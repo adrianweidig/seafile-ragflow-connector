@@ -55,4 +55,4 @@ uv run pytest
 - [RAGFlow template behavior](docs/ragflow-template.md)
 - [Recovery](docs/recovery.md)
 - [Troubleshooting](docs/troubleshooting.md)
-
+- [Release process](docs/release.md)
