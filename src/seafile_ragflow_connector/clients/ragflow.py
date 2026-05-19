@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from seafile_ragflow_connector.clients.http import make_client, unwrap_response
+from seafile_ragflow_connector.clients.http import ApiError, make_client, unwrap_response
 
 
 class RAGFlowClient:
@@ -22,7 +22,12 @@ class RAGFlowClient:
             params["name"] = name
         if parse_status:
             params["parse_status"] = parse_status
-        data = unwrap_response(self._client.get("/api/v1/datasets", params=params))
+        try:
+            data = unwrap_response(self._client.get("/api/v1/datasets", params=params))
+        except ApiError as exc:
+            if name and _is_missing_dataset_name_response(exc.payload, name):
+                return []
+            raise
         if isinstance(data, dict) and "datasets" in data:
             return list(data["datasets"])
         return list(data or [])
@@ -86,3 +91,11 @@ class RAGFlowClient:
             return list(data["documents"])
         return list(data or [])
 
+
+def _is_missing_dataset_name_response(payload: Any, name: str) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("code") not in (102, "102"):
+        return False
+    message = str(payload.get("message", ""))
+    return "lacks permission for dataset" in message and f"'{name}'" in message

@@ -27,6 +27,8 @@ class SeafileAdminClient:
         if owner:
             params["owner"] = owner
         data = unwrap_response(self._client.get("/api/v2.1/admin/libraries/", params=params))
+        if isinstance(data, dict) and "repos" in data:
+            return list(data["repos"])
         if isinstance(data, dict) and "repo_list" in data:
             return list(data["repo_list"])
         if isinstance(data, dict) and "libraries" in data:
@@ -43,4 +45,3 @@ class SeafileAdminClient:
             if len(libraries) < per_page:
                 break
             page += 1
-

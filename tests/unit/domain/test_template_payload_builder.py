@@ -24,9 +24,47 @@ class TemplatePayloadBuilderTests(unittest.TestCase):
             "seafile__library__abc12345",
         )
         self.assertEqual(payload["name"], "seafile__library__abc12345")
+        self.assertEqual(payload["embedding_model"], "BAAI/bge-m3@BAAI")
         self.assertEqual(payload["chunk_method"], "naive")
         self.assertNotIn("id", payload)
         self.assertNotIn("document_count", payload)
+
+    def test_skips_display_only_embedding_model(self) -> None:
+        payload = build_dataset_create_payload(
+            {
+                "embedding_model": "BAAI/bge-small-en-v1.5",
+                "permission": "me",
+                "chunk_method": "naive",
+            },
+            "seafile__library__abc12345",
+        )
+        self.assertNotIn("embedding_model", payload)
+        self.assertEqual(payload["permission"], "me")
+
+    def test_sanitizes_naive_parser_config_runtime_fields(self) -> None:
+        payload = build_dataset_create_payload(
+            {
+                "chunk_method": "naive",
+                "parser_config": {
+                    "chunk_token_num": 512,
+                    "delimiter": "\n",
+                    "children_delimiter": "",
+                    "image_context_size": 0,
+                    "llm_id": "",
+                    "table_context_size": 0,
+                    "parent_child": {"use_parent_child": False, "children_delimiter": "\n"},
+                },
+            },
+            "seafile__library__abc12345",
+        )
+        self.assertEqual(
+            payload["parser_config"],
+            {
+                "chunk_token_num": 512,
+                "delimiter": "\n",
+                "parent_child": {"use_parent_child": False, "children_delimiter": "\n"},
+            },
+        )
 
     def test_pipeline_payload_excludes_builtin_fields(self) -> None:
         payload = build_dataset_create_payload(
