@@ -6,7 +6,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from seafile_ragflow_connector.config import get_settings
-from seafile_ragflow_connector.models.db import Base
+from seafile_ragflow_connector.persistence.db import Base
 
 config = context.config
 
@@ -49,4 +49,3 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
-

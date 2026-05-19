@@ -33,7 +33,7 @@ dev = [
 ]
 
 [project.scripts]
-connector = "seafile_ragflow_connector.cli:app"
+connector = "seafile_ragflow_connector.app.cli:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -57,4 +57,3 @@ packages = ["seafile_ragflow_connector"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-

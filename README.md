@@ -23,9 +23,9 @@ Dokumente sicher und läuft nach Neustarts weiter.
 1. Benötigte Images auf dem Docker-Host importieren, zum Beispiel:
    `docker load -i images/seafile-ragflow-connector_0.1.0.tar`
 2. In Portainer einen neuen Stack erstellen.
-3. `docker-compose.portainer.yml` einfügen.
-4. `stack.env.example` nach `stack.env` übernehmen und lokale Seafile-/RAGFlow-URLs
-   sowie Tokens eintragen.
+3. `deploy/portainer/docker-compose.yml` einfügen.
+4. `deploy/portainer/stack.env.example` nach `deploy/portainer/stack.env`
+   übernehmen und lokale Seafile-/RAGFlow-URLs sowie Tokens eintragen.
 5. Stack starten.
 6. Controller-Logs und `/readyz` prüfen.
 
@@ -36,11 +36,11 @@ Docker-Netzwerk.
 ## Entwicklungschecks
 
 ```bash
-python -m compileall src tests
-python -m unittest discover -s tests/unit
+python -m compileall src tests migrations
+PYTHONPATH=src python -m unittest discover -s tests/unit
 ```
 
-Full development environments can also run:
+Vollständige Entwicklungsumgebungen können zusätzlich ausführen:
 
 ```bash
 uv sync --all-extras
@@ -52,10 +52,6 @@ uv run pytest
 ## Dokumentation
 
 - [Architektur](docs/architecture.md)
-- [Offline-Deployment](docs/offline-deployment.md)
-- [Portainer-Betrieb](docs/portainer.md)
 - [Konfiguration](docs/configuration.md)
+- [Betrieb, Offline-Deployment und WSL-/Docker-Prüfung](docs/operations.md)
 - [RAGFlow-Template-Verhalten](docs/ragflow-template.md)
-- [Recovery](docs/recovery.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [Release-Prozess](docs/release.md)

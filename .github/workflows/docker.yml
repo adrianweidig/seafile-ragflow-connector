@@ -24,6 +24,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
+          context: .
+          file: deploy/docker/Dockerfile
           push: true
           tags: |
             ghcr.io/${{ github.repository }}:${{ github.ref_name }}

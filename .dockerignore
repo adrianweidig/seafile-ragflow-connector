@@ -1,6 +1,7 @@
 .git
 .venv
 __pycache__
+**/__pycache__
 .pytest_cache
 .mypy_cache
 .ruff_cache
@@ -11,5 +12,5 @@ build
 cache
 tmp
 stack.env
+deploy/portainer/stack.env
 *.log
-

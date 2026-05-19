@@ -1,5 +1,6 @@
 .venv/
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
@@ -11,9 +12,9 @@ dist/
 build/
 .env
 stack.env
+deploy/portainer/stack.env
 *.log
 cache/
 tmp/
 .idea/
 .vscode/
-
