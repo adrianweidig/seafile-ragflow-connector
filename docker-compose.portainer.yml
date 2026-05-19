@@ -1,0 +1,73 @@
+services:
+  connector-postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-seafile_ragflow_sync}
+      POSTGRES_USER: ${POSTGRES_USER:-sync}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - connector-postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - connector-net
+
+  connector-redis:
+    image: ${REDIS_IMAGE:-redis:7}
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - connector-redis-data:/data
+    restart: unless-stopped
+    networks:
+      - connector-net
+
+  connector-controller:
+    image: ${CONNECTOR_IMAGE:-seafile-ragflow-connector:0.1.0}
+    env_file:
+      - stack.env
+    command: ["controller"]
+    depends_on:
+      - connector-postgres
+      - connector-redis
+    volumes:
+      - connector-cache:/cache
+    restart: unless-stopped
+    networks:
+      - connector-net
+
+  connector-worker:
+    image: ${CONNECTOR_IMAGE:-seafile-ragflow-connector:0.1.0}
+    env_file:
+      - stack.env
+    command: ["worker"]
+    depends_on:
+      - connector-postgres
+      - connector-redis
+    volumes:
+      - connector-cache:/cache
+    restart: unless-stopped
+    networks:
+      - connector-net
+
+  connector-reconciler:
+    image: ${CONNECTOR_IMAGE:-seafile-ragflow-connector:0.1.0}
+    env_file:
+      - stack.env
+    command: ["reconciler"]
+    depends_on:
+      - connector-postgres
+      - connector-redis
+    volumes:
+      - connector-cache:/cache
+    restart: unless-stopped
+    networks:
+      - connector-net
+
+volumes:
+  connector-postgres-data:
+  connector-redis-data:
+  connector-cache:
+
+networks:
+  connector-net:
+    driver: bridge
+
