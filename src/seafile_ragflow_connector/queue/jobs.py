@@ -1,0 +1,70 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any
+
+
+class JobType(StrEnum):
+    DISCOVER_LIBRARIES = "DISCOVER_LIBRARIES"
+    ENSURE_RAGFLOW_DATASET = "ENSURE_RAGFLOW_DATASET"
+    REFRESH_DATASET_SETTINGS = "REFRESH_DATASET_SETTINGS"
+    SYNC_LIBRARY_FULL = "SYNC_LIBRARY_FULL"
+    SYNC_LIBRARY_DELTA = "SYNC_LIBRARY_DELTA"
+    CLASSIFY_FILE = "CLASSIFY_FILE"
+    PREPARE_INGESTION_ARTIFACT = "PREPARE_INGESTION_ARTIFACT"
+    UPLOAD_FILE = "UPLOAD_FILE"
+    DELETE_FILE = "DELETE_FILE"
+    PARSE_DOCUMENTS = "PARSE_DOCUMENTS"
+    REPARSE_DOCUMENTS = "REPARSE_DOCUMENTS"
+    CHECK_PARSE_STATUS = "CHECK_PARSE_STATUS"
+    RECONCILE_LIBRARY = "RECONCILE_LIBRARY"
+    RECONCILE_RAGFLOW_DATASET = "RECONCILE_RAGFLOW_DATASET"
+
+
+class JobStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    RETRYING = "retrying"
+    DEAD = "dead"
+    CANCELLED = "cancelled"
+
+
+class JobPriority:
+    HIGH = 10
+    NORMAL = 100
+    LOW = 500
+
+
+HIGH_PRIORITY_TYPES = {
+    JobType.DELETE_FILE,
+    JobType.ENSURE_RAGFLOW_DATASET,
+}
+
+LOW_PRIORITY_TYPES = {
+    JobType.RECONCILE_LIBRARY,
+    JobType.RECONCILE_RAGFLOW_DATASET,
+    JobType.REPARSE_DOCUMENTS,
+    JobType.REFRESH_DATASET_SETTINGS,
+}
+
+
+@dataclass(frozen=True)
+class JobSpec:
+    job_type: JobType
+    repo_id: str | None = None
+    file_path: str | None = None
+    payload: dict[str, Any] = field(default_factory=dict)
+    priority: int | None = None
+    max_attempts: int = 5
+
+    def resolved_priority(self) -> int:
+        if self.priority is not None:
+            return self.priority
+        if self.job_type in HIGH_PRIORITY_TYPES:
+            return JobPriority.HIGH
+        if self.job_type in LOW_PRIORITY_TYPES:
+            return JobPriority.LOW
+        return JobPriority.NORMAL
+
