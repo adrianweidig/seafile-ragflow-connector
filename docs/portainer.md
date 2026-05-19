@@ -1,10 +1,11 @@
-# Portainer Operations
+# Portainer-Betrieb
 
-## Basic Stack
+## Basis-Stack
 
-Create a new Portainer stack and paste `docker-compose.portainer.yml`.
+Einen neuen Portainer-Stack erstellen und `docker-compose.portainer.yml`
+einfügen.
 
-Set environment values from `stack.env.example`. At minimum configure:
+Environment-Werte aus `stack.env.example` setzen. Mindestens konfigurieren:
 
 - `SEAFILE_BASE_URL`
 - `SEAFILE_ADMIN_TOKEN`
@@ -14,14 +15,14 @@ Set environment values from `stack.env.example`. At minimum configure:
 - `POSTGRES_PASSWORD`
 - `DATABASE_URL`
 
-## Scaling Workers
+## Worker skalieren
 
-Scale `connector-worker` in Portainer when RAGFlow and Seafile can handle additional
-load. Parsing and embedding inside RAGFlow are usually the bottleneck, so increase
-worker count conservatively.
+`connector-worker` in Portainer skalieren, wenn RAGFlow und Seafile zusätzliche
+Last verarbeiten können. Parsing und Embedding in RAGFlow sind meist der Engpass,
+daher Worker-Anzahl konservativ erhöhen.
 
-## External Docker Networks
+## Externe Docker-Netzwerke
 
-If Seafile or RAGFlow run in Docker, attach this stack to their existing network and
-use internal service names for `SEAFILE_BASE_URL` and `RAGFLOW_BASE_URL`.
-
+Wenn Seafile oder RAGFlow in Docker laufen, diesen Stack an das bestehende
+Netzwerk hängen und interne Service-Namen für `SEAFILE_BASE_URL` und
+`RAGFLOW_BASE_URL` verwenden.

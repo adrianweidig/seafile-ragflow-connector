@@ -1,20 +1,22 @@
-# Configuration
+# Konfiguration
 
-Configuration is provided through environment variables. Secrets must be supplied
-through Portainer environment management or Docker secrets and must not be committed.
+Die Konfiguration erfolgt über Environment-Variablen. Secrets müssen über
+Portainer-Environment-Management oder Docker Secrets bereitgestellt werden und
+dürfen nicht committed werden.
 
-## File Policy
+## Datei-Policy
 
-- `ALLOW_EXTENSIONS`: optional allow-list. Empty means extension is not a hard allow gate.
-- `DENY_EXTENSIONS`: extensions that are always skipped.
-- `TEXT_EXTENSIONS`: extensions treated as text/code hints.
-- `ALLOW_UNKNOWN_TEXT_FILES`: accept unknown extensions when content is text.
-- `DEFAULT_TEXT_INGESTION_STRATEGY`: default `text_projection`.
+- `ALLOW_EXTENSIONS`: optionale Allowlist. Leer bedeutet, dass die Endung keine
+  harte Zulassungsvoraussetzung ist.
+- `DENY_EXTENSIONS`: Endungen, die immer übersprungen werden.
+- `TEXT_EXTENSIONS`: Endungen, die als Text-/Code-Hinweise gelten.
+- `ALLOW_UNKNOWN_TEXT_FILES`: unbekannte Endungen akzeptieren, wenn der Inhalt Text ist.
+- `DEFAULT_TEXT_INGESTION_STRATEGY`: Standard ist `text_projection`.
 
-## Dataset Settings
+## Dataset-Einstellungen
 
-- `DATASET_SETTINGS_SOURCE=ragflow_current`: use current target dataset settings.
-- `RAGFLOW_REFRESH_DATASET_SETTINGS=true`: refresh before upload/parse batches.
-- `REPARSE_ON_DATASET_SETTINGS_CHANGE=false`: do not silently reprocess all existing
-  documents after an admin changes dataset settings.
-
+- `DATASET_SETTINGS_SOURCE=ragflow_current`: aktuelle Einstellungen des
+  Ziel-Datasets verwenden.
+- `RAGFLOW_REFRESH_DATASET_SETTINGS=true`: vor Upload-/Parse-Batches aktualisieren.
+- `REPARSE_ON_DATASET_SETTINGS_CHANGE=false`: bestehende Dokumente nach einer
+  Admin-Änderung nicht stillschweigend vollständig neu verarbeiten.

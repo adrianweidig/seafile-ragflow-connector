@@ -1,32 +1,32 @@
 # Troubleshooting
 
-## Connector Finds No Libraries
+## Connector findet keine Libraries
 
-Check:
+Prüfen:
 
 - `SEAFILE_BASE_URL`
 - `SEAFILE_ADMIN_TOKEN`
-- admin permissions for `/api/v2.1/admin/libraries/`
+- Admin-Berechtigungen für `/api/v2.1/admin/libraries/`
 
-## RAGFlow Template Not Found
+## RAGFlow-Template nicht gefunden
 
-Check:
+Prüfen:
 
 - `RAGFLOW_API_KEY`
 - `RAGFLOW_TEMPLATE_DATASET_NAME`
-- whether the API key belongs to the expected RAGFlow user
+- ob der API-Key zum erwarteten RAGFlow-User gehört
 
-## Special File Extensions Are Skipped
+## Spezielle Dateiendungen werden übersprungen
 
-Check:
+Prüfen:
 
 - `DENY_EXTENSIONS`
 - `ALLOW_UNKNOWN_TEXT_FILES`
 - `TEXT_EXTENSIONS`
-- classification logs for `detected_encoding` and `is_text`
+- Klassifikationslogs für `detected_encoding` und `is_text`
 
-## Dataset Settings Changed
+## Dataset-Einstellungen geändert
 
-The connector does not overwrite existing settings. New upload/parse operations use
-the current dataset settings observed from RAGFlow.
-
+Der Connector überschreibt bestehende Einstellungen nicht. Neue Upload-/Parse-
+Operationen nutzen die aktuellen Dataset-Einstellungen, die aus RAGFlow gelesen
+werden.

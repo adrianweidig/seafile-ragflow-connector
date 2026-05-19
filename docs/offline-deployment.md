@@ -1,18 +1,18 @@
-# Offline Deployment
+# Offline-Deployment
 
-The runtime path must not require internet access.
+Der Runtime-Pfad darf keinen Internetzugriff benötigen.
 
-## Release Bundle
+## Release-Bundle
 
-A production release should contain:
+Ein produktives Release sollte enthalten:
 
 - `docker-compose.portainer.yml`
 - `stack.env.example`
-- connector image tar, for example `seafile-ragflow-connector_0.1.0.tar`
-- optional Postgres and Redis image tars
-- checksums
+- Connector-Image als Tar-Datei, zum Beispiel `seafile-ragflow-connector_0.1.0.tar`
+- optionale PostgreSQL- und Redis-Image-Tars
+- Checksummen
 
-## Host Preparation
+## Host-Vorbereitung
 
 ```bash
 docker load -i images/seafile-ragflow-connector_0.1.0.tar
@@ -20,16 +20,15 @@ docker load -i images/postgres_16.tar
 docker load -i images/redis_7.tar
 ```
 
-Then create the Portainer stack from `docker-compose.portainer.yml`.
+Danach den Portainer-Stack aus `docker-compose.portainer.yml` erstellen.
 
-## Network Requirements
+## Netzwerkanforderungen
 
-The stack only needs access to:
+Der Stack benötigt nur Zugriff auf:
 
-- configured Seafile URL
-- configured RAGFlow URL
-- its own Postgres and Redis services
+- die konfigurierte Seafile-URL
+- die konfigurierte RAGFlow-URL
+- die eigenen PostgreSQL- und Redis-Services
 
-It must not call public package indexes, registries, telemetry endpoints, or model
-download endpoints at runtime.
-
+Zur Laufzeit dürfen keine öffentlichen Paket-Indizes, Registries,
+Telemetrie-Endpunkte oder Modell-Download-Endpunkte aufgerufen werden.

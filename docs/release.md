@@ -1,9 +1,9 @@
-# Release Process
+# Release-Prozess
 
-Online CI can build and push images for development convenience, but production
-installations should use fixed image tags and offline bundles.
+Online-CI kann Images für die Entwicklung bauen und pushen. Produktive
+Installationen sollten feste Image-Tags und Offline-Bundles verwenden.
 
-## Offline Bundle Contents
+## Inhalt des Offline-Bundles
 
 ```text
 seafile-ragflow-connector_0.1.0/
@@ -18,20 +18,20 @@ seafile-ragflow-connector_0.1.0/
   SHA256SUMS
 ```
 
-## Build Once, Run Offline
+## Einmal bauen, offline betreiben
 
-Build the connector image in a connected build environment:
+Das Connector-Image in einer verbundenen Build-Umgebung bauen:
 
 ```bash
 docker build -t seafile-ragflow-connector:0.1.0 .
 docker save seafile-ragflow-connector:0.1.0 -o images/seafile-ragflow-connector_0.1.0.tar
 ```
 
-Import it on the offline Docker host:
+Auf dem Offline-Docker-Host importieren:
 
 ```bash
 docker load -i images/seafile-ragflow-connector_0.1.0.tar
 ```
 
-The runtime container must not install packages or fetch artifacts during startup.
-
+Der Runtime-Container darf beim Start keine Pakete installieren und keine
+Artefakte nachladen.

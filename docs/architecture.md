@@ -1,33 +1,33 @@
-# Architecture
+# Architektur
 
-The connector is a control plane. It does not patch RAGFlow and does not use WebDAV
-as the core sync mechanism.
+Der Connector ist eine Sync-Control-Plane. Er patcht RAGFlow nicht und nutzt
+WebDAV nicht als Kernmechanismus.
 
 ```text
 Seafile API -> controller -> PostgreSQL state -> Redis jobs -> workers -> RAGFlow API
                          \-> reconciler ------------------------/
 ```
 
-## Components
+## Komponenten
 
-| Component | Responsibility |
+| Komponente | Verantwortung |
 | --- | --- |
-| controller | discovery loop, dataset provisioning, delta scheduling |
-| worker | download, classify, prepare artifacts, upload, delete, parse |
-| reconciler | repair divergent Seafile/DB/RAGFlow state |
-| PostgreSQL | durable sync memory and job history |
-| Redis | queue, retry delay, worker fan-out |
+| controller | Discovery-Loop, Dataset-Provisioning, Delta-Scheduling |
+| worker | Download, Klassifikation, Artefakt-Erzeugung, Upload, Delete, Parse |
+| reconciler | Reparatur abweichender Zustände zwischen Seafile, DB und RAGFlow |
+| PostgreSQL | dauerhafter Sync-Zustand und Job-Historie |
+| Redis | Queue, Retry-Verzögerung, Worker-Fan-out |
 
-## Dataset Settings
+## Dataset-Einstellungen
 
-`connector_template` is only used when a RAGFlow dataset is created. After that,
-the target dataset's current RAGFlow settings are authoritative. This allows an
-admin to change chunking, parser settings, or ingestion pipeline directly in RAGFlow
-without reconfiguring the connector.
+`connector_template` wird nur beim Erzeugen eines RAGFlow-Datasets verwendet.
+Danach sind die aktuellen RAGFlow-Einstellungen des Ziel-Datasets maßgeblich.
+Dadurch kann ein Admin Chunking, Parser-Einstellungen oder Ingestion Pipeline
+direkt in RAGFlow ändern, ohne den Connector neu zu konfigurieren.
 
-## File Ingestion
+## Datei-Ingestion
 
-The connector treats file extensions as hints, not as the complete policy. Unknown
-files can be accepted when they are detected as text. Code and special text formats
-such as Ada files are projected into stable text artifacts before upload when needed.
-
+Der Connector behandelt Dateiendungen als Hinweise, nicht als vollständige
+Policy. Unbekannte Dateien können akzeptiert werden, wenn sie als Text erkannt
+werden. Code und textbasierte Spezialformate wie Ada-Dateien werden bei Bedarf
+vor dem Upload in stabile Text-Artefakte überführt.

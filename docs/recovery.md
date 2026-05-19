@@ -1,21 +1,21 @@
 # Recovery
 
-## Worker Crash
+## Worker-Crash
 
-Jobs are idempotent. Locks expire and jobs can be executed again.
+Jobs sind idempotent. Locks laufen ab und Jobs können erneut ausgeführt werden.
 
-## Redis Loss
+## Redis-Verlust
 
-PostgreSQL remains the recovery source. Queued or running jobs can be reconstructed
-from durable job state.
+PostgreSQL bleibt die Recovery-Quelle. Queued oder laufende Jobs können aus dem
+dauerhaften Job-State rekonstruiert werden.
 
-## Seafile Outage
+## Seafile-Ausfall
 
-No delete decisions are made while Seafile is unreachable. Download and discovery
-jobs retry.
+Solange Seafile nicht erreichbar ist, werden keine Delete-Entscheidungen
+getroffen. Download- und Discovery-Jobs gehen in den Retry.
 
-## RAGFlow Outage
+## RAGFlow-Ausfall
 
-Upload, delete, parse, and status jobs retry with backoff. Discovery can continue
-but should apply backpressure to avoid unbounded queues.
-
+Upload-, Delete-, Parse- und Status-Jobs werden mit Backoff wiederholt.
+Discovery kann weiterlaufen, muss aber Backpressure anwenden, um unbegrenzte
+Queues zu vermeiden.

@@ -1,36 +1,39 @@
 # Seafile RAGFlow Connector
 
-Offline-first sync orchestrator that runs between an existing Seafile server and an
-existing RAGFlow server. It discovers Seafile libraries, creates one RAGFlow dataset
-per library from a `connector_template`, imports files, tracks changes, handles safe
-deletes, and keeps running through restarts.
+Offline-fähiger Sync-Orchestrator für den Betrieb zwischen einem bestehenden
+Seafile-Server und einem bestehenden RAGFlow-Server. Der Connector entdeckt
+Seafile-Libraries, erzeugt pro Library ein RAGFlow-Dataset aus einem
+`connector_template`, importiert Dateien, erkennt Änderungen, löscht entfernte
+Dokumente sicher und läuft nach Neustarts weiter.
 
-## Core Principles
+## Kernprinzipien
 
-- Seafile API is the source of truth.
-- RAGFlow API is the target system.
-- PostgreSQL stores durable sync memory.
-- Redis provides queueing, retries, and backpressure.
-- RAGFlow dataset settings are live after creation. The template is only used to
-  create new datasets.
-- The runtime is offline-capable: no package downloads, no telemetry, and no
-  external service dependency beyond configured Seafile and RAGFlow URLs.
+- Die Seafile API ist die Quelle der Wahrheit.
+- Die RAGFlow API ist das Zielsystem.
+- PostgreSQL speichert den dauerhaften Sync-Zustand.
+- Redis übernimmt Queueing, Retries und Backpressure.
+- RAGFlow-Dataset-Einstellungen bleiben nach der Erstellung live. Das Template
+  wird nur für neue Datasets genutzt.
+- Der Runtime-Betrieb ist offline-fähig: keine Paket-Downloads, keine Telemetrie
+  und keine externen Service-Abhängigkeiten außerhalb der konfigurierten
+  Seafile- und RAGFlow-URLs.
 
-## Offline Portainer Deployment
+## Offline-Deployment mit Portainer
 
-1. Import the required images on the Docker host, for example:
+1. Benötigte Images auf dem Docker-Host importieren, zum Beispiel:
    `docker load -i images/seafile-ragflow-connector_0.1.0.tar`
-2. Create a new Portainer stack.
-3. Paste `docker-compose.portainer.yml`.
-4. Copy `stack.env.example` to `stack.env` and fill in local Seafile/RAGFlow URLs
-   and tokens.
-5. Start the stack.
-6. Check controller logs and `/readyz`.
+2. In Portainer einen neuen Stack erstellen.
+3. `docker-compose.portainer.yml` einfügen.
+4. `stack.env.example` nach `stack.env` übernehmen und lokale Seafile-/RAGFlow-URLs
+   sowie Tokens eintragen.
+5. Stack starten.
+6. Controller-Logs und `/readyz` prüfen.
 
-Seafile and RAGFlow are not deployed by this stack. They remain external systems
-reachable over your LAN, reverse proxy, or a shared Docker network.
+Seafile und RAGFlow werden nicht durch diesen Stack bereitgestellt. Sie bleiben
+externe Systeme, erreichbar über LAN, Reverse Proxy oder ein gemeinsames
+Docker-Netzwerk.
 
-## Development Checks
+## Entwicklungschecks
 
 ```bash
 python -m compileall src tests
@@ -46,13 +49,13 @@ uv run mypy src
 uv run pytest
 ```
 
-## Documentation
+## Dokumentation
 
-- [Architecture](docs/architecture.md)
-- [Offline deployment](docs/offline-deployment.md)
-- [Portainer operations](docs/portainer.md)
-- [Configuration](docs/configuration.md)
-- [RAGFlow template behavior](docs/ragflow-template.md)
+- [Architektur](docs/architecture.md)
+- [Offline-Deployment](docs/offline-deployment.md)
+- [Portainer-Betrieb](docs/portainer.md)
+- [Konfiguration](docs/configuration.md)
+- [RAGFlow-Template-Verhalten](docs/ragflow-template.md)
 - [Recovery](docs/recovery.md)
 - [Troubleshooting](docs/troubleshooting.md)
-- [Release process](docs/release.md)
+- [Release-Prozess](docs/release.md)
