@@ -54,6 +54,42 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.database_url, "postgresql+psycopg://custom/db")
         self.assertEqual(settings.redis_url, "redis://custom-redis:6379/4")
 
+    def test_dashboard_defaults_to_disabled_with_bounded_limits(self) -> None:
+        values = self.base_values()
+        values["database_url"] = "postgresql+psycopg://custom/db"
+
+        settings = Settings(**values)
+
+        self.assertFalse(settings.connector_dashboard_enabled)
+        self.assertEqual(settings.connector_dashboard_host, "0.0.0.0")
+        self.assertEqual(settings.connector_dashboard_port, 8080)
+        self.assertEqual(settings.connector_dashboard_max_log_entries, 5000)
+        self.assertEqual(settings.connector_dashboard_max_event_entries, 10000)
+        self.assertEqual(settings.connector_dashboard_log_page_size, 100)
+
+    def test_rejects_invalid_dashboard_port_and_limits(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "connector_dashboard_port": 70000,
+            }
+        )
+
+        with self.assertRaises(ValueError):
+            Settings(**values)
+
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "connector_dashboard_max_log_entries": 0,
+            }
+        )
+
+        with self.assertRaises(ValueError):
+            Settings(**values)
+
 
 if __name__ == "__main__":
     unittest.main()

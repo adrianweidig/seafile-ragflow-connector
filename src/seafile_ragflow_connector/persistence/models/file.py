@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Text, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from seafile_ragflow_connector.persistence.db import Base
@@ -10,7 +19,11 @@ class File(Base):
     __tablename__ = "files"
     __table_args__ = (UniqueConstraint("repo_id", "normalized_path", name="uq_files_repo_path"),)
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
     repo_id: Mapped[str] = mapped_column(
         Text,
         ForeignKey("libraries.repo_id", ondelete="CASCADE"),

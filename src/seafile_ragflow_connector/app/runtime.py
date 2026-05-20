@@ -5,9 +5,11 @@ from dataclasses import dataclass
 
 from redis import Redis
 from sqlalchemy import text
+from sqlalchemy.orm import Session, sessionmaker
 
 from seafile_ragflow_connector.clients import RAGFlowClient, SeafileAdminClient, SeafileSyncClient
 from seafile_ragflow_connector.config.settings import Settings
+from seafile_ragflow_connector.dashboard.store import DashboardEventStore, DashboardLimits
 from seafile_ragflow_connector.domain.file_classification import FilePolicy
 from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
 from seafile_ragflow_connector.persistence.db import get_session_factory, init_database
@@ -23,6 +25,7 @@ class Runtime:
     orchestrator: SyncOrchestrator
     job_store: JobStore
     signal_queue: JobSignalQueue
+    dashboard_store: DashboardEventStore | None = None
 
     def close(self) -> None:
         self.admin_client.close()
@@ -48,6 +51,7 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
         _retry(lambda: init_database(settings.database_url), "database")
     _retry(lambda: check_redis(settings.redis_url), "redis")
     session_factory = get_session_factory(settings.database_url)
+    dashboard_store = build_dashboard_store(settings, session_factory)
     admin_client = SeafileAdminClient(settings.seafile_base_url, settings.seafile_admin_token)
     sync_client = SeafileSyncClient(
         settings.seafile_base_url,
@@ -68,6 +72,7 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
         skip_virtual_repos=settings.seafile_skip_virtual_repos,
         delete_ragflow_docs_on_seafile_delete=settings.delete_ragflow_docs_on_seafile_delete,
         refresh_dataset_settings=settings.ragflow_refresh_dataset_settings,
+        dashboard_store=dashboard_store,
     )
     return Runtime(
         settings=settings,
@@ -81,6 +86,27 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
             retry_max_seconds=settings.job_retry_max_seconds,
         ),
         signal_queue=JobSignalQueue(settings.redis_url),
+        dashboard_store=dashboard_store,
+    )
+
+
+def build_dashboard_store(
+    settings: Settings,
+    session_factory: sessionmaker[Session] | None = None,
+) -> DashboardEventStore | None:
+    if not settings.connector_dashboard_enabled:
+        return None
+    if session_factory is None:
+        session_factory = get_session_factory(settings.database_url)
+    return DashboardEventStore(
+        session_factory,
+        DashboardLimits(
+            max_sync_runs=settings.connector_dashboard_max_sync_runs,
+            max_event_entries=settings.connector_dashboard_max_event_entries,
+            max_log_entries=settings.connector_dashboard_max_log_entries,
+            page_size=settings.connector_dashboard_log_page_size,
+            max_field_length=settings.connector_dashboard_max_field_length,
+        ),
     )
 
 

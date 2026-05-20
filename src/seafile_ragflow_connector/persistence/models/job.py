@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, Integer, JSON, Text, func
+from sqlalchemy import JSON, BigInteger, DateTime, Integer, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from seafile_ragflow_connector.persistence.db import Base
@@ -11,7 +11,11 @@ from seafile_ragflow_connector.persistence.db import Base
 class SyncJob(Base):
     __tablename__ = "sync_jobs"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
     job_type: Mapped[str] = mapped_column(Text, nullable=False)
     repo_id: Mapped[str | None] = mapped_column(Text)
     file_path: Mapped[str | None] = mapped_column(Text)

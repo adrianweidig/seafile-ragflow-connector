@@ -38,6 +38,30 @@ Es gibt zwei unterstützte Netzwerkvarianten:
   `SEAFILE_BASE_URL=http://seafile`, `RAGFLOW_BASE_URL=http://ragflow:9380`
   nutzen.
 
+### Dashboard im Betrieb
+
+Das Dashboard läuft im Controller-Prozess, wenn
+`CONNECTOR_DASHBOARD_ENABLED=true` gesetzt ist. Standardmäßig bleibt es aus. Die
+Compose-Datei enthält ein Portmapping für den Controller:
+
+```env
+CONNECTOR_DASHBOARD_ENABLED=true
+CONNECTOR_DASHBOARD_HOST=0.0.0.0
+CONNECTOR_DASHBOARD_PORT=8080
+CONNECTOR_DASHBOARD_PUBLISHED_PORT=127.0.0.1:18080
+```
+
+Damit ist die Oberfläche auf dem Docker-Host unter `http://127.0.0.1:18080`
+erreichbar. Für LAN-Zugriff kann `CONNECTOR_DASHBOARD_PUBLISHED_PORT=18080`
+gesetzt werden. Soll die Oberfläche nicht erreichbar sein, bleibt
+`CONNECTOR_DASHBOARD_ENABLED=false` gesetzt oder das Portmapping wird in
+Portainer entfernt.
+
+Die Oberfläche ist absichtlich unauthentifiziert und ausschließlich lesend. Sie
+zeigt keine Secrets, bietet keine Datei-Downloads und führt keine
+Sync-Schreibaktionen aus. Logs, Änderungsereignisse und Sync-Historie werden
+begrenzt, damit weder Datenbank noch API-Antworten unbegrenzt wachsen.
+
 ## Offline-Bundle
 
 Ein produktives Release sollte enthalten:
@@ -155,3 +179,11 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
 - Dataset-Einstellungen geändert: Der Connector überschreibt bestehende
   Einstellungen nicht; neue Upload-/Parse-Operationen nutzen die aktuellen
   RAGFlow-Einstellungen.
+- Dashboard bleibt leer: prüfen, ob der Controller läuft und bereits
+  Sync-Läufe, Jobs oder Logs erzeugt wurden. Frische Umgebungen zeigen leere
+  Zustände statt Fehler.
+- Dashboard-Port belegt: `CONNECTOR_DASHBOARD_PUBLISHED_PORT` oder
+  `CONNECTOR_DASHBOARD_PORT` ändern und den Controller neu starten. Ein
+  Bind-Fehler wird als `dashboard.bind_failed` geloggt.
+- Dashboard nicht erreichbar: `CONNECTOR_DASHBOARD_ENABLED`, Host-/Portbindung
+  und das Portmapping in Portainer prüfen.

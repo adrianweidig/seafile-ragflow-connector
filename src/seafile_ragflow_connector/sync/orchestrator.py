@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -8,19 +9,25 @@ from typing import Any
 import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
+from structlog.contextvars import bind_contextvars, unbind_contextvars
 
 from seafile_ragflow_connector.clients import RAGFlowClient, SeafileAdminClient, SeafileSyncClient
 from seafile_ragflow_connector.clients.http import ApiError
+from seafile_ragflow_connector.dashboard.store import DashboardEventStore, new_sync_id
 from seafile_ragflow_connector.domain.file_classification import FilePolicy, classify_file
 from seafile_ragflow_connector.domain.ingestion_artifacts import prepare_ingestion_artifact
-from seafile_ragflow_connector.domain.naming import build_dataset_name, slugify
+from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.persistence.models.template import DatasetSettingsSnapshot
 from seafile_ragflow_connector.sync.dataset_provisioning import DatasetProvisioner, LibrarySource
 from seafile_ragflow_connector.sync.dataset_settings import DatasetSettingsService
-from seafile_ragflow_connector.sync.discovery import DiscoveredLibrary, normalize_library, should_skip_library
+from seafile_ragflow_connector.sync.discovery import (
+    DiscoveredLibrary,
+    normalize_library,
+    should_skip_library,
+)
 from seafile_ragflow_connector.utils.hashing import sha256_bytes
 from seafile_ragflow_connector.utils.paths import normalize_seafile_path
 
@@ -40,6 +47,7 @@ class FileSyncResult:
     uploaded: bool
     skipped: bool
     document_id: str | None
+    change_type: str | None = None
 
 
 class SyncOrchestrator:
@@ -56,6 +64,7 @@ class SyncOrchestrator:
         skip_virtual_repos: bool = True,
         delete_ragflow_docs_on_seafile_delete: bool = True,
         refresh_dataset_settings: bool = True,
+        dashboard_store: DashboardEventStore | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.admin_client = admin_client
@@ -66,6 +75,7 @@ class SyncOrchestrator:
         self.skip_virtual_repos = skip_virtual_repos
         self.delete_ragflow_docs_on_seafile_delete = delete_ragflow_docs_on_seafile_delete
         self.refresh_dataset_settings = refresh_dataset_settings
+        self.dashboard_store = dashboard_store
         self.dataset_provisioner = DatasetProvisioner(
             ragflow_client,
             template_dataset_name=template_dataset_name,
@@ -114,6 +124,15 @@ class SyncOrchestrator:
                     error=str(exc),
                 )
                 continue
+            self.log.info(
+                "library.synced",
+                repo_id=library.repo_id,
+                name=library.name,
+                files_seen=library_summary.files_seen,
+                files_uploaded=library_summary.files_uploaded,
+                files_deleted=library_summary.files_deleted,
+                files_skipped=library_summary.files_skipped,
+            )
             summary = SyncSummary(
                 libraries_seen=summary.libraries_seen,
                 libraries_synced=summary.libraries_synced + library_summary.libraries_synced,
@@ -151,36 +170,136 @@ class SyncOrchestrator:
         return result.dataset_id
 
     def sync_library_full(self, repo_id: str, *, scope: str = "/") -> SyncSummary:
+        sync_id = new_sync_id(repo_id)
         dataset_id = self.ensure_dataset_for_repo(repo_id)
+        bind_contextvars(sync_id=sync_id)
+        self._create_dashboard_sync_run(sync_id, repo_id, dataset_id, scope)
+        self.log.info(
+            "library.sync_started",
+            sync_id=sync_id,
+            repo_id=repo_id,
+            dataset_id=dataset_id,
+            scope=scope,
+        )
         seen_paths: set[str] = set()
         files_seen = 0
         files_uploaded = 0
         files_skipped = 0
+        files_created = 0
+        files_updated = 0
+        dashboard_skipped = 0
+        files_deleted = 0
+        errors_count = 0
+        warnings_count = 0
 
-        for path, item in self.iter_files(repo_id, scope):
-            normalized_path = normalize_seafile_path(path)
-            seen_paths.add(normalized_path)
-            files_seen += 1
-            result = self.sync_file(repo_id, dataset_id, normalized_path, item=item)
-            if result.uploaded:
-                files_uploaded += 1
-            if result.skipped:
-                files_skipped += 1
+        try:
+            for path, item in self.iter_files(repo_id, scope):
+                normalized_path = normalize_seafile_path(path)
+                seen_paths.add(normalized_path)
+                files_seen += 1
+                try:
+                    result = self.sync_file(
+                        repo_id,
+                        dataset_id,
+                        normalized_path,
+                        item=item,
+                        sync_id=sync_id,
+                    )
+                except Exception as exc:
+                    errors_count += 1
+                    self._record_dashboard_change(
+                        sync_id=sync_id,
+                        action="sync_file",
+                        change_type="failed",
+                        status="failed",
+                        object_name=_basename(normalized_path),
+                        source_path=normalized_path,
+                        target_path=dataset_id,
+                        error_message=str(exc),
+                        details={"repo_id": repo_id, "dataset_id": dataset_id},
+                    )
+                    raise
+                if result.uploaded:
+                    files_uploaded += 1
+                    if result.change_type == "updated":
+                        files_updated += 1
+                    else:
+                        files_created += 1
+                if result.skipped:
+                    files_skipped += 1
+                if result.skipped or result.change_type == "unchanged":
+                    dashboard_skipped += 1
 
-        files_deleted = self.delete_missing_files(repo_id, dataset_id, seen_paths, scope=scope)
-        with self.session_factory() as session:
-            db_library = self._get_library(session, repo_id)
-            db_library.last_synced_commit_id = db_library.head_commit_id
-            db_library.status = "active"
-            db_library.last_error = None
-            session.commit()
-        return SyncSummary(
-            libraries_synced=1,
-            files_seen=files_seen,
-            files_uploaded=files_uploaded,
-            files_deleted=files_deleted,
-            files_skipped=files_skipped,
-        )
+            files_deleted = self.delete_missing_files(
+                repo_id,
+                dataset_id,
+                seen_paths,
+                scope=scope,
+                sync_id=sync_id,
+            )
+            with self.session_factory() as session:
+                db_library = self._get_library(session, repo_id)
+                db_library.last_synced_commit_id = db_library.head_commit_id
+                db_library.status = "active"
+                db_library.last_error = None
+                session.commit()
+            summary = SyncSummary(
+                libraries_synced=1,
+                files_seen=files_seen,
+                files_uploaded=files_uploaded,
+                files_deleted=files_deleted,
+                files_skipped=files_skipped,
+            )
+            self._finish_dashboard_sync_run(
+                sync_id=sync_id,
+                status="succeeded",
+                objects_checked=files_seen,
+                objects_created=files_created,
+                objects_updated=files_updated,
+                objects_deleted=files_deleted,
+                objects_skipped=dashboard_skipped,
+                errors_count=errors_count,
+                warnings_count=warnings_count,
+                summary=(
+                    f"{files_seen} Dateien geprüft, {files_uploaded} hochgeladen, "
+                    f"{files_deleted} gelöscht, {files_skipped} übersprungen"
+                ),
+                details={"repo_id": repo_id, "dataset_id": dataset_id, "scope": scope},
+            )
+            self.log.info(
+                "library.sync_completed",
+                sync_id=sync_id,
+                repo_id=repo_id,
+                dataset_id=dataset_id,
+                scope=scope,
+                files_seen=files_seen,
+                files_uploaded=files_uploaded,
+                files_deleted=files_deleted,
+                files_skipped=files_skipped,
+            )
+            return summary
+        except Exception as exc:
+            self._finish_dashboard_sync_run(
+                sync_id=sync_id,
+                status="failed",
+                objects_checked=files_seen,
+                objects_created=files_created,
+                objects_updated=files_updated,
+                objects_deleted=files_deleted,
+                objects_skipped=dashboard_skipped,
+                errors_count=max(errors_count, 1),
+                warnings_count=warnings_count,
+                summary=f"Synchronisation fehlgeschlagen: {exc}",
+                details={
+                    "repo_id": repo_id,
+                    "dataset_id": dataset_id,
+                    "scope": scope,
+                    "error": str(exc),
+                },
+            )
+            raise
+        finally:
+            unbind_contextvars("sync_id")
 
     def sync_file(
         self,
@@ -190,6 +309,7 @@ class SyncOrchestrator:
         *,
         item: dict[str, Any] | None = None,
         force: bool = False,
+        sync_id: str | None = None,
     ) -> FileSyncResult:
         data = self.sync_client.download_file(repo_id, path)
         classification = classify_file(path, data, self.file_policy)
@@ -211,7 +331,36 @@ class SyncOrchestrator:
                 db_file.sync_status = "skipped"
                 db_file.error_message = classification.reason
                 session.commit()
-                return FileSyncResult(uploaded=False, skipped=True, document_id=db_file.ragflow_document_id)
+                self.log.info(
+                    "file.skipped",
+                    sync_id=sync_id,
+                    repo_id=repo_id,
+                    dataset_id=dataset_id,
+                    path=path,
+                    reason=classification.reason,
+                )
+                self._record_dashboard_change(
+                    sync_id=sync_id,
+                    action="skip_file",
+                    change_type="skipped",
+                    status="skipped",
+                    object_name=_basename(path),
+                    source_path=path,
+                    target_path=dataset_id,
+                    error_message=classification.reason,
+                    details={
+                        "repo_id": repo_id,
+                        "dataset_id": dataset_id,
+                        "detected_mime": classification.detected_mime,
+                        "ingestion_strategy": classification.ingestion_strategy,
+                    },
+                )
+                return FileSyncResult(
+                    uploaded=False,
+                    skipped=True,
+                    document_id=db_file.ragflow_document_id,
+                    change_type="skipped",
+                )
 
             unchanged = (
                 not force
@@ -230,10 +379,65 @@ class SyncOrchestrator:
                 db_file.sync_status = "synced"
                 db_file.error_message = None
                 session.commit()
-            return FileSyncResult(uploaded=False, skipped=False, document_id=old_document_id)
+            self.log.debug(
+                "file.unchanged",
+                sync_id=sync_id,
+                repo_id=repo_id,
+                dataset_id=dataset_id,
+                path=path,
+                document_id=old_document_id,
+            )
+            self._record_dashboard_change(
+                sync_id=sync_id,
+                action="compare_file",
+                change_type="unchanged",
+                status="synced",
+                object_name=_basename(path),
+                source_path=path,
+                target_path=f"{dataset_id}/{old_document_id}" if old_document_id else dataset_id,
+                details={
+                    "repo_id": repo_id,
+                    "dataset_id": dataset_id,
+                    "document_id": old_document_id,
+                },
+            )
+            return FileSyncResult(
+                uploaded=False,
+                skipped=False,
+                document_id=old_document_id,
+                change_type="unchanged",
+            )
 
-        if old_document_id:
-            self.ragflow_client.delete_documents(dataset_id, [old_document_id])
+        stale_document_ids = self._find_stale_document_ids(
+            dataset_id,
+            document_name=artifact.document_name,
+            old_document_id=old_document_id,
+        )
+        if stale_document_ids:
+            self.ragflow_client.delete_documents(dataset_id, stale_document_ids)
+            self.log.info(
+                "ragflow.stale_documents_deleted",
+                sync_id=sync_id,
+                repo_id=repo_id,
+                dataset_id=dataset_id,
+                path=path,
+                document_name=artifact.document_name,
+                document_count=len(stale_document_ids),
+            )
+            self._record_dashboard_change(
+                sync_id=sync_id,
+                action="delete_stale_ragflow_documents",
+                change_type="deleted",
+                status="succeeded",
+                object_name=artifact.document_name,
+                source_path=path,
+                target_path=dataset_id,
+                details={
+                    "repo_id": repo_id,
+                    "dataset_id": dataset_id,
+                    "document_ids": stale_document_ids,
+                },
+            )
 
         settings_hash = None
         if self.refresh_dataset_settings:
@@ -275,19 +479,82 @@ class SyncOrchestrator:
             db_file.error_message = None
             session.commit()
 
-        return FileSyncResult(uploaded=True, skipped=False, document_id=document_id)
+        self.log.info(
+            "file.uploaded",
+            sync_id=sync_id,
+            repo_id=repo_id,
+            dataset_id=dataset_id,
+            path=path,
+            document_id=document_id,
+            document_name=artifact.document_name,
+            ingestion_strategy=classification.ingestion_strategy,
+            source_size_bytes=len(data),
+        )
+        change_type = "updated" if old_document_id or stale_document_ids else "created"
+        self._record_dashboard_change(
+            sync_id=sync_id,
+            action="upload_file",
+            change_type=change_type,
+            status="synced",
+            object_name=artifact.document_name,
+            source_path=path,
+            target_path=f"{dataset_id}/{document_id}",
+            previous_name=None,
+            new_name=artifact.document_name,
+            details={
+                "repo_id": repo_id,
+                "dataset_id": dataset_id,
+                "document_id": document_id,
+                "ingestion_strategy": classification.ingestion_strategy,
+                "source_size_bytes": len(data),
+                "mime_type": artifact.mime_type,
+                "stale_document_ids": stale_document_ids,
+            },
+        )
+        return FileSyncResult(
+            uploaded=True,
+            skipped=False,
+            document_id=document_id,
+            change_type=change_type,
+        )
 
-    def delete_file(self, repo_id: str, dataset_id: str, path: str) -> bool:
+    def delete_file(
+        self,
+        repo_id: str,
+        dataset_id: str,
+        path: str,
+        *,
+        sync_id: str | None = None,
+    ) -> bool:
         normalized_path = normalize_seafile_path(path)
         with self.session_factory() as session:
             db_file = self._get_file(session, repo_id, normalized_path)
             document_id = db_file.ragflow_document_id
+            document_name = db_file.ragflow_document_name or db_file.ingested_document_name
         if document_id and self.delete_ragflow_docs_on_seafile_delete:
             self.ragflow_client.delete_documents(dataset_id, [document_id])
+            self.log.info(
+                "file.ragflow_document_deleted",
+                sync_id=sync_id,
+                repo_id=repo_id,
+                dataset_id=dataset_id,
+                path=normalized_path,
+                document_id=document_id,
+            )
         with self.session_factory() as session:
             db_file = self._get_file(session, repo_id, normalized_path)
             session.delete(db_file)
             session.commit()
+        self._record_dashboard_change(
+            sync_id=sync_id,
+            action="delete_file",
+            change_type="deleted",
+            status="succeeded",
+            object_name=document_name or _basename(normalized_path),
+            source_path=normalized_path,
+            target_path=f"{dataset_id}/{document_id}" if document_id else dataset_id,
+            details={"repo_id": repo_id, "dataset_id": dataset_id, "document_id": document_id},
+        )
         return bool(document_id)
 
     def delete_missing_files(
@@ -297,6 +564,7 @@ class SyncOrchestrator:
         seen_paths: set[str],
         *,
         scope: str = "/",
+        sync_id: str | None = None,
     ) -> int:
         normalized_scope = normalize_seafile_path(scope)
         deleted = 0
@@ -319,11 +587,41 @@ class SyncOrchestrator:
                     self.ragflow_client.delete_documents(dataset_id, [row.ragflow_document_id])
                 except ApiError:
                     raise
+                self.log.info(
+                    "file.missing_ragflow_document_deleted",
+                    sync_id=sync_id,
+                    repo_id=repo_id,
+                    dataset_id=dataset_id,
+                    path=row.normalized_path,
+                    document_id=row.ragflow_document_id,
+                )
             with self.session_factory() as session:
                 db_file = session.get(File, row.id)
                 if db_file:
                     session.delete(db_file)
                     session.commit()
+            self._record_dashboard_change(
+                sync_id=sync_id,
+                action="delete_missing_file",
+                change_type="deleted",
+                status="succeeded",
+                object_name=(
+                    row.ragflow_document_name
+                    or row.ingested_document_name
+                    or _basename(row.normalized_path)
+                ),
+                source_path=row.normalized_path,
+                target_path=(
+                    f"{dataset_id}/{row.ragflow_document_id}"
+                    if row.ragflow_document_id
+                    else dataset_id
+                ),
+                details={
+                    "repo_id": repo_id,
+                    "dataset_id": dataset_id,
+                    "document_id": row.ragflow_document_id,
+                },
+            )
             deleted += 1
         return deleted
 
@@ -342,6 +640,17 @@ class SyncOrchestrator:
                 row.parse_status = str(document.get("run") or "")
                 if document.get("run") == "FAIL":
                     row.error_message = str(document.get("progress_msg") or "")[:4000]
+                    self._record_dashboard_change(
+                        sync_id=None,
+                        action="check_parse_status",
+                        change_type="failed",
+                        status="failed",
+                        object_name=row.ragflow_document_name or row.ingested_document_name,
+                        source_path=row.normalized_path,
+                        target_path=f"{dataset_id}/{row.ragflow_document_id}",
+                        error_message=row.error_message,
+                        details={"repo_id": repo_id, "dataset_id": dataset_id},
+                    )
                 updated += 1
             session.commit()
         return updated
@@ -435,6 +744,72 @@ class SyncOrchestrator:
             db_library.last_error = str(exc)[:4000]
             session.commit()
 
+    def _create_dashboard_sync_run(
+        self,
+        sync_id: str,
+        repo_id: str,
+        dataset_id: str,
+        scope: str,
+    ) -> None:
+        if self.dashboard_store is None:
+            return
+        try:
+            self.dashboard_store.create_sync_run(
+                sync_id=sync_id,
+                source=f"seafile:{repo_id}:{scope}",
+                target=f"ragflow:{dataset_id}",
+                summary=f"Synchronisation für Repository {repo_id}",
+                details={"repo_id": repo_id, "dataset_id": dataset_id, "scope": scope},
+            )
+        except Exception as exc:
+            self.log.warning("dashboard.sync_run_create_failed", error=str(exc), sync_id=sync_id)
+
+    def _finish_dashboard_sync_run(
+        self,
+        *,
+        sync_id: str,
+        status: str,
+        objects_checked: int,
+        objects_created: int,
+        objects_updated: int,
+        objects_deleted: int,
+        objects_skipped: int,
+        errors_count: int,
+        warnings_count: int,
+        summary: str,
+        details: Mapping[str, Any],
+    ) -> None:
+        if self.dashboard_store is None:
+            return
+        try:
+            self.dashboard_store.finish_sync_run(
+                sync_id=sync_id,
+                status=status,
+                objects_checked=objects_checked,
+                objects_created=objects_created,
+                objects_updated=objects_updated,
+                objects_deleted=objects_deleted,
+                objects_skipped=objects_skipped,
+                errors_count=errors_count,
+                warnings_count=warnings_count,
+                summary=summary,
+                details=details,
+            )
+        except Exception as exc:
+            self.log.warning("dashboard.sync_run_finish_failed", error=str(exc), sync_id=sync_id)
+
+    def _record_dashboard_change(self, **kwargs: Any) -> None:
+        if self.dashboard_store is None:
+            return
+        try:
+            self.dashboard_store.record_change(**kwargs)
+        except Exception as exc:
+            self.log.warning(
+                "dashboard.change_record_failed",
+                error=str(exc),
+                sync_id=kwargs.get("sync_id"),
+            )
+
     def _get_library(self, session: Session, repo_id: str) -> Library:
         db_library = session.get(Library, repo_id)
         if db_library is None:
@@ -455,6 +830,31 @@ class SyncOrchestrator:
             raise KeyError(msg)
         return db_file
 
+    def _find_stale_document_ids(
+        self,
+        dataset_id: str,
+        *,
+        document_name: str,
+        old_document_id: str | None,
+    ) -> list[str]:
+        stale_ids: list[str] = []
+        if old_document_id:
+            stale_ids.append(old_document_id)
+
+        documents = self.ragflow_client.list_documents(
+            dataset_id,
+            keywords=_document_search_keyword(document_name),
+            page_size=1024,
+        )
+        for document in documents:
+            document_id = _document_id(document)
+            if not document_id or document_id in stale_ids:
+                continue
+            existing_name = _document_name(document)
+            if _matches_document_name_or_ragflow_duplicate(existing_name, document_name):
+                stale_ids.append(document_id)
+        return stale_ids
+
 
 def _join_seafile_path(parent: str, name: str) -> str:
     if parent == "/":
@@ -462,9 +862,49 @@ def _join_seafile_path(parent: str, name: str) -> str:
     return f"{parent.rstrip('/')}/{name}"
 
 
+def _basename(path: str) -> str:
+    stripped = path.rstrip("/")
+    if not stripped or stripped == "/":
+        return "/"
+    return stripped.rsplit("/", 1)[-1]
+
+
 def _is_directory(item: dict[str, Any]) -> bool:
     value = str(item.get("type") or "").lower()
     return value in {"dir", "directory"} or bool(item.get("is_dir"))
+
+
+def _document_id(document: dict[str, Any]) -> str | None:
+    value = document.get("id") or document.get("document_id")
+    return str(value) if value else None
+
+
+def _document_name(document: dict[str, Any]) -> str:
+    value = document.get("name") or document.get("document_name") or document.get("filename")
+    return str(value or "")
+
+
+def _matches_document_name_or_ragflow_duplicate(existing_name: str, target_name: str) -> bool:
+    if existing_name == target_name:
+        return True
+
+    existing_stem, existing_suffix = _split_document_name(existing_name)
+    target_stem, target_suffix = _split_document_name(target_name)
+    if existing_suffix != target_suffix:
+        return False
+    return re.fullmatch(rf"{re.escape(target_stem)} ?\([1-9][0-9]*\)", existing_stem) is not None
+
+
+def _document_search_keyword(document_name: str) -> str:
+    stem, _suffix = _split_document_name(document_name)
+    return stem or document_name
+
+
+def _split_document_name(name: str) -> tuple[str, str]:
+    if "." not in name.lstrip("."):
+        return name, ""
+    stem, dot, suffix = name.rpartition(".")
+    return stem, dot + suffix
 
 
 def _int_or_none(value: Any) -> int | None:

@@ -37,6 +37,29 @@ oder ein gemeinsames Docker-Netzwerk. Für bestehende Docker-Stacks kann
 gesetzt werden. Die Compose-Datei referenziert keine lokale `env_file`;
 Portainer-Environment-Variablen reichen aus.
 
+## Dashboard
+
+Der Connector enthält ein lesendes HTTP-Dashboard für Administratoren,
+Auditoren und Entwickler. Es zeigt Connector-Zustand, Sync-Historie,
+Änderungen, Quellen/Ziele, gefilterte Logs und technische Diagnosewerte. Es
+erzwingt bewusst keine Authentifizierung; der Zugriff wird über
+Netzwerkexposition gesteuert. Wer die Oberfläche nicht erreichbar machen will,
+aktiviert sie nicht oder veröffentlicht den Port nicht. Datei-Downloads und
+Schreibaktionen werden nicht angeboten.
+
+Da das Projekt bisher keine Weboberfläche hatte, ist das Dashboard standardmäßig
+deaktiviert:
+
+```env
+CONNECTOR_DASHBOARD_ENABLED=true
+CONNECTOR_DASHBOARD_HOST=0.0.0.0
+CONNECTOR_DASHBOARD_PORT=8080
+```
+
+Im Portainer-Stack läuft das Dashboard im `connector-controller`. Die
+Beispielkonfiguration veröffentlicht es lokal am Docker-Host unter
+`127.0.0.1:18080`, wenn es aktiviert ist.
+
 ## Entwicklungschecks
 
 ```bash

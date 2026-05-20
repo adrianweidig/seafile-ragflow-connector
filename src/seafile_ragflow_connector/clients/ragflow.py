@@ -64,6 +64,24 @@ class RAGFlowClient:
         raise TypeError(msg)
 
     def delete_documents(self, dataset_id: str, document_ids: list[str]) -> Any:
+        try:
+            return self._delete_documents_once(dataset_id, document_ids)
+        except ApiError as exc:
+            if not _is_missing_document_delete_response(exc.payload):
+                raise
+            if len(document_ids) <= 1:
+                return exc.payload
+            results = []
+            for document_id in document_ids:
+                try:
+                    results.append(self._delete_documents_once(dataset_id, [document_id]))
+                except ApiError as single_exc:
+                    if _is_missing_document_delete_response(single_exc.payload):
+                        continue
+                    raise
+            return results
+
+    def _delete_documents_once(self, dataset_id: str, document_ids: list[str]) -> Any:
         return unwrap_response(
             self._client.request(
                 "DELETE",
@@ -80,10 +98,21 @@ class RAGFlowClient:
             )
         )
 
-    def list_documents(self, dataset_id: str, *, run: str | None = None) -> list[dict[str, Any]]:
+    def list_documents(
+        self,
+        dataset_id: str,
+        *,
+        run: str | None = None,
+        keywords: str | None = None,
+        page_size: int | None = None,
+    ) -> list[dict[str, Any]]:
         params: dict[str, str] = {}
         if run:
             params["run"] = run
+        if keywords:
+            params["keywords"] = keywords
+        if page_size:
+            params["page_size"] = str(page_size)
         data = unwrap_response(self._client.get(f"/api/v1/datasets/{dataset_id}/documents", params=params))
         if isinstance(data, dict) and "docs" in data:
             return list(data["docs"])
@@ -99,3 +128,12 @@ def _is_missing_dataset_name_response(payload: Any, name: str) -> bool:
         return False
     message = str(payload.get("message", ""))
     return "lacks permission for dataset" in message and f"'{name}'" in message
+
+
+def _is_missing_document_delete_response(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("code") not in (102, "102"):
+        return False
+    message = str(payload.get("message", ""))
+    return "Document not found" in message or "do not belong to dataset" in message

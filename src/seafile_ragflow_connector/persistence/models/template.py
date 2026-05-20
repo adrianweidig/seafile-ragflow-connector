@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, JSON, Text, func
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Integer, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from seafile_ragflow_connector.persistence.db import Base
@@ -27,7 +27,11 @@ class TemplateState(Base):
 class DatasetSettingsSnapshot(Base):
     __tablename__ = "dataset_settings_snapshots"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
     repo_id: Mapped[str] = mapped_column(
         Text,
         ForeignKey("libraries.repo_id", ondelete="CASCADE"),
@@ -36,5 +40,8 @@ class DatasetSettingsSnapshot(Base):
     ragflow_dataset_id: Mapped[str] = mapped_column(Text, nullable=False)
     settings_hash: Mapped[str] = mapped_column(Text, nullable=False)
     settings_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    observed_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    observed_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
     source: Mapped[str] = mapped_column(Text, nullable=False, default="ragflow")

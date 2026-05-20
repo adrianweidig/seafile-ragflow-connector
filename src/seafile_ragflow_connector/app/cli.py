@@ -2,14 +2,28 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import structlog
 import typer
 
 from seafile_ragflow_connector.app.logging import configure_logging
-from seafile_ragflow_connector.app.runtime import build_runtime, check_database, check_redis
+from seafile_ragflow_connector.app.runtime import (
+    build_dashboard_store,
+    build_runtime,
+    check_database,
+    check_redis,
+)
 from seafile_ragflow_connector.config import get_settings
+from seafile_ragflow_connector.config.settings import Settings
+from seafile_ragflow_connector.dashboard.server import (
+    DashboardBindError,
+    DashboardContext,
+    DashboardServerHandle,
+    serve_dashboard_forever,
+    start_dashboard_server,
+)
 from seafile_ragflow_connector.jobs.job_store import JobStore
 from seafile_ragflow_connector.jobs.scheduler import PeriodicTask, SimpleScheduler
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
@@ -17,18 +31,23 @@ from seafile_ragflow_connector.jobs.worker import WorkerRunner
 from seafile_ragflow_connector.persistence.db import init_database
 
 app = typer.Typer(help="Offline-first Seafile to RAGFlow connector")
+PROCESS_STARTED_AT = datetime.now(UTC)
 
 
-def _bootstrap() -> None:
+def _bootstrap() -> Settings:
     settings = get_settings()
-    configure_logging(settings.log_level, settings.log_format)
+    configure_logging(
+        settings.log_level,
+        settings.log_format,
+        dashboard_store=build_dashboard_store(settings),
+    )
+    return settings
 
 
 @app.command()
 def init_db() -> None:
     """Create or update connector state tables."""
-    _bootstrap()
-    settings = get_settings()
+    settings = _bootstrap()
     init_database(settings.database_url)
     typer.echo("database initialized")
 
@@ -36,8 +55,7 @@ def init_db() -> None:
 @app.command("check-live")
 def check_live() -> None:
     """Check live dependencies without mutating Seafile or RAGFlow."""
-    _bootstrap()
-    settings = get_settings()
+    settings = _bootstrap()
     check_database(settings.database_url)
     check_redis(settings.redis_url)
     runtime = build_runtime(settings)
@@ -47,7 +65,9 @@ def check_live() -> None:
             "Seafile",
         )
         templates = _retry_until(
-            lambda: runtime.ragflow_client.list_datasets(name=settings.ragflow_template_dataset_name),
+            lambda: runtime.ragflow_client.list_datasets(
+                name=settings.ragflow_template_dataset_name,
+            ),
             "RAGFlow",
         )
         typer.echo(
@@ -74,8 +94,7 @@ def sync_once(
     ] = 0,
 ) -> None:
     """Run one full discovery and reconciliation pass."""
-    _bootstrap()
-    settings = get_settings()
+    settings = _bootstrap()
     runtime = build_runtime(settings)
     try:
         summary = runtime.orchestrator.sync_once()
@@ -89,10 +108,24 @@ def sync_once(
 @app.command()
 def controller() -> None:
     """Run the discovery and delta scheduling loop."""
-    _bootstrap()
-    settings = get_settings()
+    settings = _bootstrap()
     runtime = build_runtime(settings)
     log = structlog.get_logger(__name__)
+    dashboard_handle: DashboardServerHandle | None = None
+    if settings.connector_dashboard_enabled and runtime.dashboard_store is not None:
+        try:
+            dashboard_handle = start_dashboard_server(
+                DashboardContext(runtime.dashboard_store, settings, PROCESS_STARTED_AT)
+            )
+        except DashboardBindError as exc:
+            log.error("dashboard.bind_failed", error=str(exc))
+            runtime.close()
+            raise typer.Exit(1) from exc
+        log.info(
+            "dashboard.started",
+            host=settings.connector_dashboard_host,
+            port=settings.connector_dashboard_port,
+        )
 
     def discover() -> None:
         specs = runtime.orchestrator.discover_job_specs()
@@ -119,14 +152,18 @@ def controller() -> None:
         ]
     )
     log.info("controller.started")
-    scheduler.run_forever()
+    try:
+        scheduler.run_forever()
+    finally:
+        if dashboard_handle is not None:
+            dashboard_handle.stop()
+        runtime.close()
 
 
 @app.command()
 def worker() -> None:
     """Run a connector worker process."""
-    _bootstrap()
-    settings = get_settings()
+    settings = _bootstrap()
     runtime = build_runtime(settings)
     log = structlog.get_logger(__name__)
     log.info("worker.started")
@@ -141,8 +178,7 @@ def worker() -> None:
 @app.command()
 def reconciler() -> None:
     """Run the low-priority reconciliation loop."""
-    _bootstrap()
-    settings = get_settings()
+    settings = _bootstrap()
     runtime = build_runtime(settings)
     log = structlog.get_logger(__name__)
 
@@ -150,7 +186,9 @@ def reconciler() -> None:
         summary = runtime.orchestrator.sync_once()
         log.info("reconciler.synced", **summary.__dict__)
 
-    scheduler = SimpleScheduler([PeriodicTask("reconcile", settings.reconcile_interval_seconds, reconcile)])
+    scheduler = SimpleScheduler(
+        [PeriodicTask("reconcile", settings.reconcile_interval_seconds, reconcile)]
+    )
     log.info("reconciler.started")
     scheduler.run_forever()
 
@@ -158,8 +196,7 @@ def reconciler() -> None:
 @app.command("check-config")
 def check_config() -> None:
     """Load and validate configuration without contacting external services."""
-    _bootstrap()
-    settings = get_settings()
+    settings = _bootstrap()
     typer.echo(
         {
             "app_env": settings.app_env,
@@ -167,8 +204,32 @@ def check_config() -> None:
             "ragflow_base_url": settings.ragflow_base_url,
             "allow_unknown_text_files": settings.allow_unknown_text_files,
             "dataset_settings_source": settings.dataset_settings_source,
+            "connector_dashboard_enabled": settings.connector_dashboard_enabled,
+            "connector_dashboard_host": settings.connector_dashboard_host,
+            "connector_dashboard_port": settings.connector_dashboard_port,
         }
     )
+
+
+@app.command()
+def dashboard() -> None:
+    """Run the read-only HTTP dashboard as a foreground process."""
+    settings = _bootstrap()
+    log = structlog.get_logger(__name__)
+    if not settings.connector_dashboard_enabled:
+        log.info("dashboard.disabled")
+        typer.echo("dashboard disabled; set CONNECTOR_DASHBOARD_ENABLED=true to start it")
+        return
+    init_database(settings.database_url)
+    store = build_dashboard_store(settings)
+    if store is None:
+        typer.echo("dashboard disabled; set CONNECTOR_DASHBOARD_ENABLED=true to start it")
+        return
+    try:
+        serve_dashboard_forever(DashboardContext(store, settings, PROCESS_STARTED_AT))
+    except DashboardBindError as exc:
+        log.error("dashboard.bind_failed", error=str(exc))
+        raise typer.Exit(1) from exc
 
 
 def _enqueue_specs(job_store: JobStore, signal_queue, specs: list[JobSpec]) -> None:
@@ -191,7 +252,9 @@ def _retry_until(action: Callable[[], Any], label: str, timeout_seconds: int = 1
             last_error = exc
             time.sleep(5)
     if last_error:
-        raise RuntimeError(f"{label} did not become ready within {timeout_seconds}s") from last_error
+        raise RuntimeError(
+            f"{label} did not become ready within {timeout_seconds}s"
+        ) from last_error
     raise RuntimeError(f"{label} did not become ready within {timeout_seconds}s")
 
 
@@ -226,7 +289,10 @@ def _build_job_handlers(runtime) -> dict[JobType, Callable[[JobSpec], None]]:
 
     def check_parse(spec: JobSpec) -> None:
         _require_repo_id(spec)
-        dataset_id = str(spec.payload.get("dataset_id") or runtime.orchestrator.ensure_dataset_for_repo(spec.repo_id))
+        dataset_id = str(
+            spec.payload.get("dataset_id")
+            or runtime.orchestrator.ensure_dataset_for_repo(spec.repo_id)
+        )
         runtime.orchestrator.check_parse_status(spec.repo_id, dataset_id)
 
     return {
@@ -264,7 +330,9 @@ def _wait_for_parse(runtime, timeout_seconds: int) -> None:
             updated = runtime.orchestrator.check_parse_status(library.repo_id, dataset_id)
             if updated:
                 documents = runtime.ragflow_client.list_documents(dataset_id)
-                active = any(document.get("run") in {"RUNNING", "UNSTART"} for document in documents)
+                active = any(
+                    document.get("run") in {"RUNNING", "UNSTART"} for document in documents
+                )
         if not active:
             return
         time.sleep(5)

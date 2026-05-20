@@ -12,10 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 def _split_csv(value: str | list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
     if value is None:
         return ()
-    if isinstance(value, (list, tuple)):
-        raw_values = value
-    else:
-        raw_values = value.split(",")
+    raw_values = value if isinstance(value, (list, tuple)) else value.split(",")
     return tuple(item.strip().lower() for item in raw_values if item.strip())
 
 
@@ -30,6 +27,15 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: Literal["json", "console"] = "json"
     dry_run: bool = False
+
+    connector_dashboard_enabled: bool = False
+    connector_dashboard_host: str = "0.0.0.0"
+    connector_dashboard_port: int = 8080
+    connector_dashboard_max_log_entries: int = 5000
+    connector_dashboard_max_event_entries: int = 10000
+    connector_dashboard_max_sync_runs: int = 1000
+    connector_dashboard_log_page_size: int = 100
+    connector_dashboard_max_field_length: int = 4000
 
     seafile_base_url: str
     seafile_internal_url: str | None = None
@@ -123,6 +129,28 @@ class Settings(BaseSettings):
     def validate_max_file_size(cls, value: int) -> int:
         if value <= 0:
             msg = "max_file_size_mb must be positive"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("connector_dashboard_port")
+    @classmethod
+    def validate_dashboard_port(cls, value: int) -> int:
+        if value < 1 or value > 65535:
+            msg = "connector_dashboard_port must be between 1 and 65535"
+            raise ValueError(msg)
+        return value
+
+    @field_validator(
+        "connector_dashboard_max_log_entries",
+        "connector_dashboard_max_event_entries",
+        "connector_dashboard_max_sync_runs",
+        "connector_dashboard_log_page_size",
+        "connector_dashboard_max_field_length",
+    )
+    @classmethod
+    def validate_dashboard_positive_int(cls, value: int) -> int:
+        if value <= 0:
+            msg = "dashboard limits must be positive"
             raise ValueError(msg)
         return value
 
