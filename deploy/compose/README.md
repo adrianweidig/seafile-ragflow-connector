@@ -9,8 +9,8 @@ ersetze alle `change-me` Werte und starte dann mit `--env-file`.
 
 | Anwendungsfall | Compose-Datei | Env-Vorlage | Zweck |
 | --- | --- | --- | --- |
-| Externe Dienste über Host/LAN | `external-services.compose.yml` | `external-services.stack.env.example` | Seafile und RAGFlow laufen außerhalb des Stacks, z. B. über Reverse Proxy, LAN-IP oder veröffentlichte Host-Ports. |
-| Bestehendes Docker-Netz | `shared-network.compose.yml` | `shared-network.stack.env.example` | Connector, Seafile und RAGFlow hängen im selben Docker-Netz und sprechen sich über Service-Namen an. |
+| Externe Dienste über Host/LAN | `external-services.compose.yml` | `external-services.stack.env.example` | Seafile, RAGFlow und optional OpenWebUI laufen außerhalb des Stacks, z. B. über Reverse Proxy, LAN-IP oder veröffentlichte Host-Ports. |
+| Bestehendes Docker-Netz | `shared-network.compose.yml` | `shared-network.stack.env.example` | Connector, Seafile, RAGFlow und optional OpenWebUI hängen im selben Docker-Netz und sprechen sich über Service-Namen an. |
 | OpenWebUI zusätzlich anbinden | `openwebui.compose.yml` | `openwebui.stack.env.example` | Wie Shared-Network, zusätzlich mit Dashboard/Proxy und aktivierter OpenWebUI-Synchronisation. |
 
 ## Startbeispiele

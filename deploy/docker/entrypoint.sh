@@ -126,7 +126,7 @@ case "${1:-}" in
     wait_for_infra
     exec connector "$@"
     ;;
-  check-live|sync-once|controller|worker|reconciler|dashboard)
+  check-live|sync-once|openwebui-sync-once|controller|worker|reconciler|dashboard)
     prepare_runtime_dirs
     run_startup_checks
     auto_init_db
