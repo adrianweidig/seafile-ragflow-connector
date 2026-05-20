@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 from urllib.parse import unquote
 
@@ -48,10 +49,24 @@ class SeafileSyncClient:
         return self._rewrite_download_url(unquote(url))
 
     def download_file(self, repo_id: str, path: str) -> bytes:
-        url = self.get_file_download_url(repo_id, path)
-        response = httpx.get(url, headers=dict(self._client.headers), timeout=self._client.timeout)
-        response.raise_for_status()
-        return response.content
+        last_error: Exception | None = None
+        for attempt in range(1, 6):
+            try:
+                url = self.get_file_download_url(repo_id, path)
+                response = httpx.get(url, headers=dict(self._client.headers), timeout=self._client.timeout)
+                response.raise_for_status()
+                return response.content
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                if exc.response.status_code not in {429, 502, 503, 504}:
+                    raise
+            except httpx.HTTPError as exc:
+                last_error = exc
+            time.sleep(min(30, 2 * attempt))
+        if last_error:
+            raise last_error
+        msg = f"failed to download Seafile file after retries: {repo_id}:{path}"
+        raise RuntimeError(msg)
 
     def get_commit_diff(self, repo_id: str, commit_id: str) -> dict[str, Any]:
         # Seafile deployments differ in commit detail endpoint availability. Keep the
@@ -71,4 +86,3 @@ class SeafileSyncClient:
         ):
             return self.rewrite_to.rstrip("/") + url[len(self.rewrite_from.rstrip("/")) :]
         return url
-

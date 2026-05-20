@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     seafile_admin_token: str
     seafile_sync_user_token: str
     seafile_sync_user_email: str | None = None
+    seafile_skip_encrypted_libraries: bool = True
+    seafile_skip_virtual_repos: bool = True
     seafile_rewrite_download_urls: bool = False
     seafile_download_rewrite_from: str | None = None
     seafile_download_rewrite_to: str | None = None

@@ -18,6 +18,13 @@ def get_session_factory(database_url: str) -> sessionmaker[Session]:
     return sessionmaker(bind=get_engine(database_url), expire_on_commit=False)
 
 
+def init_database(database_url: str) -> None:
+    from seafile_ragflow_connector.persistence import models  # noqa: F401
+
+    engine = get_engine(database_url)
+    Base.metadata.create_all(engine)
+
+
 def session_scope(session_factory: sessionmaker[Session]) -> Generator[Session, None, None]:
     session = session_factory()
     try:
@@ -28,4 +35,3 @@ def session_scope(session_factory: sessionmaker[Session]) -> Generator[Session, 
         raise
     finally:
         session.close()
-

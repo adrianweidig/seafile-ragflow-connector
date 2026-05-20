@@ -1,0 +1,481 @@
+from __future__ import annotations
+
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+
+import structlog
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
+
+from seafile_ragflow_connector.clients import RAGFlowClient, SeafileAdminClient, SeafileSyncClient
+from seafile_ragflow_connector.clients.http import ApiError
+from seafile_ragflow_connector.domain.file_classification import FilePolicy, classify_file
+from seafile_ragflow_connector.domain.ingestion_artifacts import prepare_ingestion_artifact
+from seafile_ragflow_connector.domain.naming import build_dataset_name, slugify
+from seafile_ragflow_connector.jobs.types import JobSpec, JobType
+from seafile_ragflow_connector.persistence.models.file import File
+from seafile_ragflow_connector.persistence.models.library import Library
+from seafile_ragflow_connector.persistence.models.template import DatasetSettingsSnapshot
+from seafile_ragflow_connector.sync.dataset_provisioning import DatasetProvisioner, LibrarySource
+from seafile_ragflow_connector.sync.dataset_settings import DatasetSettingsService
+from seafile_ragflow_connector.sync.discovery import DiscoveredLibrary, normalize_library, should_skip_library
+from seafile_ragflow_connector.utils.hashing import sha256_bytes
+from seafile_ragflow_connector.utils.paths import normalize_seafile_path
+
+
+@dataclass(frozen=True)
+class SyncSummary:
+    libraries_seen: int = 0
+    libraries_synced: int = 0
+    files_seen: int = 0
+    files_uploaded: int = 0
+    files_deleted: int = 0
+    files_skipped: int = 0
+
+
+@dataclass(frozen=True)
+class FileSyncResult:
+    uploaded: bool
+    skipped: bool
+    document_id: str | None
+
+
+class SyncOrchestrator:
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session],
+        *,
+        admin_client: SeafileAdminClient,
+        sync_client: SeafileSyncClient,
+        ragflow_client: RAGFlowClient,
+        file_policy: FilePolicy,
+        template_dataset_name: str,
+        skip_encrypted_libraries: bool = True,
+        skip_virtual_repos: bool = True,
+        delete_ragflow_docs_on_seafile_delete: bool = True,
+        refresh_dataset_settings: bool = True,
+    ) -> None:
+        self.session_factory = session_factory
+        self.admin_client = admin_client
+        self.sync_client = sync_client
+        self.ragflow_client = ragflow_client
+        self.file_policy = file_policy
+        self.skip_encrypted_libraries = skip_encrypted_libraries
+        self.skip_virtual_repos = skip_virtual_repos
+        self.delete_ragflow_docs_on_seafile_delete = delete_ragflow_docs_on_seafile_delete
+        self.refresh_dataset_settings = refresh_dataset_settings
+        self.dataset_provisioner = DatasetProvisioner(
+            ragflow_client,
+            template_dataset_name=template_dataset_name,
+        )
+        self.dataset_settings_service = DatasetSettingsService(ragflow_client)
+        self.log = structlog.get_logger(__name__)
+
+    def discover_libraries(self) -> list[DiscoveredLibrary]:
+        discovered: list[DiscoveredLibrary] = []
+        for raw in self.admin_client.iter_libraries():
+            library = normalize_library(raw)
+            skipped, reason = should_skip_library(
+                library,
+                skip_encrypted=self.skip_encrypted_libraries,
+                skip_virtual=self.skip_virtual_repos,
+            )
+            with self.session_factory() as session:
+                db_library = self._upsert_library(session, library)
+                if skipped:
+                    db_library.status = f"skipped:{reason}"
+                session.commit()
+            if skipped:
+                self.log.info("library.skipped", repo_id=library.repo_id, reason=reason)
+                continue
+            discovered.append(library)
+        return discovered
+
+    def discover_job_specs(self) -> list[JobSpec]:
+        return [
+            JobSpec(JobType.SYNC_LIBRARY_FULL, repo_id=library.repo_id)
+            for library in self.discover_libraries()
+        ]
+
+    def sync_once(self) -> SyncSummary:
+        libraries = self.discover_libraries()
+        summary = SyncSummary(libraries_seen=len(libraries))
+        for library in libraries:
+            try:
+                library_summary = self.sync_library_full(library.repo_id)
+            except Exception as exc:
+                self._mark_library_error(library.repo_id, exc)
+                self.log.warning(
+                    "library.sync_failed",
+                    repo_id=library.repo_id,
+                    name=library.name,
+                    error=str(exc),
+                )
+                continue
+            summary = SyncSummary(
+                libraries_seen=summary.libraries_seen,
+                libraries_synced=summary.libraries_synced + library_summary.libraries_synced,
+                files_seen=summary.files_seen + library_summary.files_seen,
+                files_uploaded=summary.files_uploaded + library_summary.files_uploaded,
+                files_deleted=summary.files_deleted + library_summary.files_deleted,
+                files_skipped=summary.files_skipped + library_summary.files_skipped,
+            )
+        return summary
+
+    def ensure_dataset_for_repo(self, repo_id: str) -> str:
+        with self.session_factory() as session:
+            db_library = self._get_library(session, repo_id)
+            source = LibrarySource(
+                repo_id=db_library.repo_id,
+                name=db_library.name,
+                owner_email=db_library.owner_email,
+            )
+        result = self.dataset_provisioner.ensure_dataset(source)
+        with self.session_factory() as session:
+            db_library = self._get_library(session, repo_id)
+            db_library.ragflow_dataset_id = result.dataset_id
+            db_library.ragflow_dataset_name = result.dataset_name
+            db_library.template_hash = result.template_hash or db_library.template_hash
+            db_library.status = "active"
+            db_library.last_error = None
+            self._record_dataset_snapshot(
+                session,
+                repo_id=repo_id,
+                dataset_id=result.dataset_id,
+                settings_hash=result.settings_hash,
+                settings_payload=result.settings_payload,
+            )
+            session.commit()
+        return result.dataset_id
+
+    def sync_library_full(self, repo_id: str, *, scope: str = "/") -> SyncSummary:
+        dataset_id = self.ensure_dataset_for_repo(repo_id)
+        seen_paths: set[str] = set()
+        files_seen = 0
+        files_uploaded = 0
+        files_skipped = 0
+
+        for path, item in self.iter_files(repo_id, scope):
+            normalized_path = normalize_seafile_path(path)
+            seen_paths.add(normalized_path)
+            files_seen += 1
+            result = self.sync_file(repo_id, dataset_id, normalized_path, item=item)
+            if result.uploaded:
+                files_uploaded += 1
+            if result.skipped:
+                files_skipped += 1
+
+        files_deleted = self.delete_missing_files(repo_id, dataset_id, seen_paths, scope=scope)
+        with self.session_factory() as session:
+            db_library = self._get_library(session, repo_id)
+            db_library.last_synced_commit_id = db_library.head_commit_id
+            db_library.status = "active"
+            db_library.last_error = None
+            session.commit()
+        return SyncSummary(
+            libraries_synced=1,
+            files_seen=files_seen,
+            files_uploaded=files_uploaded,
+            files_deleted=files_deleted,
+            files_skipped=files_skipped,
+        )
+
+    def sync_file(
+        self,
+        repo_id: str,
+        dataset_id: str,
+        path: str,
+        *,
+        item: dict[str, Any] | None = None,
+        force: bool = False,
+    ) -> FileSyncResult:
+        data = self.sync_client.download_file(repo_id, path)
+        classification = classify_file(path, data, self.file_policy)
+        source_hash = sha256_bytes(data)
+        artifact = None
+        if classification.should_ingest:
+            artifact = prepare_ingestion_artifact(classification, data)
+
+        with self.session_factory() as session:
+            db_file = self._upsert_file_row(
+                session,
+                repo_id=repo_id,
+                path=path,
+                item=item,
+                classification=classification,
+                source_hash=source_hash,
+            )
+            if not classification.should_ingest or artifact is None:
+                db_file.sync_status = "skipped"
+                db_file.error_message = classification.reason
+                session.commit()
+                return FileSyncResult(uploaded=False, skipped=True, document_id=db_file.ragflow_document_id)
+
+            unchanged = (
+                not force
+                and db_file.source_content_sha256 == artifact.source_content_sha256
+                and db_file.ingested_content_sha256 == artifact.ingested_content_sha256
+                and bool(db_file.ragflow_document_id)
+            )
+            old_document_id = db_file.ragflow_document_id
+            db_file.sync_status = "pending"
+            db_file.error_message = None
+            session.commit()
+
+        if unchanged:
+            with self.session_factory() as session:
+                db_file = self._get_file(session, repo_id, normalize_seafile_path(path))
+                db_file.sync_status = "synced"
+                db_file.error_message = None
+                session.commit()
+            return FileSyncResult(uploaded=False, skipped=False, document_id=old_document_id)
+
+        if old_document_id:
+            self.ragflow_client.delete_documents(dataset_id, [old_document_id])
+
+        settings_hash = None
+        if self.refresh_dataset_settings:
+            settings = self.dataset_settings_service.refresh(dataset_id)
+            settings_hash = settings.settings_hash
+            with self.session_factory() as session:
+                self._record_dataset_snapshot(
+                    session,
+                    repo_id=repo_id,
+                    dataset_id=dataset_id,
+                    settings_hash=settings.settings_hash,
+                    settings_payload=settings.settings_payload,
+                )
+                session.commit()
+
+        document = self.ragflow_client.upload_document(
+            dataset_id,
+            document_name=artifact.document_name,
+            content=artifact.content,
+            mime_type=artifact.mime_type,
+        )
+        document_id = str(document.get("id") or document.get("document_id") or "")
+        if not document_id:
+            msg = f"RAGFlow upload response did not contain a document id for {path}"
+            raise RuntimeError(msg)
+        self.ragflow_client.parse_documents(dataset_id, [document_id])
+
+        with self.session_factory() as session:
+            db_file = self._get_file(session, repo_id, normalize_seafile_path(path))
+            db_file.source_content_sha256 = artifact.source_content_sha256
+            db_file.ingested_content_sha256 = artifact.ingested_content_sha256
+            db_file.ragflow_document_id = document_id
+            db_file.ragflow_document_name = artifact.document_name
+            db_file.ingested_document_name = artifact.document_name
+            db_file.ingested_mime = artifact.mime_type
+            db_file.last_uploaded_dataset_settings_hash = settings_hash
+            db_file.sync_status = "uploaded"
+            db_file.parse_status = "UNSTART"
+            db_file.error_message = None
+            session.commit()
+
+        return FileSyncResult(uploaded=True, skipped=False, document_id=document_id)
+
+    def delete_file(self, repo_id: str, dataset_id: str, path: str) -> bool:
+        normalized_path = normalize_seafile_path(path)
+        with self.session_factory() as session:
+            db_file = self._get_file(session, repo_id, normalized_path)
+            document_id = db_file.ragflow_document_id
+        if document_id and self.delete_ragflow_docs_on_seafile_delete:
+            self.ragflow_client.delete_documents(dataset_id, [document_id])
+        with self.session_factory() as session:
+            db_file = self._get_file(session, repo_id, normalized_path)
+            session.delete(db_file)
+            session.commit()
+        return bool(document_id)
+
+    def delete_missing_files(
+        self,
+        repo_id: str,
+        dataset_id: str,
+        seen_paths: set[str],
+        *,
+        scope: str = "/",
+    ) -> int:
+        normalized_scope = normalize_seafile_path(scope)
+        deleted = 0
+        with self.session_factory() as session:
+            rows = session.scalars(select(File).where(File.repo_id == repo_id)).all()
+            missing = [
+                row
+                for row in rows
+                if row.normalized_path not in seen_paths
+                and (
+                    normalized_scope == "/"
+                    or row.normalized_path == normalized_scope
+                    or row.normalized_path.startswith(normalized_scope.rstrip("/") + "/")
+                )
+            ]
+
+        for row in missing:
+            if row.ragflow_document_id and self.delete_ragflow_docs_on_seafile_delete:
+                try:
+                    self.ragflow_client.delete_documents(dataset_id, [row.ragflow_document_id])
+                except ApiError:
+                    raise
+            with self.session_factory() as session:
+                db_file = session.get(File, row.id)
+                if db_file:
+                    session.delete(db_file)
+                    session.commit()
+            deleted += 1
+        return deleted
+
+    def check_parse_status(self, repo_id: str, dataset_id: str) -> int:
+        documents = self.ragflow_client.list_documents(dataset_id)
+        by_id = {str(document.get("id")): document for document in documents if document.get("id")}
+        updated = 0
+        with self.session_factory() as session:
+            rows = session.scalars(select(File).where(File.repo_id == repo_id)).all()
+            for row in rows:
+                if not row.ragflow_document_id:
+                    continue
+                document = by_id.get(row.ragflow_document_id)
+                if not document:
+                    continue
+                row.parse_status = str(document.get("run") or "")
+                if document.get("run") == "FAIL":
+                    row.error_message = str(document.get("progress_msg") or "")[:4000]
+                updated += 1
+            session.commit()
+        return updated
+
+    def iter_files(self, repo_id: str, path: str = "/") -> Iterable[tuple[str, dict[str, Any]]]:
+        for item in self.sync_client.list_dir(repo_id, path):
+            name = str(item.get("name") or "")
+            if not name:
+                continue
+            child_path = _join_seafile_path(path, name)
+            if _is_directory(item):
+                yield from self.iter_files(repo_id, child_path)
+            else:
+                yield child_path, item
+
+    def _upsert_library(self, session: Session, library: DiscoveredLibrary) -> Library:
+        db_library = session.get(Library, library.repo_id)
+        if db_library is None:
+            db_library = Library(
+                repo_id=library.repo_id,
+                name=library.name,
+                name_slug=slugify(library.name),
+            )
+            session.add(db_library)
+        db_library.name = library.name
+        db_library.name_slug = slugify(library.name)
+        db_library.owner_email = library.owner_email
+        db_library.encrypted = library.encrypted
+        db_library.virtual = library.virtual
+        db_library.seafile_mtime = library.seafile_mtime
+        db_library.head_commit_id = library.head_commit_id
+        return db_library
+
+    def _upsert_file_row(
+        self,
+        session: Session,
+        *,
+        repo_id: str,
+        path: str,
+        item: dict[str, Any] | None,
+        classification: Any,
+        source_hash: str,
+    ) -> File:
+        normalized_path = normalize_seafile_path(path)
+        db_file = session.scalar(
+            select(File).where(
+                File.repo_id == repo_id,
+                File.normalized_path == normalized_path,
+            )
+        )
+        if db_file is None:
+            db_file = File(repo_id=repo_id, path=path, normalized_path=normalized_path)
+            session.add(db_file)
+        db_file.path = path
+        db_file.source_extension = classification.source_extension
+        db_file.detected_mime = classification.detected_mime
+        db_file.detected_encoding = classification.detected_encoding
+        db_file.is_text = classification.is_text
+        db_file.ingestion_strategy = classification.ingestion_strategy
+        db_file.source_content_sha256 = source_hash
+        if item:
+            db_file.seafile_obj_id = str(item.get("id") or item.get("obj_id") or "") or None
+            db_file.size = _int_or_none(item.get("size"))
+            db_file.seafile_mtime = _datetime_from_timestamp(item.get("mtime"))
+        return db_file
+
+    def _record_dataset_snapshot(
+        self,
+        session: Session,
+        *,
+        repo_id: str,
+        dataset_id: str,
+        settings_hash: str,
+        settings_payload: dict[str, Any],
+    ) -> None:
+        session.add(
+            DatasetSettingsSnapshot(
+                repo_id=repo_id,
+                ragflow_dataset_id=dataset_id,
+                settings_hash=settings_hash,
+                settings_payload=settings_payload,
+            )
+        )
+
+    def _mark_library_error(self, repo_id: str, exc: Exception) -> None:
+        with self.session_factory() as session:
+            db_library = session.get(Library, repo_id)
+            if db_library is None:
+                return
+            db_library.status = "error"
+            db_library.last_error = str(exc)[:4000]
+            session.commit()
+
+    def _get_library(self, session: Session, repo_id: str) -> Library:
+        db_library = session.get(Library, repo_id)
+        if db_library is None:
+            msg = f"unknown library in state db: {repo_id}"
+            raise KeyError(msg)
+        return db_library
+
+    def _get_file(self, session: Session, repo_id: str, path: str) -> File:
+        normalized_path = normalize_seafile_path(path)
+        db_file = session.scalar(
+            select(File).where(
+                File.repo_id == repo_id,
+                File.normalized_path == normalized_path,
+            )
+        )
+        if db_file is None:
+            msg = f"unknown file in state db: {repo_id}:{normalized_path}"
+            raise KeyError(msg)
+        return db_file
+
+
+def _join_seafile_path(parent: str, name: str) -> str:
+    if parent == "/":
+        return f"/{name}"
+    return f"{parent.rstrip('/')}/{name}"
+
+
+def _is_directory(item: dict[str, Any]) -> bool:
+    value = str(item.get("type") or "").lower()
+    return value in {"dir", "directory"} or bool(item.get("is_dir"))
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _datetime_from_timestamp(value: Any) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(int(value), UTC)
+    except (TypeError, ValueError, OSError):
+        return None
