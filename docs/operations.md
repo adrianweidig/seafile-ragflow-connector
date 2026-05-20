@@ -25,10 +25,18 @@ aus `stack.env.example` im Bereich `Environment variables` zu importieren.
    `connector-reconciler` prüfen.
 
 Der Stack stellt Seafile und RAGFlow nicht bereit. Beide Systeme bleiben extern
-und müssen über die konfigurierten URLs erreichbar sein. Wenn Seafile/RAGFlow auf
-demselben Docker-Host über veröffentlichte Ports laufen, kann
-`host.docker.internal:<port>` genutzt werden; die Compose-Datei setzt dafür
-`host-gateway`.
+und müssen über die konfigurierten URLs erreichbar sein.
+
+Es gibt zwei unterstützte Netzwerkvarianten:
+
+- `CONNECTOR_DOCKER_NETWORK_EXTERNAL=false`: Der Connector erzeugt ein eigenes
+  Docker-Netz. Seafile/RAGFlow müssen über LAN, Reverse Proxy oder
+  `host.docker.internal:<port>` erreichbar sein.
+- `CONNECTOR_DOCKER_NETWORK_EXTERNAL=true`: Der Connector wird an ein bereits
+  existierendes Docker-Netz gehängt. Dann kann `CONNECTOR_DOCKER_NETWORK_NAME`
+  z. B. auf das bestehende Seafile/RAGFlow-Netz gesetzt werden und
+  `SEAFILE_BASE_URL=http://seafile`, `RAGFLOW_BASE_URL=http://ragflow:9380`
+  nutzen.
 
 ## Offline-Bundle
 

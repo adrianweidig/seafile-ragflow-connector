@@ -32,8 +32,10 @@ Dokumente sicher und läuft nach Neustarts weiter.
 
 Seafile und RAGFlow werden nicht durch diesen Stack bereitgestellt. Sie bleiben
 externe Systeme, erreichbar über LAN, Reverse Proxy, veröffentlichte Host-Ports
-oder ein gemeinsames Docker-Netzwerk. Die Compose-Datei referenziert keine lokale
-`env_file`; Portainer-Environment-Variablen reichen aus.
+oder ein gemeinsames Docker-Netzwerk. Für bestehende Docker-Stacks kann
+`CONNECTOR_DOCKER_NETWORK_EXTERNAL=true` mit dem vorhandenen Netzwerknamen
+gesetzt werden. Die Compose-Datei referenziert keine lokale `env_file`;
+Portainer-Environment-Variablen reichen aus.
 
 ## Entwicklungschecks
 

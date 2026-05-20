@@ -169,4 +169,5 @@ volumes:
 
 networks:
   connector-net:
-    driver: bridge
+    name: ${CONNECTOR_DOCKER_NETWORK_NAME:-seafile-ragflow-connector-net}
+    external: ${CONNECTOR_DOCKER_NETWORK_EXTERNAL:-false}
