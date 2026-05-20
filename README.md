@@ -117,14 +117,16 @@ Connector-Proxy auf.
 OPENWEBUI_INTEGRATION_ENABLED=true
 OPENWEBUI_BASE_URL=http://openwebui:8080
 OPENWEBUI_ADMIN_API_KEY=change-me
-OPENWEBUI_SYNC_MODE=dry-run
+OPENWEBUI_SYNC_MODE=sync
 OPENWEBUI_PROXY_INTERNAL_BASE_URL=http://connector-controller:8080
 OPENWEBUI_PROXY_PUBLIC_BASE_URL=http://localhost:18080
 OPENWEBUI_PROXY_SHARED_SECRET=change-me
 ```
 
 `OPENWEBUI_SYNC_MODE` unterstützt `disabled`, `dry-run`, `sync` und `repair`.
-Für den ersten Betrieb sollte `dry-run` genutzt werden. Quellen werden primär
+Die bereitgestellten Testvorlagen sind auf `sync` gestellt, damit Chats, Tools
+und Pipes direkt erzeugt werden. Für eine reine Vorprüfung kann jederzeit
+`dry-run` gesetzt werden. Quellen werden primär
 als OpenWebUI-Citations mit Preview-URL bereitgestellt; wenn RAGFlow keinen
 stabilen öffentlichen Deep Link hat, kann `OPENWEBUI_SOURCE_PREVIEW_MODE` auf
 `connector_viewer` gesetzt werden.

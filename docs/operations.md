@@ -269,7 +269,9 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
   Datenbank, Redis, Seafile-Admin-Token, RAGFlow-API-Key sowie Template-Dataset
   prüfen. Einzelne externe Checks haben kurze Timeouts und blockieren die UI
   nicht dauerhaft.
-- OpenWebUI-Anbindung prüfen: zuerst `OPENWEBUI_SYNC_MODE=dry-run` setzen und
+- OpenWebUI-Anbindung prüfen: Die manuell testbaren Vorlagen nutzen
+  `OPENWEBUI_SYNC_MODE=sync`, damit Chats, Tools und Pipes wirklich erzeugt
+  werden. Für eine reine Vorprüfung `OPENWEBUI_SYNC_MODE=dry-run` setzen und
   `connector openwebui-sync-once --mode dry-run` ausführen. Danach im Dashboard
   den Tab `OpenWebUI` und die Logs nach `openwebui.*` prüfen.
 - OpenWebUI-Proxy nicht erreichbar: sicherstellen, dass
