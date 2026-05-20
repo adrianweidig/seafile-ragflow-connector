@@ -3,8 +3,9 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,8 +51,17 @@ class Settings(BaseSettings):
     ragflow_refresh_dataset_settings: bool = True
     ragflow_validate_created_dataset: bool = True
 
-    database_url: str
-    redis_url: str
+    postgres_host: str = "connector-postgres"
+    postgres_port: int = 5432
+    postgres_db: str = "seafile_ragflow_sync"
+    postgres_user: str = "sync"
+    postgres_password: str | None = None
+    database_url: str = ""
+
+    redis_host: str = "connector-redis"
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_url: str = ""
 
     allow_unknown_text_files: bool = True
     allow_extensions_csv: str = Field(default="", validation_alias="ALLOW_EXTENSIONS")
@@ -115,6 +125,23 @@ class Settings(BaseSettings):
             msg = "max_file_size_mb must be positive"
             raise ValueError(msg)
         return value
+
+    @model_validator(mode="after")
+    def build_service_urls(self) -> Settings:
+        if not self.database_url:
+            if not self.postgres_password:
+                msg = "DATABASE_URL or POSTGRES_PASSWORD must be set"
+                raise ValueError(msg)
+            user = quote(self.postgres_user, safe="")
+            password = quote(self.postgres_password, safe="")
+            database = quote(self.postgres_db, safe="")
+            self.database_url = (
+                f"postgresql+psycopg://{user}:{password}@"
+                f"{self.postgres_host}:{self.postgres_port}/{database}"
+            )
+        if not self.redis_url:
+            self.redis_url = f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+        return self
 
     @property
     def allow_extensions(self) -> tuple[str, ...]:
