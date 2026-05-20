@@ -35,7 +35,11 @@ class WorkerRunner:
         while True:
             self.run_once()
             if self.signal_queue:
-                self.signal_queue.wait(timeout_seconds=self.poll_seconds)
+                try:
+                    self.signal_queue.wait(timeout_seconds=self.poll_seconds)
+                except Exception as exc:
+                    self.log.warning("worker.signal_wait_failed", error=str(exc))
+                    time.sleep(self.poll_seconds)
             else:
                 time.sleep(self.poll_seconds)
 

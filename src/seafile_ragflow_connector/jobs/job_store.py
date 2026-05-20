@@ -67,6 +67,7 @@ class JobStore:
             if job is None:
                 return
             job.status = JobStatus.SUCCEEDED.value
+            job.error_message = None
             job.locked_by = None
             job.locked_at = None
             session.commit()
