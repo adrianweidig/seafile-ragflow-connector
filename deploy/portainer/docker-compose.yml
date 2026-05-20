@@ -1,66 +1,166 @@
+name: ${COMPOSE_PROJECT_NAME:-seafile-ragflow-connector}
+
+x-connector-env: &connector-env
+  TZ: ${TZ:-Europe/Berlin}
+  APP_ENV: ${APP_ENV:-production}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  DRY_RUN: ${DRY_RUN:-false}
+
+  SEAFILE_BASE_URL: ${SEAFILE_BASE_URL:?set SEAFILE_BASE_URL}
+  SEAFILE_INTERNAL_URL: ${SEAFILE_INTERNAL_URL:-}
+  SEAFILE_ADMIN_TOKEN: ${SEAFILE_ADMIN_TOKEN:?set SEAFILE_ADMIN_TOKEN}
+  SEAFILE_SYNC_USER_TOKEN: ${SEAFILE_SYNC_USER_TOKEN:?set SEAFILE_SYNC_USER_TOKEN}
+  SEAFILE_SYNC_USER_EMAIL: ${SEAFILE_SYNC_USER_EMAIL:-}
+  SEAFILE_SKIP_ENCRYPTED_LIBRARIES: ${SEAFILE_SKIP_ENCRYPTED_LIBRARIES:-true}
+  SEAFILE_SKIP_VIRTUAL_REPOS: ${SEAFILE_SKIP_VIRTUAL_REPOS:-true}
+  SEAFILE_REWRITE_DOWNLOAD_URLS: ${SEAFILE_REWRITE_DOWNLOAD_URLS:-false}
+  SEAFILE_DOWNLOAD_REWRITE_FROM: ${SEAFILE_DOWNLOAD_REWRITE_FROM:-}
+  SEAFILE_DOWNLOAD_REWRITE_TO: ${SEAFILE_DOWNLOAD_REWRITE_TO:-}
+
+  RAGFLOW_BASE_URL: ${RAGFLOW_BASE_URL:?set RAGFLOW_BASE_URL}
+  RAGFLOW_INTERNAL_URL: ${RAGFLOW_INTERNAL_URL:-}
+  RAGFLOW_API_KEY: ${RAGFLOW_API_KEY:?set RAGFLOW_API_KEY}
+  RAGFLOW_TEMPLATE_DATASET_NAME: ${RAGFLOW_TEMPLATE_DATASET_NAME:-connector_template}
+  RAGFLOW_TEMPLATE_REQUIRED: ${RAGFLOW_TEMPLATE_REQUIRED:-true}
+  RAGFLOW_TEMPLATE_REFRESH_SECONDS: ${RAGFLOW_TEMPLATE_REFRESH_SECONDS:-300}
+  RAGFLOW_REFRESH_DATASET_SETTINGS: ${RAGFLOW_REFRESH_DATASET_SETTINGS:-true}
+  RAGFLOW_VALIDATE_CREATED_DATASET: ${RAGFLOW_VALIDATE_CREATED_DATASET:-true}
+
+  POSTGRES_HOST: connector-postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: ${POSTGRES_DB:-seafile_ragflow_sync}
+  POSTGRES_USER: ${POSTGRES_USER:-sync}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+  DATABASE_URL: ${DATABASE_URL:-}
+  REDIS_HOST: connector-redis
+  REDIS_PORT: 6379
+  REDIS_DB: ${REDIS_DB:-0}
+  REDIS_URL: ${REDIS_URL:-}
+
+  ALLOW_UNKNOWN_TEXT_FILES: ${ALLOW_UNKNOWN_TEXT_FILES:-true}
+  ALLOW_EXTENSIONS: ${ALLOW_EXTENSIONS:-}
+  DENY_EXTENSIONS: ${DENY_EXTENSIONS:-.exe,.dll,.so,.zip,.tar,.gz,.7z,.tmp,.part}
+  TEXT_EXTENSIONS: ${TEXT_EXTENSIONS:-.ada,.adb,.ads,.txt,.md,.rst,.py,.js,.ts,.java,.c,.cpp,.h,.sql,.xml,.json,.yaml,.yml,.ini,.cfg,.log}
+  BINARY_DIRECT_EXTENSIONS: ${BINARY_DIRECT_EXTENSIONS:-.pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg}
+  DEFAULT_TEXT_INGESTION_STRATEGY: ${DEFAULT_TEXT_INGESTION_STRATEGY:-text_projection}
+  PRESERVE_ORIGINAL_FILENAME_IN_METADATA: ${PRESERVE_ORIGINAL_FILENAME_IN_METADATA:-true}
+  MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-1024}
+  EXCLUDE_REGEX: ${EXCLUDE_REGEX:-}
+
+  DATASET_SETTINGS_SOURCE: ${DATASET_SETTINGS_SOURCE:-ragflow_current}
+  REPARSE_ON_DATASET_SETTINGS_CHANGE: ${REPARSE_ON_DATASET_SETTINGS_CHANGE:-false}
+
+  DISCOVERY_INTERVAL_SECONDS: ${DISCOVERY_INTERVAL_SECONDS:-300}
+  DELTA_SYNC_INTERVAL_SECONDS: ${DELTA_SYNC_INTERVAL_SECONDS:-300}
+  RECONCILE_INTERVAL_SECONDS: ${RECONCILE_INTERVAL_SECONDS:-21600}
+  FULL_SYNC_ON_MISSING_COMMIT: ${FULL_SYNC_ON_MISSING_COMMIT:-true}
+
+  DELETE_RAGFLOW_DOCS_ON_SEAFILE_DELETE: ${DELETE_RAGFLOW_DOCS_ON_SEAFILE_DELETE:-true}
+  DELETE_DATASET_WHEN_LIBRARY_DELETED: ${DELETE_DATASET_WHEN_LIBRARY_DELETED:-false}
+  ARCHIVE_DATASET_WHEN_LIBRARY_DELETED: ${ARCHIVE_DATASET_WHEN_LIBRARY_DELETED:-true}
+
+  MAX_CONCURRENT_LIBRARIES: ${MAX_CONCURRENT_LIBRARIES:-2}
+  UPLOAD_WORKERS: ${UPLOAD_WORKERS:-2}
+  PARSE_WORKERS: ${PARSE_WORKERS:-1}
+  RAGFLOW_UPLOAD_BATCH_SIZE: ${RAGFLOW_UPLOAD_BATCH_SIZE:-8}
+  RAGFLOW_PARSE_BATCH_SIZE: ${RAGFLOW_PARSE_BATCH_SIZE:-16}
+  RAGFLOW_MAX_INFLIGHT_DOCUMENTS: ${RAGFLOW_MAX_INFLIGHT_DOCUMENTS:-64}
+
+  JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-5}
+  JOB_RETRY_BASE_SECONDS: ${JOB_RETRY_BASE_SECONDS:-30}
+  JOB_RETRY_MAX_SECONDS: ${JOB_RETRY_MAX_SECONDS:-3600}
+
+  CACHE_DIR: ${CACHE_DIR:-/cache}
+  TEMP_DIR: ${TEMP_DIR:-/cache/tmp}
+  ALLOW_OUTBOUND_INTERNET: ${ALLOW_OUTBOUND_INTERNET:-false}
+  DISABLE_TELEMETRY: ${DISABLE_TELEMETRY:-true}
+
+  CONNECTOR_AUTO_INIT_DB: ${CONNECTOR_AUTO_INIT_DB:-true}
+  CONNECTOR_STARTUP_CHECK: ${CONNECTOR_STARTUP_CHECK:-live}
+  CONNECTOR_STARTUP_MAX_WAIT_SECONDS: ${CONNECTOR_STARTUP_MAX_WAIT_SECONDS:-300}
+  CONNECTOR_STARTUP_SLEEP_SECONDS: ${CONNECTOR_STARTUP_SLEEP_SECONDS:-5}
+  CONNECTOR_BOOTSTRAP_CHECK_LIVE: ${CONNECTOR_BOOTSTRAP_CHECK_LIVE:-true}
+  CONNECTOR_FALLBACK_CACHE_DIR: ${CONNECTOR_FALLBACK_CACHE_DIR:-/tmp/seafile-ragflow-connector/cache}
+  CONNECTOR_FALLBACK_TEMP_DIR: ${CONNECTOR_FALLBACK_TEMP_DIR:-/tmp/seafile-ragflow-connector/cache/tmp}
+
+x-connector-common: &connector-common
+  image: ${CONNECTOR_IMAGE:-seafile-ragflow-connector:0.1.0}
+  restart: unless-stopped
+  environment: *connector-env
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  volumes:
+    - connector-cache:/cache
+  networks:
+    - connector-net
+  healthcheck:
+    test: ["CMD", "connector", "check-config"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 30s
+
 services:
   connector-postgres:
     image: ${POSTGRES_IMAGE:-postgres:16}
     environment:
+      TZ: ${TZ:-Europe/Berlin}
       POSTGRES_DB: ${POSTGRES_DB:-seafile_ragflow_sync}
       POSTGRES_USER: ${POSTGRES_USER:-sync}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - connector-postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
     networks:
       - connector-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
 
   connector-redis:
     image: ${REDIS_IMAGE:-redis:7}
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["sh", "-c", "redis-server --appendonly yes || valkey-server --appendonly yes"]
     volumes:
       - connector-redis-data:/data
     restart: unless-stopped
     networks:
       - connector-net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping || valkey-cli ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
 
   connector-controller:
-    image: ${CONNECTOR_IMAGE:-seafile-ragflow-connector:0.1.0}
-    env_file:
-      - stack.env
+    <<: *connector-common
     command: ["controller"]
     depends_on:
-      - connector-postgres
-      - connector-redis
-    volumes:
-      - connector-cache:/cache
-    restart: unless-stopped
-    networks:
-      - connector-net
+      connector-postgres:
+        condition: service_healthy
+      connector-redis:
+        condition: service_healthy
 
   connector-worker:
-    image: ${CONNECTOR_IMAGE:-seafile-ragflow-connector:0.1.0}
-    env_file:
-      - stack.env
+    <<: *connector-common
     command: ["worker"]
     depends_on:
-      - connector-postgres
-      - connector-redis
-    volumes:
-      - connector-cache:/cache
-    restart: unless-stopped
-    networks:
-      - connector-net
+      connector-postgres:
+        condition: service_healthy
+      connector-redis:
+        condition: service_healthy
 
   connector-reconciler:
-    image: ${CONNECTOR_IMAGE:-seafile-ragflow-connector:0.1.0}
-    env_file:
-      - stack.env
+    <<: *connector-common
     command: ["reconciler"]
     depends_on:
-      - connector-postgres
-      - connector-redis
-    volumes:
-      - connector-cache:/cache
-    restart: unless-stopped
-    networks:
-      - connector-net
+      connector-postgres:
+        condition: service_healthy
+      connector-redis:
+        condition: service_healthy
 
 volumes:
   connector-postgres-data:
@@ -70,4 +170,3 @@ volumes:
 networks:
   connector-net:
     driver: bridge
-

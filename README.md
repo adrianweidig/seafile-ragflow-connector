@@ -23,15 +23,17 @@ Dokumente sicher und läuft nach Neustarts weiter.
 1. Benötigte Images auf dem Docker-Host importieren, zum Beispiel:
    `docker load -i images/seafile-ragflow-connector_0.1.0.tar`
 2. In Portainer einen neuen Stack erstellen.
-3. `deploy/portainer/docker-compose.yml` einfügen.
-4. `deploy/portainer/stack.env.example` nach `deploy/portainer/stack.env`
-   übernehmen und lokale Seafile-/RAGFlow-URLs sowie Tokens eintragen.
-5. Stack starten.
-6. Controller-Logs und `/readyz` prüfen.
+3. `deploy/portainer/docker-compose.yml` einfügen oder dieses Repo als Git-Stack
+   verwenden.
+4. `deploy/portainer/stack.env.example` in Portainer als Environment importieren.
+5. Alle `change-me` Werte ersetzen und `SEAFILE_BASE_URL` sowie
+   `RAGFLOW_BASE_URL` auf aus dem Connector-Container erreichbare URLs setzen.
+6. Stack starten und die Logs von Controller, Worker und Reconciler prüfen.
 
 Seafile und RAGFlow werden nicht durch diesen Stack bereitgestellt. Sie bleiben
-externe Systeme, erreichbar über LAN, Reverse Proxy oder ein gemeinsames
-Docker-Netzwerk.
+externe Systeme, erreichbar über LAN, Reverse Proxy, veröffentlichte Host-Ports
+oder ein gemeinsames Docker-Netzwerk. Die Compose-Datei referenziert keine lokale
+`env_file`; Portainer-Environment-Variablen reichen aus.
 
 ## Entwicklungschecks
 

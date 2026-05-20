@@ -6,17 +6,29 @@ Troubleshooting, Release und die lokale WSL-/Docker-Prüfung.
 ## Portainer-Deployment
 
 Der produktive Stack liegt unter `deploy/portainer/docker-compose.yml`. Die
-Beispielkonfiguration liegt unter `deploy/portainer/stack.env.example`.
+importierbare Beispielkonfiguration liegt unter
+`deploy/portainer/stack.env.example`.
+
+Die Compose-Datei referenziert keine lokale `env_file`. In Portainer reicht es,
+die Compose-Datei einzufügen oder das Repo als Git-Stack zu nutzen und die Werte
+aus `stack.env.example` im Bereich `Environment variables` zu importieren.
 
 1. Benötigte Images auf dem Docker-Host importieren:
    `docker load -i images/seafile-ragflow-connector_0.1.0.tar`
 2. In Portainer einen neuen Stack erstellen.
 3. Inhalt von `deploy/portainer/docker-compose.yml` einfügen.
-4. `deploy/portainer/stack.env.example` als Vorlage für `stack.env` nutzen.
-5. Stack starten und Controller-Logs prüfen.
+4. `deploy/portainer/stack.env.example` in Portainer importieren.
+5. Alle `change-me` Werte ersetzen.
+6. `SEAFILE_BASE_URL` und `RAGFLOW_BASE_URL` auf die aus dem
+   Connector-Container erreichbaren URLs setzen.
+7. Stack starten und die Logs von `connector-controller`, `connector-worker` und
+   `connector-reconciler` prüfen.
 
 Der Stack stellt Seafile und RAGFlow nicht bereit. Beide Systeme bleiben extern
-und müssen über die konfigurierten URLs erreichbar sein.
+und müssen über die konfigurierten URLs erreichbar sein. Wenn Seafile/RAGFlow auf
+demselben Docker-Host über veröffentlichte Ports laufen, kann
+`host.docker.internal:<port>` genutzt werden; die Compose-Datei setzt dafür
+`host-gateway`.
 
 ## Offline-Bundle
 
@@ -95,10 +107,11 @@ Es ist keine Verbindung zu Seafile oder RAGFlow notwendig.
 ### 6. Compose-Syntax prüfen
 
 ```powershell
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker compose -f deploy/portainer/docker-compose.yml --env-file deploy/portainer/stack.env config --quiet'
+wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker compose --env-file deploy/portainer/stack.env -f deploy/portainer/docker-compose.yml config --quiet'
 ```
 
-Erwartung: Exit-Code 0, keine fehlenden `env_file`- oder Pfadfehler.
+Erwartung: Exit-Code 0. Die Compose-Datei darf keine `env_file`-Abhängigkeit
+enthalten.
 
 ### 7. Optionaler Infrastruktur-Smoke-Test
 
@@ -134,4 +147,3 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
 - Dataset-Einstellungen geändert: Der Connector überschreibt bestehende
   Einstellungen nicht; neue Upload-/Parse-Operationen nutzen die aktuellen
   RAGFlow-Einstellungen.
-
