@@ -18,7 +18,13 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("#log-table { min-width: 1120px; }", DASHBOARD_HTML)
         self.assertIn("#change-table { min-width: 1360px; }", DASHBOARD_HTML)
         self.assertIn("#sync-table { min-width: 1180px; }", DASHBOARD_HTML)
+        self.assertIn("#openwebui-table { min-width: 1420px; }", DASHBOARD_HTML)
         self.assertIn("#log-table th:nth-child(5) { width: 40%; }", DASHBOARD_HTML)
+
+    def test_openwebui_tab_is_present(self) -> None:
+        self.assertIn('data-tab="openwebui"', DASHBOARD_HTML)
+        self.assertIn("/api/openwebui/status", DASHBOARD_HTML)
+        self.assertIn("OpenWebUI Integration", DASHBOARD_HTML)
 
 
 if __name__ == "__main__":

@@ -10,13 +10,19 @@ try:
     from sqlalchemy.pool import StaticPool
 
     from seafile_ragflow_connector.config.settings import Settings
-    from seafile_ragflow_connector.dashboard.server import DashboardContext, start_dashboard_server
+    from seafile_ragflow_connector.dashboard.server import (
+        DashboardContext,
+        _load_mapping,
+        start_dashboard_server,
+    )
     from seafile_ragflow_connector.dashboard.store import (
         DashboardEventStore,
         DashboardLimits,
         utcnow,
     )
     from seafile_ragflow_connector.persistence.db import Base
+    from seafile_ragflow_connector.persistence.models.library import Library
+    from seafile_ragflow_connector.persistence.models.openwebui import OpenWebUIDatasetMapping
 except ModuleNotFoundError as exc:
     if exc.name not in {"pydantic", "sqlalchemy"}:
         raise
@@ -114,6 +120,49 @@ class DashboardServerTests(unittest.TestCase):
         )
         self.assertIn("connector-audit-", disposition)
         self.assertIn(".xlsx", disposition)
+
+    def test_openwebui_mapping_requires_assigned_tool_and_pipe(self) -> None:
+        store = _store()
+        with store.session_factory() as session:
+            session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo", status="active"))
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                    ragflow_chat_id="chat-1",
+                    openwebui_tool_id="tool-1",
+                    openwebui_pipe_id="pipe-1",
+                )
+            )
+            session.commit()
+
+        mapping = _load_mapping(store, dataset_id="dataset-1", tool_id="tool-1")
+
+        self.assertEqual(mapping.openwebui_tool_id, "tool-1")
+        with self.assertRaises(ValueError):
+            _load_mapping(store, dataset_id="dataset-1", tool_id="other-tool")
+        with self.assertRaises(ValueError):
+            _load_mapping(store, dataset_id="dataset-1", chat_id="chat-1", pipe_id="other-pipe")
+
+    def test_openwebui_mapping_rejects_deleted_library(self) -> None:
+        store = _store()
+        with store.session_factory() as session:
+            session.add(
+                Library(repo_id="repo-1", name="Demo", name_slug="demo", status="deleted")
+            )
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                    openwebui_tool_id="tool-1",
+                )
+            )
+            session.commit()
+
+        with self.assertRaises(ValueError):
+            _load_mapping(store, dataset_id="dataset-1", tool_id="tool-1")
 
 
 def _get_json(port: int, path: str) -> dict[str, object]:

@@ -9,7 +9,12 @@ Dokumente sicher und läuft nach Neustarts weiter.
 ## Kernprinzipien
 
 - Die Seafile API ist die Quelle der Wahrheit.
-- Die RAGFlow API ist das Zielsystem.
+- Die RAGFlow API und optional OpenWebUI sind Zielsysteme.
+- Seafile wird nie geändert, nur weil Zielartefakte in RAGFlow oder OpenWebUI
+  fehlen, gelöscht wurden oder driften.
+- Entfernte Seafile-Dateien und -Libraries werden in den Zielsystemen
+  nachvollzogen; extern gelöschte Zielartefakte werden aus Seafile neu
+  aufgebaut.
 - PostgreSQL speichert den dauerhaften Sync-Zustand.
 - Redis übernimmt Queueing, Retries und Backpressure.
 - RAGFlow-Dataset-Einstellungen bleiben nach der Erstellung live. Das Template
@@ -20,8 +25,24 @@ Dokumente sicher und läuft nach Neustarts weiter.
 
 ## Offline-Deployment mit Portainer
 
-1. Benötigte Images auf dem Docker-Host importieren, zum Beispiel:
-   `docker load -i images/seafile-ragflow-connector_0.1.0.tar`
+Der einfachste Online-Start nutzt das veröffentlichte GHCR-Image:
+
+```bash
+docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:latest
+```
+
+Für Offline-Umgebungen kann dasselbe Image vorab exportiert und auf dem
+Zielhost importiert werden:
+
+```bash
+docker save ghcr.io/adrianweidig/seafile-ragflow-connector:latest \
+  -o images/seafile-ragflow-connector_latest.tar
+docker load -i images/seafile-ragflow-connector_latest.tar
+```
+
+Portainer-Start:
+
+1. Bei Offline-Betrieb benötigte Images auf dem Docker-Host importieren.
 2. In Portainer einen neuen Stack erstellen.
 3. `deploy/portainer/docker-compose.yml` einfügen oder dieses Repo als Git-Stack
    verwenden.
@@ -36,6 +57,21 @@ oder ein gemeinsames Docker-Netzwerk. Für bestehende Docker-Stacks kann
 `CONNECTOR_DOCKER_NETWORK_EXTERNAL=true` mit dem vorhandenen Netzwerknamen
 gesetzt werden. Die Compose-Datei referenziert keine lokale `env_file`;
 Portainer-Environment-Variablen reichen aus.
+
+## Repository-Struktur
+
+| Pfad | Zweck |
+| --- | --- |
+| `.github/workflows/` | GitHub Actions für Tests und GHCR-Image-Publishing |
+| `deploy/docker/` | Dockerfile und Container-Entrypoint für das Connector-Image |
+| `deploy/portainer/` | Portainer-fähige Compose-Datei und importierbare Beispiel-Env |
+| `docs/` | Architektur, Konfiguration, Betrieb und RAGFlow-Template-Verhalten |
+| `migrations/` | Alembic-Migrationen für PostgreSQL/SQLite-Testdatenbanken |
+| `src/seafile_ragflow_connector/` | Anwendungscode für CLI, Sync, Clients, Dashboard, Jobs und OpenWebUI |
+| `tests/` | Unit-, Integrations- und Support-Tests mit lokalen Fakes/Fixtures |
+
+Jeder dieser Ordner enthält eine kurze README, die den Inhalt und den
+üblichen Einstiegspunkt beschreibt.
 
 ## Dashboard
 
@@ -65,6 +101,31 @@ CONNECTOR_DASHBOARD_PORT=8080
 Im Portainer-Stack läuft das Dashboard im `connector-controller`. Die
 Beispielkonfiguration veröffentlicht es lokal am Docker-Host unter
 `127.0.0.1:18080`, wenn es aktiviert ist.
+
+## Optionale OpenWebUI-Anbindung
+
+Die OpenWebUI-Anbindung ist standardmäßig vollständig deaktiviert. Wenn sie per
+Environment aktiviert wird, synchronisiert der Connector pro RAGFlow-Dataset
+einen RAGFlow-Chat-Assistant sowie je ein OpenWebUI-Tool und eine Pipe. Die
+Pipe erscheint in OpenWebUI als auswählbares Custom-Model. Tool und Pipe
+enthalten keine RAGFlow- oder Admin-Secrets, sondern rufen den geschützten
+Connector-Proxy auf.
+
+```env
+OPENWEBUI_INTEGRATION_ENABLED=true
+OPENWEBUI_BASE_URL=http://openwebui:8080
+OPENWEBUI_ADMIN_API_KEY=change-me
+OPENWEBUI_SYNC_MODE=dry-run
+OPENWEBUI_PROXY_INTERNAL_BASE_URL=http://connector-controller:8080
+OPENWEBUI_PROXY_PUBLIC_BASE_URL=http://localhost:18080
+OPENWEBUI_PROXY_SHARED_SECRET=change-me
+```
+
+`OPENWEBUI_SYNC_MODE` unterstützt `disabled`, `dry-run`, `sync` und `repair`.
+Für den ersten Betrieb sollte `dry-run` genutzt werden. Quellen werden primär
+als OpenWebUI-Citations mit Preview-URL bereitgestellt; wenn RAGFlow keinen
+stabilen öffentlichen Deep Link hat, kann `OPENWEBUI_SOURCE_PREVIEW_MODE` auf
+`connector_viewer` gesetzt werden.
 
 ## Entwicklungschecks
 

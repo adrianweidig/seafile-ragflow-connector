@@ -79,6 +79,73 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Settings(**values)
 
+    def test_openwebui_defaults_to_disabled_without_required_secrets(self) -> None:
+        values = self.base_values()
+        values["database_url"] = "postgresql+psycopg://custom/db"
+
+        settings = Settings(**values)
+
+        self.assertFalse(settings.openwebui_integration_enabled)
+        self.assertEqual(settings.openwebui_effective_sync_mode, "disabled")
+        self.assertEqual(settings.openwebui_base_url, "http://localhost:3000")
+        self.assertEqual(settings.openwebui_function_namespace, "ragflow")
+        self.assertTrue(settings.delete_dataset_when_library_deleted)
+        self.assertFalse(settings.archive_dataset_when_library_deleted)
+
+    def test_openwebui_sync_requires_admin_key_and_proxy_secret(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "openwebui_integration_enabled": True,
+                "openwebui_sync_mode": "sync",
+            }
+        )
+
+        with self.assertRaises(ValueError):
+            Settings(**values)
+
+        values["openwebui_admin_api_key"] = "admin-key"
+        with self.assertRaises(ValueError):
+            Settings(**values)
+
+        values["openwebui_proxy_shared_secret"] = "proxy-secret"
+        with self.assertRaises(ValueError):
+            Settings(**values)
+
+        values["openwebui_proxy_internal_base_url"] = "http://connector:8080"
+        settings = Settings(**values)
+
+        self.assertEqual(settings.openwebui_effective_sync_mode, "sync")
+
+    def test_openwebui_rejects_invalid_proxy_urls_when_enabled(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "openwebui_integration_enabled": True,
+                "openwebui_sync_mode": "dry-run",
+                "openwebui_proxy_public_base_url": "connector:8080",
+            }
+        )
+
+        with self.assertRaises(ValueError):
+            Settings(**values)
+
+    def test_global_dry_run_forces_openwebui_dry_run(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "dry_run": True,
+                "openwebui_integration_enabled": True,
+            }
+        )
+
+        settings = Settings(**values)
+
+        self.assertEqual(settings.openwebui_effective_sync_mode, "dry-run")
+
         values = self.base_values()
         values.update(
             {

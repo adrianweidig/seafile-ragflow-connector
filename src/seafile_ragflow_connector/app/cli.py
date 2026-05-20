@@ -3,13 +3,14 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, cast
 
 import structlog
 import typer
 
 from seafile_ragflow_connector.app.logging import configure_logging
 from seafile_ragflow_connector.app.runtime import (
+    Runtime,
     build_dashboard_store,
     build_runtime,
     check_database,
@@ -24,7 +25,7 @@ from seafile_ragflow_connector.dashboard.server import (
     serve_dashboard_forever,
     start_dashboard_server,
 )
-from seafile_ragflow_connector.jobs.job_store import JobStore
+from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
 from seafile_ragflow_connector.jobs.scheduler import PeriodicTask, SimpleScheduler
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 from seafile_ragflow_connector.jobs.worker import WorkerRunner
@@ -32,6 +33,7 @@ from seafile_ragflow_connector.persistence.db import init_database
 
 app = typer.Typer(help="Offline-first Seafile to RAGFlow connector")
 PROCESS_STARTED_AT = datetime.now(UTC)
+OpenWebUIMode = Literal["disabled", "dry-run", "sync", "repair"]
 
 
 def _bootstrap() -> Settings:
@@ -105,6 +107,34 @@ def sync_once(
         runtime.close()
 
 
+@app.command("openwebui-sync-once")
+def openwebui_sync_once(
+    mode: Annotated[
+        str | None,
+        typer.Option(
+            "--mode",
+            help="Override OpenWebUI sync mode: disabled, dry-run, sync or repair.",
+        ),
+    ] = None,
+) -> None:
+    """Run one OpenWebUI synchronization pass."""
+    settings = _bootstrap()
+    runtime = build_runtime(settings)
+    try:
+        if runtime.openwebui_sync_service is None:
+            typer.echo({"status": "disabled"})
+            return
+        selected_mode = mode or settings.openwebui_effective_sync_mode
+        if selected_mode not in {"disabled", "dry-run", "sync", "repair"}:
+            raise typer.BadParameter("mode must be disabled, dry-run, sync or repair")
+        summary = runtime.openwebui_sync_service.sync_once(
+            mode_override=cast(OpenWebUIMode, selected_mode)
+        )
+        typer.echo(summary.__dict__)
+    finally:
+        runtime.close()
+
+
 @app.command()
 def controller() -> None:
     """Run the discovery and delta scheduling loop."""
@@ -112,7 +142,11 @@ def controller() -> None:
     runtime = build_runtime(settings)
     log = structlog.get_logger(__name__)
     dashboard_handle: DashboardServerHandle | None = None
-    if settings.connector_dashboard_enabled and runtime.dashboard_store is not None:
+    dashboard_required = (
+        settings.connector_dashboard_enabled
+        or settings.openwebui_effective_sync_mode != "disabled"
+    )
+    if dashboard_required and runtime.dashboard_store is not None:
         try:
             dashboard_handle = start_dashboard_server(
                 DashboardContext(runtime.dashboard_store, settings, PROCESS_STARTED_AT)
@@ -144,13 +178,26 @@ def controller() -> None:
         _enqueue_specs(runtime.job_store, runtime.signal_queue, specs)
         log.info("controller.settings_refresh.enqueued", count=len(specs))
 
-    scheduler = SimpleScheduler(
-        [
-            PeriodicTask("discovery", settings.discovery_interval_seconds, discover),
-            PeriodicTask("delta", settings.delta_sync_interval_seconds, delta),
-            PeriodicTask("template", settings.ragflow_template_refresh_seconds, template),
-        ]
-    )
+    def openwebui() -> None:
+        if runtime.openwebui_sync_service is None:
+            return
+        runtime.openwebui_sync_service.sync_once()
+
+    if (
+        settings.openwebui_sync_on_startup
+        and settings.openwebui_effective_sync_mode != "disabled"
+        and runtime.openwebui_sync_service is not None
+    ):
+        openwebui()
+
+    tasks = [
+        PeriodicTask("discovery", settings.discovery_interval_seconds, discover),
+        PeriodicTask("delta", settings.delta_sync_interval_seconds, delta),
+        PeriodicTask("template", settings.ragflow_template_refresh_seconds, template),
+    ]
+    if settings.openwebui_effective_sync_mode != "disabled":
+        tasks.append(PeriodicTask("openwebui", settings.openwebui_sync_interval_seconds, openwebui))
+    scheduler = SimpleScheduler(tasks)
     log.info("controller.started")
     try:
         scheduler.run_forever()
@@ -207,6 +254,11 @@ def check_config() -> None:
             "connector_dashboard_enabled": settings.connector_dashboard_enabled,
             "connector_dashboard_host": settings.connector_dashboard_host,
             "connector_dashboard_port": settings.connector_dashboard_port,
+            "openwebui_integration_enabled": settings.openwebui_integration_enabled,
+            "openwebui_sync_mode": settings.openwebui_effective_sync_mode,
+            "openwebui_base_url": settings.openwebui_base_url,
+            "openwebui_create_tools": settings.openwebui_create_tools,
+            "openwebui_create_pipes": settings.openwebui_create_pipes,
         }
     )
 
@@ -232,7 +284,11 @@ def dashboard() -> None:
         raise typer.Exit(1) from exc
 
 
-def _enqueue_specs(job_store: JobStore, signal_queue, specs: list[JobSpec]) -> None:
+def _enqueue_specs(
+    job_store: JobStore,
+    signal_queue: JobSignalQueue,
+    specs: list[JobSpec],
+) -> None:
     log = structlog.get_logger(__name__)
     for spec in specs:
         job_id = job_store.enqueue(spec)
@@ -258,29 +314,29 @@ def _retry_until(action: Callable[[], Any], label: str, timeout_seconds: int = 1
     raise RuntimeError(f"{label} did not become ready within {timeout_seconds}s")
 
 
-def _build_job_handlers(runtime) -> dict[JobType, Callable[[JobSpec], None]]:
+def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], None]]:
     def ensure_dataset(spec: JobSpec) -> None:
-        _require_repo_id(spec)
-        runtime.orchestrator.ensure_dataset_for_repo(spec.repo_id)
+        repo_id = _require_repo_id(spec)
+        runtime.orchestrator.ensure_dataset_for_repo(repo_id)
 
     def sync_full(spec: JobSpec) -> None:
-        _require_repo_id(spec)
+        repo_id = _require_repo_id(spec)
         scope = str(spec.payload.get("scope") or spec.file_path or "/")
-        runtime.orchestrator.sync_library_full(spec.repo_id, scope=scope)
+        runtime.orchestrator.sync_library_full(repo_id, scope=scope)
 
     def upload_file(spec: JobSpec) -> None:
-        _require_repo_id(spec)
+        repo_id = _require_repo_id(spec)
         if not spec.file_path:
             raise ValueError("UPLOAD_FILE requires file_path")
-        dataset_id = runtime.orchestrator.ensure_dataset_for_repo(spec.repo_id)
-        runtime.orchestrator.sync_file(spec.repo_id, dataset_id, spec.file_path, force=True)
+        dataset_id = runtime.orchestrator.ensure_dataset_for_repo(repo_id)
+        runtime.orchestrator.sync_file(repo_id, dataset_id, spec.file_path, force=True)
 
     def delete_file(spec: JobSpec) -> None:
-        _require_repo_id(spec)
+        repo_id = _require_repo_id(spec)
         if not spec.file_path:
             raise ValueError("DELETE_FILE requires file_path")
-        dataset_id = runtime.orchestrator.ensure_dataset_for_repo(spec.repo_id)
-        runtime.orchestrator.delete_file(spec.repo_id, dataset_id, spec.file_path)
+        dataset_id = runtime.orchestrator.ensure_dataset_for_repo(repo_id)
+        runtime.orchestrator.delete_file(repo_id, dataset_id, spec.file_path)
 
     def parse_documents(spec: JobSpec) -> None:
         dataset_id = str(spec.payload["dataset_id"])
@@ -288,12 +344,21 @@ def _build_job_handlers(runtime) -> dict[JobType, Callable[[JobSpec], None]]:
         runtime.ragflow_client.parse_documents(dataset_id, document_ids)
 
     def check_parse(spec: JobSpec) -> None:
-        _require_repo_id(spec)
+        repo_id = _require_repo_id(spec)
         dataset_id = str(
             spec.payload.get("dataset_id")
-            or runtime.orchestrator.ensure_dataset_for_repo(spec.repo_id)
+            or runtime.orchestrator.ensure_dataset_for_repo(repo_id)
         )
-        runtime.orchestrator.check_parse_status(spec.repo_id, dataset_id)
+        runtime.orchestrator.check_parse_status(repo_id, dataset_id)
+
+    def sync_openwebui(spec: JobSpec) -> None:
+        if runtime.openwebui_sync_service is None:
+            return
+        mode = spec.payload.get("mode")
+        if mode is not None and str(mode) not in {"disabled", "dry-run", "sync", "repair"}:
+            raise ValueError("SYNC_OPENWEBUI mode must be disabled, dry-run, sync or repair")
+        mode_override = cast(OpenWebUIMode, str(mode)) if mode else None
+        runtime.openwebui_sync_service.sync_once(mode_override=mode_override)
 
     return {
         JobType.DISCOVER_LIBRARIES: lambda spec: _enqueue_specs(
@@ -312,16 +377,18 @@ def _build_job_handlers(runtime) -> dict[JobType, Callable[[JobSpec], None]]:
         JobType.CHECK_PARSE_STATUS: check_parse,
         JobType.RECONCILE_LIBRARY: sync_full,
         JobType.RECONCILE_RAGFLOW_DATASET: check_parse,
+        JobType.SYNC_OPENWEBUI: sync_openwebui,
     }
 
 
-def _require_repo_id(spec: JobSpec) -> None:
+def _require_repo_id(spec: JobSpec) -> str:
     if not spec.repo_id:
         msg = f"{spec.job_type} requires repo_id"
         raise ValueError(msg)
+    return spec.repo_id
 
 
-def _wait_for_parse(runtime, timeout_seconds: int) -> None:
+def _wait_for_parse(runtime: Runtime, timeout_seconds: int) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         active = False

@@ -63,6 +63,7 @@ class SyncOrchestrator:
         skip_encrypted_libraries: bool = True,
         skip_virtual_repos: bool = True,
         delete_ragflow_docs_on_seafile_delete: bool = True,
+        delete_dataset_when_library_deleted: bool = True,
         refresh_dataset_settings: bool = True,
         dashboard_store: DashboardEventStore | None = None,
     ) -> None:
@@ -74,6 +75,7 @@ class SyncOrchestrator:
         self.skip_encrypted_libraries = skip_encrypted_libraries
         self.skip_virtual_repos = skip_virtual_repos
         self.delete_ragflow_docs_on_seafile_delete = delete_ragflow_docs_on_seafile_delete
+        self.delete_dataset_when_library_deleted = delete_dataset_when_library_deleted
         self.refresh_dataset_settings = refresh_dataset_settings
         self.dashboard_store = dashboard_store
         self.dataset_provisioner = DatasetProvisioner(
@@ -85,8 +87,10 @@ class SyncOrchestrator:
 
     def discover_libraries(self) -> list[DiscoveredLibrary]:
         discovered: list[DiscoveredLibrary] = []
+        current_repo_ids: set[str] = set()
         for raw in self.admin_client.iter_libraries():
             library = normalize_library(raw)
+            current_repo_ids.add(library.repo_id)
             skipped, reason = should_skip_library(
                 library,
                 skip_encrypted=self.skip_encrypted_libraries,
@@ -101,6 +105,7 @@ class SyncOrchestrator:
                 self.log.info("library.skipped", repo_id=library.repo_id, reason=reason)
                 continue
             discovered.append(library)
+        self._cleanup_missing_libraries(current_repo_ids)
         return discovered
 
     def discover_job_specs(self) -> list[JobSpec]:
@@ -146,6 +151,7 @@ class SyncOrchestrator:
     def ensure_dataset_for_repo(self, repo_id: str) -> str:
         with self.session_factory() as session:
             db_library = self._get_library(session, repo_id)
+            previous_dataset_id = db_library.ragflow_dataset_id
             source = LibrarySource(
                 repo_id=db_library.repo_id,
                 name=db_library.name,
@@ -154,6 +160,17 @@ class SyncOrchestrator:
         result = self.dataset_provisioner.ensure_dataset(source)
         with self.session_factory() as session:
             db_library = self._get_library(session, repo_id)
+            dataset_replaced = (
+                bool(previous_dataset_id)
+                and previous_dataset_id != result.dataset_id
+            )
+            if dataset_replaced:
+                self._clear_file_target_bindings(
+                    session,
+                    repo_id=repo_id,
+                    previous_dataset_id=str(previous_dataset_id),
+                    new_dataset_id=result.dataset_id,
+                )
             db_library.ragflow_dataset_id = result.dataset_id
             db_library.ragflow_dataset_name = result.dataset_name
             db_library.template_hash = result.template_hash or db_library.template_hash
@@ -167,6 +184,13 @@ class SyncOrchestrator:
                 settings_payload=result.settings_payload,
             )
             session.commit()
+        if previous_dataset_id and previous_dataset_id != result.dataset_id:
+            self.log.info(
+                "ragflow.dataset_recreated",
+                repo_id=repo_id,
+                previous_dataset_id=previous_dataset_id,
+                dataset_id=result.dataset_id,
+            )
         return result.dataset_id
 
     def sync_library_full(self, repo_id: str, *, scope: str = "/") -> SyncSummary:
@@ -373,40 +397,58 @@ class SyncOrchestrator:
             db_file.error_message = None
             session.commit()
 
-        if unchanged:
-            with self.session_factory() as session:
-                db_file = self._get_file(session, repo_id, normalize_seafile_path(path))
-                db_file.sync_status = "synced"
-                db_file.error_message = None
-                session.commit()
-            self.log.debug(
-                "file.unchanged",
-                sync_id=sync_id,
-                repo_id=repo_id,
-                dataset_id=dataset_id,
-                path=path,
-                document_id=old_document_id,
-            )
-            self._record_dashboard_change(
-                sync_id=sync_id,
-                action="compare_file",
-                change_type="unchanged",
-                status="synced",
-                object_name=_basename(path),
-                source_path=path,
-                target_path=f"{dataset_id}/{old_document_id}" if old_document_id else dataset_id,
-                details={
-                    "repo_id": repo_id,
-                    "dataset_id": dataset_id,
-                    "document_id": old_document_id,
-                },
-            )
-            return FileSyncResult(
-                uploaded=False,
-                skipped=False,
-                document_id=old_document_id,
-                change_type="unchanged",
-            )
+            if unchanged and old_document_id:
+                unchanged = self._ragflow_document_exists(
+                    dataset_id,
+                    old_document_id,
+                    artifact.document_name,
+                )
+                if not unchanged:
+                    self.log.info(
+                        "ragflow.document_missing_reupload",
+                        sync_id=sync_id,
+                        repo_id=repo_id,
+                        dataset_id=dataset_id,
+                        path=path,
+                        document_id=old_document_id,
+                    )
+
+            if unchanged:
+                with self.session_factory() as session:
+                    db_file = self._get_file(session, repo_id, normalize_seafile_path(path))
+                    db_file.sync_status = "synced"
+                    db_file.error_message = None
+                    session.commit()
+                self.log.debug(
+                    "file.unchanged",
+                    sync_id=sync_id,
+                    repo_id=repo_id,
+                    dataset_id=dataset_id,
+                    path=path,
+                    document_id=old_document_id,
+                )
+                self._record_dashboard_change(
+                    sync_id=sync_id,
+                    action="compare_file",
+                    change_type="unchanged",
+                    status="synced",
+                    object_name=_basename(path),
+                    source_path=path,
+                    target_path=(
+                        f"{dataset_id}/{old_document_id}" if old_document_id else dataset_id
+                    ),
+                    details={
+                        "repo_id": repo_id,
+                        "dataset_id": dataset_id,
+                        "document_id": old_document_id,
+                    },
+                )
+                return FileSyncResult(
+                    uploaded=False,
+                    skipped=False,
+                    document_id=old_document_id,
+                    change_type="unchanged",
+                )
 
         stale_document_ids = self._find_stale_document_ids(
             dataset_id,
@@ -684,6 +726,71 @@ class SyncOrchestrator:
         db_library.head_commit_id = library.head_commit_id
         return db_library
 
+    def _cleanup_missing_libraries(self, current_repo_ids: set[str]) -> None:
+        with self.session_factory() as session:
+            missing = session.scalars(
+                select(Library)
+                .where(Library.repo_id.not_in(current_repo_ids))
+                .where(Library.status != "deleted")
+            ).all()
+            items = [
+                {
+                    "repo_id": row.repo_id,
+                    "name": row.name,
+                    "dataset_id": row.ragflow_dataset_id,
+                }
+                for row in missing
+            ]
+
+        for item in items:
+            repo_id = str(item["repo_id"])
+            dataset_id = str(item["dataset_id"] or "")
+            try:
+                self.log.info(
+                    "library.deleted_detected",
+                    repo_id=repo_id,
+                    name=item["name"],
+                    dataset_id=dataset_id or None,
+                )
+                if dataset_id and self.delete_dataset_when_library_deleted:
+                    self.ragflow_client.delete_datasets([dataset_id])
+                    self.log.info(
+                        "ragflow.dataset_deleted_for_missing_library",
+                        repo_id=repo_id,
+                        dataset_id=dataset_id,
+                    )
+                    self._record_dashboard_change(
+                        sync_id=None,
+                        action="delete_ragflow_dataset_for_missing_library",
+                        change_type="deleted",
+                        status="succeeded",
+                        object_name=str(item["name"]),
+                        source_path=f"seafile:{repo_id}",
+                        target_path=f"ragflow:{dataset_id}",
+                        details={"repo_id": repo_id, "dataset_id": dataset_id},
+                    )
+                with self.session_factory() as session:
+                    db_library = session.get(Library, repo_id)
+                    if db_library:
+                        db_library.status = "deleted"
+                        db_library.last_error = None
+                        for row in session.scalars(select(File).where(File.repo_id == repo_id)):
+                            session.delete(row)
+                        session.commit()
+            except Exception as exc:
+                with self.session_factory() as session:
+                    db_library = session.get(Library, repo_id)
+                    if db_library:
+                        db_library.status = "delete_failed"
+                        db_library.last_error = str(exc)[:4000]
+                        session.commit()
+                self.log.warning(
+                    "library.delete_cleanup_failed",
+                    repo_id=repo_id,
+                    dataset_id=dataset_id or None,
+                    error=str(exc),
+                )
+
     def _upsert_file_row(
         self,
         session: Session,
@@ -714,7 +821,7 @@ class SyncOrchestrator:
         if item:
             db_file.seafile_obj_id = str(item.get("id") or item.get("obj_id") or "") or None
             db_file.size = _int_or_none(item.get("size"))
-            db_file.seafile_mtime = _datetime_from_timestamp(item.get("mtime"))
+            db_file.seafile_mtime = _datetime_from_timestamp(item.get("mtime"))  # type: ignore[assignment]
         return db_file
 
     def _record_dataset_snapshot(
@@ -733,6 +840,37 @@ class SyncOrchestrator:
                 settings_hash=settings_hash,
                 settings_payload=settings_payload,
             )
+        )
+
+    def _clear_file_target_bindings(
+        self,
+        session: Session,
+        *,
+        repo_id: str,
+        previous_dataset_id: str,
+        new_dataset_id: str,
+    ) -> None:
+        for row in session.scalars(select(File).where(File.repo_id == repo_id)):
+            row.ragflow_document_id = None
+            row.ragflow_document_name = None
+            row.ingested_document_name = None
+            row.ingested_mime = None
+            row.parse_status = None
+            row.sync_status = "pending"
+            row.error_message = None
+        self._record_dashboard_change(
+            sync_id=None,
+            action="reset_file_bindings_after_dataset_recreate",
+            change_type="updated",
+            status="synced",
+            object_name=repo_id,
+            source_path=f"ragflow:{previous_dataset_id}",
+            target_path=f"ragflow:{new_dataset_id}",
+            details={
+                "repo_id": repo_id,
+                "previous_dataset_id": previous_dataset_id,
+                "dataset_id": new_dataset_id,
+            },
         )
 
     def _mark_library_error(self, repo_id: str, exc: Exception) -> None:
@@ -854,6 +992,19 @@ class SyncOrchestrator:
             if _matches_document_name_or_ragflow_duplicate(existing_name, document_name):
                 stale_ids.append(document_id)
         return stale_ids
+
+    def _ragflow_document_exists(
+        self,
+        dataset_id: str,
+        document_id: str,
+        document_name: str,
+    ) -> bool:
+        documents = self.ragflow_client.list_documents(
+            dataset_id,
+            keywords=_document_search_keyword(document_name),
+            page_size=1024,
+        )
+        return any(_document_id(document) == document_id for document in documents)
 
 
 def _join_seafile_path(parent: str, name: str) -> str:

@@ -10,7 +10,6 @@ from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 from seafile_ragflow_connector.persistence.models.job import SyncJob
 
-
 JobHandler = Callable[[JobSpec], None]
 
 
@@ -54,14 +53,25 @@ class WorkerRunner:
         spec = self.job_store.to_spec(job)
         handler = self.handlers.get(spec.job_type)
         if handler is None:
-            status = self.job_store.mark_failed(job.id, f"no handler registered for {spec.job_type}")
-            self.log.warning("job.no_handler", job_id=job.id, job_type=spec.job_type, status=status.value)
+            error = f"no handler registered for {spec.job_type}"
+            status = self.job_store.mark_failed(job.id, error)
+            self.log.warning(
+                "job.no_handler",
+                job_id=job.id,
+                job_type=spec.job_type,
+                status=status.value,
+            )
             return
         try:
             handler(spec)
         except Exception as exc:
             status = self.job_store.mark_failed(job.id, str(exc))
-            self.log.warning("job.failed", job_id=job.id, job_type=spec.job_type, status=status.value)
+            self.log.warning(
+                "job.failed",
+                job_id=job.id,
+                job_type=spec.job_type,
+                status=status.value,
+            )
             return
         self.job_store.mark_succeeded(job.id)
         self.log.info("job.succeeded", job_id=job.id, job_type=spec.job_type)

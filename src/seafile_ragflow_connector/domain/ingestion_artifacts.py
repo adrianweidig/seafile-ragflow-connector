@@ -39,7 +39,11 @@ def prepare_ingestion_artifact(
     path_hash = sha256_text(classification.normalized_path)[:16]
 
     if classification.ingestion_strategy == "text_projection":
-        content = _project_text(classification.normalized_path, data, classification.detected_encoding)
+        content = _project_text(
+            classification.normalized_path,
+            data,
+            classification.detected_encoding,
+        )
         document_name = f"{path_hash}__{base_name}.txt"
         mime_type = "text/plain"
     elif classification.ingestion_strategy == "direct":

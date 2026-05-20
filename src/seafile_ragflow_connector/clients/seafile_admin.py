@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Generator
 from typing import Any
 
 from seafile_ragflow_connector.clients.http import make_client, unwrap_response
@@ -35,7 +36,12 @@ class SeafileAdminClient:
             return list(data["libraries"])
         return list(data or [])
 
-    def iter_libraries(self, *, per_page: int = 100, owner: str | None = None):
+    def iter_libraries(
+        self,
+        *,
+        per_page: int = 100,
+        owner: str | None = None,
+    ) -> Generator[dict[str, Any], None, None]:
         page = 1
         while True:
             libraries = self.list_libraries(page=page, per_page=per_page, owner=owner)

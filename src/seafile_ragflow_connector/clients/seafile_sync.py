@@ -53,7 +53,11 @@ class SeafileSyncClient:
         for attempt in range(1, 6):
             try:
                 url = self.get_file_download_url(repo_id, path)
-                response = httpx.get(url, headers=dict(self._client.headers), timeout=self._client.timeout)
+                response = httpx.get(
+                    url,
+                    headers=dict(self._client.headers),
+                    timeout=self._client.timeout,
+                )
                 response.raise_for_status()
                 return response.content
             except httpx.HTTPStatusError as exc:

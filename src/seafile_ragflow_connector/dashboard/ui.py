@@ -511,6 +511,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     #change-table { min-width: 1360px; }
     #log-table { min-width: 1120px; }
     #source-table, #target-table { min-width: 920px; }
+    #openwebui-table { min-width: 1420px; }
     #log-table th:nth-child(1) { width: 17%; }
     #log-table th:nth-child(2) { width: 10%; }
     #log-table th:nth-child(3) { width: 15%; }
@@ -579,12 +580,12 @@ DASHBOARD_HTML = r"""<!doctype html>
     .status.ok::before, .status.succeeded::before, .status.synced::before, .status.done::before, .status.running::before, .status.wartend::before {
       background: var(--ok);
     }
-    .status.warning, .status.warn, .status.retrying, .status.skipped, .status.übersprungen {
+    .status.warning, .status.warn, .status.retrying, .status.skipped, .status.übersprungen, .status.manual_required, .status.partial, .status.planned, .status.deleted {
       color: var(--warn);
       border-color: color-mix(in srgb, var(--warn) 42%, var(--border));
       background: color-mix(in srgb, var(--warn) 10%, transparent);
     }
-    .status.warning::before, .status.warn::before, .status.retrying::before, .status.skipped::before, .status.übersprungen::before {
+    .status.warning::before, .status.warn::before, .status.retrying::before, .status.skipped::before, .status.übersprungen::before, .status.manual_required::before, .status.partial::before, .status.planned::before, .status.deleted::before {
       background: var(--warn);
     }
     .status.error, .status.failed, .status.dead, .status.fehlgeschlagen, .status.fehlerhaft {
@@ -812,6 +813,7 @@ DASHBOARD_HTML = r"""<!doctype html>
         <button class="tab" data-tab="changes" aria-selected="false"><span class="tab-dot"></span>Änderungen</button>
         <button class="tab" data-tab="logs" aria-selected="false"><span class="tab-dot"></span>Logs</button>
         <button class="tab" data-tab="systems" aria-selected="false"><span class="tab-dot"></span>Systeme</button>
+        <button class="tab" data-tab="openwebui" aria-selected="false"><span class="tab-dot"></span>OpenWebUI</button>
         <button class="tab" data-tab="diagnostics" aria-selected="false"><span class="tab-dot"></span>Diagnose</button>
       </nav>
       <div class="sidebar-footer">
@@ -967,6 +969,18 @@ DASHBOARD_HTML = r"""<!doctype html>
         </div>
       </section>
 
+      <section id="openwebui" hidden>
+        <div class="panel">
+          <div class="panel-header"><h3>OpenWebUI Integration</h3><small id="openwebui-summary">-</small></div>
+          <div class="panel-body">
+            <div class="metric-grid" id="openwebui-metrics"></div>
+            <div class="table-wrap"><table id="openwebui-table"></table></div>
+            <div id="openwebui-pager" class="pager"></div>
+            <pre id="openwebui-detail" class="detail"></pre>
+          </div>
+        </div>
+      </section>
+
       <section id="diagnostics" hidden>
         <div class="panel">
           <div class="panel-header"><h3>Technische Diagnose</h3><small>maskierte Konfiguration</small></div>
@@ -983,13 +997,14 @@ DASHBOARD_HTML = r"""<!doctype html>
       loading: false,
       refreshTimer: null,
       refreshMs: Number(localStorage.getItem('connector-dashboard-refresh-ms') || '10000'),
-      pages: { syncs: 0, changes: 0, logs: 0 },
+      pages: { syncs: 0, changes: 0, logs: 0, openwebui: 0 },
       titles: {
         overview: ['Übersicht', 'Live-Zustand, Durchsatz und Auffälligkeiten'],
         syncs: ['Sync-Läufe', 'Historie, Laufzeiten und Ergebnisdetails'],
         changes: ['Änderungen', 'Aktionen mit Quelle, Ziel, Objekt und Status'],
         logs: ['Logs', 'Filterbare Debug- und Audit-Ereignisse'],
         systems: ['Systeme', 'Seafile-Libraries und RAGFlow-Datasets'],
+        openwebui: ['OpenWebUI', 'Tools, Pipes, Custom-Modelle und Fehlerstatus'],
         diagnostics: ['Diagnose', 'Technische Werte ohne Secrets']
       }
     };
@@ -1379,6 +1394,42 @@ DASHBOARD_HTML = r"""<!doctype html>
         __cells: [compactText(dataset.repo_id, { threshold: 34 }), compactText(dataset.dataset_id, { threshold: 34 }), compactText(dataset.dataset_name, { threshold: 48 }), compactText(dataset.template_hash, { threshold: 34 })]
       })));
     }
+    async function loadOpenWebUI() {
+      const offset = state.pages.openwebui * PAGE_SIZE;
+      const [statusData, mappings, capabilities, dryRun] = await Promise.all([
+        api('/api/openwebui/status'),
+        api('/api/openwebui/mappings?limit=' + PAGE_SIZE + '&offset=' + offset),
+        api('/api/openwebui/capabilities'),
+        api('/api/openwebui/dry-run')
+      ]);
+      const counts = statusData.counts || {};
+      setText('openwebui-summary', (statusData.status || 'disabled') + ' · ' + (statusData.mode || 'disabled'));
+      const grid = $('openwebui-metrics');
+      clear(grid);
+      grid.append(
+        metric('Integration', statusData.enabled ? 'aktiv' : 'aus', statusData.base_url || '-', statusData.enabled ? 'info' : ''),
+        metric('Datasets', fmtNumber(counts.datasets), 'erkannte Mappings'),
+        metric('Synchronisiert', fmtNumber(counts.synced_or_planned), 'inkl. Dry-Run geplant', counts.failed ? '' : 'info'),
+        metric('Gelöscht', fmtNumber(counts.deleted), 'Seafile-Library entfernt', counts.deleted ? 'warn' : ''),
+        metric('Manuell', fmtNumber(counts.manual_required), 'API-Fallback', counts.manual_required ? 'warn' : ''),
+        metric('Fehler', fmtNumber(counts.failed), statusData.last_error || 'keine', counts.failed ? 'bad' : '')
+      );
+      table('openwebui-table', ['Dataset', 'Status', 'Chat', 'Tool', 'Pipe', 'Modell', 'Letzter Erfolg', 'Fehler'], (mappings.items || []).map((item) => ({
+        ...item,
+        __cells: [
+          compactText(item.ragflow_dataset_name, { threshold: 42 }),
+          status(item.sync_status),
+          compactText(item.ragflow_chat_id, { threshold: 34 }),
+          compactText(item.openwebui_tool_id, { threshold: 34 }),
+          compactText(item.openwebui_pipe_id, { threshold: 34 }),
+          compactText(item.openwebui_model_name, { threshold: 42 }),
+          fmtDate(item.last_successful_sync_at),
+          compactText(item.last_error, { threshold: 56 })
+        ]
+      })));
+      renderPager('openwebui-pager', mappings, (delta) => { state.pages.openwebui = Math.max(0, state.pages.openwebui + delta); loadOpenWebUI(); });
+      $('openwebui-detail').textContent = JSON.stringify({ status: statusData, capabilities, dry_run: dryRun }, null, 2);
+    }
     async function loadDiagnostics() {
       $('diagnostics-json').textContent = JSON.stringify(await api('/api/diagnostics'), null, 2);
     }
@@ -1393,6 +1444,7 @@ DASHBOARD_HTML = r"""<!doctype html>
         if (state.activeTab === 'changes') await loadChanges();
         if (state.activeTab === 'logs') await loadLogs();
         if (state.activeTab === 'systems') await loadSystems();
+        if (state.activeTab === 'openwebui') await loadOpenWebUI();
         if (state.activeTab === 'diagnostics') await loadDiagnostics();
       } catch (err) {
         showError(err.message || String(err));

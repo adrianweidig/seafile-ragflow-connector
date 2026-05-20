@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 import unicodedata
 
-
 _SLUG_INVALID_RE = re.compile(r"[^a-z0-9]+")
 _SLUG_DASH_RE = re.compile(r"-+")
 

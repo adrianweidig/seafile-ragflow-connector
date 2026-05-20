@@ -5,7 +5,6 @@ from typing import Any
 
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 
-
 UPLOAD_OPERATIONS = {"new", "modified"}
 DELETE_OPERATIONS = {"removed"}
 
@@ -26,7 +25,14 @@ def map_commit_diff_to_jobs(repo_id: str, entries: Iterable[dict[str, Any]]) -> 
         op = _operation(entry)
         path = _path(entry)
         if op in UPLOAD_OPERATIONS and path:
-            jobs.append(JobSpec(JobType.UPLOAD_FILE, repo_id=repo_id, file_path=path, payload={"operation": op}))
+            jobs.append(
+                JobSpec(
+                    JobType.UPLOAD_FILE,
+                    repo_id=repo_id,
+                    file_path=path,
+                    payload={"operation": op},
+                )
+            )
         elif op == "renamed":
             old_path = entry.get("old_path") or entry.get("oldname")
             new_path = entry.get("new_path") or entry.get("newname") or path
@@ -49,7 +55,14 @@ def map_commit_diff_to_jobs(repo_id: str, entries: Iterable[dict[str, Any]]) -> 
                     )
                 )
         elif op in DELETE_OPERATIONS and path:
-            jobs.append(JobSpec(JobType.DELETE_FILE, repo_id=repo_id, file_path=path, payload={"operation": op}))
+            jobs.append(
+                JobSpec(
+                    JobType.DELETE_FILE,
+                    repo_id=repo_id,
+                    file_path=path,
+                    payload={"operation": op},
+                )
+            )
         elif op == "deldir" and path:
             jobs.append(
                 JobSpec(

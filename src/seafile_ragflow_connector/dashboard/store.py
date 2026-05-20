@@ -20,6 +20,10 @@ from seafile_ragflow_connector.persistence.models.dashboard import (
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.job import SyncJob
 from seafile_ragflow_connector.persistence.models.library import Library
+from seafile_ragflow_connector.persistence.models.openwebui import (
+    OpenWebUIDatasetMapping,
+    OpenWebUISyncState,
+)
 from seafile_ragflow_connector.utils.redaction import redact_mapping
 
 MAX_LIMIT = 500
@@ -53,7 +57,7 @@ def isoformat(value: Any) -> str | None:
     if isinstance(value, datetime):
         if value.tzinfo is None:
             value = value.replace(tzinfo=UTC)
-        return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+        return str(value.astimezone(UTC).isoformat().replace("+00:00", "Z"))
     return str(value)
 
 
@@ -87,7 +91,10 @@ def safe_json(value: Any, *, max_length: int = DEFAULT_FIELD_LIMIT) -> dict[str,
         decoded = json.loads(encoded)
     except (TypeError, ValueError):
         return {"value": safe_text(redacted, max_length=max_length)}
-    return _truncate_json(decoded, max_length=max_length)
+    truncated = _truncate_json(decoded, max_length=max_length)
+    if isinstance(truncated, dict):
+        return truncated
+    return {"value": truncated}
 
 
 def _truncate_json(value: Any, *, max_length: int) -> Any:
@@ -315,6 +322,11 @@ class DashboardEventStore:
                 "logs": self._count(session, DashboardLogEntry),
                 "jobs_by_status": self._group_count(session, SyncJob.status),
                 "files_by_status": self._group_count(session, File.sync_status),
+                "openwebui_mappings": self._count(session, OpenWebUIDatasetMapping),
+                "openwebui_mappings_by_status": self._group_count(
+                    session,
+                    OpenWebUIDatasetMapping.sync_status,
+                ),
             }
 
     def systems(self) -> dict[str, Any]:
@@ -349,7 +361,90 @@ class DashboardEventStore:
                         for library in libraries
                     ],
                 },
+                "openwebui": self.openwebui_status(),
             }
+
+    def openwebui_status(self) -> dict[str, Any]:
+        with self._session() as session:
+            state = session.get(OpenWebUISyncState, "default")
+            total = self._count(session, OpenWebUIDatasetMapping)
+            synced = self._count(
+                session,
+                OpenWebUIDatasetMapping,
+                OpenWebUIDatasetMapping.sync_status.in_(["synced", "planned"]),
+            )
+            failed = self._count(
+                session,
+                OpenWebUIDatasetMapping,
+                OpenWebUIDatasetMapping.sync_status == "failed",
+            )
+            manual = self._count(
+                session,
+                OpenWebUIDatasetMapping,
+                OpenWebUIDatasetMapping.sync_status == "manual_required",
+            )
+            deleted = self._count(
+                session,
+                OpenWebUIDatasetMapping,
+                OpenWebUIDatasetMapping.sync_status == "deleted",
+            )
+            return {
+                "enabled": bool(state.enabled) if state else False,
+                "mode": state.mode if state else "disabled",
+                "status": state.status if state else "disabled",
+                "base_url": state.base_url if state else None,
+                "last_healthcheck_at": isoformat(state.last_healthcheck_at) if state else None,
+                "last_sync_started_at": isoformat(state.last_sync_started_at) if state else None,
+                "last_sync_finished_at": isoformat(state.last_sync_finished_at) if state else None,
+                "last_successful_sync_at": (
+                    isoformat(state.last_successful_sync_at) if state else None
+                ),
+                "last_error": state.last_error if state else None,
+                "summary": state.summary if state else {},
+                "counts": {
+                    "datasets": total,
+                    "synced_or_planned": synced,
+                    "failed": failed,
+                    "manual_required": manual,
+                    "deleted": deleted,
+                },
+            }
+
+    def list_openwebui_mappings(self, *, limit: int | None, offset: int | None) -> dict[str, Any]:
+        limit_value = clamp_limit(limit, self.limits.page_size)
+        offset_value = clamp_offset(offset)
+        with self._session() as session:
+            stmt = (
+                select(OpenWebUIDatasetMapping)
+                .order_by(OpenWebUIDatasetMapping.ragflow_dataset_name.asc())
+                .limit(limit_value)
+                .offset(offset_value)
+            )
+            total = int(
+                session.scalar(select(func.count()).select_from(OpenWebUIDatasetMapping)) or 0
+            )
+            return self._page(
+                [serialize_openwebui_mapping(item) for item in session.scalars(stmt).all()],
+                total,
+                limit_value,
+                offset_value,
+            )
+
+    def openwebui_capabilities(self) -> dict[str, Any]:
+        with self._session() as session:
+            state = session.get(OpenWebUISyncState, "default")
+            return safe_json(
+                state.capabilities_snapshot if state else {},
+                max_length=self.limits.max_field_length,
+            )
+
+    def openwebui_dry_run(self) -> dict[str, Any]:
+        with self._session() as session:
+            state = session.get(OpenWebUISyncState, "default")
+            return safe_json(
+                state.dry_run_plan if state else {},
+                max_length=self.limits.max_field_length,
+            )
 
     def list_sync_runs(
         self,
@@ -512,6 +607,8 @@ class DashboardEventStore:
                     "dashboard_sync_runs": self._count(session, DashboardSyncRun),
                     "dashboard_change_events": self._count(session, DashboardChangeEvent),
                     "dashboard_log_entries": self._count(session, DashboardLogEntry),
+                    "openwebui_dataset_mappings": self._count(session, OpenWebUIDatasetMapping),
+                    "openwebui_sync_state": self._count(session, OpenWebUISyncState),
                 },
             }
 
@@ -551,6 +648,13 @@ class DashboardEventStore:
             "sync_runs": [serialize_sync_run(run) for run in sync_runs],
             "changes": [serialize_change(event) for event in changes],
             "logs": [serialize_log(entry) for entry in logs],
+            "openwebui": {
+                "status": self.openwebui_status(),
+                "mappings": self.list_openwebui_mappings(
+                    limit=_export_limit(self.limits.max_event_entries),
+                    offset=0,
+                )["items"],
+            },
             "export_limits": {
                 "max_sync_runs": _export_limit(self.limits.max_sync_runs),
                 "max_event_entries": _export_limit(self.limits.max_event_entries),
@@ -666,6 +770,29 @@ def serialize_log(entry: DashboardLogEntry) -> dict[str, Any]:
         "message": entry.message,
         "sync_id": entry.sync_id,
         "details": entry.details or {},
+    }
+
+
+def serialize_openwebui_mapping(mapping: OpenWebUIDatasetMapping) -> dict[str, Any]:
+    return {
+        "id": mapping.id,
+        "repo_id": mapping.repo_id,
+        "ragflow_dataset_id": mapping.ragflow_dataset_id,
+        "ragflow_dataset_name": mapping.ragflow_dataset_name,
+        "ragflow_binding_type": mapping.ragflow_binding_type,
+        "ragflow_chat_id": mapping.ragflow_chat_id,
+        "ragflow_agent_id": mapping.ragflow_agent_id,
+        "openwebui_tool_id": mapping.openwebui_tool_id,
+        "openwebui_pipe_id": mapping.openwebui_pipe_id,
+        "openwebui_model_name": mapping.openwebui_model_name,
+        "tool_definition_hash": mapping.tool_definition_hash,
+        "pipe_definition_hash": mapping.pipe_definition_hash,
+        "artifact_version": mapping.artifact_version,
+        "sync_status": mapping.sync_status,
+        "last_sync_attempt_at": isoformat(mapping.last_sync_attempt_at),
+        "last_successful_sync_at": isoformat(mapping.last_successful_sync_at),
+        "last_error": mapping.last_error,
+        "capabilities_snapshot": mapping.capabilities_snapshot or {},
     }
 
 

@@ -53,4 +53,8 @@ class DocumentUploadService:
             mime_type=artifact.mime_type,
         )
         document_id = str(document.get("id") or document.get("document_id"))
-        return UploadResult(document_id=document_id, artifact=artifact, dataset_settings_hash=settings_hash)
+        return UploadResult(
+            document_id=document_id,
+            artifact=artifact,
+            dataset_settings_hash=settings_hash,
+        )

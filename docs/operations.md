@@ -9,12 +9,23 @@ Der produktive Stack liegt unter `deploy/portainer/docker-compose.yml`. Die
 importierbare Beispielkonfiguration liegt unter
 `deploy/portainer/stack.env.example`.
 
+Standardmäßig zieht der Stack das Connector-Image aus GHCR:
+
+```bash
+docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:latest
+```
+
+Für reproduzierbare produktive Rollouts kann `CONNECTOR_IMAGE` in Portainer auf
+einen Release- oder SHA-Tag gesetzt werden. Für Offline-Betrieb kann dasselbe
+Image vorab exportiert und auf dem Zielhost geladen werden.
+
 Die Compose-Datei referenziert keine lokale `env_file`. In Portainer reicht es,
 die Compose-Datei einzufügen oder das Repo als Git-Stack zu nutzen und die Werte
 aus `stack.env.example` im Bereich `Environment variables` zu importieren.
 
-1. Benötigte Images auf dem Docker-Host importieren:
-   `docker load -i images/seafile-ragflow-connector_0.1.0.tar`
+1. Bei Offline-Betrieb benötigte Images auf dem Docker-Host importieren,
+   beispielsweise:
+   `docker load -i images/seafile-ragflow-connector_latest.tar`
 2. In Portainer einen neuen Stack erstellen.
 3. Inhalt von `deploy/portainer/docker-compose.yml` einfügen.
 4. `deploy/portainer/stack.env.example` in Portainer importieren.
@@ -77,7 +88,7 @@ Ein produktives Release sollte enthalten:
 docker-compose.yml
 stack.env.example
 images/
-  seafile-ragflow-connector_0.1.0.tar
+  seafile-ragflow-connector_latest.tar
   postgres_16.tar
   redis_7.tar
 SHA256SUMS
@@ -120,7 +131,7 @@ Erwartung: `Check complete, no warnings found.`
 ### 4. Image lokal bauen
 
 ```powershell
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker build -t seafile-ragflow-connector:0.1.0 -f deploy/docker/Dockerfile .'
+wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker build -t ghcr.io/adrianweidig/seafile-ragflow-connector:local-test -f deploy/docker/Dockerfile .'
 ```
 
 Erwartung: Das Image wird erfolgreich gebaut. Zur Container-Laufzeit findet keine
@@ -137,7 +148,7 @@ Copy-Item deploy\portainer\stack.env.example deploy\portainer\stack.env
 Dann:
 
 ```powershell
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker run --rm --env-file deploy/portainer/stack.env seafile-ragflow-connector:0.1.0 check-config'
+wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker run --rm --env-file deploy/portainer/stack.env ghcr.io/adrianweidig/seafile-ragflow-connector:local-test check-config'
 ```
 
 Erwartung: `check-config` gibt zentrale Werte aus und beendet sich mit Exit-Code 0.
@@ -152,7 +163,20 @@ wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docke
 Erwartung: Exit-Code 0. Die Compose-Datei darf keine `env_file`-Abhängigkeit
 enthalten.
 
-### 7. Optionaler Infrastruktur-Smoke-Test
+### 7. GHCR-Pull prüfen
+
+Nach einem erfolgreichen GitHub-Workflow muss das öffentliche Image ohne lokalen
+Build ziehbar sein:
+
+```powershell
+wsl bash -lc 'docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:latest'
+```
+
+Falls der Pull ohne Anmeldung fehlschlägt, ist meist die GHCR-Package-Sichtbarkeit
+noch nicht öffentlich gesetzt oder der Publish-Workflow ist noch nicht
+erfolgreich gelaufen.
+
+### 8. Optionaler Infrastruktur-Smoke-Test
 
 Nur ausführen, wenn `postgres:16` und `redis:7` lokal verfügbar sind oder Pulls
 erlaubt sind:
@@ -198,6 +222,22 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
   Datenbank, Redis, Seafile-Admin-Token, RAGFlow-API-Key sowie Template-Dataset
   prüfen. Einzelne externe Checks haben kurze Timeouts und blockieren die UI
   nicht dauerhaft.
+- OpenWebUI-Anbindung prüfen: zuerst `OPENWEBUI_SYNC_MODE=dry-run` setzen und
+  `connector openwebui-sync-once --mode dry-run` ausführen. Danach im Dashboard
+  den Tab `OpenWebUI` und die Logs nach `openwebui.*` prüfen.
+- OpenWebUI-Proxy nicht erreichbar: sicherstellen, dass
+  `OPENWEBUI_PROXY_INTERNAL_BASE_URL` aus dem OpenWebUI-Container erreichbar ist
+  und dass `OPENWEBUI_PROXY_SHARED_SECRET` gesetzt ist.
+- Tool oder Pipe fehlt in OpenWebUI: `OPENWEBUI_SYNC_MODE=repair` nutzen. Falls
+  die Admin-API der Zielversion keine stabilen Writes erlaubt, zeigt das
+  Dashboard den Status `manual_required`.
+- Seafile-Library gelöscht: der nächste Discovery-/Sync-Lauf markiert die
+  Library lokal als `deleted`, löscht das RAGFlow-Dataset und der OpenWebUI-Sync
+  entfernt eigene Chat-, Tool- und Pipe-Artefakte. Seafile selbst wird dabei nie
+  geschrieben.
+- RAGFlow-Dataset oder Dokumente extern gelöscht: `connector sync-once` baut das
+  Dataset aus dem Template neu auf und lädt die weiterhin in Seafile vorhandenen
+  Dateien erneut hoch.
 - Audit-Excel leer: prüfen, ob bereits Sync-Läufe, Änderungsereignisse oder
   Logs existieren. Frische Umgebungen exportieren leere Tabellenblätter mit
   Kopfzeilen.

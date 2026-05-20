@@ -1,17 +1,25 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from redis import Redis
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
-from seafile_ragflow_connector.clients import RAGFlowClient, SeafileAdminClient, SeafileSyncClient
+from seafile_ragflow_connector.clients import (
+    OpenWebUIClient,
+    RAGFlowClient,
+    SeafileAdminClient,
+    SeafileSyncClient,
+)
 from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore, DashboardLimits
 from seafile_ragflow_connector.domain.file_classification import FilePolicy
 from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
+from seafile_ragflow_connector.openwebui.sync import OpenWebUISyncService
 from seafile_ragflow_connector.persistence.db import get_session_factory, init_database
 from seafile_ragflow_connector.sync.orchestrator import SyncOrchestrator
 
@@ -25,12 +33,16 @@ class Runtime:
     orchestrator: SyncOrchestrator
     job_store: JobStore
     signal_queue: JobSignalQueue
+    openwebui_client: OpenWebUIClient | None = None
+    openwebui_sync_service: OpenWebUISyncService | None = None
     dashboard_store: DashboardEventStore | None = None
 
     def close(self) -> None:
         self.admin_client.close()
         self.sync_client.close()
         self.ragflow_client.close()
+        if self.openwebui_client is not None:
+            self.openwebui_client.close()
 
 
 def build_file_policy(settings: Settings) -> FilePolicy:
@@ -61,6 +73,7 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
         rewrite_to=settings.seafile_download_rewrite_to,
     )
     ragflow_client = RAGFlowClient(settings.ragflow_base_url, settings.ragflow_api_key)
+    openwebui_client = _build_openwebui_client(settings)
     orchestrator = SyncOrchestrator(
         session_factory,
         admin_client=admin_client,
@@ -71,6 +84,7 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
         skip_encrypted_libraries=settings.seafile_skip_encrypted_libraries,
         skip_virtual_repos=settings.seafile_skip_virtual_repos,
         delete_ragflow_docs_on_seafile_delete=settings.delete_ragflow_docs_on_seafile_delete,
+        delete_dataset_when_library_deleted=settings.delete_dataset_when_library_deleted,
         refresh_dataset_settings=settings.ragflow_refresh_dataset_settings,
         dashboard_store=dashboard_store,
     )
@@ -86,6 +100,14 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
             retry_max_seconds=settings.job_retry_max_seconds,
         ),
         signal_queue=JobSignalQueue(settings.redis_url),
+        openwebui_client=openwebui_client,
+        openwebui_sync_service=OpenWebUISyncService(
+            settings=settings,
+            session_factory=session_factory,
+            ragflow_client=ragflow_client,
+            openwebui_client=openwebui_client,
+            dashboard_store=dashboard_store,
+        ),
         dashboard_store=dashboard_store,
     )
 
@@ -94,7 +116,11 @@ def build_dashboard_store(
     settings: Settings,
     session_factory: sessionmaker[Session] | None = None,
 ) -> DashboardEventStore | None:
-    if not settings.connector_dashboard_enabled:
+    dashboard_not_needed = (
+        not settings.connector_dashboard_enabled
+        and settings.openwebui_effective_sync_mode == "disabled"
+    )
+    if dashboard_not_needed:
         return None
     if session_factory is None:
         session_factory = get_session_factory(settings.database_url)
@@ -110,6 +136,19 @@ def build_dashboard_store(
     )
 
 
+def _build_openwebui_client(settings: Settings) -> OpenWebUIClient | None:
+    if settings.openwebui_effective_sync_mode == "disabled":
+        return None
+    if not settings.openwebui_admin_api_key:
+        return None
+    return OpenWebUIClient(
+        settings.openwebui_base_url,
+        settings.openwebui_admin_api_key,
+        timeout=settings.openwebui_request_timeout_seconds,
+        verify_ssl=settings.openwebui_verify_ssl,
+    )
+
+
 def check_database(database_url: str) -> None:
     session_factory = get_session_factory(database_url)
     with session_factory() as session:
@@ -120,7 +159,13 @@ def check_redis(redis_url: str) -> None:
     Redis.from_url(redis_url).ping()
 
 
-def _retry(operation, name: str, *, timeout_seconds: int = 120, sleep_seconds: int = 2) -> None:
+def _retry(
+    operation: Callable[[], Any],
+    name: str,
+    *,
+    timeout_seconds: int = 120,
+    sleep_seconds: int = 2,
+) -> None:
     deadline = time.monotonic() + timeout_seconds
     last_error: Exception | None = None
     while time.monotonic() < deadline:

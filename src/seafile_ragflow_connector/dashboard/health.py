@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -22,7 +23,7 @@ def collect_dashboard_health(
     *,
     store: DashboardEventStore,
     settings: Settings,
-    started_at,
+    started_at: datetime,
 ) -> dict[str, Any]:
     status = store.connector_status(started_at=started_at)
     checks = [
@@ -31,6 +32,7 @@ def collect_dashboard_health(
         _timed_check("redis", "Redis", _check_redis(settings.redis_url)),
         _timed_check("seafile", "Seafile Admin API", _check_seafile(settings)),
         _timed_check("ragflow", "RAGFlow API", _check_ragflow(settings)),
+        _check_openwebui(settings),
         _check_sync_jobs(status),
     ]
     summary = {
@@ -158,6 +160,46 @@ def _check_ragflow(settings: Settings) -> Callable[[], dict[str, Any]]:
             "status": "ok",
             "message": f"API erreichbar, {len(datasets)} Template-Treffer.",
             "endpoint": base_url,
+        }
+
+    return run
+
+
+def _check_openwebui(settings: Settings) -> dict[str, Any]:
+    if settings.openwebui_effective_sync_mode == "disabled":
+        return {
+            "name": "openwebui",
+            "label": "OpenWebUI",
+            "status": "ok",
+            "latency_ms": 0,
+            "message": "Integration deaktiviert.",
+        }
+    if not settings.openwebui_admin_api_key:
+        return {
+            "name": "openwebui",
+            "label": "OpenWebUI",
+            "status": "warning",
+            "latency_ms": 0,
+            "message": "Admin-API-Key fehlt.",
+        }
+    return _timed_check("openwebui", "OpenWebUI", _check_openwebui_api(settings))
+
+
+def _check_openwebui_api(settings: Settings) -> Callable[[], dict[str, Any]]:
+    def run() -> dict[str, Any]:
+        with httpx.Client(
+            base_url=settings.openwebui_base_url,
+            headers={"Authorization": f"Bearer {settings.openwebui_admin_api_key}"},
+            timeout=HEALTH_TIMEOUT_SECONDS,
+            verify=settings.openwebui_verify_ssl,
+            follow_redirects=False,
+        ) as client:
+            response = client.get("/api/v1/functions/list")
+            response.raise_for_status()
+        return {
+            "status": "ok",
+            "message": "Functions-API erreichbar.",
+            "endpoint": settings.openwebui_base_url,
         }
 
     return run

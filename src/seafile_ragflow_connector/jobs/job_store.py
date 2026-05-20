@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import cast
 
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -135,7 +135,13 @@ class JobSignalQueue:
         self.redis.lpush(self.queue_name, str(job_id))
 
     def wait(self, timeout_seconds: int = 5) -> str | None:
-        item: tuple[bytes, bytes] | None = self.redis.brpop(self.queue_name, timeout=timeout_seconds)
+        item = cast(
+            tuple[bytes, bytes] | None,
+            self.redis.brpop(
+                self.queue_name,
+                timeout=timeout_seconds,
+            ),
+        )
         if item is None:
             return None
         return item[1].decode("utf-8")

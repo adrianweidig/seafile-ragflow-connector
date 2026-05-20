@@ -5,7 +5,6 @@ from typing import Any
 
 from seafile_ragflow_connector.utils.hashing import sha256_json
 
-
 DATASET_CREATE_FIELDS = {
     "name",
     "avatar",

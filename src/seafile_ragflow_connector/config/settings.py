@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -56,6 +56,33 @@ class Settings(BaseSettings):
     ragflow_template_refresh_seconds: int = 300
     ragflow_refresh_dataset_settings: bool = True
     ragflow_validate_created_dataset: bool = True
+    ragflow_public_base_url: str | None = None
+    ragflow_document_url_template: str | None = None
+
+    openwebui_integration_enabled: bool = False
+    openwebui_base_url: str = "http://localhost:3000"
+    openwebui_admin_api_key: str | None = None
+    openwebui_sync_on_startup: bool = True
+    openwebui_sync_mode: Literal["disabled", "dry-run", "sync", "repair"] = "sync"
+    openwebui_create_tools: bool = True
+    openwebui_create_pipes: bool = True
+    openwebui_request_timeout_seconds: int = 30
+    openwebui_verify_ssl: bool = True
+    openwebui_function_namespace: str = "ragflow"
+    openwebui_source_preview_mode: Literal[
+        "ragflow_link",
+        "connector_viewer",
+        "citation_only",
+        "disabled",
+    ] = "ragflow_link"
+    openwebui_proxy_public_base_url: str | None = None
+    openwebui_proxy_internal_base_url: str | None = None
+    openwebui_proxy_shared_secret: str | None = None
+    openwebui_sync_interval_seconds: int = 300
+    openwebui_dataset_allowlist_csv: str = Field(
+        default="",
+        validation_alias="OPENWEBUI_DATASET_ALLOWLIST",
+    )
 
     postgres_host: str = "connector-postgres"
     postgres_port: int = 5432
@@ -100,8 +127,8 @@ class Settings(BaseSettings):
     full_sync_on_missing_commit: bool = True
 
     delete_ragflow_docs_on_seafile_delete: bool = True
-    delete_dataset_when_library_deleted: bool = False
-    archive_dataset_when_library_deleted: bool = True
+    delete_dataset_when_library_deleted: bool = True
+    archive_dataset_when_library_deleted: bool = False
 
     max_concurrent_libraries: int = 2
     upload_workers: int = 2
@@ -119,10 +146,17 @@ class Settings(BaseSettings):
     allow_outbound_internet: bool = False
     disable_telemetry: bool = True
 
-    @field_validator("seafile_base_url", "ragflow_base_url")
+    @field_validator(
+        "seafile_base_url",
+        "ragflow_base_url",
+        "ragflow_public_base_url",
+        "openwebui_base_url",
+        "openwebui_proxy_public_base_url",
+        "openwebui_proxy_internal_base_url",
+    )
     @classmethod
-    def strip_url(cls, value: str) -> str:
-        return value.rstrip("/")
+    def strip_url(cls, value: str | None) -> str | None:
+        return value.rstrip("/") if value else value
 
     @field_validator("max_file_size_mb")
     @classmethod
@@ -139,6 +173,23 @@ class Settings(BaseSettings):
             msg = "connector_dashboard_port must be between 1 and 65535"
             raise ValueError(msg)
         return value
+
+    @field_validator("openwebui_request_timeout_seconds", "openwebui_sync_interval_seconds")
+    @classmethod
+    def validate_openwebui_positive_int(cls, value: int) -> int:
+        if value <= 0:
+            msg = "openwebui numeric settings must be positive"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("openwebui_function_namespace")
+    @classmethod
+    def validate_openwebui_namespace(cls, value: str) -> str:
+        namespace = value.strip().lower().replace("-", "_")
+        if not namespace or not namespace.replace("_", "").isalnum() or namespace[0].isdigit():
+            msg = "OPENWEBUI_FUNCTION_NAMESPACE must be a valid Python identifier prefix"
+            raise ValueError(msg)
+        return namespace
 
     @field_validator(
         "connector_dashboard_max_log_entries",
@@ -169,6 +220,57 @@ class Settings(BaseSettings):
             )
         if not self.redis_url:
             self.redis_url = f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+        if self.openwebui_proxy_internal_base_url is None:
+            self.openwebui_proxy_internal_base_url = self.openwebui_proxy_public_base_url
+        for name in (
+            "ragflow_public_base_url",
+            "openwebui_proxy_public_base_url",
+            "openwebui_proxy_internal_base_url",
+        ):
+            value = getattr(self, name)
+            if value and not _is_http_url(value):
+                msg = f"{name.upper()} must be an http or https URL"
+                raise ValueError(msg)
+        if self.openwebui_integration_enabled:
+            mode = self.openwebui_effective_sync_mode
+            if mode in {"sync", "repair"} and not self.openwebui_admin_api_key:
+                msg = "OPENWEBUI_ADMIN_API_KEY must be set when OpenWebUI sync or repair is enabled"
+                raise ValueError(msg)
+            if (
+                mode in {"sync", "repair"}
+                and (self.openwebui_create_tools or self.openwebui_create_pipes)
+                and not self.openwebui_proxy_shared_secret
+            ):
+                msg = (
+                    "OPENWEBUI_PROXY_SHARED_SECRET must be set when OpenWebUI "
+                    "tools or pipes are synced"
+                )
+                raise ValueError(msg)
+            if (
+                mode in {"sync", "repair"}
+                and (self.openwebui_create_tools or self.openwebui_create_pipes)
+                and not self.openwebui_proxy_base_url_for_functions
+            ):
+                msg = (
+                    "OPENWEBUI_PROXY_INTERNAL_BASE_URL or OPENWEBUI_PROXY_PUBLIC_BASE_URL "
+                    "must be set when OpenWebUI tools or pipes are synced"
+                )
+                raise ValueError(msg)
+            if (
+                self.openwebui_source_preview_mode == "connector_viewer"
+                and (
+                    not self.openwebui_proxy_public_base_url
+                    or not self.openwebui_proxy_shared_secret
+                )
+            ):
+                msg = (
+                    "OPENWEBUI_PROXY_PUBLIC_BASE_URL and OPENWEBUI_PROXY_SHARED_SECRET "
+                    "must be set for connector_viewer preview mode"
+                )
+                raise ValueError(msg)
+            if not _is_http_url(self.openwebui_base_url):
+                msg = "OPENWEBUI_BASE_URL must be an http or https URL"
+                raise ValueError(msg)
         return self
 
     @property
@@ -186,6 +288,31 @@ class Settings(BaseSettings):
     @property
     def binary_direct_extensions(self) -> tuple[str, ...]:
         return _split_csv(self.binary_direct_extensions_csv)
+
+    @property
+    def openwebui_dataset_allowlist(self) -> tuple[str, ...]:
+        return tuple(
+            item.strip()
+            for item in self.openwebui_dataset_allowlist_csv.split(",")
+            if item.strip()
+        )
+
+    @property
+    def openwebui_effective_sync_mode(self) -> Literal["disabled", "dry-run", "sync", "repair"]:
+        if not self.openwebui_integration_enabled or self.openwebui_sync_mode == "disabled":
+            return "disabled"
+        if self.dry_run:
+            return "dry-run"
+        return self.openwebui_sync_mode
+
+    @property
+    def openwebui_proxy_base_url_for_functions(self) -> str | None:
+        return self.openwebui_proxy_internal_base_url or self.openwebui_proxy_public_base_url
+
+
+def _is_http_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 @lru_cache

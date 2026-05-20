@@ -13,4 +13,6 @@ class ReconcilePlan:
 
 class Reconciler:
     def plan_library_reconcile(self) -> ReconcilePlan:
-        return ReconcilePlan(warnings=["library reconcile planning requires live Seafile and DB state"])
+        return ReconcilePlan(
+            warnings=["library reconcile planning requires live Seafile and DB state"]
+        )

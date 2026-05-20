@@ -22,10 +22,20 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/docker/Dockerfile
           push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

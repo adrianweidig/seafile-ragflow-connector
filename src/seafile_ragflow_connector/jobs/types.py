@@ -20,6 +20,7 @@ class JobType(StrEnum):
     CHECK_PARSE_STATUS = "CHECK_PARSE_STATUS"
     RECONCILE_LIBRARY = "RECONCILE_LIBRARY"
     RECONCILE_RAGFLOW_DATASET = "RECONCILE_RAGFLOW_DATASET"
+    SYNC_OPENWEBUI = "SYNC_OPENWEBUI"
 
 
 class JobStatus(StrEnum):
@@ -47,6 +48,7 @@ LOW_PRIORITY_TYPES = {
     JobType.RECONCILE_RAGFLOW_DATASET,
     JobType.REPARSE_DOCUMENTS,
     JobType.REFRESH_DATASET_SETTINGS,
+    JobType.SYNC_OPENWEBUI,
 }
 
 
@@ -67,4 +69,3 @@ class JobSpec:
         if self.job_type in LOW_PRIORITY_TYPES:
             return JobPriority.LOW
         return JobPriority.NORMAL
-

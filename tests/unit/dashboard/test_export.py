@@ -42,6 +42,7 @@ class DashboardAuditExportTests(unittest.TestCase):
                 "sync_runs": [{"sync_id": "sync-1", "status": "succeeded"}],
                 "changes": [{"sync_id": "sync-1", "object_name": "a.txt", "status": "synced"}],
                 "logs": [{"level": "info", "message": "done"}],
+                "openwebui": {"status": {"status": "disabled"}, "mappings": []},
                 "export_limits": {"max_log_entries": 5000},
             }
         )
@@ -58,6 +59,7 @@ class DashboardAuditExportTests(unittest.TestCase):
         self.assertIn('name="Overview"', workbook_xml)
         self.assertIn('name="Sync Runs"', workbook_xml)
         self.assertIn('name="Changes"', workbook_xml)
+        self.assertIn('name="OpenWebUI"', workbook_xml)
         self.assertIn("Connector-Zustand", first_sheet)
 
 

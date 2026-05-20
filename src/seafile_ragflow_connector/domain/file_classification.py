@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 
 from seafile_ragflow_connector.utils.paths import normalize_seafile_path, source_extension
 
-
 TEXT_MIME_PREFIXES = ("text/",)
 TEXT_MIME_TYPES = {
     "application/json",
@@ -54,7 +53,9 @@ class FilePolicy:
         )
     )
     binary_direct_extensions: frozenset[str] = field(
-        default_factory=lambda: frozenset({".pdf", ".docx", ".xlsx", ".pptx", ".png", ".jpg", ".jpeg"})
+        default_factory=lambda: frozenset(
+            {".pdf", ".docx", ".xlsx", ".pptx", ".png", ".jpg", ".jpeg"}
+        )
     )
     default_text_ingestion_strategy: str = "text_projection"
     max_file_size_bytes: int = 1024 * 1024 * 1024
@@ -205,4 +206,3 @@ def classify_file(path: str, data: bytes, policy: FilePolicy | None = None) -> F
         should_ingest=False,
         reason="unknown_binary_or_disallowed",
     )
-

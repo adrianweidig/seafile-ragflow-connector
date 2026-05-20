@@ -17,12 +17,19 @@ def evaluate_dataset_settings_change(
     reparse_on_change: bool,
 ) -> DatasetSettingsDecision:
     if previous_hash is None:
-        return DatasetSettingsDecision(changed=False, enqueue_reparse=False, reason="first_observation")
+        return DatasetSettingsDecision(
+            changed=False,
+            enqueue_reparse=False,
+            reason="first_observation",
+        )
     if previous_hash == current_hash:
-        return DatasetSettingsDecision(changed=False, enqueue_reparse=False, reason="unchanged")
+        return DatasetSettingsDecision(
+            changed=False,
+            enqueue_reparse=False,
+            reason="unchanged",
+        )
     return DatasetSettingsDecision(
         changed=True,
         enqueue_reparse=reparse_on_change,
         reason="changed_reparse_enabled" if reparse_on_change else "changed_reparse_disabled",
     )
-

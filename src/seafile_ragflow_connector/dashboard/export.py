@@ -27,6 +27,7 @@ def build_audit_workbook(snapshot: Mapping[str, Any]) -> bytes:
         _logs_sheet(_as_list(snapshot.get("logs"))),
         _sources_sheet(snapshot),
         _targets_sheet(snapshot),
+        _openwebui_sheet(snapshot),
         _diagnostics_sheet(snapshot),
     ]
     return _build_workbook(sheets)
@@ -194,6 +195,54 @@ def _targets_sheet(snapshot: Mapping[str, Any]) -> SheetRows:
         for item in datasets
     ]
     return ("Targets", headers, rows)
+
+
+def _openwebui_sheet(snapshot: Mapping[str, Any]) -> SheetRows:
+    openwebui = _as_mapping(snapshot.get("openwebui"))
+    status = _as_mapping(openwebui.get("status"))
+    mappings = _as_list(openwebui.get("mappings"))
+    headers = [
+        "Repo-ID",
+        "Dataset-ID",
+        "Dataset-Name",
+        "Chat-ID",
+        "Tool-ID",
+        "Pipe-ID",
+        "Modellname",
+        "Status",
+        "Letzter Erfolg",
+        "Fehler",
+    ]
+    rows: list[list[Any]] = [
+        [
+            "Status",
+            "",
+            status.get("status"),
+            "",
+            "",
+            "",
+            status.get("mode"),
+            "",
+            "",
+            status.get("last_error"),
+        ]
+    ]
+    rows.extend(
+        [
+            item.get("repo_id"),
+            item.get("ragflow_dataset_id"),
+            item.get("ragflow_dataset_name"),
+            item.get("ragflow_chat_id"),
+            item.get("openwebui_tool_id"),
+            item.get("openwebui_pipe_id"),
+            item.get("openwebui_model_name"),
+            item.get("sync_status"),
+            item.get("last_successful_sync_at"),
+            item.get("last_error"),
+        ]
+        for item in mappings
+    )
+    return ("OpenWebUI", headers, rows)
 
 
 def _diagnostics_sheet(snapshot: Mapping[str, Any]) -> SheetRows:

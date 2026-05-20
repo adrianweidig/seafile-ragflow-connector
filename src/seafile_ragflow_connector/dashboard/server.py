@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 # ruff: noqa: E501
+import hmac
 import json
 import threading
 from dataclasses import dataclass
 from datetime import datetime
+from html import escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -12,11 +14,20 @@ from urllib.parse import parse_qs, urlparse
 
 import structlog
 
+from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
 from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.export import audit_export_filename, build_audit_workbook
 from seafile_ragflow_connector.dashboard.health import collect_dashboard_health
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore
 from seafile_ragflow_connector.dashboard.ui import DASHBOARD_HTML
+from seafile_ragflow_connector.openwebui.sources import (
+    extract_answer,
+    normalize_sources,
+    verify_preview_token,
+)
+from seafile_ragflow_connector.persistence.models.file import File
+from seafile_ragflow_connector.persistence.models.library import Library
+from seafile_ragflow_connector.persistence.models.openwebui import OpenWebUIDatasetMapping
 from seafile_ragflow_connector.utils.redaction import redact_mapping
 
 
@@ -73,7 +84,7 @@ def serve_dashboard_forever(context: DashboardContext) -> None:
         handle.server.server_close()
 
 
-def _build_handler(context: DashboardContext):
+def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
     class DashboardRequestHandler(BaseHTTPRequestHandler):
         server_version = "SeafileRAGFlowConnectorDashboard/1.0"
 
@@ -147,6 +158,28 @@ def _build_handler(context: DashboardContext):
                 if parsed.path == "/api/diagnostics":
                     self._send_json(context.store.diagnostics(_safe_config(context.settings)))
                     return
+                if parsed.path == "/api/openwebui/status":
+                    self._send_json(context.store.openwebui_status())
+                    return
+                if parsed.path == "/api/openwebui/mappings":
+                    params = parse_qs(parsed.query)
+                    self._send_json(
+                        context.store.list_openwebui_mappings(
+                            limit=_int(params, "limit"),
+                            offset=_int(params, "offset"),
+                        )
+                    )
+                    return
+                if parsed.path == "/api/openwebui/capabilities":
+                    self._send_json(context.store.openwebui_capabilities())
+                    return
+                if parsed.path == "/api/openwebui/dry-run":
+                    self._send_json(context.store.openwebui_dry_run())
+                    return
+                if parsed.path == "/api/openwebui/sources/preview":
+                    params = parse_qs(parsed.query)
+                    self._send_html(_preview_html(context.settings, _one(params, "token")))
+                    return
                 if parsed.path in {"/api/audit.xlsx", "/api/audit-export.xlsx"}:
                     snapshot = context.store.audit_snapshot(
                         started_at=context.started_at,
@@ -159,6 +192,27 @@ def _build_handler(context: DashboardContext):
                 structlog.get_logger(__name__).warning("dashboard.request_failed", path=parsed.path, error=str(exc))
                 self._send_json(
                     {"error": "dashboard request failed", "message": "Die Daten konnten nicht geladen werden."},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            try:
+                if parsed.path == "/api/openwebui/proxy/query":
+                    self._send_json(_handle_openwebui_query(context, self._json_body(), self.headers.get("Authorization")))
+                    return
+                if parsed.path == "/api/openwebui/proxy/chat":
+                    self._send_json(_handle_openwebui_chat(context, self._json_body(), self.headers.get("Authorization")))
+                    return
+                self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+            except PermissionError:
+                self._send_json({"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+            except ValueError as exc:
+                self._send_json({"error": "bad request", "message": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                structlog.get_logger(__name__).warning("openwebui.proxy_failed", path=parsed.path, error=str(exc))
+                self._send_json(
+                    {"error": "proxy request failed", "message": "Die RAGFlow-Abfrage konnte nicht geladen werden."},
                     status=HTTPStatus.INTERNAL_SERVER_ERROR,
                 )
 
@@ -194,6 +248,19 @@ def _build_handler(context: DashboardContext):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _json_body(self) -> dict[str, Any]:
+            raw_length = self.headers.get("Content-Length")
+            length = int(raw_length or "0")
+            if length <= 0 or length > 1_000_000:
+                raise ValueError("invalid request body size")
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            except ValueError as exc:
+                raise ValueError("invalid JSON body") from exc
+            if not isinstance(payload, dict):
+                raise ValueError("JSON body must be an object")
+            return payload
 
     return DashboardRequestHandler
 
@@ -249,5 +316,177 @@ def _safe_config(settings: Settings) -> dict[str, Any]:
         "connector_dashboard_max_event_entries": settings.connector_dashboard_max_event_entries,
         "connector_dashboard_max_sync_runs": settings.connector_dashboard_max_sync_runs,
         "connector_dashboard_log_page_size": settings.connector_dashboard_log_page_size,
+        "openwebui_integration_enabled": settings.openwebui_integration_enabled,
+        "openwebui_base_url": settings.openwebui_base_url,
+        "openwebui_sync_on_startup": settings.openwebui_sync_on_startup,
+        "openwebui_sync_mode": settings.openwebui_effective_sync_mode,
+        "openwebui_create_tools": settings.openwebui_create_tools,
+        "openwebui_create_pipes": settings.openwebui_create_pipes,
+        "openwebui_request_timeout_seconds": settings.openwebui_request_timeout_seconds,
+        "openwebui_verify_ssl": settings.openwebui_verify_ssl,
+        "openwebui_function_namespace": settings.openwebui_function_namespace,
+        "openwebui_source_preview_mode": settings.openwebui_source_preview_mode,
+        "openwebui_proxy_public_base_url": settings.openwebui_proxy_public_base_url,
+        "openwebui_proxy_internal_base_url": settings.openwebui_proxy_internal_base_url,
+        "openwebui_sync_interval_seconds": settings.openwebui_sync_interval_seconds,
+        "openwebui_dataset_allowlist": settings.openwebui_dataset_allowlist,
+        "ragflow_public_base_url": settings.ragflow_public_base_url,
+        "ragflow_document_url_template": settings.ragflow_document_url_template,
     }
     return dict(redact_mapping(safe))
+
+
+def _handle_openwebui_query(
+    context: DashboardContext,
+    payload: dict[str, Any],
+    authorization: str | None,
+) -> dict[str, Any]:
+    _require_proxy_secret(context.settings, authorization)
+    artifact_id = _required_text(payload, "artifact_id")
+    dataset_id = _required_text(payload, "dataset_id")
+    question = _required_text(payload, "question")
+    top_k = int(payload.get("top_k") or 5)
+    mapping = _load_mapping(context.store, dataset_id=dataset_id, tool_id=artifact_id)
+    ragflow = RAGFlowClient(
+        context.settings.ragflow_internal_url or context.settings.ragflow_base_url,
+        context.settings.ragflow_api_key,
+        timeout=context.settings.openwebui_request_timeout_seconds,
+    )
+    try:
+        result = ragflow.retrieve_chunks(dataset_id=dataset_id, question=question, top_k=top_k, page_size=top_k)
+    finally:
+        ragflow.close()
+    sources = normalize_sources(
+        result,
+        settings=context.settings,
+        dataset_id=dataset_id,
+        dataset_name=mapping.ragflow_dataset_name,
+        files_by_document_id=_files_by_document_id(context.store, mapping.repo_id),
+    )
+    return {"answer": _sources_markdown(sources), "sources": sources, "citations_emitted": True}
+
+
+def _handle_openwebui_chat(
+    context: DashboardContext,
+    payload: dict[str, Any],
+    authorization: str | None,
+) -> dict[str, Any]:
+    _require_proxy_secret(context.settings, authorization)
+    artifact_id = _required_text(payload, "artifact_id")
+    dataset_id = _required_text(payload, "dataset_id")
+    chat_id = _required_text(payload, "chat_id")
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        raise ValueError("messages must be a list")
+    mapping = _load_mapping(
+        context.store,
+        dataset_id=dataset_id,
+        chat_id=chat_id,
+        pipe_id=artifact_id,
+    )
+    ragflow = RAGFlowClient(
+        context.settings.ragflow_internal_url or context.settings.ragflow_base_url,
+        context.settings.ragflow_api_key,
+        timeout=context.settings.openwebui_request_timeout_seconds,
+    )
+    try:
+        result = ragflow.chat_completion(chat_id=chat_id, messages=messages, stream=False)
+    finally:
+        ragflow.close()
+    sources = normalize_sources(
+        result,
+        settings=context.settings,
+        dataset_id=dataset_id,
+        dataset_name=mapping.ragflow_dataset_name,
+        files_by_document_id=_files_by_document_id(context.store, mapping.repo_id),
+    )
+    return {"answer": extract_answer(result), "sources": sources, "citations_emitted": True}
+
+
+def _require_proxy_secret(settings: Settings, authorization: str | None) -> None:
+    if not settings.openwebui_proxy_shared_secret:
+        raise PermissionError("proxy secret is not configured")
+    expected = f"Bearer {settings.openwebui_proxy_shared_secret}"
+    if not authorization or not hmac.compare_digest(authorization, expected):
+        raise PermissionError("invalid proxy authorization")
+
+
+def _required_text(payload: dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if value in (None, ""):
+        raise ValueError(f"{key} is required")
+    return str(value)
+
+
+def _load_mapping(
+    store: DashboardEventStore,
+    *,
+    dataset_id: str,
+    chat_id: str | None = None,
+    tool_id: str | None = None,
+    pipe_id: str | None = None,
+) -> OpenWebUIDatasetMapping:
+    with store.session_factory() as session:
+        mapping = session.query(OpenWebUIDatasetMapping).filter_by(ragflow_dataset_id=dataset_id).one_or_none()
+        if mapping is None:
+            raise ValueError("unknown dataset")
+        library = session.get(Library, mapping.repo_id)
+        if library is None or library.status != "active":
+            raise ValueError("dataset is no longer active")
+        if chat_id and mapping.ragflow_chat_id != chat_id:
+            raise ValueError("chat is not assigned to dataset")
+        if tool_id and mapping.openwebui_tool_id != tool_id:
+            raise ValueError("tool is not assigned to dataset")
+        if pipe_id and mapping.openwebui_pipe_id != pipe_id:
+            raise ValueError("pipe is not assigned to dataset")
+        session.expunge(mapping)
+        return mapping
+
+
+def _files_by_document_id(store: DashboardEventStore, repo_id: str) -> dict[str, dict[str, Any]]:
+    with store.session_factory() as session:
+        rows = session.query(File).filter_by(repo_id=repo_id).all()
+        return {
+            str(row.ragflow_document_id): {
+                "repo_id": row.repo_id,
+                "path": row.path,
+                "ragflow_document_name": row.ragflow_document_name,
+            }
+            for row in rows
+            if row.ragflow_document_id
+        }
+
+
+def _sources_markdown(sources: list[dict[str, Any]]) -> str:
+    if not sources:
+        return "Keine passenden Quellen gefunden."
+    lines = ["Gefundene Quellen:"]
+    for index, source in enumerate(sources, start=1):
+        name = source.get("name") or "Quelle"
+        url = source.get("url")
+        snippet = source.get("snippet") or ""
+        lines.append(f"{index}. [{name}]({url})" if url else f"{index}. {name}")
+        if snippet:
+            lines.append(f"   {snippet}")
+    return "\n".join(lines)
+
+
+def _preview_html(settings: Settings, token: str | None) -> str:
+    if not token or not settings.openwebui_proxy_shared_secret:
+        return "<!doctype html><html><body><h1>Quelle nicht verfügbar</h1></body></html>"
+    try:
+        payload = verify_preview_token(token, settings.openwebui_proxy_shared_secret)
+    except ValueError:
+        return "<!doctype html><html><body><h1>Quelle nicht verfügbar</h1></body></html>"
+    title = escape(str(payload.get("document_name") or "Quelle"))
+    snippet = escape(str(payload.get("snippet") or ""))
+    dataset = escape(str(payload.get("dataset_name") or payload.get("dataset_id") or ""))
+    chunk = escape(str(payload.get("chunk_id") or ""))
+    return (
+        "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{title}</title>"
+        "<style>body{font-family:system-ui,Segoe UI,Arial,sans-serif;margin:2rem;line-height:1.5;max-width:960px}"
+        "pre{white-space:pre-wrap;background:#f1f5f9;padding:1rem;border-radius:8px}</style></head><body>"
+        f"<h1>{title}</h1><p>Dataset: {dataset}</p><p>Chunk: {chunk}</p><pre>{snippet}</pre></body></html>"
+    )

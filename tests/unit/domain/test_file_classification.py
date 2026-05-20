@@ -14,7 +14,7 @@ class FileClassificationTests(unittest.TestCase):
         self.assertEqual(result.ingestion_strategy, "text_projection")
 
     def test_unknown_utf8_file_is_accepted_when_enabled(self) -> None:
-        result = classify_file("/custom/domain.filetype", "hello äöü".encode("utf-8"))
+        result = classify_file("/custom/domain.filetype", "hello äöü".encode())
         self.assertTrue(result.should_ingest)
         self.assertEqual(result.ingestion_strategy, "text_projection")
 

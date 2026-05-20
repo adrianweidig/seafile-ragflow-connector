@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import JSON, BigInteger, DateTime, Integer, Text, func
@@ -25,11 +26,17 @@ class SyncJob(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     locked_by: Mapped[str | None] = mapped_column(Text)
-    locked_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
-    run_after: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    run_after: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
     error_message: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[DateTime] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
