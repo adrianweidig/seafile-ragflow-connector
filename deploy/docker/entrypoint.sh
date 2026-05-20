@@ -54,7 +54,18 @@ PY
 prepare_runtime_dirs() {
   cache_dir="${CACHE_DIR:-/cache}"
   temp_dir="${TEMP_DIR:-${cache_dir}/tmp}"
-  mkdir -p "$cache_dir" "$temp_dir" || fail "cannot create runtime directories: $cache_dir $temp_dir"
+  if mkdir -p "$cache_dir" "$temp_dir" 2>/dev/null && [ -w "$cache_dir" ] && [ -w "$temp_dir" ]; then
+    export CACHE_DIR="$cache_dir"
+    export TEMP_DIR="$temp_dir"
+    return 0
+  fi
+
+  fallback_cache="${CONNECTOR_FALLBACK_CACHE_DIR:-/tmp/seafile-ragflow-connector/cache}"
+  fallback_temp="${CONNECTOR_FALLBACK_TEMP_DIR:-${fallback_cache}/tmp}"
+  mkdir -p "$fallback_cache" "$fallback_temp" || fail "cannot create fallback runtime directories: $fallback_cache $fallback_temp"
+  export CACHE_DIR="$fallback_cache"
+  export TEMP_DIR="$fallback_temp"
+  log "runtime cache is not writable, using fallback: $CACHE_DIR"
 }
 
 run_startup_checks() {
