@@ -24,19 +24,23 @@ wait_for_infra() {
 
   while :; do
     if python - <<'PY'
-import os
+import sys
 from sqlalchemy import create_engine, text
 from redis import Redis
+from seafile_ragflow_connector.config import get_settings
 
-database_url = os.environ["DATABASE_URL"]
-redis_url = os.environ["REDIS_URL"]
+try:
+    settings = get_settings()
 
-engine = create_engine(database_url, pool_pre_ping=True)
-with engine.connect() as connection:
-    connection.execute(text("select 1"))
+    engine = create_engine(settings.database_url, pool_pre_ping=True)
+    with engine.connect() as connection:
+        connection.execute(text("select 1"))
 
-client = Redis.from_url(redis_url)
-client.ping()
+    client = Redis.from_url(settings.redis_url)
+    client.ping()
+except Exception as exc:
+    print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
 PY
     then
       log "database and redis are reachable"
