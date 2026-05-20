@@ -49,6 +49,53 @@ Es gibt zwei unterstützte Netzwerkvarianten:
   `SEAFILE_BASE_URL=http://seafile`, `RAGFLOW_BASE_URL=http://ragflow:9380`
   nutzen.
 
+## Direkte Docker-Compose-Varianten
+
+Für Betreiber, die nicht über Portainer deployen, liegen unter `deploy/compose`
+direkt nutzbare Varianten mit jeweils eigener kommentierter Env-Vorlage:
+
+| Anwendungsfall | Compose-Datei | Env-Vorlage |
+| --- | --- | --- |
+| Seafile/RAGFlow über Host, LAN oder Reverse Proxy | `deploy/compose/external-services.compose.yml` | `deploy/compose/external-services.stack.env.example` |
+| Seafile/RAGFlow im bestehenden Docker-Netz | `deploy/compose/shared-network.compose.yml` | `deploy/compose/shared-network.stack.env.example` |
+| Seafile/RAGFlow/OpenWebUI im gemeinsamen Docker-Netz | `deploy/compose/openwebui.compose.yml` | `deploy/compose/openwebui.stack.env.example` |
+
+Beispiel:
+
+```bash
+docker compose \
+  --env-file deploy/compose/external-services.stack.env.example \
+  -f deploy/compose/external-services.compose.yml \
+  up -d
+```
+
+Für das Shared-Network- und OpenWebUI-Szenario muss
+`CONNECTOR_DOCKER_NETWORK_NAME` auf ein bereits existierendes Docker-Netz
+zeigen. Die OpenWebUI-Variante aktiviert das Dashboard, weil die generierten
+Tools/Pipes den Connector-Proxy unter `/api/openwebui/proxy/*` erreichen
+müssen.
+
+## Docker Swarm
+
+Die Swarm-Alternative liegt unter `deploy/swarm`. Sie nutzt ein eigenes
+Overlay-Netz und bringt PostgreSQL/Redis als Swarm-Services mit. Seafile,
+RAGFlow und optional OpenWebUI bleiben externe Systeme, die aus den
+Connector-Tasks erreichbar sein müssen.
+
+```bash
+cd deploy/swarm
+cp stack.env.example stack.env
+set -a
+. ./stack.env
+set +a
+docker stack deploy -c docker-stack.yml seafile-ragflow-connector
+```
+
+Wichtig: `docker stack deploy` liest keine Env-Datei wie `docker compose
+--env-file`. Die Variablen müssen vor dem Deploy in die Shell exportiert
+werden. Außerdem veröffentlicht Swarm Dashboard-Ports über das Routing-Mesh;
+`CONNECTOR_DASHBOARD_PUBLISHED_PORT` ist dort nur eine Portnummer.
+
 ### Dashboard im Betrieb
 
 Das Dashboard läuft im Controller-Prozess, wenn

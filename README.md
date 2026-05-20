@@ -65,6 +65,8 @@ Portainer-Environment-Variablen reichen aus.
 | `.github/workflows/` | GitHub Actions für Tests und GHCR-Image-Publishing |
 | `deploy/docker/` | Dockerfile und Container-Entrypoint für das Connector-Image |
 | `deploy/portainer/` | Portainer-fähige Compose-Datei und importierbare Beispiel-Env |
+| `deploy/compose/` | Direkt nutzbare Compose-Varianten für Host/LAN, Shared Network und OpenWebUI |
+| `deploy/swarm/` | Docker-Swarm-Alternative mit Stackfile und Env-Vorlage |
 | `docs/` | Architektur, Konfiguration, Betrieb und RAGFlow-Template-Verhalten |
 | `migrations/` | Alembic-Migrationen für PostgreSQL/SQLite-Testdatenbanken |
 | `src/seafile_ragflow_connector/` | Anwendungscode für CLI, Sync, Clients, Dashboard, Jobs und OpenWebUI |

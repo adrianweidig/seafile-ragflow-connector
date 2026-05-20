@@ -1,0 +1,163 @@
+# Docker Compose: Connector mit extern erreichbarem Seafile/RAGFlow.
+#
+# Benutzen, wenn Seafile und RAGFlow nicht im gleichen Compose-Projekt laufen,
+# sondern über LAN, Reverse Proxy oder veröffentlichte Host-Ports erreichbar
+# sind. Typische URLs sind http://host.docker.internal:<port> oder interne
+# Reverse-Proxy-URLs.
+#
+# Start:
+#   docker compose --env-file deploy/compose/external-services.stack.env.example \
+#     -f deploy/compose/external-services.compose.yml up -d
+
+name: ${COMPOSE_PROJECT_NAME:-seafile-ragflow-connector-external}
+
+x-connector-env: &connector-env
+  # Allgemeine Runtime.
+  TZ: ${TZ:-Europe/Berlin}
+  APP_ENV: ${APP_ENV:-production}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  DRY_RUN: ${DRY_RUN:-false}
+
+  # Lesendes Dashboard. Der Port wird nur am Controller veröffentlicht.
+  CONNECTOR_DASHBOARD_ENABLED: ${CONNECTOR_DASHBOARD_ENABLED:-false}
+  CONNECTOR_DASHBOARD_HOST: ${CONNECTOR_DASHBOARD_HOST:-0.0.0.0}
+  CONNECTOR_DASHBOARD_PORT: ${CONNECTOR_DASHBOARD_PORT:-8080}
+
+  # Externe Quellsysteme. Diese URLs müssen aus dem Container erreichbar sein.
+  SEAFILE_BASE_URL: ${SEAFILE_BASE_URL:?set SEAFILE_BASE_URL}
+  SEAFILE_INTERNAL_URL: ${SEAFILE_INTERNAL_URL:-}
+  SEAFILE_ADMIN_TOKEN: ${SEAFILE_ADMIN_TOKEN:?set SEAFILE_ADMIN_TOKEN}
+  SEAFILE_SYNC_USER_TOKEN: ${SEAFILE_SYNC_USER_TOKEN:?set SEAFILE_SYNC_USER_TOKEN}
+  SEAFILE_SYNC_USER_EMAIL: ${SEAFILE_SYNC_USER_EMAIL:-}
+  SEAFILE_REWRITE_DOWNLOAD_URLS: ${SEAFILE_REWRITE_DOWNLOAD_URLS:-false}
+  SEAFILE_DOWNLOAD_REWRITE_FROM: ${SEAFILE_DOWNLOAD_REWRITE_FROM:-}
+  SEAFILE_DOWNLOAD_REWRITE_TO: ${SEAFILE_DOWNLOAD_REWRITE_TO:-}
+
+  # RAGFlow bleibt Zielsystem. Fehlen Zielartefakte, baut der Connector sie aus
+  # Seafile neu auf; Seafile selbst wird dabei nicht geschrieben.
+  RAGFLOW_BASE_URL: ${RAGFLOW_BASE_URL:?set RAGFLOW_BASE_URL}
+  RAGFLOW_INTERNAL_URL: ${RAGFLOW_INTERNAL_URL:-}
+  RAGFLOW_API_KEY: ${RAGFLOW_API_KEY:?set RAGFLOW_API_KEY}
+  RAGFLOW_TEMPLATE_DATASET_NAME: ${RAGFLOW_TEMPLATE_DATASET_NAME:-connector_template}
+  RAGFLOW_TEMPLATE_REQUIRED: ${RAGFLOW_TEMPLATE_REQUIRED:-true}
+  RAGFLOW_PUBLIC_BASE_URL: ${RAGFLOW_PUBLIC_BASE_URL:-}
+  RAGFLOW_DOCUMENT_URL_TEMPLATE: ${RAGFLOW_DOCUMENT_URL_TEMPLATE:-}
+
+  # In dieser Variante bleibt OpenWebUI aus.
+  OPENWEBUI_INTEGRATION_ENABLED: ${OPENWEBUI_INTEGRATION_ENABLED:-false}
+  OPENWEBUI_SYNC_MODE: ${OPENWEBUI_SYNC_MODE:-disabled}
+
+  # Connector-State innerhalb dieses Compose-Projekts.
+  POSTGRES_HOST: connector-postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: ${POSTGRES_DB:-seafile_ragflow_sync}
+  POSTGRES_USER: ${POSTGRES_USER:-sync}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+  REDIS_HOST: connector-redis
+  REDIS_PORT: 6379
+  REDIS_DB: ${REDIS_DB:-0}
+
+  # Delete-/Repair-Policy: Seafile-Deletes werden ins Ziel gespiegelt,
+  # externe Ziel-Deletes werden repariert.
+  DELETE_RAGFLOW_DOCS_ON_SEAFILE_DELETE: ${DELETE_RAGFLOW_DOCS_ON_SEAFILE_DELETE:-true}
+  DELETE_DATASET_WHEN_LIBRARY_DELETED: ${DELETE_DATASET_WHEN_LIBRARY_DELETED:-true}
+  ARCHIVE_DATASET_WHEN_LIBRARY_DELETED: ${ARCHIVE_DATASET_WHEN_LIBRARY_DELETED:-false}
+
+  # Startup wartet auf DB/Redis und prüft danach optional live Seafile/RAGFlow.
+  CONNECTOR_AUTO_INIT_DB: ${CONNECTOR_AUTO_INIT_DB:-true}
+  CONNECTOR_STARTUP_CHECK: ${CONNECTOR_STARTUP_CHECK:-live}
+  CONNECTOR_BOOTSTRAP_CHECK_LIVE: ${CONNECTOR_BOOTSTRAP_CHECK_LIVE:-true}
+
+x-connector-common: &connector-common
+  image: ${CONNECTOR_IMAGE:-ghcr.io/adrianweidig/seafile-ragflow-connector:latest}
+  restart: unless-stopped
+  environment: *connector-env
+  extra_hosts:
+    # Hilft auf Linux-Hosts, wenn Seafile/RAGFlow über veröffentlichte
+    # Host-Ports angesprochen werden.
+    - "host.docker.internal:host-gateway"
+  volumes:
+    - connector-cache:/cache
+  networks:
+    - connector-net
+  healthcheck:
+    test: ["CMD", "connector", "check-config"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 30s
+
+services:
+  connector-postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16}
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      POSTGRES_DB: ${POSTGRES_DB:-seafile_ragflow_sync}
+      POSTGRES_USER: ${POSTGRES_USER:-sync}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - connector-postgres-data:/var/lib/postgresql/data
+    networks:
+      - connector-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  connector-redis:
+    image: ${REDIS_IMAGE:-redis:7}
+    restart: unless-stopped
+    command: ["sh", "-c", "redis-server --appendonly yes || valkey-server --appendonly yes"]
+    volumes:
+      - connector-redis-data:/data
+    networks:
+      - connector-net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping || valkey-cli ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  connector-controller:
+    <<: *connector-common
+    command: ["controller"]
+    ports:
+      # Lokal gebunden, damit das unauthentifizierte Dashboard nicht
+      # versehentlich im LAN veröffentlicht wird.
+      - "${CONNECTOR_DASHBOARD_PUBLISHED_PORT:-127.0.0.1:18080}:${CONNECTOR_DASHBOARD_PORT:-8080}"
+    depends_on:
+      connector-postgres:
+        condition: service_healthy
+      connector-redis:
+        condition: service_healthy
+
+  connector-worker:
+    <<: *connector-common
+    command: ["worker"]
+    depends_on:
+      connector-postgres:
+        condition: service_healthy
+      connector-redis:
+        condition: service_healthy
+
+  connector-reconciler:
+    <<: *connector-common
+    command: ["reconciler"]
+    depends_on:
+      connector-postgres:
+        condition: service_healthy
+      connector-redis:
+        condition: service_healthy
+
+volumes:
+  connector-postgres-data:
+  connector-redis-data:
+  connector-cache:
+
+networks:
+  connector-net:
+    name: ${CONNECTOR_DOCKER_NETWORK_NAME:-seafile-ragflow-connector-external-net}

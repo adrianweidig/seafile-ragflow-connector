@@ -1,0 +1,167 @@
+# Docker Compose: Connector mit optionaler OpenWebUI-Anbindung.
+#
+# Benutzen, wenn OpenWebUI zusätzlich zu Seafile und RAGFlow synchronisiert
+# werden soll. Der Controller stellt dabei das Dashboard und die geschützten
+# OpenWebUI-Proxy-Routen bereit. Tool/Pipe-Code in OpenWebUI bekommt keine
+# RAGFlow-Secrets, sondern ruft diesen Proxy auf.
+#
+# Start:
+#   docker compose --env-file deploy/compose/openwebui.stack.env.example \
+#     -f deploy/compose/openwebui.compose.yml up -d
+
+name: ${COMPOSE_PROJECT_NAME:-seafile-ragflow-connector-openwebui}
+
+x-connector-env: &connector-env
+  TZ: ${TZ:-Europe/Berlin}
+  APP_ENV: ${APP_ENV:-production}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  DRY_RUN: ${DRY_RUN:-false}
+
+  # Für OpenWebUI-Proxy und Preview-Links muss das Dashboard laufen.
+  CONNECTOR_DASHBOARD_ENABLED: ${CONNECTOR_DASHBOARD_ENABLED:-true}
+  CONNECTOR_DASHBOARD_HOST: ${CONNECTOR_DASHBOARD_HOST:-0.0.0.0}
+  CONNECTOR_DASHBOARD_PORT: ${CONNECTOR_DASHBOARD_PORT:-8080}
+
+  SEAFILE_BASE_URL: ${SEAFILE_BASE_URL:?set SEAFILE_BASE_URL}
+  SEAFILE_INTERNAL_URL: ${SEAFILE_INTERNAL_URL:-}
+  SEAFILE_ADMIN_TOKEN: ${SEAFILE_ADMIN_TOKEN:?set SEAFILE_ADMIN_TOKEN}
+  SEAFILE_SYNC_USER_TOKEN: ${SEAFILE_SYNC_USER_TOKEN:?set SEAFILE_SYNC_USER_TOKEN}
+  SEAFILE_SYNC_USER_EMAIL: ${SEAFILE_SYNC_USER_EMAIL:-}
+  SEAFILE_REWRITE_DOWNLOAD_URLS: ${SEAFILE_REWRITE_DOWNLOAD_URLS:-true}
+  SEAFILE_DOWNLOAD_REWRITE_FROM: ${SEAFILE_DOWNLOAD_REWRITE_FROM:-}
+  SEAFILE_DOWNLOAD_REWRITE_TO: ${SEAFILE_DOWNLOAD_REWRITE_TO:-}
+
+  RAGFLOW_BASE_URL: ${RAGFLOW_BASE_URL:?set RAGFLOW_BASE_URL}
+  RAGFLOW_INTERNAL_URL: ${RAGFLOW_INTERNAL_URL:-}
+  RAGFLOW_API_KEY: ${RAGFLOW_API_KEY:?set RAGFLOW_API_KEY}
+  RAGFLOW_TEMPLATE_DATASET_NAME: ${RAGFLOW_TEMPLATE_DATASET_NAME:-connector_template}
+  RAGFLOW_TEMPLATE_REQUIRED: ${RAGFLOW_TEMPLATE_REQUIRED:-true}
+  RAGFLOW_PUBLIC_BASE_URL: ${RAGFLOW_PUBLIC_BASE_URL:-}
+  RAGFLOW_DOCUMENT_URL_TEMPLATE: ${RAGFLOW_DOCUMENT_URL_TEMPLATE:-}
+
+  # OpenWebUI-Sync. Für den ersten Start `dry-run` nutzen und danach auf
+  # `sync` oder `repair` wechseln.
+  OPENWEBUI_INTEGRATION_ENABLED: ${OPENWEBUI_INTEGRATION_ENABLED:-true}
+  OPENWEBUI_BASE_URL: ${OPENWEBUI_BASE_URL:?set OPENWEBUI_BASE_URL}
+  OPENWEBUI_ADMIN_API_KEY: ${OPENWEBUI_ADMIN_API_KEY:?set OPENWEBUI_ADMIN_API_KEY}
+  OPENWEBUI_SYNC_ON_STARTUP: ${OPENWEBUI_SYNC_ON_STARTUP:-true}
+  OPENWEBUI_SYNC_MODE: ${OPENWEBUI_SYNC_MODE:-dry-run}
+  OPENWEBUI_CREATE_TOOLS: ${OPENWEBUI_CREATE_TOOLS:-true}
+  OPENWEBUI_CREATE_PIPES: ${OPENWEBUI_CREATE_PIPES:-true}
+  OPENWEBUI_FUNCTION_NAMESPACE: ${OPENWEBUI_FUNCTION_NAMESPACE:-ragflow}
+  OPENWEBUI_SOURCE_PREVIEW_MODE: ${OPENWEBUI_SOURCE_PREVIEW_MODE:-connector_viewer}
+  OPENWEBUI_PROXY_PUBLIC_BASE_URL: ${OPENWEBUI_PROXY_PUBLIC_BASE_URL:?set OPENWEBUI_PROXY_PUBLIC_BASE_URL}
+  OPENWEBUI_PROXY_INTERNAL_BASE_URL: ${OPENWEBUI_PROXY_INTERNAL_BASE_URL:-http://connector-controller:8080}
+  OPENWEBUI_PROXY_SHARED_SECRET: ${OPENWEBUI_PROXY_SHARED_SECRET:?set OPENWEBUI_PROXY_SHARED_SECRET}
+  OPENWEBUI_SYNC_INTERVAL_SECONDS: ${OPENWEBUI_SYNC_INTERVAL_SECONDS:-300}
+  OPENWEBUI_DATASET_ALLOWLIST: ${OPENWEBUI_DATASET_ALLOWLIST:-}
+
+  POSTGRES_HOST: connector-postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: ${POSTGRES_DB:-seafile_ragflow_sync}
+  POSTGRES_USER: ${POSTGRES_USER:-sync}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+  REDIS_HOST: connector-redis
+  REDIS_PORT: 6379
+  REDIS_DB: ${REDIS_DB:-0}
+
+  DELETE_RAGFLOW_DOCS_ON_SEAFILE_DELETE: ${DELETE_RAGFLOW_DOCS_ON_SEAFILE_DELETE:-true}
+  DELETE_DATASET_WHEN_LIBRARY_DELETED: ${DELETE_DATASET_WHEN_LIBRARY_DELETED:-true}
+  ARCHIVE_DATASET_WHEN_LIBRARY_DELETED: ${ARCHIVE_DATASET_WHEN_LIBRARY_DELETED:-false}
+
+  CONNECTOR_AUTO_INIT_DB: ${CONNECTOR_AUTO_INIT_DB:-true}
+  CONNECTOR_STARTUP_CHECK: ${CONNECTOR_STARTUP_CHECK:-live}
+  CONNECTOR_BOOTSTRAP_CHECK_LIVE: ${CONNECTOR_BOOTSTRAP_CHECK_LIVE:-true}
+
+x-connector-common: &connector-common
+  image: ${CONNECTOR_IMAGE:-ghcr.io/adrianweidig/seafile-ragflow-connector:latest}
+  restart: unless-stopped
+  environment: *connector-env
+  volumes:
+    - connector-cache:/cache
+  networks:
+    - connector-net
+  healthcheck:
+    test: ["CMD", "connector", "check-config"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 30s
+
+services:
+  connector-postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16}
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      POSTGRES_DB: ${POSTGRES_DB:-seafile_ragflow_sync}
+      POSTGRES_USER: ${POSTGRES_USER:-sync}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - connector-postgres-data:/var/lib/postgresql/data
+    networks:
+      - connector-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  connector-redis:
+    image: ${REDIS_IMAGE:-redis:7}
+    restart: unless-stopped
+    command: ["sh", "-c", "redis-server --appendonly yes || valkey-server --appendonly yes"]
+    volumes:
+      - connector-redis-data:/data
+    networks:
+      - connector-net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping || valkey-cli ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  connector-controller:
+    <<: *connector-common
+    command: ["controller"]
+    ports:
+      # Für Browser-Preview-Links und Dashboard. Bei öffentlichem Zugriff
+      # Reverse Proxy/Auth davor setzen.
+      - "${CONNECTOR_DASHBOARD_PUBLISHED_PORT:-127.0.0.1:18080}:${CONNECTOR_DASHBOARD_PORT:-8080}"
+    depends_on:
+      connector-postgres:
+        condition: service_healthy
+      connector-redis:
+        condition: service_healthy
+
+  connector-worker:
+    <<: *connector-common
+    command: ["worker"]
+    depends_on:
+      connector-postgres:
+        condition: service_healthy
+      connector-redis:
+        condition: service_healthy
+
+  connector-reconciler:
+    <<: *connector-common
+    command: ["reconciler"]
+    depends_on:
+      connector-postgres:
+        condition: service_healthy
+      connector-redis:
+        condition: service_healthy
+
+volumes:
+  connector-postgres-data:
+  connector-redis-data:
+  connector-cache:
+
+networks:
+  connector-net:
+    # Muss bereits existieren, wenn Seafile/RAGFlow/OpenWebUI in einem
+    # gemeinsamen Docker-Netz laufen.
+    name: ${CONNECTOR_DOCKER_NETWORK_NAME:?set CONNECTOR_DOCKER_NETWORK_NAME}
+    external: true

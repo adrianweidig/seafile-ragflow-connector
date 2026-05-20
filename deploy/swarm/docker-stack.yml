@@ -1,0 +1,172 @@
+# Docker Swarm Stack für den Seafile-RAGFlow-Connector.
+#
+# Start:
+#   set -a && . deploy/swarm/stack.env && set +a
+#   docker stack deploy -c deploy/swarm/docker-stack.yml seafile-ragflow-connector
+#
+# Seafile bleibt Quelle der Wahrheit. Der Connector schreibt keine Daten nach
+# Seafile, sondern erzeugt/repariert/löscht nur eigene Zielartefakte in RAGFlow
+# und optional OpenWebUI.
+
+x-connector-env: &connector-env
+  TZ: ${TZ:-Europe/Berlin}
+  APP_ENV: ${APP_ENV:-production}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  DRY_RUN: ${DRY_RUN:-false}
+
+  # Dashboard/Proxy. In Swarm wird der Port über Routing-Mesh veröffentlicht.
+  CONNECTOR_DASHBOARD_ENABLED: ${CONNECTOR_DASHBOARD_ENABLED:-false}
+  CONNECTOR_DASHBOARD_HOST: ${CONNECTOR_DASHBOARD_HOST:-0.0.0.0}
+  CONNECTOR_DASHBOARD_PORT: ${CONNECTOR_DASHBOARD_PORT:-8080}
+
+  # Externe Systeme müssen aus den Connector-Tasks erreichbar sein.
+  SEAFILE_BASE_URL: ${SEAFILE_BASE_URL:?set SEAFILE_BASE_URL}
+  SEAFILE_INTERNAL_URL: ${SEAFILE_INTERNAL_URL:-}
+  SEAFILE_ADMIN_TOKEN: ${SEAFILE_ADMIN_TOKEN:?set SEAFILE_ADMIN_TOKEN}
+  SEAFILE_SYNC_USER_TOKEN: ${SEAFILE_SYNC_USER_TOKEN:?set SEAFILE_SYNC_USER_TOKEN}
+  SEAFILE_SYNC_USER_EMAIL: ${SEAFILE_SYNC_USER_EMAIL:-}
+  SEAFILE_REWRITE_DOWNLOAD_URLS: ${SEAFILE_REWRITE_DOWNLOAD_URLS:-false}
+  SEAFILE_DOWNLOAD_REWRITE_FROM: ${SEAFILE_DOWNLOAD_REWRITE_FROM:-}
+  SEAFILE_DOWNLOAD_REWRITE_TO: ${SEAFILE_DOWNLOAD_REWRITE_TO:-}
+
+  RAGFLOW_BASE_URL: ${RAGFLOW_BASE_URL:?set RAGFLOW_BASE_URL}
+  RAGFLOW_INTERNAL_URL: ${RAGFLOW_INTERNAL_URL:-}
+  RAGFLOW_API_KEY: ${RAGFLOW_API_KEY:?set RAGFLOW_API_KEY}
+  RAGFLOW_TEMPLATE_DATASET_NAME: ${RAGFLOW_TEMPLATE_DATASET_NAME:-connector_template}
+  RAGFLOW_TEMPLATE_REQUIRED: ${RAGFLOW_TEMPLATE_REQUIRED:-true}
+  RAGFLOW_PUBLIC_BASE_URL: ${RAGFLOW_PUBLIC_BASE_URL:-}
+  RAGFLOW_DOCUMENT_URL_TEMPLATE: ${RAGFLOW_DOCUMENT_URL_TEMPLATE:-}
+
+  # OpenWebUI kann im Swarm ebenfalls aktiviert werden. Starte mit dry-run,
+  # wenn die Zielversion noch nicht verifiziert ist.
+  OPENWEBUI_INTEGRATION_ENABLED: ${OPENWEBUI_INTEGRATION_ENABLED:-false}
+  OPENWEBUI_BASE_URL: ${OPENWEBUI_BASE_URL:-http://openwebui:8080}
+  OPENWEBUI_ADMIN_API_KEY: ${OPENWEBUI_ADMIN_API_KEY:-}
+  OPENWEBUI_SYNC_ON_STARTUP: ${OPENWEBUI_SYNC_ON_STARTUP:-true}
+  OPENWEBUI_SYNC_MODE: ${OPENWEBUI_SYNC_MODE:-disabled}
+  OPENWEBUI_CREATE_TOOLS: ${OPENWEBUI_CREATE_TOOLS:-true}
+  OPENWEBUI_CREATE_PIPES: ${OPENWEBUI_CREATE_PIPES:-true}
+  OPENWEBUI_FUNCTION_NAMESPACE: ${OPENWEBUI_FUNCTION_NAMESPACE:-ragflow}
+  OPENWEBUI_SOURCE_PREVIEW_MODE: ${OPENWEBUI_SOURCE_PREVIEW_MODE:-connector_viewer}
+  OPENWEBUI_PROXY_PUBLIC_BASE_URL: ${OPENWEBUI_PROXY_PUBLIC_BASE_URL:-}
+  OPENWEBUI_PROXY_INTERNAL_BASE_URL: ${OPENWEBUI_PROXY_INTERNAL_BASE_URL:-http://connector-controller:8080}
+  OPENWEBUI_PROXY_SHARED_SECRET: ${OPENWEBUI_PROXY_SHARED_SECRET:-}
+  OPENWEBUI_SYNC_INTERVAL_SECONDS: ${OPENWEBUI_SYNC_INTERVAL_SECONDS:-300}
+  OPENWEBUI_DATASET_ALLOWLIST: ${OPENWEBUI_DATASET_ALLOWLIST:-}
+
+  POSTGRES_HOST: connector-postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: ${POSTGRES_DB:-seafile_ragflow_sync}
+  POSTGRES_USER: ${POSTGRES_USER:-sync}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+  REDIS_HOST: connector-redis
+  REDIS_PORT: 6379
+  REDIS_DB: ${REDIS_DB:-0}
+
+  DELETE_RAGFLOW_DOCS_ON_SEAFILE_DELETE: ${DELETE_RAGFLOW_DOCS_ON_SEAFILE_DELETE:-true}
+  DELETE_DATASET_WHEN_LIBRARY_DELETED: ${DELETE_DATASET_WHEN_LIBRARY_DELETED:-true}
+  ARCHIVE_DATASET_WHEN_LIBRARY_DELETED: ${ARCHIVE_DATASET_WHEN_LIBRARY_DELETED:-false}
+
+  CONNECTOR_AUTO_INIT_DB: ${CONNECTOR_AUTO_INIT_DB:-true}
+  CONNECTOR_STARTUP_CHECK: ${CONNECTOR_STARTUP_CHECK:-live}
+  CONNECTOR_BOOTSTRAP_CHECK_LIVE: ${CONNECTOR_BOOTSTRAP_CHECK_LIVE:-true}
+
+x-connector-deploy: &connector-deploy
+  replicas: 1
+  restart_policy:
+    condition: any
+    delay: 10s
+    max_attempts: 0
+  update_config:
+    order: stop-first
+    failure_action: rollback
+
+x-connector-common: &connector-common
+  image: ${CONNECTOR_IMAGE:-ghcr.io/adrianweidig/seafile-ragflow-connector:latest}
+  environment: *connector-env
+  volumes:
+    - connector-cache:/cache
+  networks:
+    - connector-net
+  healthcheck:
+    test: ["CMD", "connector", "check-config"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 30s
+
+services:
+  connector-postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16}
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      POSTGRES_DB: ${POSTGRES_DB:-seafile_ragflow_sync}
+      POSTGRES_USER: ${POSTGRES_USER:-sync}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - connector-postgres-data:/var/lib/postgresql/data
+    networks:
+      connector-net:
+        aliases:
+          - connector-postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+
+  connector-redis:
+    image: ${REDIS_IMAGE:-redis:7}
+    command: ["sh", "-c", "redis-server --appendonly yes || valkey-server --appendonly yes"]
+    volumes:
+      - connector-redis-data:/data
+    networks:
+      connector-net:
+        aliases:
+          - connector-redis
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping || valkey-cli ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+
+  connector-controller:
+    <<: *connector-common
+    command: ["controller"]
+    ports:
+      - target: ${CONNECTOR_DASHBOARD_PORT:-8080}
+        published: ${CONNECTOR_DASHBOARD_PUBLISHED_PORT:-18080}
+        protocol: tcp
+        mode: ingress
+    deploy: *connector-deploy
+
+  connector-worker:
+    <<: *connector-common
+    command: ["worker"]
+    deploy: *connector-deploy
+
+  connector-reconciler:
+    <<: *connector-common
+    command: ["reconciler"]
+    deploy: *connector-deploy
+
+volumes:
+  connector-postgres-data:
+  connector-redis-data:
+  connector-cache:
+
+networks:
+  connector-net:
+    name: ${CONNECTOR_SWARM_NETWORK_NAME:-seafile-ragflow-connector-net}
+    driver: overlay
+    attachable: true

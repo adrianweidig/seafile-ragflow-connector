@@ -6,8 +6,9 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
   die optionale OpenWebUI-Integration.
 - `configuration.md` beschreibt Environment-Variablen, Delete-Policy,
   Dashboard und OpenWebUI-Modi.
-- `operations.md` enthält Portainer-Betrieb, GHCR-/Offline-Hinweise,
-  Recovery, Troubleshooting und lokale WSL-/Docker-Prüfungen.
+- `operations.md` enthält Portainer-Betrieb, Docker-Compose-Varianten,
+  Docker-Swarm-Betrieb, GHCR-/Offline-Hinweise, Recovery, Troubleshooting und
+  lokale WSL-/Docker-Prüfungen.
 - `ragflow-template.md` beschreibt, wie das RAGFlow-Template beim Erzeugen neuer
   Datasets genutzt wird.
 
