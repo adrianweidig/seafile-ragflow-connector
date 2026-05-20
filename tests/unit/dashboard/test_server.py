@@ -75,10 +75,53 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(logs["limit"], 1)
         self.assertEqual(logs["items"][0]["message"], "server-log")
 
+    def test_audit_export_endpoint_returns_xlsx(self) -> None:
+        store = _store()
+        store.create_sync_run(
+            sync_id="sync-export",
+            source="seafile:repo",
+            target="ragflow:dataset",
+            summary="export test",
+        )
+        store.finish_sync_run(
+            sync_id="sync-export",
+            status="succeeded",
+            objects_checked=1,
+            objects_created=1,
+            objects_updated=0,
+            objects_deleted=0,
+            objects_skipped=0,
+        )
+        handle = start_dashboard_server(
+            DashboardContext(store=store, settings=_settings(0), started_at=utcnow())
+        )
+        port = handle.server.server_address[1]
+        try:
+            body, content_type, disposition = _get_bytes(port, "/api/audit.xlsx")
+        finally:
+            handle.stop()
+
+        self.assertTrue(body.startswith(b"PK"))
+        self.assertEqual(
+            content_type,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.assertIn("connector-audit-", disposition)
+        self.assertIn(".xlsx", disposition)
+
 
 def _get_json(port: int, path: str) -> dict[str, object]:
     with urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _get_bytes(port: int, path: str) -> tuple[bytes, str, str]:
+    with urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as response:
+        return (
+            response.read(),
+            response.headers.get("Content-Type", ""),
+            response.headers.get("Content-Disposition", ""),
+        )
 
 
 if __name__ == "__main__":

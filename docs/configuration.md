@@ -25,7 +25,10 @@ dürfen nicht committed werden.
 
 Das Dashboard ist eine rein lesende Weboberfläche für Status, Sync-Historie,
 Änderungen, Logs, Quellen/Ziele und technische Diagnose. Da das Projekt vorher
-keine Weboberfläche hatte, ist sie standardmäßig deaktiviert.
+keine Weboberfläche hatte, ist sie standardmäßig deaktiviert. Das UI wird
+vollständig aus dem Connector ausgeliefert und lädt keine CDN- oder
+Internet-Assets nach. Der Theme-Wechsel zwischen Dark und Light wird lokal im
+Browser gespeichert.
 
 ```env
 CONNECTOR_DASHBOARD_ENABLED=false
@@ -55,7 +58,11 @@ CONNECTOR_DASHBOARD_MAX_FIELD_LENGTH=4000
   Meldungen, Pfade und Debug-Felder.
 
 Sensible Felder wie Tokens, API-Keys, Passwörter und Secrets werden maskiert.
-Das Dashboard bietet keine Datei-Downloads, keine Schreibaktionen und keine
-destruktiven Steuerungsfunktionen. Da keine Authentifizierung eingebaut ist,
-muss der Zugriff über Netzwerkregeln, Reverse Proxy, Portainer-Portmapping oder
-nicht veröffentlichte Ports kontrolliert werden.
+Das Dashboard bietet keine Downloads von synchronisierten Dateien, keine
+Schreibaktionen und keine destruktiven Steuerungsfunktionen. Der einzige
+Download ist der Audit-Export unter `/api/audit.xlsx`. Diese Excel-Datei enthält
+mehrere Tabellenblätter für Übersicht, Sync-Läufe, Änderungen, Logs, Quellen,
+Ziele und Diagnose. Sie basiert auf den begrenzten Dashboard-Historien und
+enthält keine Seafile-/RAGFlow-Dateiinhalte. Da keine Authentifizierung
+eingebaut ist, muss der Zugriff über Netzwerkregeln, Reverse Proxy,
+Portainer-Portmapping oder nicht veröffentlichte Ports kontrolliert werden.

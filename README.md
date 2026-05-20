@@ -44,8 +44,12 @@ Auditoren und Entwickler. Es zeigt Connector-Zustand, Sync-Historie,
 Änderungen, Quellen/Ziele, gefilterte Logs und technische Diagnosewerte. Es
 erzwingt bewusst keine Authentifizierung; der Zugriff wird über
 Netzwerkexposition gesteuert. Wer die Oberfläche nicht erreichbar machen will,
-aktiviert sie nicht oder veröffentlicht den Port nicht. Datei-Downloads und
-Schreibaktionen werden nicht angeboten.
+aktiviert sie nicht oder veröffentlicht den Port nicht. Die Oberfläche nutzt
+keine CDN- oder Internet-Assets, bietet einen Dark-/Light-Modus und enthält
+einen Excel-Audit-Export mit mehreren Tabellenblättern. Exportiert werden nur
+Status-, Sync-, Änderungs-, Log- und Diagnosemetadaten; Datei-Inhalte aus
+Seafile oder RAGFlow werden nicht heruntergeladen. Schreibaktionen werden nicht
+angeboten.
 
 Da das Projekt bisher keine Weboberfläche hatte, ist das Dashboard standardmäßig
 deaktiviert:

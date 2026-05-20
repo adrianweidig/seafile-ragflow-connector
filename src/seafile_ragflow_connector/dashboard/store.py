@@ -23,6 +23,7 @@ from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.utils.redaction import redact_mapping
 
 MAX_LIMIT = 500
+EXPORT_MAX_LIMIT = 20000
 DEFAULT_FIELD_LIMIT = 4000
 
 
@@ -514,6 +515,45 @@ class DashboardEventStore:
                 },
             }
 
+    def audit_snapshot(
+        self,
+        *,
+        started_at: datetime,
+        safe_config: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        with self._session() as session:
+            sync_runs = session.scalars(
+                select(DashboardSyncRun)
+                .order_by(DashboardSyncRun.started_at.desc())
+                .limit(_export_limit(self.limits.max_sync_runs))
+            ).all()
+            changes = session.scalars(
+                select(DashboardChangeEvent)
+                .order_by(DashboardChangeEvent.occurred_at.desc())
+                .limit(_export_limit(self.limits.max_event_entries))
+            ).all()
+            logs = session.scalars(
+                select(DashboardLogEntry)
+                .order_by(DashboardLogEntry.occurred_at.desc())
+                .limit(_export_limit(self.limits.max_log_entries))
+            ).all()
+
+        return {
+            "generated_at": isoformat(utcnow()),
+            "status": self.connector_status(started_at=started_at),
+            "metrics": self.metrics(),
+            "systems": self.systems(),
+            "diagnostics": self.diagnostics(safe_config),
+            "sync_runs": [serialize_sync_run(run) for run in sync_runs],
+            "changes": [serialize_change(event) for event in changes],
+            "logs": [serialize_log(entry) for entry in logs],
+            "export_limits": {
+                "max_sync_runs": _export_limit(self.limits.max_sync_runs),
+                "max_event_entries": _export_limit(self.limits.max_event_entries),
+                "max_log_entries": _export_limit(self.limits.max_log_entries),
+            },
+        }
+
     def _session(self) -> Session:
         return self.session_factory()
 
@@ -623,3 +663,7 @@ def serialize_log(entry: DashboardLogEntry) -> dict[str, Any]:
         "sync_id": entry.sync_id,
         "details": entry.details or {},
     }
+
+
+def _export_limit(configured_limit: int) -> int:
+    return max(1, min(configured_limit, EXPORT_MAX_LIMIT))
