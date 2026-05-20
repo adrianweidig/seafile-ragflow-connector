@@ -507,6 +507,24 @@ DASHBOARD_HTML = r"""<!doctype html>
       table-layout: fixed;
       width: 100%;
     }
+    #sync-table { min-width: 1180px; }
+    #change-table { min-width: 1360px; }
+    #log-table { min-width: 1120px; }
+    #source-table, #target-table { min-width: 920px; }
+    #log-table th:nth-child(1) { width: 17%; }
+    #log-table th:nth-child(2) { width: 10%; }
+    #log-table th:nth-child(3) { width: 15%; }
+    #log-table th:nth-child(4) { width: 18%; }
+    #log-table th:nth-child(5) { width: 40%; }
+    #change-table th:nth-child(1) { width: 12%; }
+    #change-table th:nth-child(2) { width: 15%; }
+    #change-table th:nth-child(3) { width: 8%; }
+    #change-table th:nth-child(4) { width: 8%; }
+    #change-table th:nth-child(5) { width: 9%; }
+    #change-table th:nth-child(6) { width: 14%; }
+    #change-table th:nth-child(7) { width: 15%; }
+    #change-table th:nth-child(8) { width: 15%; }
+    #change-table th:nth-child(9) { width: 14%; }
     th, td {
       border-bottom: 1px solid var(--border);
       padding: 10px 12px;
@@ -530,7 +548,9 @@ DASHBOARD_HTML = r"""<!doctype html>
     }
     td {
       color: var(--soft);
+      min-width: 0;
       overflow-wrap: anywhere;
+      word-break: break-word;
     }
     tr.clickable { cursor: pointer; }
     .compact-table table { min-width: 680px; }
@@ -689,11 +709,51 @@ DASHBOARD_HTML = r"""<!doctype html>
     .sync-detail {
       margin-top: 14px;
     }
-    .message-cell {
+    .long-cell {
+      min-width: 0;
+    }
+    .long-text {
+      display: grid;
+      gap: 7px;
+      max-width: 100%;
+      min-width: 0;
+    }
+    .long-text-preview {
+      color: var(--soft);
+      display: block;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      white-space: normal;
+      word-break: break-word;
+    }
+    .long-text.is-collapsible:not(.is-expanded) .long-text-preview {
       display: -webkit-box;
       -webkit-box-orient: vertical;
-      -webkit-line-clamp: 3;
+      -webkit-line-clamp: var(--cell-lines, 2);
       overflow: hidden;
+    }
+    .long-text.is-expanded .long-text-preview {
+      display: block;
+    }
+    .cell-toggle {
+      background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+      border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+      color: var(--text);
+      font-size: 12px;
+      justify-self: start;
+      min-height: 28px;
+      padding: 4px 8px;
+    }
+    .cell-toggle::before {
+      content: "+";
+      color: var(--accent);
+      font-weight: 800;
+    }
+    .cell-toggle[aria-expanded="true"]::before {
+      content: "-";
+    }
+    .message-cell .long-text {
+      --cell-lines: 3;
     }
     .pill-row {
       display: flex;
@@ -934,6 +994,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       }
     };
     const $ = (id) => document.getElementById(id);
+    let disclosureId = 0;
 
     function showError(message) {
       const node = $('error');
@@ -971,6 +1032,41 @@ DASHBOARD_HTML = r"""<!doctype html>
       span.className = 'status ' + statusClass(value);
       span.textContent = value || 'unbekannt';
       return span;
+    }
+    function longText(value, options = {}) {
+      const text = value == null || value === '' ? '-' : String(value);
+      const threshold = options.threshold || 72;
+      const lines = options.lines || 2;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'long-text';
+      wrapper.style.setProperty('--cell-lines', String(lines));
+      const preview = document.createElement('span');
+      preview.className = 'long-text-preview';
+      preview.textContent = text;
+      wrapper.appendChild(preview);
+      if (text.length > threshold || text.includes('\n')) {
+        const id = 'cell-disclosure-' + (++disclosureId);
+        preview.id = id;
+        wrapper.classList.add('is-collapsible');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'cell-toggle';
+        button.setAttribute('aria-expanded', 'false');
+        button.setAttribute('aria-controls', id);
+        button.textContent = options.moreLabel || 'Mehr';
+        button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const expanded = !wrapper.classList.contains('is-expanded');
+          wrapper.classList.toggle('is-expanded', expanded);
+          button.setAttribute('aria-expanded', String(expanded));
+          button.textContent = expanded ? (options.lessLabel || 'Weniger') : (options.moreLabel || 'Mehr');
+        });
+        wrapper.appendChild(button);
+      }
+      return wrapper;
+    }
+    function compactText(value, options = {}) {
+      return [longText(value, options), options.className || 'long-cell'];
     }
     function cell(row, value, className) {
       const td = document.createElement('td');
@@ -1164,12 +1260,12 @@ DASHBOARD_HTML = r"""<!doctype html>
       setText('recent-sync-count', syncs.items.length);
       table('recent-syncs', ['Start', 'Status', 'Quelle', 'Ziel', 'Objekte'], syncs.items.map((run) => ({
         ...run,
-        __cells: [fmtDate(run.started_at), status(run.status), run.source, run.target, fmtNumber(run.objects_checked)]
+        __cells: [fmtDate(run.started_at), status(run.status), compactText(run.source, { threshold: 40 }), compactText(run.target, { threshold: 40 }), fmtNumber(run.objects_checked)]
       })), (run) => openSyncDetail(run.sync_id));
       setText('recent-change-count', changes.items.length);
       table('recent-changes', ['Zeit', 'Typ', 'Status', 'Objekt', 'Ziel'], changes.items.map((change) => ({
         ...change,
-        __cells: [fmtDate(change.occurred_at), change.change_type, status(change.status), change.object_name, change.target_path]
+        __cells: [fmtDate(change.occurred_at), change.change_type, status(change.status), compactText(change.object_name, { threshold: 36 }), compactText(change.target_path, { threshold: 44 })]
       })));
     }
     async function loadSyncs() {
@@ -1181,7 +1277,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       setText('sync-total', fmtNumber(data.total) + ' Läufe');
       table('sync-table', ['Sync-ID', 'Start', 'Dauer', 'Status', 'Geprüft', 'Neu', 'Aktualisiert', 'Gelöscht', 'Übersprungen'], data.items.map((run) => ({
         ...run,
-        __cells: [run.sync_id, fmtDate(run.started_at), fmtDuration(run.duration_ms), status(run.status), fmtNumber(run.objects_checked), fmtNumber(run.objects_created), fmtNumber(run.objects_updated), fmtNumber(run.objects_deleted), fmtNumber(run.objects_skipped)]
+        __cells: [compactText(run.sync_id, { threshold: 34 }), fmtDate(run.started_at), fmtDuration(run.duration_ms), status(run.status), fmtNumber(run.objects_checked), fmtNumber(run.objects_created), fmtNumber(run.objects_updated), fmtNumber(run.objects_deleted), fmtNumber(run.objects_skipped)]
       })), (run) => openSyncDetail(run.sync_id, false));
       renderPager('sync-pager', data, (delta) => { state.pages.syncs = Math.max(0, state.pages.syncs + delta); loadSyncs(); });
     }
@@ -1234,7 +1330,17 @@ DASHBOARD_HTML = r"""<!doctype html>
       setText('change-total', fmtNumber(data.total) + ' Ereignisse');
       table('change-table', ['Zeit', 'Sync-ID', 'Aktion', 'Typ', 'Status', 'Objekt', 'Quelle', 'Ziel', 'Fehler'], data.items.map((change) => ({
         ...change,
-        __cells: [fmtDate(change.occurred_at), change.sync_id, change.action, change.change_type, status(change.status), change.object_name, change.source_path, change.target_path, change.error_message]
+        __cells: [
+          fmtDate(change.occurred_at),
+          compactText(change.sync_id, { threshold: 34 }),
+          change.action,
+          change.change_type,
+          status(change.status),
+          compactText(change.object_name, { threshold: 42 }),
+          compactText(change.source_path, { threshold: 48 }),
+          compactText(change.target_path, { threshold: 48 }),
+          compactText(change.error_message, { threshold: 48 })
+        ]
       })));
       renderPager('change-pager', data, (delta) => { state.pages.changes = Math.max(0, state.pages.changes + delta); loadChanges(); });
     }
@@ -1248,7 +1354,13 @@ DASHBOARD_HTML = r"""<!doctype html>
       setText('log-total', fmtNumber(data.total) + ' Logs');
       table('log-table', ['Zeit', 'Level', 'Komponente', 'Sync-ID', 'Nachricht'], data.items.map((entry) => ({
         ...entry,
-        __cells: [fmtDate(entry.occurred_at), status(entry.level), entry.component, entry.sync_id, [entry.message, 'message-cell']]
+        __cells: [
+          fmtDate(entry.occurred_at),
+          status(entry.level),
+          compactText(entry.component, { threshold: 34 }),
+          compactText(entry.sync_id, { threshold: 34 }),
+          compactText(entry.message, { threshold: 86, lines: 3, className: 'message-cell long-cell' })
+        ]
       })), (entry) => {
         const detail = $('log-detail');
         detail.hidden = false;
@@ -1260,11 +1372,11 @@ DASHBOARD_HTML = r"""<!doctype html>
       const data = await api('/api/systems');
       table('source-table', ['Repo-ID', 'Name', 'Status', 'Head Commit', 'Letzter Sync', 'Fehler'], (data.source.libraries || []).map((library) => ({
         ...library,
-        __cells: [library.repo_id, library.name, status(library.status), library.head_commit_id, library.last_synced_commit_id, library.last_error]
+        __cells: [compactText(library.repo_id, { threshold: 34 }), compactText(library.name, { threshold: 38 }), status(library.status), compactText(library.head_commit_id, { threshold: 34 }), compactText(library.last_synced_commit_id, { threshold: 34 }), compactText(library.last_error, { threshold: 48 })]
       })));
       table('target-table', ['Repo-ID', 'Dataset-ID', 'Dataset-Name', 'Template Hash'], (data.target.datasets || []).map((dataset) => ({
         ...dataset,
-        __cells: [dataset.repo_id, dataset.dataset_id, dataset.dataset_name, dataset.template_hash]
+        __cells: [compactText(dataset.repo_id, { threshold: 34 }), compactText(dataset.dataset_id, { threshold: 34 }), compactText(dataset.dataset_name, { threshold: 48 }), compactText(dataset.template_hash, { threshold: 34 })]
       })));
     }
     async function loadDiagnostics() {
