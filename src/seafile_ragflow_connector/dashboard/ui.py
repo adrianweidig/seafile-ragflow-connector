@@ -36,6 +36,11 @@ DASHBOARD_HTML = r"""<!doctype html>
       --shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
       --radius: 8px;
       --focus: 0 0 0 3px rgba(45, 212, 191, 0.28);
+      --primary-bg: linear-gradient(135deg, var(--accent), var(--accent-2));
+      --primary-text: #041116;
+      --primary-border: transparent;
+      --motion-fast: 160ms;
+      --motion-slow: 1100ms;
     }
     :root[data-theme="light"] {
       color-scheme: light;
@@ -59,6 +64,9 @@ DASHBOARD_HTML = r"""<!doctype html>
       --unknown: #64748b;
       --shadow: 0 20px 60px rgba(15, 23, 42, 0.12);
       --focus: 0 0 0 3px rgba(15, 118, 110, 0.22);
+      --primary-bg: linear-gradient(135deg, #ccfbf1, #dbeafe);
+      --primary-text: #0f172a;
+      --primary-border: rgba(15, 118, 110, 0.28);
     }
     * { box-sizing: border-box; }
     html { min-height: 100%; }
@@ -74,6 +82,30 @@ DASHBOARD_HTML = r"""<!doctype html>
       line-height: 1.45;
       letter-spacing: 0;
     }
+    @keyframes surfaceIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes gridDrift {
+      from { transform: translateX(0); }
+      to { transform: translateX(38px); }
+    }
+    @keyframes railRise {
+      from { transform: scaleY(0.25); opacity: 0.35; }
+      to { transform: scaleY(1); opacity: 0.86; }
+    }
+    @keyframes softPulse {
+      0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent); }
+      50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 18%, transparent); }
+    }
+    @keyframes refreshProgress {
+      from { transform: scaleX(0); }
+      to { transform: scaleX(1); }
+    }
+    @keyframes sheen {
+      from { transform: translateX(-120%); }
+      to { transform: translateX(140%); }
+    }
     button, input, select, a.action {
       font: inherit;
     }
@@ -88,7 +120,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       min-height: 36px;
       padding: 8px 12px;
       text-decoration: none;
-      transition: border-color 140ms ease, background 140ms ease, color 140ms ease, transform 140ms ease;
+      transition: border-color var(--motion-fast) ease, background var(--motion-fast) ease, color var(--motion-fast) ease, transform var(--motion-fast) ease;
       user-select: none;
     }
     button:hover, a.action:hover { transform: translateY(-1px); border-color: var(--border-strong); }
@@ -143,6 +175,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       justify-content: center;
       margin-bottom: 12px;
       width: 34px;
+      animation: softPulse 4.8s ease-in-out infinite;
     }
     .brand h1 {
       font-size: 18px;
@@ -208,15 +241,75 @@ DASHBOARD_HTML = r"""<!doctype html>
       gap: 10px;
       justify-content: flex-end;
     }
+    .refresh-control {
+      align-items: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: grid;
+      gap: 5px;
+      min-width: 150px;
+      overflow: hidden;
+      padding: 6px 8px 4px;
+      position: relative;
+    }
+    .refresh-control span {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+    .refresh-control select {
+      background: transparent;
+      border: 0;
+      min-height: 24px;
+      padding: 0 18px 0 0;
+    }
+    .refresh-progress {
+      background: color-mix(in srgb, var(--accent) 20%, transparent);
+      bottom: 0;
+      height: 2px;
+      left: 0;
+      overflow: hidden;
+      position: absolute;
+      right: 0;
+    }
+    .refresh-progress i {
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      display: block;
+      height: 100%;
+      transform: scaleX(0);
+      transform-origin: left;
+    }
+    .refresh-control.is-active .refresh-progress i {
+      animation: refreshProgress var(--refresh-ms, 10000ms) linear infinite;
+    }
+    .workspace.is-refreshing .status-stage,
+    .workspace.is-refreshing .panel-header {
+      border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+    }
     .action, .ghost {
       background: var(--surface);
       color: var(--text);
     }
     .primary {
-      background: linear-gradient(135deg, var(--accent), var(--accent-2));
-      border-color: transparent;
-      color: #041116;
+      background: var(--primary-bg);
+      border-color: var(--primary-border);
+      color: var(--primary-text);
       font-weight: 700;
+      position: relative;
+      overflow: hidden;
+    }
+    .primary::after {
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.34), transparent);
+      content: "";
+      inset: 0;
+      pointer-events: none;
+      position: absolute;
+      transform: translateX(-120%);
+    }
+    .primary:hover::after {
+      animation: sheen 900ms ease;
     }
     .danger-soft {
       color: var(--bad);
@@ -252,7 +345,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     .overview-grid {
       display: grid;
       gap: 14px;
-      grid-template-columns: minmax(280px, 1.1fr) minmax(280px, 0.9fr);
+      grid-template-columns: minmax(340px, 1.15fr) minmax(280px, 0.9fr) minmax(280px, 0.9fr);
       margin-bottom: 14px;
     }
     .status-stage {
@@ -277,6 +370,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       position: absolute;
       right: 0;
       top: 0;
+      animation: gridDrift 22s linear infinite;
     }
     .status-stage > * { position: relative; z-index: 1; }
     .status-line {
@@ -316,6 +410,8 @@ DASHBOARD_HTML = r"""<!doctype html>
       border-radius: 4px 4px 0 0;
       min-height: 10px;
       opacity: 0.86;
+      transform-origin: bottom;
+      animation: railRise var(--motion-slow) cubic-bezier(0.2, 0.8, 0.2, 1);
     }
     .rail-bar.warn { background: linear-gradient(180deg, var(--accent-3), var(--warn)); }
     .rail-bar.bad { background: linear-gradient(180deg, var(--bad), #f43f5e); }
@@ -325,6 +421,12 @@ DASHBOARD_HTML = r"""<!doctype html>
       border-radius: var(--radius);
       box-shadow: var(--shadow);
       overflow: hidden;
+      animation: surfaceIn 420ms ease both;
+    }
+    .panel:hover, .metric:hover {
+      border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+      transform: translateY(-1px);
+      transition: border-color var(--motion-fast) ease, transform var(--motion-fast) ease;
     }
     .panel-header {
       align-items: center;
@@ -513,6 +615,54 @@ DASHBOARD_HTML = r"""<!doctype html>
       display: block;
       font-size: 12px;
     }
+    .health-list {
+      display: grid;
+      gap: 10px;
+    }
+    .health-item {
+      align-items: flex-start;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: grid;
+      gap: 8px;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      padding: 10px 12px;
+    }
+    .health-led {
+      background: var(--unknown);
+      border-radius: 999px;
+      height: 10px;
+      margin-top: 5px;
+      width: 10px;
+    }
+    .health-item.ok .health-led {
+      background: var(--ok);
+      box-shadow: 0 0 0 5px color-mix(in srgb, var(--ok) 14%, transparent);
+    }
+    .health-item.warning .health-led {
+      background: var(--warn);
+      box-shadow: 0 0 0 5px color-mix(in srgb, var(--warn) 14%, transparent);
+    }
+    .health-item.error .health-led {
+      background: var(--bad);
+      box-shadow: 0 0 0 5px color-mix(in srgb, var(--bad) 14%, transparent);
+    }
+    .health-name {
+      color: var(--text);
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+    .health-message {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+      overflow-wrap: anywhere;
+    }
+    .health-latency {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
     .pager {
       align-items: center;
       color: var(--muted);
@@ -578,6 +728,14 @@ DASHBOARD_HTML = r"""<!doctype html>
       .metric-grid { grid-template-columns: 1fr; }
       .state-value { font-size: 28px; }
     }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 1ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 1ms !important;
+      }
+    }
   </style>
 </head>
 <body>
@@ -608,6 +766,16 @@ DASHBOARD_HTML = r"""<!doctype html>
           <p id="view-subtitle">Live-Zustand, Durchsatz und Auffälligkeiten</p>
         </div>
         <div class="actions">
+          <label class="refresh-control" for="refresh-interval">
+            <span>Auto-Refresh</span>
+            <select id="refresh-interval">
+              <option value="0">Aus</option>
+              <option value="5000">5 Sekunden</option>
+              <option value="10000">10 Sekunden</option>
+              <option value="60000">1 Minute</option>
+            </select>
+            <b class="refresh-progress" aria-hidden="true"><i></i></b>
+          </label>
           <button class="ghost" id="refresh-active" type="button"><span class="icon refresh"></span>Aktualisieren</button>
           <button class="ghost" id="theme-toggle" type="button" aria-pressed="true"><span class="icon theme"></span>Dark</button>
           <a class="action primary" id="audit-export" href="/api/audit.xlsx" download><span class="icon export"></span>Audit Excel</a>
@@ -631,6 +799,13 @@ DASHBOARD_HTML = r"""<!doctype html>
               <div id="last-failure">Letzter Fehler: -</div>
             </div>
             <div class="health-rail" id="health-rail" aria-hidden="true"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <h3>System Health</h3>
+              <small id="health-summary">prüfe...</small>
+            </div>
+            <div class="panel-body"><div id="dependency-health" class="health-list"></div></div>
           </div>
           <div class="panel">
             <div class="panel-header">
@@ -745,6 +920,9 @@ DASHBOARD_HTML = r"""<!doctype html>
     const PAGE_SIZE = 100;
     const state = {
       activeTab: 'overview',
+      loading: false,
+      refreshTimer: null,
+      refreshMs: Number(localStorage.getItem('connector-dashboard-refresh-ms') || '10000'),
       pages: { syncs: 0, changes: 0, logs: 0 },
       titles: {
         overview: ['Übersicht', 'Live-Zustand, Durchsatz und Auffälligkeiten'],
@@ -919,14 +1097,46 @@ DASHBOARD_HTML = r"""<!doctype html>
         node.appendChild(wrapper);
       });
     }
+    function renderDependencyHealth(health) {
+      const node = $('dependency-health');
+      clear(node);
+      const summary = health.summary || { ok: 0, warning: 0, error: 0 };
+      setText('health-summary', (health.status || 'unbekannt') + ' · ' + summary.ok + ' ok / ' + summary.warning + ' warn / ' + summary.error + ' error');
+      (health.checks || []).forEach((check) => {
+        const item = document.createElement('div');
+        item.className = 'health-item ' + statusClass(check.status);
+        const led = document.createElement('div');
+        led.className = 'health-led';
+        const copy = document.createElement('div');
+        const name = document.createElement('div');
+        name.className = 'health-name';
+        name.textContent = check.label || check.name || 'Check';
+        const message = document.createElement('div');
+        message.className = 'health-message';
+        message.textContent = check.message || '-';
+        copy.append(name, message);
+        const latency = document.createElement('div');
+        latency.className = 'health-latency';
+        latency.textContent = check.latency_ms == null ? '-' : check.latency_ms + ' ms';
+        item.append(led, copy, latency);
+        node.appendChild(item);
+      });
+      if (!node.childNodes.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'Keine Health-Daten vorhanden.';
+        node.appendChild(empty);
+      }
+    }
     async function loadOverview() {
-      const [statusData, metricsData, syncs, changes, errors, warnings] = await Promise.all([
+      const [statusData, metricsData, syncs, changes, errors, warnings, health] = await Promise.all([
         api('/api/status'),
         api('/api/metrics'),
         api('/api/sync-runs?limit=6'),
         api('/api/changes?limit=6'),
         api('/api/logs?level=error&limit=4'),
-        api('/api/logs?level=warning&limit=4')
+        api('/api/logs?level=warning&limit=4'),
+        api('/api/health')
       ]);
       setText('state-value', statusData.state);
       clear($('state-pill'));
@@ -937,6 +1147,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       setText('sidebar-state', 'Status: ' + (statusData.state || 'unbekannt'));
       setText('sidebar-updated', 'Aktualisiert: ' + new Date().toLocaleTimeString());
       renderHealthRail(statusData);
+      renderDependencyHealth(health);
       const grid = $('metrics');
       clear(grid);
       grid.append(
@@ -1060,7 +1271,10 @@ DASHBOARD_HTML = r"""<!doctype html>
       $('diagnostics-json').textContent = JSON.stringify(await api('/api/diagnostics'), null, 2);
     }
     async function loadActive() {
+      if (state.loading) return;
+      state.loading = true;
       showError('');
+      document.querySelector('.workspace').classList.add('is-refreshing');
       try {
         if (state.activeTab === 'overview') await loadOverview();
         if (state.activeTab === 'syncs') await loadSyncs();
@@ -1070,6 +1284,9 @@ DASHBOARD_HTML = r"""<!doctype html>
         if (state.activeTab === 'diagnostics') await loadDiagnostics();
       } catch (err) {
         showError(err.message || String(err));
+      } finally {
+        state.loading = false;
+        window.setTimeout(() => document.querySelector('.workspace').classList.remove('is-refreshing'), 240);
       }
     }
     function activateTab(name) {
@@ -1099,6 +1316,29 @@ DASHBOARD_HTML = r"""<!doctype html>
       });
       update();
     }
+    function initAutoRefresh() {
+      const select = $('refresh-interval');
+      const wrapper = select.closest('.refresh-control');
+      const apply = () => {
+        state.refreshMs = Number(select.value || 0);
+        localStorage.setItem('connector-dashboard-refresh-ms', String(state.refreshMs));
+        if (state.refreshTimer) {
+          clearInterval(state.refreshTimer);
+          state.refreshTimer = null;
+        }
+        wrapper.classList.toggle('is-active', state.refreshMs > 0);
+        wrapper.style.setProperty('--refresh-ms', state.refreshMs + 'ms');
+        if (state.refreshMs > 0) {
+          state.refreshTimer = setInterval(loadActive, state.refreshMs);
+        }
+      };
+      if (![0, 5000, 10000, 60000].includes(state.refreshMs)) {
+        state.refreshMs = 10000;
+      }
+      select.value = String(state.refreshMs);
+      select.addEventListener('change', apply);
+      apply();
+    }
     document.querySelectorAll('.tab').forEach((button) => {
       button.addEventListener('click', () => activateTab(button.dataset.tab));
     });
@@ -1107,8 +1347,8 @@ DASHBOARD_HTML = r"""<!doctype html>
     $('change-refresh').addEventListener('click', () => { state.pages.changes = 0; loadChanges(); });
     $('log-refresh').addEventListener('click', () => { state.pages.logs = 0; loadLogs(); });
     initThemeToggle();
+    initAutoRefresh();
     loadActive();
-    setInterval(() => { if (state.activeTab === 'overview') loadOverview(); }, 30000);
   </script>
 </body>
 </html>

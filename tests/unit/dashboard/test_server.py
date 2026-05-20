@@ -25,13 +25,13 @@ except ModuleNotFoundError as exc:
 
 def _settings(port: int) -> Settings:
     settings = Settings(
-        seafile_base_url="http://seafile.local",
+        seafile_base_url="http://127.0.0.1:9",
         seafile_admin_token="admin-token",
         seafile_sync_user_token="sync-token",
-        ragflow_base_url="http://ragflow.local",
+        ragflow_base_url="http://127.0.0.1:9",
         ragflow_api_key="ragflow-token",
         database_url="sqlite://",
-        redis_url="redis://redis.local:6379/0",
+        redis_url="redis://127.0.0.1:1/0",
         connector_dashboard_enabled=True,
         connector_dashboard_host="127.0.0.1",
         connector_dashboard_port=1,
@@ -70,7 +70,13 @@ class DashboardServerTests(unittest.TestCase):
         finally:
             handle.stop()
 
-        self.assertEqual(health["status"], "ok")
+        self.assertEqual(health["status"], "degraded")
+        self.assertIn("checks", health)
+        checks = {str(item["name"]): item for item in health["checks"]}
+        self.assertEqual(checks["database"]["status"], "ok")
+        self.assertEqual(checks["redis"]["status"], "error")
+        self.assertEqual(checks["seafile"]["status"], "error")
+        self.assertEqual(checks["ragflow"]["status"], "error")
         self.assertIn("state", status)
         self.assertEqual(logs["limit"], 1)
         self.assertEqual(logs["items"][0]["message"], "server-log")

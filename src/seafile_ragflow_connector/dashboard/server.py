@@ -14,6 +14,7 @@ import structlog
 
 from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.export import audit_export_filename, build_audit_workbook
+from seafile_ragflow_connector.dashboard.health import collect_dashboard_health
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore
 from seafile_ragflow_connector.dashboard.ui import DASHBOARD_HTML
 from seafile_ragflow_connector.utils.redaction import redact_mapping
@@ -83,7 +84,13 @@ def _build_handler(context: DashboardContext):
                     self._send_html(DASHBOARD_HTML)
                     return
                 if parsed.path == "/api/health":
-                    self._send_json({"status": "ok", "dashboard_enabled": True})
+                    self._send_json(
+                        collect_dashboard_health(
+                            store=context.store,
+                            settings=context.settings,
+                            started_at=context.started_at,
+                        )
+                    )
                     return
                 if parsed.path == "/api/status":
                     self._send_json(context.store.connector_status(started_at=context.started_at))

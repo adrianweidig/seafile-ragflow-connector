@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -514,6 +514,10 @@ class DashboardEventStore:
                     "dashboard_log_entries": self._count(session, DashboardLogEntry),
                 },
             }
+
+    def ping_database(self) -> None:
+        with self._session() as session:
+            session.execute(text("select 1"))
 
     def audit_snapshot(
         self,

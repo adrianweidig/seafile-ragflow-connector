@@ -46,10 +46,12 @@ erzwingt bewusst keine Authentifizierung; der Zugriff wird über
 Netzwerkexposition gesteuert. Wer die Oberfläche nicht erreichbar machen will,
 aktiviert sie nicht oder veröffentlicht den Port nicht. Die Oberfläche nutzt
 keine CDN- oder Internet-Assets, bietet einen Dark-/Light-Modus und enthält
-einen Excel-Audit-Export mit mehreren Tabellenblättern. Exportiert werden nur
-Status-, Sync-, Änderungs-, Log- und Diagnosemetadaten; Datei-Inhalte aus
-Seafile oder RAGFlow werden nicht heruntergeladen. Schreibaktionen werden nicht
-angeboten.
+einen auswählbaren Auto-Refresh für 5 Sekunden, 10 Sekunden oder 1 Minute. Ein
+System-Health-Bereich prüft Dashboard, Datenbank, Redis, Seafile, RAGFlow und
+Sync-Job-Zustand. Der Excel-Audit-Export enthält mehrere Tabellenblätter.
+Exportiert werden nur Status-, Sync-, Änderungs-, Log- und Diagnosemetadaten;
+Datei-Inhalte aus Seafile oder RAGFlow werden nicht heruntergeladen.
+Schreibaktionen werden nicht angeboten.
 
 Da das Projekt bisher keine Weboberfläche hatte, ist das Dashboard standardmäßig
 deaktiviert:

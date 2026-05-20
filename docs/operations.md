@@ -59,12 +59,15 @@ Portainer entfernt.
 
 Die Oberfläche ist absichtlich unauthentifiziert und ausschließlich lesend. Sie
 zeigt keine Secrets, lädt keine CDN-Assets nach und führt keine
-Sync-Schreibaktionen aus. Der Dark-/Light-Modus läuft rein im Browser. Der
-Button `Audit Excel` exportiert eine `.xlsx`-Datei mit mehreren Tabellenblättern
-für Übersicht, Sync-Läufe, Änderungen, Logs, Quellen, Ziele und Diagnose. Dieser
-Export enthält nur Dashboard- und Auditmetadaten, keine synchronisierten
-Dateiinhalte. Logs, Änderungsereignisse und Sync-Historie werden begrenzt, damit
-weder Datenbank noch API-Antworten unbegrenzt wachsen.
+Sync-Schreibaktionen aus. Der Dark-/Light-Modus und die Auto-Refresh-Auswahl
+laufen rein im Browser. Wählbar sind aus, 5 Sekunden, 10 Sekunden und 1 Minute.
+Der Health-Bereich prüft Dashboard, Datenbank, Redis, Seafile-Admin-API,
+RAGFlow-API und Sync-Job-Zustand. Der Button `Audit Excel` exportiert eine
+`.xlsx`-Datei mit mehreren Tabellenblättern für Übersicht, Sync-Läufe,
+Änderungen, Logs, Quellen, Ziele und Diagnose. Dieser Export enthält nur
+Dashboard- und Auditmetadaten, keine synchronisierten Dateiinhalte. Logs,
+Änderungsereignisse und Sync-Historie werden begrenzt, damit weder Datenbank
+noch API-Antworten unbegrenzt wachsen.
 
 ## Offline-Bundle
 
@@ -191,6 +194,10 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
   Bind-Fehler wird als `dashboard.bind_failed` geloggt.
 - Dashboard nicht erreichbar: `CONNECTOR_DASHBOARD_ENABLED`, Host-/Portbindung
   und das Portmapping in Portainer prüfen.
+- Dashboard-Health zeigt `degraded`: Details im Health-Bereich öffnen und
+  Datenbank, Redis, Seafile-Admin-Token, RAGFlow-API-Key sowie Template-Dataset
+  prüfen. Einzelne externe Checks haben kurze Timeouts und blockieren die UI
+  nicht dauerhaft.
 - Audit-Excel leer: prüfen, ob bereits Sync-Läufe, Änderungsereignisse oder
   Logs existieren. Frische Umgebungen exportieren leere Tabellenblätter mit
   Kopfzeilen.

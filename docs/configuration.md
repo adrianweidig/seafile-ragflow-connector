@@ -28,7 +28,9 @@ Das Dashboard ist eine rein lesende Weboberfläche für Status, Sync-Historie,
 keine Weboberfläche hatte, ist sie standardmäßig deaktiviert. Das UI wird
 vollständig aus dem Connector ausgeliefert und lädt keine CDN- oder
 Internet-Assets nach. Der Theme-Wechsel zwischen Dark und Light wird lokal im
-Browser gespeichert.
+Browser gespeichert. Der Auto-Refresh ist im Dashboard zwischen aus, 5
+Sekunden, 10 Sekunden und 1 Minute wählbar und wird ebenfalls lokal im Browser
+gespeichert.
 
 ```env
 CONNECTOR_DASHBOARD_ENABLED=false
@@ -63,6 +65,11 @@ Schreibaktionen und keine destruktiven Steuerungsfunktionen. Der einzige
 Download ist der Audit-Export unter `/api/audit.xlsx`. Diese Excel-Datei enthält
 mehrere Tabellenblätter für Übersicht, Sync-Läufe, Änderungen, Logs, Quellen,
 Ziele und Diagnose. Sie basiert auf den begrenzten Dashboard-Historien und
-enthält keine Seafile-/RAGFlow-Dateiinhalte. Da keine Authentifizierung
-eingebaut ist, muss der Zugriff über Netzwerkregeln, Reverse Proxy,
-Portainer-Portmapping oder nicht veröffentlichte Ports kontrolliert werden.
+enthält keine Seafile-/RAGFlow-Dateiinhalte.
+
+Der Health-Endpunkt `/api/health` liefert begrenzte Statusdaten für Dashboard,
+Datenbank, Redis, Seafile-Admin-API, RAGFlow-API und Sync-Job-Zustand. Externe
+Checks nutzen kurze Timeouts, damit ein nicht erreichbarer Dienst die
+Weboberfläche nicht blockiert. Da keine Authentifizierung eingebaut ist, muss
+der Zugriff über Netzwerkregeln, Reverse Proxy, Portainer-Portmapping oder nicht
+veröffentlichte Ports kontrolliert werden.
