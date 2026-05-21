@@ -25,14 +25,21 @@ aus `connector.env.example` im Bereich `Environment variables` zu importieren.
 
 1. Bei Offline-Betrieb benötigte Images auf dem Docker-Host importieren,
    beispielsweise:
-   `docker load -i images/seafile-ragflow-connector_latest.tar`
-2. In Portainer einen neuen Stack erstellen.
-3. Inhalt von `deploy/portainer/docker-compose.yml` einfügen.
-4. `connector.env.example` in Portainer importieren.
-5. Alle `change-me` Werte ersetzen.
-6. `SEAFILE_BASE_URL` und `RAGFLOW_BASE_URL` auf die aus dem
+   `docker load -i images/seafile-ragflow-portainer-images.tar`
+2. Wenn der Docker-Host `postgres:16` und `redis:7` nicht pullen kann, auch
+   diese Images importieren.
+3. In Portainer einen neuen Stack erstellen.
+4. Inhalt von `deploy/portainer/docker-compose.yml` einfügen.
+5. `connector.env.example` in Portainer importieren.
+6. Alle `change-me` Werte ersetzen.
+7. `CONNECTOR_IMAGE`, `POSTGRES_IMAGE` und `REDIS_IMAGE` müssen exakt den
+   Image-Namen entsprechen, die Portainer unter `Images` anzeigt. Wenn nur
+   lokale Images genutzt werden sollen, `CONNECTOR_IMAGE_PULL_POLICY=never`,
+   `POSTGRES_IMAGE_PULL_POLICY=never` und `REDIS_IMAGE_PULL_POLICY=never`
+   setzen.
+8. `SEAFILE_BASE_URL` und `RAGFLOW_BASE_URL` auf die aus dem
    Connector-Container erreichbaren URLs setzen.
-7. Stack starten und die Logs von `connector-controller`, `connector-worker` und
+9. Stack starten und die Logs von `connector-controller`, `connector-worker` und
    `connector-reconciler` prüfen.
 
 Der Stack stellt Seafile und RAGFlow nicht bereit. Beide Systeme bleiben extern
@@ -159,10 +166,18 @@ Ein produktives Release sollte enthalten:
 docker-compose.yml
 connector.env.example
 images/
-  seafile-ragflow-connector_latest.tar
-  postgres_16.tar
-  redis_7.tar
+  seafile-ragflow-portainer-images.tar
 SHA256SUMS
+```
+
+In `connector.env` dann entweder die Image-Namen aus den importierten Tar-Dateien
+verwenden oder die Images vor dem Export entsprechend taggen. Für vollständig
+offline betriebene Docker-Hosts sollten die Pull-Policies auf `never` stehen:
+
+```env
+CONNECTOR_IMAGE_PULL_POLICY=never
+POSTGRES_IMAGE_PULL_POLICY=never
+REDIS_IMAGE_PULL_POLICY=never
 ```
 
 Der Runtime-Container darf beim Start keine Pakete installieren und keine

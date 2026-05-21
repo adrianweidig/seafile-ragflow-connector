@@ -137,17 +137,38 @@ http://127.0.0.1:18080
 
 ### 5. Start mit Portainer
 
-1. In Portainer einen neuen Stack erstellen.
-2. `deploy/portainer/docker-compose.yml` als Web editor Inhalt einfuegen oder
+1. In Portainer unter `Images` das Connector-Image importieren oder sicherstellen,
+   dass der Docker-Host es pullen kann.
+2. Wenn der Docker-Host `postgres:16` und `redis:7` nicht pullen kann, diese
+   Images ebenfalls in Portainer importieren.
+3. In Portainer einen neuen Stack erstellen.
+4. `deploy/portainer/docker-compose.yml` als Web editor Inhalt einfuegen oder
    dieses Repository als Git-Stack verwenden.
-3. Den Inhalt von `connector.env.example` im Stack-Bereich `Environment
+5. Den Inhalt von `connector.env.example` im Stack-Bereich `Environment
    variables` importieren.
-4. Alle `change-me` Werte und die Base-URLs ersetzen.
-5. Stack deployen.
-6. Logs von `connector-controller`, `connector-worker` und
+6. Alle `change-me` Werte und die Base-URLs ersetzen.
+7. `CONNECTOR_IMAGE`, `POSTGRES_IMAGE` und `REDIS_IMAGE` muessen exakt den
+   Image-Namen entsprechen, die Portainer unter `Images` anzeigt. Wenn alle
+   Images lokal vorhanden sind und nicht gepullt werden sollen, setze:
+
+   ```env
+   CONNECTOR_IMAGE_PULL_POLICY=never
+   POSTGRES_IMAGE_PULL_POLICY=never
+   REDIS_IMAGE_PULL_POLICY=never
+   ```
+
+8. Stack deployen.
+9. Logs von `connector-controller`, `connector-worker` und
    `connector-reconciler` pruefen.
-7. Dashboard-Health unter `http://<docker-host>:18080/api/health` pruefen,
-   wenn der Dashboard-Port entsprechend veroeffentlicht wurde.
+10. Dashboard-Health unter `http://<docker-host>:18080/api/health` pruefen,
+    wenn der Dashboard-Port entsprechend veroeffentlicht wurde.
+
+Wichtig fuer Portainer-Image-Uploads: Der Stack startet genau das Image, dessen
+Name in `CONNECTOR_IMAGE` steht. Wenn das hochgeladene Image z. B. als
+`seafile-ragflow-connector:latest` angezeigt wird, muss `CONNECTOR_IMAGE` auch
+genau diesen Wert haben. Wenn es als
+`ghcr.io/adrianweidig/seafile-ragflow-connector:latest` angezeigt wird, kann
+der Defaultwert bleiben.
 
 ### 6. Offline-Installation
 
@@ -161,15 +182,16 @@ Fuer Offline-Umgebungen koennen die benoetigten Images vorab exportiert und auf
 dem Zielhost importiert werden:
 
 ```bash
-docker save ghcr.io/adrianweidig/seafile-ragflow-connector:latest \
-  -o images/seafile-ragflow-connector_latest.tar
-docker save postgres:16 -o images/postgres_16.tar
-docker save redis:7 -o images/redis_7.tar
+docker save \
+  ghcr.io/adrianweidig/seafile-ragflow-connector:latest \
+  postgres:16 \
+  redis:7 \
+  -o images/seafile-ragflow-portainer-images.tar
 
-docker load -i images/seafile-ragflow-connector_latest.tar
-docker load -i images/postgres_16.tar
-docker load -i images/redis_7.tar
+docker load -i images/seafile-ragflow-portainer-images.tar
 ```
+
+Die gleiche Tar-Datei kann in Portainer unter `Images` importiert werden.
 
 Wenn interne Registry- oder lokale Image-Namen genutzt werden, trage sie in
 `connector.env` ein:

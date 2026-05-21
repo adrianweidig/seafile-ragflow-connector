@@ -77,6 +77,7 @@ x-connector-env: &connector-env
 
 x-connector-common: &connector-common
   image: ${CONNECTOR_IMAGE:-ghcr.io/adrianweidig/seafile-ragflow-connector:latest}
+  pull_policy: ${CONNECTOR_IMAGE_PULL_POLICY:-missing}
   restart: unless-stopped
   environment: *connector-env
   volumes:
@@ -93,6 +94,7 @@ x-connector-common: &connector-common
 services:
   connector-postgres:
     image: ${POSTGRES_IMAGE:-postgres:16}
+    pull_policy: ${POSTGRES_IMAGE_PULL_POLICY:-missing}
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Europe/Berlin}
@@ -112,6 +114,7 @@ services:
 
   connector-redis:
     image: ${REDIS_IMAGE:-redis:7}
+    pull_policy: ${REDIS_IMAGE_PULL_POLICY:-missing}
     restart: unless-stopped
     command: ["sh", "-c", "redis-server --appendonly yes || valkey-server --appendonly yes"]
     volumes:

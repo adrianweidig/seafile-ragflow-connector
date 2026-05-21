@@ -13,6 +13,11 @@ starte Compose mit `--env-file connector.env`. Die älteren
 `*.stack.env.example` Dateien bleiben als szenariospezifische Referenz
 erhalten.
 
+Wenn Images lokal importiert wurden, müssen `CONNECTOR_IMAGE`,
+`POSTGRES_IMAGE` und `REDIS_IMAGE` exakt auf die vorhandenen Image-Tags zeigen.
+Mit `CONNECTOR_IMAGE_PULL_POLICY=never`, `POSTGRES_IMAGE_PULL_POLICY=never` und
+`REDIS_IMAGE_PULL_POLICY=never` wird ein versehentlicher Pull verhindert.
+
 ## Welche Datei benutze ich?
 
 | Anwendungsfall | Compose-Datei | Empfohlene Env-Datei | Zweck |

@@ -16,13 +16,20 @@ werden.
 
 Portainer-Start:
 
-1. Neuen Stack erstellen.
-2. Inhalt von `docker-compose.yml` einfügen oder dieses Repo als Git-Stack
+1. Connector-Image unter `Images` importieren oder sicherstellen, dass der
+   Docker-Host es pullen kann.
+2. Falls kein Internetzugriff besteht, auch `postgres:16` und `redis:7` als
+   Images importieren.
+3. Neuen Stack erstellen.
+4. Inhalt von `docker-compose.yml` einfügen oder dieses Repo als Git-Stack
    verwenden.
-3. Inhalt von `../../connector.env.example` in Portainer unter `Environment
+5. Inhalt von `../../connector.env.example` in Portainer unter `Environment
    variables` importieren.
-4. Alle `change-me` Werte und die Base-URLs ersetzen.
-5. Stack deployen und Logs von Controller, Worker und Reconciler prüfen.
+6. Alle `change-me` Werte und die Base-URLs ersetzen.
+7. `CONNECTOR_IMAGE`, `POSTGRES_IMAGE` und `REDIS_IMAGE` an die in Portainer
+   sichtbaren Image-Tags anpassen. Wenn lokale Images genutzt werden sollen,
+   kann `*_IMAGE_PULL_POLICY=never` gesetzt werden.
+8. Stack deployen und Logs von Controller, Worker und Reconciler prüfen.
 
 Wichtig: Seafile ist die Quelle der Wahrheit. Der Connector kann Zielartefakte
 in RAGFlow und OpenWebUI löschen oder neu erzeugen, wenn Seafile-Libraries oder
