@@ -216,14 +216,41 @@ class RAGFlowClient:
         *,
         chat_id: str,
         messages: list[dict[str, Any]],
+        model: str = "model",
         stream: bool = False,
     ) -> dict[str, Any]:
-        data = unwrap_response(
-            self._client.post(
-                "/api/v1/chat/completions",
-                json={"chat_id": chat_id, "messages": messages, "stream": stream},
+        payload = {
+            "model": model or "model",
+            "messages": messages,
+            "stream": stream,
+            "extra_body": {"reference": True},
+        }
+        try:
+            data = unwrap_response(
+                self._client.post(
+                    f"/api/v1/openai/{chat_id}/chat/completions",
+                    json=payload,
+                )
             )
-        )
+        except ApiError as exc:
+            if not _is_missing_openai_chat_completion_endpoint(exc):
+                raise
+            try:
+                data = unwrap_response(
+                    self._client.post(
+                        f"/api/v1/chats_openai/{chat_id}/chat/completions",
+                        json=payload,
+                    )
+                )
+            except ApiError as fallback_exc:
+                if not _is_missing_openai_chat_completion_endpoint(fallback_exc):
+                    raise
+                data = unwrap_response(
+                    self._client.post(
+                        "/api/v1/chat/completions",
+                        json={"chat_id": chat_id, "messages": messages, "stream": stream},
+                    )
+                )
         if isinstance(data, dict):
             return data
         return {"content": str(data or "")}
@@ -268,3 +295,18 @@ def _is_missing_chat_response(payload: Any) -> bool:
         return False
     message = str(payload.get("message", ""))
     return "chat" in message.lower() and "not found" in message.lower()
+
+
+def _is_missing_openai_chat_completion_endpoint(exc: ApiError) -> bool:
+    if exc.status_code == 404:
+        return True
+    payload = exc.payload
+    if not isinstance(payload, dict):
+        return False
+    message = str(payload.get("message", "")).lower()
+    return payload.get("code") in (101, 102, "101", "102") and (
+        "not found" in message
+        or "doesn't exist" in message
+        or "does not exist" in message
+        or "not exist" in message
+    )

@@ -65,6 +65,7 @@ class _ChatHttpClient:
         self.created_payload: dict[str, object] | None = None
         self.updated_payload: dict[str, object] | None = None
         self.deleted_payloads: list[tuple[str, dict[str, object]]] = []
+        self.post_paths: list[str] = []
 
     def get(self, path: str, *, params: dict[str, str] | None = None) -> httpx.Response:
         request = httpx.Request("GET", f"http://ragflow.local{path}")
@@ -90,6 +91,7 @@ class _ChatHttpClient:
         )
 
     def post(self, path: str, *, json: dict[str, object]) -> httpx.Response:
+        self.post_paths.append(path)
         request = httpx.Request("POST", f"http://ragflow.local{path}")
         if path == "/api/v1/chats":
             self.created_payload = json
@@ -104,10 +106,21 @@ class _ChatHttpClient:
                 json={"code": 0, "data": {"chunks": [{"id": "chunk-1", "document_id": "doc-1"}]}},
                 request=request,
             )
-        if path == "/api/v1/chat/completions":
+        if path == "/api/v1/openai/chat-1/chat/completions":
             return httpx.Response(
                 200,
-                json={"code": 0, "data": {"content": "answer", "reference": {"chunks": []}}},
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "answer",
+                                "reference": {"chunks": []},
+                                "role": "assistant",
+                            }
+                        }
+                    ],
+                    "object": "chat.completion",
+                },
                 request=request,
             )
         raise AssertionError(path)
@@ -172,13 +185,12 @@ class RAGFlowClientTests(unittest.TestCase):
             client.retrieve_chunks(dataset_id="ds-1", question="q")["chunks"][0]["id"],
             "chunk-1",
         )
-        self.assertEqual(
-            client.chat_completion(
-                chat_id="chat-1",
-                messages=[{"role": "user", "content": "q"}],
-            )["content"],
-            "answer",
+        response = client.chat_completion(
+            chat_id="chat-1",
+            messages=[{"role": "user", "content": "q"}],
         )
+        self.assertEqual(response["choices"][0]["message"]["content"], "answer")
+        self.assertIn("/api/v1/openai/chat-1/chat/completions", http_client.post_paths)
         self.assertTrue(client.delete_chats(["chat-1"]))
         self.assertTrue(client.delete_datasets(["ds-1"]))
         self.assertEqual(

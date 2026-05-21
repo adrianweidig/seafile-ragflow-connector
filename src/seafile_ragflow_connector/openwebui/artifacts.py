@@ -300,7 +300,7 @@ def _pipe_content() -> str:
                     "Content-Type": "application/json",
                 }
                 try:
-                    async with httpx.AsyncClient(timeout=120) as client:
+                    async with httpx.AsyncClient(timeout=180) as client:
                         url = (
                             self.valves.CONNECTOR_PROXY_BASE_URL.rstrip("/")
                             + "/api/openwebui/proxy/chat"
@@ -337,7 +337,7 @@ def _pipe_content() -> str:
                 answer = data.get("answer") or ""
                 if sources and not data.get("citations_emitted", True):
                     answer = answer + "\\n\\n" + _source_markdown(sources)
-                return answer or "RAGFlow hat keine Antwort geliefert."
+                return answer or _source_markdown(sources) or "RAGFlow hat keine Antwort geliefert."
 
 
         def _source_markdown(sources):

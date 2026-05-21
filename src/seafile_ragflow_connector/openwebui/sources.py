@@ -17,6 +17,11 @@ SOURCE_TOKEN_TTL_SECONDS = 900
 
 def extract_answer(payload: Any) -> str:
     if isinstance(payload, dict):
+        nested = payload.get("data")
+        if isinstance(nested, dict):
+            answer = extract_answer(nested)
+            if answer:
+                return answer
         choices = payload.get("choices")
         if isinstance(choices, list) and choices:
             message = choices[0].get("message") if isinstance(choices[0], dict) else None

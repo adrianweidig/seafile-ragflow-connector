@@ -390,16 +390,38 @@ def _handle_openwebui_chat(
         timeout=context.settings.openwebui_request_timeout_seconds,
     )
     try:
-        result = ragflow.chat_completion(chat_id=chat_id, messages=messages, stream=False)
+        result = ragflow.chat_completion(
+            chat_id=chat_id,
+            messages=messages,
+            model=str(payload.get("model") or "model"),
+            stream=False,
+        )
+        files_by_document_id = _files_by_document_id(context.store, mapping.repo_id)
+        sources = normalize_sources(
+            result,
+            settings=context.settings,
+            dataset_id=dataset_id,
+            dataset_name=mapping.ragflow_dataset_name,
+            files_by_document_id=files_by_document_id,
+        )
+        if not sources:
+            question = _last_user_message(messages)
+            if question:
+                retrieval_result = ragflow.retrieve_chunks(
+                    dataset_id=dataset_id,
+                    question=question,
+                    top_k=5,
+                    page_size=5,
+                )
+                sources = normalize_sources(
+                    retrieval_result,
+                    settings=context.settings,
+                    dataset_id=dataset_id,
+                    dataset_name=mapping.ragflow_dataset_name,
+                    files_by_document_id=files_by_document_id,
+                )
     finally:
         ragflow.close()
-    sources = normalize_sources(
-        result,
-        settings=context.settings,
-        dataset_id=dataset_id,
-        dataset_name=mapping.ragflow_dataset_name,
-        files_by_document_id=_files_by_document_id(context.store, mapping.repo_id),
-    )
     return {"answer": extract_answer(result), "sources": sources, "citations_emitted": True}
 
 
@@ -416,6 +438,26 @@ def _required_text(payload: dict[str, Any], key: str) -> str:
     if value in (None, ""):
         raise ValueError(f"{key} is required")
     return str(value)
+
+
+def _last_user_message(messages: list[Any]) -> str | None:
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
+                    parts.append(str(item["text"]))
+                elif isinstance(item, str):
+                    parts.append(item)
+            text = "\n".join(part.strip() for part in parts if part.strip())
+            if text:
+                return text
+    return None
 
 
 def _load_mapping(

@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     openwebui_sync_mode: Literal["disabled", "dry-run", "sync", "repair"] = "sync"
     openwebui_create_tools: bool = True
     openwebui_create_pipes: bool = True
-    openwebui_request_timeout_seconds: int = 30
+    openwebui_request_timeout_seconds: int = 180
     openwebui_verify_ssl: bool = True
     openwebui_function_namespace: str = "ragflow"
     openwebui_source_preview_mode: Literal[

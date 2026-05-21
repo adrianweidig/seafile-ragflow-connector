@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from seafile_ragflow_connector.openwebui.sources import (
+    extract_answer,
     normalize_sources,
     sign_preview_payload,
     verify_preview_token,
@@ -11,7 +12,7 @@ from seafile_ragflow_connector.openwebui.sources import (
 try:
     from seafile_ragflow_connector.config.settings import Settings
 except ModuleNotFoundError as exc:
-    if exc.name != "pydantic":
+    if exc.name not in {"pydantic", "pydantic_settings"}:
         raise
     Settings = None  # type: ignore[assignment]
 
@@ -104,6 +105,20 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual(sources[0]["name"], "report.pdf")
         self.assertNotIn("source_path", sources[0]["metadata"][0])
         self.assertNotIn("source_path", sources[0]["source_metadata"])
+
+    def test_extract_answer_unwraps_native_ragflow_data_payload(self) -> None:
+        answer = extract_answer(
+            {
+                "code": 0,
+                "data": {
+                    "answer": "Antwort aus RAGFlow",
+                    "reference": {"chunks": []},
+                },
+                "message": "success",
+            }
+        )
+
+        self.assertEqual(answer, "Antwort aus RAGFlow")
 
 
 if __name__ == "__main__":
