@@ -570,7 +570,35 @@ class SyncOrchestrator:
     ) -> bool:
         normalized_path = normalize_seafile_path(path)
         with self.session_factory() as session:
-            db_file = self._get_file(session, repo_id, normalized_path)
+            db_file = session.scalar(
+                select(File).where(
+                    File.repo_id == repo_id,
+                    File.normalized_path == normalized_path,
+                )
+            )
+            if db_file is None:
+                self.log.info(
+                    "file.delete_skipped_missing_state",
+                    sync_id=sync_id,
+                    repo_id=repo_id,
+                    dataset_id=dataset_id,
+                    path=normalized_path,
+                )
+                self._record_dashboard_change(
+                    sync_id=sync_id,
+                    action="delete_file",
+                    change_type="deleted",
+                    status="skipped",
+                    object_name=_basename(normalized_path),
+                    source_path=normalized_path,
+                    target_path=dataset_id,
+                    details={
+                        "repo_id": repo_id,
+                        "dataset_id": dataset_id,
+                        "reason": "file_not_known_in_state",
+                    },
+                )
+                return False
             document_id = db_file.ragflow_document_id
             document_name = db_file.ragflow_document_name or db_file.ingested_document_name
         if document_id and self.delete_ragflow_docs_on_seafile_delete:

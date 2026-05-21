@@ -102,7 +102,11 @@ def sync_once(
         summary = runtime.orchestrator.sync_once()
         if wait_parse_seconds > 0:
             _wait_for_parse(runtime, wait_parse_seconds)
-        typer.echo(summary.__dict__)
+        payload: dict[str, Any] = dict(summary.__dict__)
+        openwebui_summary = _sync_openwebui_if_enabled(runtime)
+        if openwebui_summary is not None:
+            payload["openwebui"] = openwebui_summary
+        typer.echo(payload)
     finally:
         runtime.close()
 
@@ -162,7 +166,7 @@ def controller() -> None:
         )
 
     def discover() -> None:
-        specs = runtime.orchestrator.discover_job_specs()
+        specs = _discover_job_specs(runtime)
         _enqueue_specs(runtime.job_store, runtime.signal_queue, specs)
         log.info("controller.discovery.enqueued", count=len(specs))
 
@@ -336,6 +340,14 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
         if not spec.file_path:
             raise ValueError("DELETE_FILE requires file_path")
         dataset_id = runtime.orchestrator.ensure_dataset_for_repo(repo_id)
+        if bool(spec.payload.get("recursive")):
+            runtime.orchestrator.delete_missing_files(
+                repo_id,
+                dataset_id,
+                set(),
+                scope=spec.file_path,
+            )
+            return
         runtime.orchestrator.delete_file(repo_id, dataset_id, spec.file_path)
 
     def parse_documents(spec: JobSpec) -> None:
@@ -364,7 +376,7 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
         JobType.DISCOVER_LIBRARIES: lambda spec: _enqueue_specs(
             runtime.job_store,
             runtime.signal_queue,
-            runtime.orchestrator.discover_job_specs(),
+            _discover_job_specs(runtime),
         ),
         JobType.ENSURE_RAGFLOW_DATASET: ensure_dataset,
         JobType.REFRESH_DATASET_SETTINGS: ensure_dataset,
@@ -379,6 +391,24 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
         JobType.RECONCILE_RAGFLOW_DATASET: check_parse,
         JobType.SYNC_OPENWEBUI: sync_openwebui,
     }
+
+
+def _discover_job_specs(runtime: Runtime) -> list[JobSpec]:
+    specs = runtime.orchestrator.discover_job_specs()
+    if _openwebui_sync_enabled(runtime):
+        specs.append(JobSpec(JobType.SYNC_OPENWEBUI))
+    return specs
+
+
+def _sync_openwebui_if_enabled(runtime: Runtime) -> dict[str, Any] | None:
+    if not _openwebui_sync_enabled(runtime) or runtime.openwebui_sync_service is None:
+        return None
+    summary = runtime.openwebui_sync_service.sync_once()
+    return dict(summary.__dict__)
+
+
+def _openwebui_sync_enabled(runtime: Runtime) -> bool:
+    return runtime.settings.openwebui_effective_sync_mode != "disabled"
 
 
 def _require_repo_id(spec: JobSpec) -> str:

@@ -240,6 +240,78 @@ class OrchestratorUploadTests(unittest.TestCase):
             self.assertEqual(library.status, "deleted")
             self.assertEqual(session.query(File).count(), 0)
 
+    def test_delete_unknown_file_is_skipped_without_ragflow_delete(self) -> None:
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo", status="active"))
+            session.commit()
+
+        ragflow_client = _FakeRAGFlowClient()
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"%PDF-1.4\ncontent"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        deleted = orchestrator.delete_file("repo", "dataset", "/missing.pdf")
+
+        self.assertFalse(deleted)
+        self.assertEqual(ragflow_client.deleted_ids, [])
+
+    def test_recursive_missing_delete_is_scoped_to_directory(self) -> None:
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo", status="active"))
+            session.add(
+                File(
+                    repo_id="repo",
+                    path="/docs/a.pdf",
+                    normalized_path="/docs/a.pdf",
+                    ragflow_document_id="doc-a",
+                )
+            )
+            session.add(
+                File(
+                    repo_id="repo",
+                    path="/other/b.pdf",
+                    normalized_path="/other/b.pdf",
+                    ragflow_document_id="doc-b",
+                )
+            )
+            session.commit()
+
+        ragflow_client = _FakeRAGFlowClient()
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"%PDF-1.4\ncontent"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        deleted_count = orchestrator.delete_missing_files(
+            "repo",
+            "dataset",
+            set(),
+            scope="/docs",
+        )
+
+        self.assertEqual(deleted_count, 1)
+        self.assertEqual(ragflow_client.deleted_ids, [["doc-a"]])
+        with session_factory() as session:
+            remaining = session.query(File).one()
+            self.assertEqual(remaining.normalized_path, "/other/b.pdf")
+
 
 if __name__ == "__main__":
     unittest.main()
