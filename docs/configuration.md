@@ -7,6 +7,46 @@ Datei mit Docker Compose oder Portainer verwenden. Secrets müssen über
 Portainer-Environment-Management, Docker Secrets oder eine lokale nicht
 committed Env-Datei bereitgestellt werden.
 
+## TLS und interne Zertifizierungsstellen
+
+Wenn ein Zielsystem mit `unable to get local issuer certificate` fehlschlägt,
+vertraut der Connector dem ausstellenden Root- oder Intermediate-Zertifikat
+nicht. Die saubere Lösung ist ein PEM-CA-Bundle statt `VERIFY_SSL=false`.
+
+```env
+CONNECTOR_CERTS_HOST_DIR=./certs
+CONNECTOR_CA_BUNDLE=/certs/company-root-ca.pem
+SEAFILE_VERIFY_SSL=true
+SEAFILE_CA_BUNDLE=
+RAGFLOW_VERIFY_SSL=true
+RAGFLOW_CA_BUNDLE=
+OPENWEBUI_VERIFY_SSL=true
+OPENWEBUI_CA_BUNDLE=
+```
+
+- `CONNECTOR_CERTS_HOST_DIR`: Host-Verzeichnis, das in Compose/Portainer
+  read-only nach `/certs` gemountet wird.
+- `CONNECTOR_CA_BUNDLE`: gemeinsames PEM-Bundle für Seafile, RAGFlow und
+  OpenWebUI. Es muss im Container existieren.
+- `SEAFILE_CA_BUNDLE`, `RAGFLOW_CA_BUNDLE`, `OPENWEBUI_CA_BUNDLE`: optionale
+  service-spezifische Overrides, falls die Systeme unterschiedlichen CAs
+  vertrauen müssen.
+- `SEAFILE_VERIFY_SSL=false`, `RAGFLOW_VERIFY_SSL=false` oder
+  `OPENWEBUI_VERIFY_SSL=false`: nur als kurzfristiger Diagnose-Notfall,
+  weil damit Zertifikatsprüfung für den jeweiligen Dienst abgeschaltet wird.
+
+Für die von OpenWebUI ausgeführten Tools und Pipes gibt es zusätzlich:
+
+```env
+OPENWEBUI_PROXY_VERIFY_SSL=true
+OPENWEBUI_PROXY_CA_BUNDLE=
+```
+
+Diese Werte betreffen den HTTP-Aufruf von OpenWebUI zum Connector-Proxy. Wenn
+`OPENWEBUI_PROXY_INTERNAL_BASE_URL` auf eine HTTPS-URL mit interner CA zeigt,
+muss `OPENWEBUI_PROXY_CA_BUNDLE` ein Pfad sein, der im OpenWebUI-Container
+existiert; der Connector schreibt den Wert als Valve in Tool und Pipe.
+
 ## Datei-Policy
 
 - `ALLOW_EXTENSIONS`: optionale Allowlist. Leer bedeutet, dass die Endung keine
@@ -116,11 +156,14 @@ OPENWEBUI_CREATE_TOOLS=true
 OPENWEBUI_CREATE_PIPES=true
 OPENWEBUI_REQUEST_TIMEOUT_SECONDS=180
 OPENWEBUI_VERIFY_SSL=true
+OPENWEBUI_CA_BUNDLE=
 OPENWEBUI_FUNCTION_NAMESPACE=ragflow
 OPENWEBUI_SOURCE_PREVIEW_MODE=ragflow_link
 OPENWEBUI_PROXY_PUBLIC_BASE_URL=
 OPENWEBUI_PROXY_INTERNAL_BASE_URL=
 OPENWEBUI_PROXY_SHARED_SECRET=
+OPENWEBUI_PROXY_VERIFY_SSL=true
+OPENWEBUI_PROXY_CA_BUNDLE=
 OPENWEBUI_SYNC_INTERVAL_SECONDS=300
 OPENWEBUI_DATASET_ALLOWLIST=
 RAGFLOW_PUBLIC_BASE_URL=

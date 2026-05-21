@@ -26,6 +26,9 @@ Portainer-Start:
 5. Inhalt von `../../connector.env.example` in Portainer unter `Environment
    variables` importieren.
 6. Alle `change-me` Werte und die Base-URLs ersetzen.
+   Wenn interne Zertifikate genutzt werden, die CA-PEM-Datei in ein
+   Host-Verzeichnis legen, `CONNECTOR_CERTS_HOST_DIR` auf dieses Verzeichnis
+   und `CONNECTOR_CA_BUNDLE=/certs/<datei>.pem` setzen.
 7. `CONNECTOR_IMAGE`, `POSTGRES_IMAGE` und `REDIS_IMAGE` an die in Portainer
    sichtbaren Image-Tags anpassen. Wenn lokale Images genutzt werden sollen,
    kann `*_IMAGE_PULL_POLICY=never` gesetzt werden.

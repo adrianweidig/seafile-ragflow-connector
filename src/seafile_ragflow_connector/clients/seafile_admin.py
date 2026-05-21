@@ -3,15 +3,23 @@ from __future__ import annotations
 from collections.abc import Generator
 from typing import Any
 
-from seafile_ragflow_connector.clients.http import make_client, unwrap_response
+from seafile_ragflow_connector.clients.http import VerifyConfig, make_client, unwrap_response
 
 
 class SeafileAdminClient:
-    def __init__(self, base_url: str, admin_token: str, *, timeout: float = 60.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        admin_token: str,
+        *,
+        timeout: float = 60.0,
+        verify: VerifyConfig = True,
+    ) -> None:
         self._client = make_client(
             base_url,
             headers={"Authorization": f"Token {admin_token}"},
             timeout=timeout,
+            verify=verify,
         )
 
     def close(self) -> None:

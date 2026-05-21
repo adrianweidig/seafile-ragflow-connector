@@ -352,6 +352,7 @@ def _handle_openwebui_query(
         context.settings.ragflow_internal_url or context.settings.ragflow_base_url,
         context.settings.ragflow_api_key,
         timeout=context.settings.openwebui_request_timeout_seconds,
+        verify=context.settings.ragflow_httpx_verify,
     )
     try:
         result = ragflow.retrieve_chunks(dataset_id=dataset_id, question=question, top_k=top_k, page_size=top_k)
@@ -389,6 +390,7 @@ def _handle_openwebui_chat(
         context.settings.ragflow_internal_url or context.settings.ragflow_base_url,
         context.settings.ragflow_api_key,
         timeout=context.settings.openwebui_request_timeout_seconds,
+        verify=context.settings.ragflow_httpx_verify,
     )
     try:
         result = ragflow.chat_completion(

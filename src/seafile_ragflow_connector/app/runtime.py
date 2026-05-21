@@ -64,15 +64,24 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
     _retry(lambda: check_redis(settings.redis_url), "redis")
     session_factory = get_session_factory(settings.database_url)
     dashboard_store = build_dashboard_store(settings, session_factory)
-    admin_client = SeafileAdminClient(settings.seafile_base_url, settings.seafile_admin_token)
+    admin_client = SeafileAdminClient(
+        settings.seafile_base_url,
+        settings.seafile_admin_token,
+        verify=settings.seafile_httpx_verify,
+    )
     sync_client = SeafileSyncClient(
         settings.seafile_base_url,
         settings.seafile_sync_user_token,
+        verify=settings.seafile_httpx_verify,
         rewrite_download_urls=settings.seafile_rewrite_download_urls,
         rewrite_from=settings.seafile_download_rewrite_from,
         rewrite_to=settings.seafile_download_rewrite_to,
     )
-    ragflow_client = RAGFlowClient(settings.ragflow_base_url, settings.ragflow_api_key)
+    ragflow_client = RAGFlowClient(
+        settings.ragflow_base_url,
+        settings.ragflow_api_key,
+        verify=settings.ragflow_httpx_verify,
+    )
     openwebui_client = _build_openwebui_client(settings)
     orchestrator = SyncOrchestrator(
         session_factory,
@@ -145,7 +154,7 @@ def _build_openwebui_client(settings: Settings) -> OpenWebUIClient | None:
         settings.openwebui_base_url,
         settings.openwebui_admin_api_key,
         timeout=settings.openwebui_request_timeout_seconds,
-        verify_ssl=settings.openwebui_verify_ssl,
+        verify=settings.openwebui_httpx_verify,
     )
 
 

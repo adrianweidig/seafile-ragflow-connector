@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: Literal["json", "console"] = "json"
     dry_run: bool = False
+    connector_ca_bundle: str | None = None
 
     connector_dashboard_enabled: bool = False
     connector_dashboard_host: str = "0.0.0.0"
@@ -44,6 +45,8 @@ class Settings(BaseSettings):
     seafile_sync_user_email: str | None = None
     seafile_skip_encrypted_libraries: bool = True
     seafile_skip_virtual_repos: bool = True
+    seafile_verify_ssl: bool = True
+    seafile_ca_bundle: str | None = None
     seafile_rewrite_download_urls: bool = False
     seafile_download_rewrite_from: str | None = None
     seafile_download_rewrite_to: str | None = None
@@ -53,6 +56,8 @@ class Settings(BaseSettings):
     ragflow_api_key: str
     ragflow_template_dataset_name: str = "connector_template"
     ragflow_template_required: bool = True
+    ragflow_verify_ssl: bool = True
+    ragflow_ca_bundle: str | None = None
     ragflow_template_refresh_seconds: int = 300
     ragflow_refresh_dataset_settings: bool = True
     ragflow_validate_created_dataset: bool = True
@@ -68,6 +73,7 @@ class Settings(BaseSettings):
     openwebui_create_pipes: bool = True
     openwebui_request_timeout_seconds: int = 180
     openwebui_verify_ssl: bool = True
+    openwebui_ca_bundle: str | None = None
     openwebui_function_namespace: str = "ragflow"
     openwebui_source_preview_mode: Literal[
         "ragflow_link",
@@ -78,6 +84,8 @@ class Settings(BaseSettings):
     openwebui_proxy_public_base_url: str | None = None
     openwebui_proxy_internal_base_url: str | None = None
     openwebui_proxy_shared_secret: str | None = None
+    openwebui_proxy_verify_ssl: bool = True
+    openwebui_proxy_ca_bundle: str | None = None
     openwebui_sync_interval_seconds: int = 300
     openwebui_dataset_allowlist_csv: str = Field(
         default="",
@@ -158,6 +166,21 @@ class Settings(BaseSettings):
     def strip_url(cls, value: str | None) -> str | None:
         return value.rstrip("/") if value else value
 
+    @field_validator(
+        "connector_ca_bundle",
+        "seafile_ca_bundle",
+        "ragflow_ca_bundle",
+        "openwebui_ca_bundle",
+        "openwebui_proxy_ca_bundle",
+        mode="before",
+    )
+    @classmethod
+    def strip_optional_path(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
     @field_validator("max_file_size_mb")
     @classmethod
     def validate_max_file_size(cls, value: int) -> int:
@@ -230,6 +253,16 @@ class Settings(BaseSettings):
             value = getattr(self, name)
             if value and not _is_http_url(value):
                 msg = f"{name.upper()} must be an http or https URL"
+                raise ValueError(msg)
+        for name in (
+            "connector_ca_bundle",
+            "seafile_ca_bundle",
+            "ragflow_ca_bundle",
+            "openwebui_ca_bundle",
+        ):
+            value = getattr(self, name)
+            if value and not Path(value).is_file():
+                msg = f"{name.upper()} must point to a readable PEM CA bundle file"
                 raise ValueError(msg)
         if self.openwebui_integration_enabled:
             mode = self.openwebui_effective_sync_mode
@@ -308,6 +341,23 @@ class Settings(BaseSettings):
     @property
     def openwebui_proxy_base_url_for_functions(self) -> str | None:
         return self.openwebui_proxy_internal_base_url or self.openwebui_proxy_public_base_url
+
+    @property
+    def seafile_httpx_verify(self) -> bool | str:
+        return self._httpx_verify(self.seafile_verify_ssl, self.seafile_ca_bundle)
+
+    @property
+    def ragflow_httpx_verify(self) -> bool | str:
+        return self._httpx_verify(self.ragflow_verify_ssl, self.ragflow_ca_bundle)
+
+    @property
+    def openwebui_httpx_verify(self) -> bool | str:
+        return self._httpx_verify(self.openwebui_verify_ssl, self.openwebui_ca_bundle)
+
+    def _httpx_verify(self, verify_ssl: bool, service_ca_bundle: str | None) -> bool | str:
+        if not verify_ssl:
+            return False
+        return service_ca_bundle or self.connector_ca_bundle or True
 
 
 def _is_http_url(value: str) -> bool:

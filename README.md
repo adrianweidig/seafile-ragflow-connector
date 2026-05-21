@@ -73,6 +73,23 @@ OPENWEBUI_ADMIN_API_KEY=
 OPENWEBUI_PROXY_SHARED_SECRET=
 ```
 
+Wenn deine produktive Umgebung interne oder selbstsignierte Zertifikate nutzt
+und der Connector `unable to get local issuer certificate` meldet, lege die
+Root-/Intermediate-CA als PEM-Datei auf dem Docker-Host ab und setze z. B.:
+
+```env
+CONNECTOR_CERTS_HOST_DIR=/opt/seafile-ragflow-connector/certs
+CONNECTOR_CA_BUNDLE=/certs/company-root-ca.pem
+SEAFILE_VERIFY_SSL=true
+RAGFLOW_VERIFY_SSL=true
+OPENWEBUI_VERIFY_SSL=true
+```
+
+`CONNECTOR_CA_BUNDLE` gilt fuer Seafile, RAGFlow und OpenWebUI. Falls nur ein
+Dienst betroffen ist, kann stattdessen `SEAFILE_CA_BUNDLE`,
+`RAGFLOW_CA_BUNDLE` oder `OPENWEBUI_CA_BUNDLE` gesetzt werden.
+`*_VERIFY_SSL=false` ist nur als kurzfristige Diagnose gedacht.
+
 ### 3. Netzwerkvariante waehlen
 
 Host/LAN/Reverse Proxy ist der einfachste Fall. Behalte:

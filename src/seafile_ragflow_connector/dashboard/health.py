@@ -114,6 +114,7 @@ def _check_seafile(settings: Settings) -> Callable[[], dict[str, Any]]:
             base_url=base_url,
             headers={"Authorization": f"Token {settings.seafile_admin_token}"},
             timeout=HEALTH_TIMEOUT_SECONDS,
+            verify=settings.seafile_httpx_verify,
         ) as client:
             response = client.get("/api/v2.1/admin/libraries/", params={"page": 1, "per_page": 1})
             response.raise_for_status()
@@ -135,6 +136,7 @@ def _check_ragflow(settings: Settings) -> Callable[[], dict[str, Any]]:
             base_url=base_url,
             headers={"Authorization": f"Bearer {settings.ragflow_api_key}"},
             timeout=HEALTH_TIMEOUT_SECONDS,
+            verify=settings.ragflow_httpx_verify,
         ) as client:
             response = client.get(
                 "/api/v1/datasets",
@@ -191,7 +193,7 @@ def _check_openwebui_api(settings: Settings) -> Callable[[], dict[str, Any]]:
             base_url=settings.openwebui_base_url,
             headers={"Authorization": f"Bearer {settings.openwebui_admin_api_key}"},
             timeout=HEALTH_TIMEOUT_SECONDS,
-            verify=settings.openwebui_verify_ssl,
+            verify=settings.openwebui_httpx_verify,
             follow_redirects=False,
         ) as client:
             response = client.get("/api/v1/functions/list")

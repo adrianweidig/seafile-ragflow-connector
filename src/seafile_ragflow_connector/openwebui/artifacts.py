@@ -7,7 +7,7 @@ from textwrap import dedent
 from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "1"
+ARTIFACT_VERSION = "2"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 
 
@@ -29,6 +29,8 @@ class DatasetArtifactInputs:
     dataset_name: str
     ragflow_chat_id: str | None
     proxy_base_url: str | None
+    proxy_verify_ssl: bool = True
+    proxy_ca_bundle: str | None = None
     model_name_prefix: str = "ragflow"
 
 
@@ -40,6 +42,8 @@ def build_tool_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "ARTIFACT_ID": artifact_id,
         "CONNECTOR_PROXY_BASE_URL": inputs.proxy_base_url or "",
         "CONNECTOR_PROXY_SHARED_SECRET": "",
+        "CONNECTOR_PROXY_VERIFY_SSL": inputs.proxy_verify_ssl,
+        "CONNECTOR_PROXY_CA_BUNDLE": inputs.proxy_ca_bundle or "",
         "DATASET_ID": inputs.dataset_id,
         "TOP_K": 5,
     }
@@ -65,6 +69,8 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "ARTIFACT_ID": artifact_id,
         "CONNECTOR_PROXY_BASE_URL": inputs.proxy_base_url or "",
         "CONNECTOR_PROXY_SHARED_SECRET": "",
+        "CONNECTOR_PROXY_VERIFY_SSL": inputs.proxy_verify_ssl,
+        "CONNECTOR_PROXY_CA_BUNDLE": inputs.proxy_ca_bundle or "",
         "DATASET_ID": inputs.dataset_id,
         "RAGFLOW_CHAT_ID": inputs.ragflow_chat_id or "",
         "MODEL_ID": model_name,
@@ -135,9 +141,9 @@ def _tool_content() -> str:
         """
         title: RAGFlow Dataset Search
         author: Seafile RAGFlow Connector
-        version: 1.0.0
+        version: 1.1.0
         owner: seafile-ragflow-connector
-        artifact_version: 1
+        artifact_version: 2
         """
 
         import httpx
@@ -149,6 +155,8 @@ def _tool_content() -> str:
                 ARTIFACT_ID: str = Field(default="")
                 CONNECTOR_PROXY_BASE_URL: str = Field(default="")
                 CONNECTOR_PROXY_SHARED_SECRET: str = Field(default="")
+                CONNECTOR_PROXY_VERIFY_SSL: bool = Field(default=True)
+                CONNECTOR_PROXY_CA_BUNDLE: str = Field(default="")
                 DATASET_ID: str = Field(default="")
                 TOP_K: int = Field(default=5, ge=1, le=20)
 
@@ -178,7 +186,13 @@ def _tool_content() -> str:
                     "Content-Type": "application/json",
                 }
                 try:
-                    async with httpx.AsyncClient(timeout=60) as client:
+                    async with httpx.AsyncClient(
+                        timeout=60,
+                        verify=_httpx_verify(
+                            self.valves.CONNECTOR_PROXY_VERIFY_SSL,
+                            self.valves.CONNECTOR_PROXY_CA_BUNDLE,
+                        ),
+                    ) as client:
                         url = (
                             self.valves.CONNECTOR_PROXY_BASE_URL.rstrip("/")
                             + "/api/openwebui/proxy/query"
@@ -228,6 +242,13 @@ def _tool_content() -> str:
                 if snippet:
                     lines.append(f"   {snippet}")
             return "\\n".join(lines)
+
+
+        def _httpx_verify(verify_ssl, ca_bundle):
+            if not bool(verify_ssl):
+                return False
+            ca_path = str(ca_bundle or "").strip()
+            return ca_path or True
         '''
     ).strip()
 
@@ -238,9 +259,9 @@ def _pipe_content() -> str:
         """
         title: RAGFlow Dataset Pipe
         author: Seafile RAGFlow Connector
-        version: 1.0.0
+        version: 1.1.0
         owner: seafile-ragflow-connector
-        artifact_version: 1
+        artifact_version: 2
         """
 
         import httpx
@@ -252,6 +273,8 @@ def _pipe_content() -> str:
                 ARTIFACT_ID: str = Field(default="")
                 CONNECTOR_PROXY_BASE_URL: str = Field(default="")
                 CONNECTOR_PROXY_SHARED_SECRET: str = Field(default="")
+                CONNECTOR_PROXY_VERIFY_SSL: bool = Field(default=True)
+                CONNECTOR_PROXY_CA_BUNDLE: str = Field(default="")
                 DATASET_ID: str = Field(default="")
                 RAGFLOW_CHAT_ID: str = Field(default="")
                 MODEL_ID: str = Field(default="")
@@ -307,7 +330,13 @@ def _pipe_content() -> str:
                     "Content-Type": "application/json",
                 }
                 try:
-                    async with httpx.AsyncClient(timeout=180) as client:
+                    async with httpx.AsyncClient(
+                        timeout=180,
+                        verify=_httpx_verify(
+                            self.valves.CONNECTOR_PROXY_VERIFY_SSL,
+                            self.valves.CONNECTOR_PROXY_CA_BUNDLE,
+                        ),
+                    ) as client:
                         url = (
                             self.valves.CONNECTOR_PROXY_BASE_URL.rstrip("/")
                             + "/api/openwebui/proxy/chat"
@@ -390,6 +419,13 @@ def _pipe_content() -> str:
             if len(clean) <= max_length:
                 return clean
             return clean[: max_length - 1].rstrip() + "..."
+
+
+        def _httpx_verify(verify_ssl, ca_bundle):
+            if not bool(verify_ssl):
+                return False
+            ca_path = str(ca_bundle or "").strip()
+            return ca_path or True
 
 
         def _source_markdown(sources):

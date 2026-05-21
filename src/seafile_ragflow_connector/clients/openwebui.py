@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from seafile_ragflow_connector.clients.http import ApiError
+from seafile_ragflow_connector.clients.http import ApiError, VerifyConfig
 
 
 @dataclass(frozen=True)
@@ -39,13 +39,13 @@ class OpenWebUIClient:
         api_key: str,
         *,
         timeout: float = 30.0,
-        verify_ssl: bool = True,
+        verify: VerifyConfig = True,
     ) -> None:
         self._client = httpx.Client(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=timeout,
-            verify=verify_ssl,
+            verify=verify,
             follow_redirects=False,
         )
 

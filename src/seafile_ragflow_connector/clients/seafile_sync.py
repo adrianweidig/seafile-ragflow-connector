@@ -6,7 +6,7 @@ from urllib.parse import unquote
 
 import httpx
 
-from seafile_ragflow_connector.clients.http import make_client, unwrap_response
+from seafile_ragflow_connector.clients.http import VerifyConfig, make_client, unwrap_response
 
 
 class SeafileSyncClient:
@@ -16,6 +16,7 @@ class SeafileSyncClient:
         sync_token: str,
         *,
         timeout: float = 120.0,
+        verify: VerifyConfig = True,
         rewrite_download_urls: bool = False,
         rewrite_from: str | None = None,
         rewrite_to: str | None = None,
@@ -24,10 +25,12 @@ class SeafileSyncClient:
         self.rewrite_download_urls = rewrite_download_urls
         self.rewrite_from = rewrite_from
         self.rewrite_to = rewrite_to
+        self.verify = verify
         self._client = make_client(
             base_url,
             headers={"Authorization": f"Token {sync_token}"},
             timeout=timeout,
+            verify=verify,
         )
 
     def close(self) -> None:
@@ -57,6 +60,7 @@ class SeafileSyncClient:
                     url,
                     headers=dict(self._client.headers),
                     timeout=self._client.timeout,
+                    verify=self.verify,
                 )
                 response.raise_for_status()
                 return response.content

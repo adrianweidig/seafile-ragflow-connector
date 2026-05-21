@@ -291,6 +291,16 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
   `/api/v2.1/admin/libraries/` prüfen.
 - Template nicht gefunden: `RAGFLOW_TEMPLATE_DATASET_NAME`, `RAGFLOW_API_KEY` und
   RAGFlow-User prüfen.
+- `unable to get local issuer certificate`: Root- und Intermediate-CA als PEM
+  in ein Host-Verzeichnis legen, dieses per `CONNECTOR_CERTS_HOST_DIR` nach
+  `/certs` mounten und `CONNECTOR_CA_BUNDLE=/certs/<datei>.pem` setzen. Wenn
+  nur ein einzelner Dienst betroffen ist, stattdessen `SEAFILE_CA_BUNDLE`,
+  `RAGFLOW_CA_BUNDLE` oder `OPENWEBUI_CA_BUNDLE` setzen. `*_VERIFY_SSL=false`
+  nur kurzfristig zur Diagnose verwenden.
+- Derselbe Zertifikatsfehler in OpenWebUI-Tool/Pipe: Der Aufruf läuft im
+  OpenWebUI-Container. Dann muss `OPENWEBUI_PROXY_CA_BUNDLE` auf einen Pfad
+  zeigen, der dort existiert, und `OPENWEBUI_SYNC_MODE=repair` den Tool/Pipe-
+  Valve-Wert aktualisieren.
 - Spezialendungen werden übersprungen: `DENY_EXTENSIONS`,
   `ALLOW_UNKNOWN_TEXT_FILES`, `TEXT_EXTENSIONS` und Klassifikationslogs prüfen.
 - Dataset-Einstellungen geändert: Der Connector überschreibt bestehende

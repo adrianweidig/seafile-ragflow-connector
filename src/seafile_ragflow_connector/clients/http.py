@@ -5,6 +5,8 @@ from typing import Any
 
 import httpx
 
+VerifyConfig = bool | str
+
 
 class ApiError(RuntimeError):
     def __init__(
@@ -47,5 +49,16 @@ def unwrap_response(response: httpx.Response) -> Any:
     return payload
 
 
-def make_client(base_url: str, headers: Mapping[str, str], timeout: float = 60.0) -> httpx.Client:
-    return httpx.Client(base_url=base_url.rstrip("/"), headers=dict(headers), timeout=timeout)
+def make_client(
+    base_url: str,
+    headers: Mapping[str, str],
+    timeout: float = 60.0,
+    *,
+    verify: VerifyConfig = True,
+) -> httpx.Client:
+    return httpx.Client(
+        base_url=base_url.rstrip("/"),
+        headers=dict(headers),
+        timeout=timeout,
+        verify=verify,
+    )

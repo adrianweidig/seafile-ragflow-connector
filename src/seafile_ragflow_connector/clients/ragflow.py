@@ -2,15 +2,23 @@ from __future__ import annotations
 
 from typing import Any
 
-from seafile_ragflow_connector.clients.http import ApiError, make_client, unwrap_response
+from seafile_ragflow_connector.clients.http import ApiError, VerifyConfig, make_client, unwrap_response
 
 
 class RAGFlowClient:
-    def __init__(self, base_url: str, api_key: str, *, timeout: float = 60.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        *,
+        timeout: float = 60.0,
+        verify: VerifyConfig = True,
+    ) -> None:
         self._client = make_client(
             base_url,
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=timeout,
+            verify=verify,
         )
 
     def close(self) -> None:
