@@ -35,16 +35,29 @@ class OpenWebUISourceTests(unittest.TestCase):
             openwebui_source_preview_mode="connector_viewer",
         )
 
-    def test_signed_preview_tokens_roundtrip_and_expire(self) -> None:
+    def test_signed_preview_tokens_roundtrip_and_keep_chat_links_durable(self) -> None:
         token = sign_preview_payload({"document_id": "doc-1"}, "proxy-secret", now=100)
 
         self.assertEqual(
             verify_preview_token(token, "proxy-secret", now=101)["document_id"],
             "doc-1",
         )
+        self.assertEqual(
+            verify_preview_token(token, "proxy-secret", now=2000)["document_id"],
+            "doc-1",
+        )
 
-        with self.assertRaises(ValueError):
-            verify_preview_token(token, "proxy-secret", now=2000)
+    def test_legacy_expired_preview_tokens_still_open_saved_chat_sources(self) -> None:
+        token = sign_preview_payload(
+            {"document_id": "doc-1", "exp": 101},
+            "proxy-secret",
+            now=100,
+        )
+
+        self.assertEqual(
+            verify_preview_token(token, "proxy-secret", now=2000)["document_id"],
+            "doc-1",
+        )
 
     def test_normalize_sources_builds_safe_preview_url(self) -> None:
         sources = normalize_sources(

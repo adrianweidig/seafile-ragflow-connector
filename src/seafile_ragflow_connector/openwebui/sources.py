@@ -4,7 +4,6 @@ import base64
 import hmac
 import json
 import re
-import time
 from hashlib import sha256
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
@@ -13,7 +12,6 @@ from urllib.parse import quote
 if TYPE_CHECKING:
     from seafile_ragflow_connector.config.settings import Settings
 
-SOURCE_TOKEN_TTL_SECONDS = 900
 _RAGFLOW_INLINE_CITATION_RE = re.compile(r"\[ID:(\d+)\]")
 
 
@@ -84,7 +82,6 @@ def annotate_answer_citations(answer: str, sources: list[dict[str, Any]]) -> str
 
 def sign_preview_payload(payload: dict[str, Any], secret: str, *, now: int | None = None) -> str:
     body = dict(payload)
-    body["exp"] = int(now or time.time()) + SOURCE_TOKEN_TTL_SECONDS
     encoded = _b64encode(
         json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     )
@@ -105,8 +102,6 @@ def verify_preview_token(token: str, secret: str, *, now: int | None = None) -> 
     payload = json.loads(_b64decode(encoded))
     if not isinstance(payload, dict):
         raise ValueError("invalid preview token payload")
-    if int(payload.get("exp") or 0) < int(now or time.time()):
-        raise ValueError("preview token expired")
     return payload
 
 

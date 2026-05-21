@@ -144,6 +144,14 @@ RAGFLOW_DOCUMENT_URL_TEMPLATE=
 - `OPENWEBUI_DATASET_ALLOWLIST`: optionale CSV aus Repo-IDs oder
   RAGFlow-Dataset-IDs für stufenweisen Rollout.
 
+Im Modus `connector_viewer` erzeugt der Connector signierte Quellenlinks auf
+`/api/openwebui/sources/preview`. Diese Links enthalten die von RAGFlow
+gelieferte Chunk-Referenz inklusive Seite, Position und Textauszug und bleiben
+für gespeicherte OpenWebUI-Chatverläufe dauerhaft gültig, solange
+`OPENWEBUI_PROXY_SHARED_SECRET` unverändert bleibt. Wenn RAGFlow selbst stabile
+öffentliche Dokument-/Chunk-Links liefert oder `RAGFLOW_DOCUMENT_URL_TEMPLATE`
+gesetzt ist, kann `ragflow_link` stattdessen direkt auf RAGFlow zeigen.
+
 Wenn OpenWebUI aktiviert ist, benötigt der Connector-Controller einen
 erreichbaren HTTP-Port für Proxy-Routen wie `/api/openwebui/proxy/chat` und
 `/api/openwebui/proxy/query`. Die generierten OpenWebUI-Tools und Pipes greifen
