@@ -11,6 +11,7 @@ htmlcov/
 dist/
 build/
 .env
+connector.env
 stack.env
 deploy/portainer/stack.env
 *.log

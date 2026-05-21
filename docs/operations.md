@@ -6,8 +6,8 @@ Troubleshooting, Release und die lokale WSL-/Docker-Prüfung.
 ## Portainer-Deployment
 
 Der produktive Stack liegt unter `deploy/portainer/docker-compose.yml`. Die
-importierbare Beispielkonfiguration liegt unter
-`deploy/portainer/stack.env.example`.
+einheitliche Beispielkonfiguration liegt im Repo-Root unter
+`connector.env.example`.
 
 Standardmäßig zieht der Stack das Connector-Image aus GHCR:
 
@@ -21,14 +21,14 @@ Image vorab exportiert und auf dem Zielhost geladen werden.
 
 Die Compose-Datei referenziert keine lokale `env_file`. In Portainer reicht es,
 die Compose-Datei einzufügen oder das Repo als Git-Stack zu nutzen und die Werte
-aus `stack.env.example` im Bereich `Environment variables` zu importieren.
+aus `connector.env.example` im Bereich `Environment variables` zu importieren.
 
 1. Bei Offline-Betrieb benötigte Images auf dem Docker-Host importieren,
    beispielsweise:
    `docker load -i images/seafile-ragflow-connector_latest.tar`
 2. In Portainer einen neuen Stack erstellen.
 3. Inhalt von `deploy/portainer/docker-compose.yml` einfügen.
-4. `deploy/portainer/stack.env.example` in Portainer importieren.
+4. `connector.env.example` in Portainer importieren.
 5. Alle `change-me` Werte ersetzen.
 6. `SEAFILE_BASE_URL` und `RAGFLOW_BASE_URL` auf die aus dem
    Connector-Container erreichbaren URLs setzen.
@@ -49,22 +49,44 @@ Es gibt zwei unterstützte Netzwerkvarianten:
   `SEAFILE_BASE_URL=http://seafile`, `RAGFLOW_BASE_URL=http://ragflow:9380`
   nutzen.
 
-## Direkte Docker-Compose-Varianten
+## Direkter Docker-Compose-Start
 
-Für Betreiber, die nicht über Portainer deployen, liegen unter `deploy/compose`
-direkt nutzbare Varianten mit jeweils eigener kommentierter Env-Vorlage:
+Für Betreiber, die nicht über Portainer deployen, ist der einfachste direkte
+Start ebenfalls die zentrale Konfigurationsdatei:
 
-| Anwendungsfall | Compose-Datei | Env-Vorlage |
-| --- | --- | --- |
-| Seafile/RAGFlow über Host, LAN oder Reverse Proxy | `deploy/compose/external-services.compose.yml` | `deploy/compose/external-services.stack.env.example` |
-| Seafile/RAGFlow im bestehenden Docker-Netz | `deploy/compose/shared-network.compose.yml` | `deploy/compose/shared-network.stack.env.example` |
-| Seafile/RAGFlow/OpenWebUI im gemeinsamen Docker-Netz | `deploy/compose/openwebui.compose.yml` | `deploy/compose/openwebui.stack.env.example` |
+```bash
+cp connector.env.example connector.env
+```
+
+Danach `connector.env` bearbeiten, alle `change-me` Werte ersetzen und den
+Stack starten:
+
+```bash
+docker compose \
+  --env-file connector.env \
+  -f deploy/portainer/docker-compose.yml \
+  config --quiet
+
+docker compose \
+  --env-file connector.env \
+  -f deploy/portainer/docker-compose.yml \
+  up -d
+```
+
+Unter `deploy/compose` liegen zusätzlich spezialisierte Compose-Varianten. Sie
+können ebenfalls mit `--env-file connector.env` gestartet werden:
+
+| Anwendungsfall | Compose-Datei |
+| --- | --- |
+| Seafile/RAGFlow über Host, LAN oder Reverse Proxy | `deploy/compose/external-services.compose.yml` |
+| Seafile/RAGFlow im bestehenden Docker-Netz | `deploy/compose/shared-network.compose.yml` |
+| Seafile/RAGFlow/OpenWebUI im gemeinsamen Docker-Netz | `deploy/compose/openwebui.compose.yml` |
 
 Beispiel:
 
 ```bash
 docker compose \
-  --env-file deploy/compose/external-services.stack.env.example \
+  --env-file connector.env \
   -f deploy/compose/external-services.compose.yml \
   up -d
 ```
@@ -84,7 +106,7 @@ Connector-Tasks erreichbar sein müssen.
 
 ```bash
 cd deploy/swarm
-cp stack.env.example stack.env
+cp ../../connector.env.example stack.env
 set -a
 . ./stack.env
 set +a
@@ -94,7 +116,9 @@ docker stack deploy -c docker-stack.yml seafile-ragflow-connector
 Wichtig: `docker stack deploy` liest keine Env-Datei wie `docker compose
 --env-file`. Die Variablen müssen vor dem Deploy in die Shell exportiert
 werden. Außerdem veröffentlicht Swarm Dashboard-Ports über das Routing-Mesh;
-`CONNECTOR_DASHBOARD_PUBLISHED_PORT` ist dort nur eine Portnummer.
+`CONNECTOR_DASHBOARD_PUBLISHED_PORT` ist dort nur eine Portnummer. Wenn die
+zentrale Vorlage noch `127.0.0.1:18080` enthält, muss der Wert für Swarm auf
+`18080` geändert werden.
 
 ### Dashboard im Betrieb
 
@@ -133,7 +157,7 @@ Ein produktives Release sollte enthalten:
 
 ```text
 docker-compose.yml
-stack.env.example
+connector.env.example
 images/
   seafile-ragflow-connector_latest.tar
   postgres_16.tar
@@ -189,13 +213,13 @@ Paketinstallation statt.
 Für diesen Test eine lokale, nicht getrackte Env-Datei erzeugen:
 
 ```powershell
-Copy-Item deploy\portainer\stack.env.example deploy\portainer\stack.env
+Copy-Item connector.env.example connector.env
 ```
 
 Dann:
 
 ```powershell
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker run --rm --env-file deploy/portainer/stack.env ghcr.io/adrianweidig/seafile-ragflow-connector:local-test check-config'
+wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker run --rm --env-file connector.env ghcr.io/adrianweidig/seafile-ragflow-connector:local-test check-config'
 ```
 
 Erwartung: `check-config` gibt zentrale Werte aus und beendet sich mit Exit-Code 0.
@@ -204,7 +228,7 @@ Es ist keine Verbindung zu Seafile oder RAGFlow notwendig.
 ### 6. Compose-Syntax prüfen
 
 ```powershell
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker compose --env-file deploy/portainer/stack.env -f deploy/portainer/docker-compose.yml config --quiet'
+wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker compose --env-file connector.env -f deploy/portainer/docker-compose.yml config --quiet'
 ```
 
 Erwartung: Exit-Code 0. Die Compose-Datei darf keine `env_file`-Abhängigkeit
@@ -229,9 +253,9 @@ Nur ausführen, wenn `postgres:16` und `redis:7` lokal verfügbar sind oder Pull
 erlaubt sind:
 
 ```powershell
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker compose -f deploy/portainer/docker-compose.yml --env-file deploy/portainer/stack.env up -d connector-postgres connector-redis'
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker compose -f deploy/portainer/docker-compose.yml --env-file deploy/portainer/stack.env ps'
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker compose -f deploy/portainer/docker-compose.yml --env-file deploy/portainer/stack.env down'
+wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker compose -f deploy/portainer/docker-compose.yml --env-file connector.env up -d connector-postgres connector-redis'
+wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker compose -f deploy/portainer/docker-compose.yml --env-file connector.env ps'
+wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker compose -f deploy/portainer/docker-compose.yml --env-file connector.env down'
 ```
 
 Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppen.

@@ -1,6 +1,7 @@
 # Docker Swarm Stack für den Seafile-RAGFlow-Connector.
 #
 # Start:
+#   cp connector.env.example deploy/swarm/stack.env
 #   set -a && . deploy/swarm/stack.env && set +a
 #   docker stack deploy -c deploy/swarm/docker-stack.yml seafile-ragflow-connector
 #

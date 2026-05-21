@@ -1,37 +1,45 @@
 # Docker Compose Anwendungsfälle
 
 Dieser Ordner enthält direkt nutzbare Compose-Varianten für typische
-Installationen. Jede Variante hat eine eigene kommentierte
-`*.stack.env.example`. Kopiere die passende Datei bei Bedarf zu `stack.env`,
-ersetze alle `change-me` Werte und starte dann mit `--env-file`.
+Installationen. Für normale externe Installationen ist der empfohlene Weg die
+zentrale Datei im Repo-Root:
+
+```bash
+cp connector.env.example connector.env
+```
+
+Ersetze in `connector.env` alle `change-me` Werte sowie die Base-URLs und
+starte Compose mit `--env-file connector.env`. Die älteren
+`*.stack.env.example` Dateien bleiben als szenariospezifische Referenz
+erhalten.
 
 ## Welche Datei benutze ich?
 
-| Anwendungsfall | Compose-Datei | Env-Vorlage | Zweck |
+| Anwendungsfall | Compose-Datei | Empfohlene Env-Datei | Zweck |
 | --- | --- | --- | --- |
-| Externe Dienste über Host/LAN | `external-services.compose.yml` | `external-services.stack.env.example` | Seafile, RAGFlow und optional OpenWebUI laufen außerhalb des Stacks, z. B. über Reverse Proxy, LAN-IP oder veröffentlichte Host-Ports. |
-| Bestehendes Docker-Netz | `shared-network.compose.yml` | `shared-network.stack.env.example` | Connector, Seafile, RAGFlow und optional OpenWebUI hängen im selben Docker-Netz und sprechen sich über Service-Namen an. |
-| OpenWebUI zusätzlich anbinden | `openwebui.compose.yml` | `openwebui.stack.env.example` | Wie Shared-Network, zusätzlich mit Dashboard/Proxy und aktivierter OpenWebUI-Synchronisation. |
+| Externe Dienste über Host/LAN | `external-services.compose.yml` | `../../connector.env.example` | Seafile, RAGFlow und optional OpenWebUI laufen außerhalb des Stacks, z. B. über Reverse Proxy, LAN-IP oder veröffentlichte Host-Ports. |
+| Bestehendes Docker-Netz | `shared-network.compose.yml` | `../../connector.env.example` | Connector, Seafile, RAGFlow und optional OpenWebUI hängen im selben Docker-Netz und sprechen sich über Service-Namen an. |
+| OpenWebUI zusätzlich anbinden | `openwebui.compose.yml` | `../../connector.env.example` | Wie Shared-Network, zusätzlich mit Dashboard/Proxy und aktivierter OpenWebUI-Synchronisation. |
 
 ## Startbeispiele
 
 ```bash
 docker compose \
-  --env-file deploy/compose/external-services.stack.env.example \
+  --env-file connector.env \
   -f deploy/compose/external-services.compose.yml \
   up -d
 ```
 
 ```bash
 docker compose \
-  --env-file deploy/compose/shared-network.stack.env.example \
+  --env-file connector.env \
   -f deploy/compose/shared-network.compose.yml \
   up -d
 ```
 
 ```bash
 docker compose \
-  --env-file deploy/compose/openwebui.stack.env.example \
+  --env-file connector.env \
   -f deploy/compose/openwebui.compose.yml \
   up -d
 ```

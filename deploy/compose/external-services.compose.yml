@@ -6,7 +6,7 @@
 # Reverse-Proxy-URLs.
 #
 # Start:
-#   docker compose --env-file deploy/compose/external-services.stack.env.example \
+#   docker compose --env-file connector.env \
 #     -f deploy/compose/external-services.compose.yml up -d
 
 name: ${COMPOSE_PROJECT_NAME:-seafile-ragflow-connector-external}

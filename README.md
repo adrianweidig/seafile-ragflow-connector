@@ -23,40 +23,179 @@ Dokumente sicher und läuft nach Neustarts weiter.
   und keine externen Service-Abhängigkeiten außerhalb der konfigurierten
   Seafile- und RAGFlow-URLs.
 
-## Offline-Deployment mit Portainer
+## Schnellstart fuer externe Umgebungen
 
-Der einfachste Online-Start nutzt das veröffentlichte GHCR-Image:
+Der Connector wird als eigener Docker-Stack betrieben. Seafile, RAGFlow und
+optional OpenWebUI bleiben bestehende externe Systeme. Die einzige
+Konfigurationsschnittstelle fuer Betreiber ist die Datei
+[`connector.env.example`](connector.env.example). Kopiere sie zu
+`connector.env`, ersetze die Platzhalter und starte danach den Stack.
+
+### 1. Voraussetzungen pruefen
+
+- Docker mit Docker Compose Plugin oder Portainer.
+- Ein erreichbarer Seafile-Server mit Admin-API-Token.
+- Ein erreichbarer RAGFlow-Server mit API-Key.
+- In RAGFlow existiert ein Template-Dataset, standardmaessig
+  `connector_template`. Neue Library-Datasets werden daraus erzeugt.
+- Optional: eine erreichbare OpenWebUI-Instanz mit Admin-API-Key, wenn Tools
+  und Pipes automatisch synchronisiert werden sollen.
+
+### 2. Zentrale Konfiguration anlegen
+
+```bash
+cp connector.env.example connector.env
+```
+
+Bearbeite danach `connector.env`. Fuer einen normalen Start muessen nur die
+folgenden Werte gesetzt werden:
+
+| Variable | Zweck |
+| --- | --- |
+| `SEAFILE_BASE_URL` | Aus dem Connector-Container erreichbare Seafile-URL, z. B. `http://host.docker.internal:18081` oder `https://seafile.example.local`. |
+| `SEAFILE_ADMIN_TOKEN` | Seafile Admin-API-Token fuer Library-Discovery. |
+| `SEAFILE_SYNC_USER_TOKEN` | Seafile API-Token fuer Downloads der zu synchronisierenden Dateien. |
+| `RAGFLOW_BASE_URL` | Aus dem Connector-Container erreichbare RAGFlow-API-URL, z. B. `http://host.docker.internal:19380` oder `http://ragflow:9380`. |
+| `RAGFLOW_API_KEY` | RAGFlow API-Key des Ziel-Users. |
+| `POSTGRES_PASSWORD` | Passwort fuer die vom Stack bereitgestellte Connector-Datenbank. |
+| `OPENWEBUI_BASE_URL` | Nur bei OpenWebUI-Anbindung: aus dem Connector erreichbare OpenWebUI-URL. |
+| `OPENWEBUI_ADMIN_API_KEY` | Nur bei OpenWebUI-Anbindung: Admin-API-Key fuer Tool-/Pipe-Sync. |
+| `OPENWEBUI_PROXY_PUBLIC_BASE_URL` | Browser-URL zum Connector-Dashboard/Proxy, z. B. `http://localhost:18080`. |
+| `OPENWEBUI_PROXY_INTERNAL_BASE_URL` | URL, die OpenWebUI serverseitig zum Connector erreicht. |
+| `OPENWEBUI_PROXY_SHARED_SECRET` | Eigenes langes Zufallssecret fuer den geschuetzten Connector-Proxy. |
+
+Wenn OpenWebUI nicht angebunden werden soll, setze:
+
+```env
+OPENWEBUI_INTEGRATION_ENABLED=false
+OPENWEBUI_SYNC_MODE=disabled
+OPENWEBUI_ADMIN_API_KEY=
+OPENWEBUI_PROXY_SHARED_SECRET=
+```
+
+### 3. Netzwerkvariante waehlen
+
+Host/LAN/Reverse Proxy ist der einfachste Fall. Behalte:
+
+```env
+CONNECTOR_DOCKER_NETWORK_EXTERNAL=false
+SEAFILE_BASE_URL=http://host.docker.internal:18081
+RAGFLOW_BASE_URL=http://host.docker.internal:19380
+OPENWEBUI_BASE_URL=http://host.docker.internal:3000
+```
+
+Wenn Seafile, RAGFlow und OpenWebUI bereits in einem gemeinsamen Docker-Netz
+laufen, nutze stattdessen:
+
+```env
+CONNECTOR_DOCKER_NETWORK_EXTERNAL=true
+CONNECTOR_DOCKER_NETWORK_NAME=<bestehendes-docker-netz>
+SEAFILE_BASE_URL=http://seafile
+RAGFLOW_BASE_URL=http://ragflow:9380
+OPENWEBUI_BASE_URL=http://openwebui:8080
+OPENWEBUI_PROXY_INTERNAL_BASE_URL=http://connector-controller:8080
+```
+
+### 4. Start mit Docker Compose
+
+```bash
+docker compose \
+  --env-file connector.env \
+  -f deploy/portainer/docker-compose.yml \
+  config --quiet
+```
+
+Wenn die Konfiguration gueltig ist:
+
+```bash
+docker compose \
+  --env-file connector.env \
+  -f deploy/portainer/docker-compose.yml \
+  up -d
+```
+
+Logs ansehen:
+
+```bash
+docker compose \
+  --env-file connector.env \
+  -f deploy/portainer/docker-compose.yml \
+  logs -f connector-controller connector-worker connector-reconciler
+```
+
+Healthcheck:
+
+```bash
+curl http://127.0.0.1:18080/api/health
+```
+
+Das Dashboard ist bei Default-Portbindung lokal erreichbar:
+
+```text
+http://127.0.0.1:18080
+```
+
+### 5. Start mit Portainer
+
+1. In Portainer einen neuen Stack erstellen.
+2. `deploy/portainer/docker-compose.yml` als Web editor Inhalt einfuegen oder
+   dieses Repository als Git-Stack verwenden.
+3. Den Inhalt von `connector.env.example` im Stack-Bereich `Environment
+   variables` importieren.
+4. Alle `change-me` Werte und die Base-URLs ersetzen.
+5. Stack deployen.
+6. Logs von `connector-controller`, `connector-worker` und
+   `connector-reconciler` pruefen.
+7. Dashboard-Health unter `http://<docker-host>:18080/api/health` pruefen,
+   wenn der Dashboard-Port entsprechend veroeffentlicht wurde.
+
+### 6. Offline-Installation
+
+Der Online-Start nutzt das veroeffentlichte GHCR-Image:
 
 ```bash
 docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:latest
 ```
 
-Für Offline-Umgebungen kann dasselbe Image vorab exportiert und auf dem
-Zielhost importiert werden:
+Fuer Offline-Umgebungen koennen die benoetigten Images vorab exportiert und auf
+dem Zielhost importiert werden:
 
 ```bash
 docker save ghcr.io/adrianweidig/seafile-ragflow-connector:latest \
   -o images/seafile-ragflow-connector_latest.tar
+docker save postgres:16 -o images/postgres_16.tar
+docker save redis:7 -o images/redis_7.tar
+
 docker load -i images/seafile-ragflow-connector_latest.tar
+docker load -i images/postgres_16.tar
+docker load -i images/redis_7.tar
 ```
 
-Portainer-Start:
+Wenn interne Registry- oder lokale Image-Namen genutzt werden, trage sie in
+`connector.env` ein:
 
-1. Bei Offline-Betrieb benötigte Images auf dem Docker-Host importieren.
-2. In Portainer einen neuen Stack erstellen.
-3. `deploy/portainer/docker-compose.yml` einfügen oder dieses Repo als Git-Stack
-   verwenden.
-4. `deploy/portainer/stack.env.example` in Portainer als Environment importieren.
-5. Alle `change-me` Werte ersetzen und `SEAFILE_BASE_URL` sowie
-   `RAGFLOW_BASE_URL` auf aus dem Connector-Container erreichbare URLs setzen.
-6. Stack starten und die Logs von Controller, Worker und Reconciler prüfen.
+```env
+CONNECTOR_IMAGE=seafile-ragflow-connector:latest
+POSTGRES_IMAGE=postgres:16
+REDIS_IMAGE=redis:7
+```
 
-Seafile und RAGFlow werden nicht durch diesen Stack bereitgestellt. Sie bleiben
-externe Systeme, erreichbar über LAN, Reverse Proxy, veröffentlichte Host-Ports
-oder ein gemeinsames Docker-Netzwerk. Für bestehende Docker-Stacks kann
-`CONNECTOR_DOCKER_NETWORK_EXTERNAL=true` mit dem vorhandenen Netzwerknamen
-gesetzt werden. Die Compose-Datei referenziert keine lokale `env_file`;
-Portainer-Environment-Variablen reichen aus.
+### 7. Betrieb pruefen
+
+Nach dem Start sollten diese Punkte stimmen:
+
+- Dashboard-Health meldet fuer Dashboard, Datenbank, Redis, Seafile und RAGFlow
+  `ok`.
+- In RAGFlow entsteht pro Seafile-Library ein Dataset aus dem Template.
+- Dateien werden in RAGFlow hochgeladen und geparst.
+- Wenn OpenWebUI aktiviert ist, erscheinen pro Dataset ein Tool und eine Pipe
+  beziehungsweise ein auswählbares Custom Model.
+- Wird eine Seafile-Library geloescht, entfernt der Connector die zugehoerigen
+  eigenen RAGFlow- und OpenWebUI-Artefakte.
+
+Die Compose-Datei referenziert keine lokale `env_file`. Docker Compose bekommt
+die Werte ueber `--env-file connector.env`; Portainer bekommt dieselben Werte
+ueber den Environment-Variablen-Import.
 
 ## Repository-Struktur
 
@@ -64,7 +203,7 @@ Portainer-Environment-Variablen reichen aus.
 | --- | --- |
 | `.github/workflows/` | GitHub Actions für Tests und GHCR-Image-Publishing |
 | `deploy/docker/` | Dockerfile und Container-Entrypoint für das Connector-Image |
-| `deploy/portainer/` | Portainer-fähige Compose-Datei und importierbare Beispiel-Env |
+| `deploy/portainer/` | Portainer-fähige Compose-Datei für die zentrale `connector.env.example` |
 | `deploy/compose/` | Direkt nutzbare Compose-Varianten für Host/LAN, Shared Network und OpenWebUI |
 | `deploy/swarm/` | Docker-Swarm-Alternative mit Stackfile und Env-Vorlage |
 | `docs/` | Architektur, Konfiguration, Betrieb und RAGFlow-Template-Verhalten |

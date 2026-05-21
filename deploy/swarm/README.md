@@ -24,10 +24,12 @@ Swarm-Nodes beziehungsweise aus den Connector-Tasks erreichbar sein.
 
 ```bash
 cd deploy/swarm
-cp stack.env.example stack.env
+cp ../../connector.env.example stack.env
 ```
 
-`stack.env` bearbeiten, alle `change-me` Werte ersetzen und dann:
+`stack.env` bearbeiten, alle `change-me` Werte ersetzen und
+`CONNECTOR_DASHBOARD_PUBLISHED_PORT` auf eine reine Portnummer wie `18080`
+setzen. Danach:
 
 ```bash
 set -a

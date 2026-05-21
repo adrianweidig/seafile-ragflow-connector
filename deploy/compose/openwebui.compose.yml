@@ -6,7 +6,7 @@
 # RAGFlow-Secrets, sondern ruft diesen Proxy auf.
 #
 # Start:
-#   docker compose --env-file deploy/compose/openwebui.stack.env.example \
+#   docker compose --env-file connector.env \
 #     -f deploy/compose/openwebui.compose.yml up -d
 
 name: ${COMPOSE_PROJECT_NAME:-seafile-ragflow-connector-openwebui}

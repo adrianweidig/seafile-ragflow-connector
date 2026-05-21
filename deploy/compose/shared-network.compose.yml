@@ -6,7 +6,7 @@
 # externe Netz.
 #
 # Start:
-#   docker compose --env-file deploy/compose/shared-network.stack.env.example \
+#   docker compose --env-file connector.env \
 #     -f deploy/compose/shared-network.compose.yml up -d
 
 name: ${COMPOSE_PROJECT_NAME:-seafile-ragflow-connector-shared}

@@ -1,8 +1,11 @@
 # Konfiguration
 
-Die Konfiguration erfolgt über Environment-Variablen. Secrets müssen über
-Portainer-Environment-Management oder Docker Secrets bereitgestellt werden und
-dürfen nicht committed werden.
+Die Konfiguration erfolgt über Environment-Variablen. Für Installationen ist
+`connector.env.example` im Repo-Root die zentrale Schnittstelle: Datei zu
+`connector.env` kopieren, `change-me` Werte und Base-URLs ersetzen und dieselbe
+Datei mit Docker Compose oder Portainer verwenden. Secrets müssen über
+Portainer-Environment-Management, Docker Secrets oder eine lokale nicht
+committed Env-Datei bereitgestellt werden.
 
 ## Datei-Policy
 
