@@ -20,6 +20,14 @@ class _OpenWebUIHttpClient:
         request = httpx.Request("GET", f"http://openwebui.local{path}")
         if path.endswith("/missing"):
             return httpx.Response(404, json={"detail": "not found"}, request=request)
+        if path.endswith("/missing401"):
+            return httpx.Response(401, json={"detail": "Not found"}, request=request)
+        if path.endswith("/missing401_openwebui"):
+            return httpx.Response(
+                401,
+                json={"detail": "We could not find what you're looking for :/"},
+                request=request,
+            )
         if path.endswith("/unauthorized"):
             return httpx.Response(401, json={"detail": "unauthorized"}, request=request)
         return httpx.Response(
@@ -62,6 +70,10 @@ class OpenWebUIClientTests(unittest.TestCase):
         client.update_tool_valves("tool", {"A": "B"})
         self.assertTrue(client.delete_function("fn"))
         self.assertTrue(client.delete_tool("tool"))
+        self.assertIsNone(client.get_function("missing401"))
+        self.assertIsNone(client.get_tool("missing401"))
+        self.assertIsNone(client.get_function("missing401_openwebui"))
+        self.assertIsNone(client.get_tool("missing401_openwebui"))
         self.assertFalse(client.delete_function("missing"))
         self.assertFalse(client.delete_tool("missing"))
 

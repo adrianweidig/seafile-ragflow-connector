@@ -82,7 +82,7 @@ class OpenWebUIClient:
 
     def get_function(self, function_id: str) -> dict[str, Any] | None:
         response = self._client.get(f"/api/v1/functions/id/{function_id}")
-        if response.status_code == 404:
+        if _is_missing_artifact_response(response):
             return None
         return _json_dict(response)
 
@@ -117,7 +117,7 @@ class OpenWebUIClient:
 
     def get_tool(self, tool_id: str) -> dict[str, Any] | None:
         response = self._client.get(f"/api/v1/tools/id/{tool_id}")
-        if response.status_code == 404:
+        if _is_missing_artifact_response(response):
             return None
         return _json_dict(response)
 
@@ -185,12 +185,20 @@ def _delete_result(response: httpx.Response) -> bool:
     return bool(payload) if isinstance(payload, bool) else True
 
 
+def _is_missing_artifact_response(response: httpx.Response) -> bool:
+    if response.status_code == 404:
+        return True
+    if response.status_code == 401 and _payload_is_not_found(_safe_payload(response)):
+        return True
+    return False
+
+
 def _payload_is_not_found(payload: Any) -> bool:
     if isinstance(payload, dict):
         detail = str(payload.get("detail") or payload.get("message") or "").lower()
     else:
         detail = str(payload).lower()
-    return "not found" in detail
+    return "not found" in detail or "could not find" in detail
 
 
 def _safe_payload(response: httpx.Response) -> Any:
