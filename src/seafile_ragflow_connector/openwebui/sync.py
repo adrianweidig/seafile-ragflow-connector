@@ -426,7 +426,6 @@ class OpenWebUISyncService:
             )
             return "manual_required"
         if previous_hash == spec.definition_hash and _remote_content_matches(existing, spec):
-            self.openwebui_client.update_tool_valves(spec.artifact_id, valves)
             self.log.info("openwebui.sync.tool.reused", openwebui_tool_id=spec.artifact_id)
             return "reused"
         self.openwebui_client.update_tool(spec.artifact_id, spec.payload)
@@ -467,7 +466,6 @@ class OpenWebUISyncService:
             )
             return "manual_required"
         if previous_hash == spec.definition_hash and _remote_content_matches(existing, spec):
-            self.openwebui_client.update_function_valves(spec.artifact_id, valves)
             self.openwebui_client.ensure_function_active(spec.artifact_id)
             self.log.info("openwebui.sync.pipe.reused", openwebui_pipe_id=spec.artifact_id)
             return "reused"

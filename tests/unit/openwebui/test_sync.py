@@ -51,6 +51,8 @@ class _FakeOpenWebUIClient:
         self.functions: dict[str, dict[str, object]] = {}
         self.deleted_tools: list[str] = []
         self.deleted_functions: list[str] = []
+        self.tool_valve_updates: list[str] = []
+        self.function_valve_updates: list[str] = []
 
     def probe_capabilities(self):
         return OpenWebUICapabilities(
@@ -75,6 +77,7 @@ class _FakeOpenWebUIClient:
         return payload
 
     def update_tool_valves(self, tool_id: str, valves: dict[str, object]):
+        self.tool_valve_updates.append(tool_id)
         return valves
 
     def delete_tool(self, tool_id: str):
@@ -94,6 +97,7 @@ class _FakeOpenWebUIClient:
         return payload
 
     def update_function_valves(self, function_id: str, valves: dict[str, object]):
+        self.function_valve_updates.append(function_id)
         return valves
 
     def ensure_function_active(self, function_id: str):
@@ -203,6 +207,8 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         self.assertEqual(first.pipes_created, 1)
         self.assertEqual(second.tools_reused, 1)
         self.assertEqual(second.pipes_reused, 1)
+        self.assertEqual(openwebui.tool_valve_updates, ["ragflow_tool_demo_dataset_dataset1"])
+        self.assertEqual(openwebui.function_valve_updates, ["ragflow_pipe_demo_dataset_dataset1"])
 
     def test_foreign_openwebui_artifact_keeps_manual_required_status(self) -> None:
         session_factory = _session_factory()

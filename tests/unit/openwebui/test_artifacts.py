@@ -34,6 +34,27 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("owner: seafile-ragflow-connector", tool.content)
         self.assertNotIn("proxy-secret", tool.content.lower())
         self.assertNotIn("proxy-secret", str(pipe.payload).lower())
+        compile(tool.content, "<openwebui-tool>", "exec")
+        compile(pipe.content, "<openwebui-pipe>", "exec")
+
+    def test_pipe_handles_openwebui_background_tasks_locally(self) -> None:
+        inputs = DatasetArtifactInputs(
+            namespace="ragflow",
+            repo_id="repo-1",
+            dataset_id="dataset-1234567890",
+            dataset_name="Demo Library",
+            ragflow_chat_id="chat-1",
+            proxy_base_url="http://connector:8080",
+        )
+
+        pipe = build_pipe_spec(inputs)
+
+        self.assertIn("__task__: str | None = None", pipe.content)
+        self.assertIn("if task:", pipe.content)
+        self.assertIn("return _task_response(task, __task_body__ or body)", pipe.content)
+        self.assertIn('"model": "model"', pipe.content)
+        self.assertIn('"title" in task', pipe.content)
+        self.assertIn('return "[]"', pipe.content)
 
 
 if __name__ == "__main__":

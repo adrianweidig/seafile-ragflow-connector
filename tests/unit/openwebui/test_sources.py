@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from seafile_ragflow_connector.openwebui.sources import (
+    annotate_answer_citations,
     extract_answer,
     normalize_sources,
     sign_preview_payload,
@@ -54,6 +55,7 @@ class OpenWebUISourceTests(unittest.TestCase):
                         "document_id": "doc-1",
                         "document_keyword": "report.pdf",
                         "content": "Treffertext",
+                        "positions": [[3, 10, 20, 30, 40]],
                         "similarity": 0.9,
                     }
                 ]
@@ -69,6 +71,38 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual(sources[0]["source_metadata"]["dataset_id"], "dataset-1")
         self.assertEqual(sources[0]["document"], ["Treffertext"])
         self.assertEqual(sources[0]["name"], "report.pdf")
+        self.assertEqual(sources[0]["source_metadata"]["citation_marker"], "[ID:0]")
+        self.assertEqual(sources[0]["source_metadata"]["page"], 3)
+        self.assertIn("Quelle 1, Seite 3, Chunk chunk-1", sources[0]["citation_label"])
+
+        token = sources[0]["preview_url"].rsplit("token=", 1)[1]
+        preview = verify_preview_token(token, "proxy-secret", now=100)
+        self.assertEqual(preview["page"], 3)
+        self.assertEqual(preview["position"], [[3, 10, 20, 30, 40]])
+
+    def test_annotate_answer_citations_links_ragflow_inline_ids_to_sources(self) -> None:
+        sources = normalize_sources(
+            {
+                "reference": [
+                    {
+                        "id": "chunk-1",
+                        "document_id": "doc-1",
+                        "document_name": "report.pdf",
+                        "content": "Treffertext",
+                        "positions": [[3, 10, 20, 30, 40]],
+                    }
+                ]
+            },
+            settings=self._settings(),
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+        )
+
+        answer = annotate_answer_citations("Siehe Studienplan [ID:0] und unbekannt [ID:9].", sources)
+
+        self.assertIn("[Quelle 1, Seite 3, Chunk chunk-1](https://connector.example", answer)
+        self.assertNotIn("[ID:0]", answer)
+        self.assertIn("[ID:9]", answer)
 
     def test_normalize_sources_extracts_ragflow_reference_mapping_without_path_leak(self) -> None:
         sources = normalize_sources(

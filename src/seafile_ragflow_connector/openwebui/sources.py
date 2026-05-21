@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hmac
 import json
+import re
 import time
 from hashlib import sha256
 from pathlib import PurePosixPath
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
     from seafile_ragflow_connector.config.settings import Settings
 
 SOURCE_TOKEN_TTL_SECONDS = 900
+_RAGFLOW_INLINE_CITATION_RE = re.compile(r"\[ID:(\d+)\]")
 
 
 def extract_answer(payload: Any) -> str:
@@ -60,6 +62,24 @@ def normalize_sources(
         )
         sources.append(source)
     return sources
+
+
+def annotate_answer_citations(answer: str, sources: list[dict[str, Any]]) -> str:
+    if not answer or not sources:
+        return answer
+
+    def replace(match: re.Match[str]) -> str:
+        citation_id = int(match.group(1))
+        if citation_id < 0 or citation_id >= len(sources):
+            return match.group(0)
+        source = sources[citation_id]
+        label = str(source.get("citation_label") or f"Quelle {citation_id + 1}")
+        url = source.get("url") or source.get("preview_url")
+        if url:
+            return f"[{label}]({url})"
+        return f"[{label}]"
+
+    return _RAGFLOW_INLINE_CITATION_RE.sub(replace, answer)
 
 
 def sign_preview_payload(payload: dict[str, Any], secret: str, *, now: int | None = None) -> str:
@@ -112,9 +132,12 @@ def _normalize_reference(
     )
     snippet = _first_text(raw, "content", "text", "snippet", "content_with_weight")
     score = raw.get("score") or raw.get("similarity") or raw.get("vector_similarity")
+    position = raw.get("position") or raw.get("positions")
+    page = raw.get("page") or raw.get("page_num") or raw.get("page_number") or _first_page(position)
     file_row = files_by_document_id.get(document_id or "")
     if not document_name and file_row:
         document_name = _safe_document_name_from_file_row(file_row)
+    citation_label = _citation_label(index=index, page=page, chunk_id=chunk_id)
     preview_url = _preview_url(
         raw,
         settings=settings,
@@ -124,6 +147,11 @@ def _normalize_reference(
         document_name=document_name,
         chunk_id=chunk_id,
         snippet=snippet,
+        citation_label=citation_label,
+        page=page,
+        section=raw.get("section"),
+        line=raw.get("line") or raw.get("line_number"),
+        position=position,
     )
     metadata = {
         "dataset_id": dataset_id,
@@ -131,10 +159,13 @@ def _normalize_reference(
         "document_id": document_id,
         "document_name": document_name,
         "chunk_id": chunk_id,
-        "page": raw.get("page") or raw.get("page_num") or raw.get("page_number"),
+        "citation_id": index - 1,
+        "citation_marker": f"[ID:{index - 1}]",
+        "citation_label": citation_label,
+        "page": page,
         "section": raw.get("section"),
         "line": raw.get("line") or raw.get("line_number"),
-        "position": raw.get("position") or raw.get("positions"),
+        "position": position,
         "score": score,
     }
     if file_row:
@@ -150,6 +181,12 @@ def _normalize_reference(
         "source": {"name": title, "url": preview_url},
         "url": preview_url,
         "preview_url": preview_url,
+        "citation": {
+            "id": index - 1,
+            "marker": f"[ID:{index - 1}]",
+            "label": citation_label,
+        },
+        "citation_label": citation_label,
         "text": snippet or "",
         "snippet": snippet or "",
     }
@@ -165,6 +202,11 @@ def _preview_url(
     document_name: str | None,
     chunk_id: str | None,
     snippet: str | None,
+    citation_label: str | None,
+    page: Any,
+    section: Any,
+    line: Any,
+    position: Any,
 ) -> str | None:
     if settings.openwebui_source_preview_mode == "disabled":
         return None
@@ -183,6 +225,11 @@ def _preview_url(
             "document_id": document_id,
             "document_name": document_name,
             "chunk_id": chunk_id,
+            "citation_label": citation_label,
+            "page": page,
+            "section": section,
+            "line": line,
+            "position": position,
             "snippet": snippet,
         }
         token = sign_preview_payload(payload, settings.openwebui_proxy_shared_secret)
@@ -248,6 +295,24 @@ def _first_text(value: dict[str, Any], *keys: str) -> str | None:
         if item not in (None, ""):
             return str(item)
     return None
+
+
+def _first_page(position: Any) -> Any:
+    if not isinstance(position, list) or not position:
+        return None
+    first = position[0]
+    if isinstance(first, list) and first:
+        return first[0]
+    return None
+
+
+def _citation_label(*, index: int, page: Any, chunk_id: str | None) -> str:
+    parts = [f"Quelle {index}"]
+    if page not in (None, ""):
+        parts.append(f"Seite {page}")
+    if chunk_id:
+        parts.append(f"Chunk {chunk_id}")
+    return ", ".join(parts)
 
 
 def _safe_document_name_from_file_row(file_row: dict[str, Any]) -> str:

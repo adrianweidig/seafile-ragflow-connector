@@ -10,9 +10,11 @@ try:
     from sqlalchemy.pool import StaticPool
 
     from seafile_ragflow_connector.config.settings import Settings
+    import seafile_ragflow_connector.dashboard.server as dashboard_server
     from seafile_ragflow_connector.dashboard.server import (
         DashboardContext,
         _load_mapping,
+        _handle_openwebui_chat,
         start_dashboard_server,
     )
     from seafile_ragflow_connector.dashboard.store import (
@@ -41,6 +43,7 @@ def _settings(port: int) -> Settings:
         connector_dashboard_enabled=True,
         connector_dashboard_host="127.0.0.1",
         connector_dashboard_port=1,
+        openwebui_proxy_shared_secret="proxy-secret",
     )
     settings.connector_dashboard_port = port
     return settings
@@ -163,6 +166,68 @@ class DashboardServerTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             _load_mapping(store, dataset_id="dataset-1", tool_id="tool-1")
+
+    def test_openwebui_chat_proxy_uses_ragflow_model_placeholder(self) -> None:
+        store = _store()
+        with store.session_factory() as session:
+            session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo", status="active"))
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                    ragflow_chat_id="chat-1",
+                    openwebui_pipe_id="pipe-1",
+                )
+            )
+            session.commit()
+
+        original_client = dashboard_server.RAGFlowClient
+        dashboard_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        _FakeRAGFlowClient.last_model = None
+        try:
+            result = _handle_openwebui_chat(
+                DashboardContext(store=store, settings=_settings(0), started_at=utcnow()),
+                {
+                    "artifact_id": "pipe-1",
+                    "dataset_id": "dataset-1",
+                    "chat_id": "chat-1",
+                    "model": "ragflow/openwebui-model-id",
+                    "messages": [{"role": "user", "content": "Frage"}],
+                },
+                "Bearer proxy-secret",
+            )
+        finally:
+            dashboard_server.RAGFlowClient = original_client  # type: ignore[assignment]
+
+        self.assertEqual(result["answer"], "answer")
+        self.assertEqual(_FakeRAGFlowClient.last_model, "model")
+
+
+class _FakeRAGFlowClient:
+    last_model: str | None = None
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def chat_completion(self, **kwargs: object) -> dict[str, object]:
+        self.__class__.last_model = str(kwargs.get("model"))
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "answer",
+                        "reference": {"chunks": []},
+                    }
+                }
+            ]
+        }
+
+    def retrieve_chunks(self, **kwargs: object) -> dict[str, object]:
+        return {"chunks": []}
+
+    def close(self) -> None:
+        pass
 
 
 def _get_json(port: int, path: str) -> dict[str, object]:

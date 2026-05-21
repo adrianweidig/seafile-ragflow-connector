@@ -273,7 +273,14 @@ def _pipe_content() -> str:
                 body: dict,
                 __event_emitter__=None,
                 __user__: dict | None = None,
+                __task__: str | None = None,
+                __task_body__: dict | None = None,
+                __metadata__: dict | None = None,
             ):
+                task = _normalize_task(__task__ or (__metadata__ or {}).get("task"))
+                if task:
+                    return _task_response(task, __task_body__ or body)
+
                 if __event_emitter__:
                     await __event_emitter__(
                         {
@@ -289,7 +296,7 @@ def _pipe_content() -> str:
                     "dataset_id": self.valves.DATASET_ID,
                     "chat_id": self.valves.RAGFLOW_CHAT_ID,
                     "messages": body.get("messages") or [],
-                    "model": body.get("model") or self.valves.MODEL_ID,
+                    "model": "model",
                     "user": {
                         "id": (__user__ or {}).get("id"),
                         "email": (__user__ or {}).get("email"),
@@ -338,6 +345,51 @@ def _pipe_content() -> str:
                 if sources and not data.get("citations_emitted", True):
                     answer = answer + "\\n\\n" + _source_markdown(sources)
                 return answer or _source_markdown(sources) or "RAGFlow hat keine Antwort geliefert."
+
+
+        def _normalize_task(task):
+            if not task:
+                return ""
+            value = str(task).lower()
+            if "." in value:
+                value = value.rsplit(".", 1)[-1]
+            return value
+
+
+        def _task_response(task, task_body):
+            text = _last_user_text((task_body or {}).get("messages") or [])
+            if "title" in task:
+                return _compact_text(text, 80) or "RAGFlow"
+            if "tags" in task or "follow_up" in task:
+                return "[]"
+            if "emoji" in task:
+                return "RAG"
+            if "query" in task or "image_prompt" in task:
+                return _compact_text(text, 160)
+            return ""
+
+
+        def _last_user_text(messages):
+            for message in reversed(messages):
+                if not isinstance(message, dict) or message.get("role") != "user":
+                    continue
+                content = message.get("content")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    parts = []
+                    for item in content:
+                        if isinstance(item, dict):
+                            parts.append(str(item.get("text") or ""))
+                    return " ".join(part for part in parts if part)
+            return ""
+
+
+        def _compact_text(text, max_length):
+            clean = " ".join(str(text or "").split())
+            if len(clean) <= max_length:
+                return clean
+            return clean[: max_length - 1].rstrip() + "..."
 
 
         def _source_markdown(sources):

@@ -21,6 +21,7 @@ from seafile_ragflow_connector.dashboard.health import collect_dashboard_health
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore
 from seafile_ragflow_connector.dashboard.ui import DASHBOARD_HTML
 from seafile_ragflow_connector.openwebui.sources import (
+    annotate_answer_citations,
     extract_answer,
     normalize_sources,
     verify_preview_token,
@@ -393,7 +394,7 @@ def _handle_openwebui_chat(
         result = ragflow.chat_completion(
             chat_id=chat_id,
             messages=messages,
-            model=str(payload.get("model") or "model"),
+            model="model",
             stream=False,
         )
         files_by_document_id = _files_by_document_id(context.store, mapping.repo_id)
@@ -422,7 +423,8 @@ def _handle_openwebui_chat(
                 )
     finally:
         ragflow.close()
-    return {"answer": extract_answer(result), "sources": sources, "citations_emitted": True}
+    answer = annotate_answer_citations(extract_answer(result), sources)
+    return {"answer": answer, "sources": sources, "citations_emitted": True}
 
 
 def _require_proxy_secret(settings: Settings, authorization: str | None) -> None:
@@ -524,11 +526,30 @@ def _preview_html(settings: Settings, token: str | None) -> str:
     snippet = escape(str(payload.get("snippet") or ""))
     dataset = escape(str(payload.get("dataset_name") or payload.get("dataset_id") or ""))
     chunk = escape(str(payload.get("chunk_id") or ""))
+    citation = escape(str(payload.get("citation_label") or "Quelle"))
+    page = escape(str(payload.get("page") or ""))
+    section = escape(str(payload.get("section") or ""))
+    line = escape(str(payload.get("line") or ""))
+    position = escape(json.dumps(payload.get("position"), ensure_ascii=False, default=str))
+    details = [
+        f"<p>Dataset: {dataset}</p>",
+        f"<p>Zitation: {citation}</p>",
+        f"<p>Chunk: {chunk}</p>",
+    ]
+    if page:
+        details.append(f"<p>Seite: {page}</p>")
+    if section:
+        details.append(f"<p>Abschnitt: {section}</p>")
+    if line:
+        details.append(f"<p>Zeile: {line}</p>")
+    if position not in ("null", '""'):
+        details.append(f"<p>Position: <code>{position}</code></p>")
     return (
         "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{title}</title>"
         "<style>body{font-family:system-ui,Segoe UI,Arial,sans-serif;margin:2rem;line-height:1.5;max-width:960px}"
-        "pre{white-space:pre-wrap;background:#f1f5f9;padding:1rem;border-radius:8px}</style></head><body>"
-        f"<h1>{title}</h1><p>Dataset: {dataset}</p><p>Chunk: {chunk}</p><pre>{snippet}</pre></body></html>"
+        "code,pre{background:#f1f5f9;padding:.15rem .3rem;border-radius:6px}"
+        "pre{white-space:pre-wrap;padding:1rem}</style></head><body>"
+        f"<h1>{title}</h1>{''.join(details)}<pre>{snippet}</pre></body></html>"
     )
