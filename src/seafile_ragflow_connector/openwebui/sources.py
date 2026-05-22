@@ -5,8 +5,10 @@ import hmac
 import json
 import re
 import zlib
+from dataclasses import dataclass, field
 from hashlib import sha256
 from html import unescape
+from html.parser import HTMLParser
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
@@ -16,10 +18,109 @@ if TYPE_CHECKING:
 
 _RAGFLOW_INLINE_CITATION_RE = re.compile(r"\[ID:(\d+)\]")
 _PREVIEW_SNIPPET_MAX_CHARS = 120
+_SOURCE_SNIPPET_MAX_CHARS = 420
 _TEXT_PROJECTION_WRAPPER_RE = re.compile(
     r"(?is)^\s*Source path:.*?----- BEGIN SOURCE CONTENT -----\s*(?P<content>.*?)"
     r"\s*----- END SOURCE CONTENT -----\s*$"
 )
+
+
+@dataclass(frozen=True)
+class SourceHit:
+    rank: int
+    title: str
+    snippet: str = ""
+    document_name: str | None = None
+    path: str | None = None
+    page: Any = None
+    line: Any = None
+    section: Any = None
+    chunk_id: str | None = None
+    score: Any = None
+    preview_url: str | None = None
+    original_url: str | None = None
+    dataset_id: str | None = None
+    dataset_name: str | None = None
+    document_id: str | None = None
+    repo_id: str | None = None
+    file_type: str | None = None
+    mime_type: str | None = None
+    position: Any = None
+    citation_label: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def relevance(self) -> str:
+        value = _score_float(self.score)
+        if value is None:
+            return "unbekannt"
+        if value >= 0.8:
+            return "hoch"
+        if value >= 0.55:
+            return "mittel"
+        return "niedrig"
+
+    @property
+    def display_location(self) -> str:
+        parts = []
+        if self.page not in (None, ""):
+            parts.append(f"Seite {self.page}")
+        if self.section not in (None, ""):
+            parts.append(f"Abschnitt {self.section}")
+        if self.line not in (None, ""):
+            parts.append(f"Zeile {self.line}")
+        return " · ".join(parts) or "Fundstelle nicht angegeben"
+
+    def metadata(self) -> dict[str, Any]:
+        values = {
+            "rank": self.rank,
+            "dataset_id": self.dataset_id,
+            "dataset_name": self.dataset_name,
+            "document_id": self.document_id,
+            "document_name": self.document_name,
+            "chunk_id": self.chunk_id,
+            "citation_id": self.rank - 1,
+            "citation_marker": f"[ID:{self.rank - 1}]",
+            "citation_label": self.citation_label,
+            "page": self.page,
+            "section": self.section,
+            "line": self.line,
+            "position": self.position,
+            "score": self.score,
+            "relevance": self.relevance,
+            "path": self.path,
+            "repo_id": self.repo_id,
+            "file_type": self.file_type,
+            "mime_type": self.mime_type,
+            "original_url": self.original_url,
+            "preview_url": self.preview_url,
+        }
+        return {key: value for key, value in values.items() if value not in (None, "")}
+
+    def to_openwebui_source(self) -> dict[str, Any]:
+        metadata = self.metadata()
+        title = self.title or self.document_name or f"Quelle {self.rank}"
+        return {
+            "name": title,
+            "document": [self.snippet or title],
+            "metadata": [metadata],
+            "source_metadata": metadata,
+            "source": {"name": title, "url": self.preview_url},
+            "url": self.preview_url,
+            "preview_url": self.preview_url,
+            "original_url": self.original_url,
+            "citation": {
+                "id": self.rank - 1,
+                "marker": f"[ID:{self.rank - 1}]",
+                "label": self.citation_label,
+            },
+            "citation_label": self.citation_label,
+            "text": self.snippet,
+            "snippet": self.snippet,
+            "rank": self.rank,
+            "score": self.score,
+            "relevance": self.relevance,
+        }
 
 
 def extract_answer(payload: Any) -> str:
@@ -65,7 +166,7 @@ def normalize_sources(
             dataset_name=dataset_name,
             files_by_document_id=files_by_document_id or {},
         )
-        sources.append(source)
+        sources.append(source.to_openwebui_source())
     return sources
 
 
@@ -85,6 +186,54 @@ def annotate_answer_citations(answer: str, sources: list[dict[str, Any]]) -> str
         return f"[{label}]"
 
     return _RAGFLOW_INLINE_CITATION_RE.sub(replace, answer)
+
+
+def render_sources_markdown(
+    sources: list[dict[str, Any]],
+    *,
+    show_scores: bool = True,
+    show_debug: bool = False,
+    max_documents: int = 6,
+) -> str:
+    if not sources:
+        return "Keine passenden Quellen gefunden."
+    groups = _group_sources_by_document(sources)
+    lines = ["## Gefundene Quellen", ""]
+    for display_index, group in enumerate(groups[:max_documents], start=1):
+        best = group[0]
+        metadata = _source_metadata(best)
+        name = _markdown_plain(str(best.get("name") or "Quelle"))
+        location = _source_location(metadata)
+        relevance = _relevance_label(metadata, best) if show_scores else ""
+        hit_count = "" if len(group) == 1 else f" · {len(group)} Treffer"
+        summary_parts = [part for part in (location, relevance) if part]
+        lines.append(f"### {display_index}. {name}")
+        if summary_parts or hit_count:
+            lines.append(f"**{' · '.join(summary_parts)}{hit_count}**")
+        actions = _source_actions(best)
+        if actions:
+            lines.append(f"**Aktionen:** {actions}")
+        snippet = _clean_reference_text(str(best.get("snippet") or best.get("text") or "")) or ""
+        if snippet:
+            lines.append("")
+            lines.extend(_blockquote(_compact_markdown_text(snippet, _SOURCE_SNIPPET_MAX_CHARS)))
+        other_locations = [
+            _source_location(_source_metadata(item))
+            for item in group[1:4]
+            if _source_location(_source_metadata(item)) != location
+        ]
+        if other_locations:
+            lines.append("")
+            lines.append(f"Weitere Fundstellen: {', '.join(other_locations)}")
+        if show_debug:
+            debug_parts = _debug_parts(metadata)
+            if debug_parts:
+                lines.append("")
+                lines.append(f"Debug: {' · '.join(debug_parts)}")
+        lines.append("")
+    if len(groups) > max_documents:
+        lines.append(f"_Weitere {len(groups) - max_documents} Dokumente wurden ausgeblendet._")
+    return "\n".join(lines).rstrip()
 
 
 def sign_preview_payload(payload: dict[str, Any], secret: str, *, now: int | None = None) -> str:
@@ -126,7 +275,7 @@ def _normalize_reference(
     dataset_id: str,
     dataset_name: str,
     files_by_document_id: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
+) -> SourceHit:
     chunk_id = _first_text(raw, "id", "chunk_id", "chunkId")
     document_id = _first_text(raw, "document_id", "doc_id", "docid", "docId")
     document_name = _first_text(
@@ -149,6 +298,8 @@ def _normalize_reference(
         document_name = _safe_document_name_from_file_row(file_row) or document_name
     source_path = _source_path(raw, file_row)
     repo_id = _repo_id(raw, file_row)
+    file_type = _file_type(document_name or source_path)
+    mime_type = _first_text(raw, "mime_type", "mime", "content_type")
     original_url = _original_source_url(
         settings,
         repo_id=repo_id,
@@ -175,45 +326,34 @@ def _normalize_reference(
         repo_id=repo_id,
         source_path=source_path,
         original_url=original_url,
+        score=score,
+        file_type=file_type,
+        mime_type=mime_type,
     )
-    metadata = {
-        "dataset_id": dataset_id,
-        "dataset_name": dataset_name,
-        "document_id": document_id,
-        "document_name": document_name,
-        "chunk_id": chunk_id,
-        "citation_id": index - 1,
-        "citation_marker": f"[ID:{index - 1}]",
-        "citation_label": citation_label,
-        "page": page,
-        "section": raw.get("section"),
-        "line": raw.get("line") or raw.get("line_number"),
-        "position": position,
-        "score": score,
-    }
-    if file_row:
-        metadata["repo_id"] = file_row.get("repo_id")
     title = document_name or f"Quelle {index}"
-    return {
-        "name": title,
-        "document": [snippet or title],
-        "metadata": [{key: value for key, value in metadata.items() if value not in (None, "")}],
-        "source_metadata": {
-            key: value for key, value in metadata.items() if value not in (None, "")
-        },
-        "source": {"name": title, "url": preview_url},
-        "url": preview_url,
-        "preview_url": preview_url,
-        "original_url": original_url,
-        "citation": {
-            "id": index - 1,
-            "marker": f"[ID:{index - 1}]",
-            "label": citation_label,
-        },
-        "citation_label": citation_label,
-        "text": snippet or "",
-        "snippet": snippet or "",
-    }
+    return SourceHit(
+        rank=index,
+        title=title,
+        document_name=document_name,
+        path=source_path,
+        page=page,
+        line=raw.get("line") or raw.get("line_number"),
+        section=raw.get("section"),
+        chunk_id=chunk_id,
+        score=score,
+        snippet=snippet or "",
+        preview_url=preview_url,
+        original_url=original_url,
+        dataset_id=dataset_id,
+        dataset_name=dataset_name,
+        document_id=document_id,
+        repo_id=repo_id,
+        file_type=file_type,
+        mime_type=mime_type,
+        position=position,
+        citation_label=citation_label,
+        raw=raw,
+    )
 
 
 def _preview_url(
@@ -234,6 +374,9 @@ def _preview_url(
     repo_id: str | None,
     source_path: str | None,
     original_url: str | None,
+    score: Any,
+    file_type: str | None,
+    mime_type: str | None,
 ) -> str | None:
     if settings.openwebui_source_preview_mode == "disabled":
         return None
@@ -261,6 +404,9 @@ def _preview_url(
             "repo_id": repo_id,
             "source_path": source_path,
             "original_url": original_url,
+            "score": score,
+            "file_type": file_type,
+            "mime_type": mime_type,
         }
         token = sign_preview_payload(payload, settings.openwebui_proxy_shared_secret)
         base_url = settings.openwebui_proxy_public_base_url
@@ -414,18 +560,212 @@ def _safe_document_name_from_file_row(file_row: dict[str, Any]) -> str:
 def _clean_reference_text(value: str | None) -> str | None:
     if value in (None, ""):
         return value
-    clean = str(value)
-    clean = re.sub(r"(?is)<(script|style).*?</\1>", " ", clean)
-    clean = re.sub(r"(?i)</t[dh]>\s*<t[dh][^>]*>", " | ", clean)
-    clean = re.sub(r"(?i)</tr>\s*<tr[^>]*>", "\n", clean)
-    clean = re.sub(r"(?i)<br\s*/?>", "\n", clean)
-    clean = re.sub(r"(?s)<[^>]+>", " ", clean)
+    clean = _html_to_text(str(value))
     clean = unescape(clean)
     match = _TEXT_PROJECTION_WRAPPER_RE.match(clean)
     if match:
         clean = match.group("content")
     clean = "\n".join(" ".join(line.split()) for line in clean.splitlines())
     return "\n".join(line for line in clean.splitlines() if line).strip()
+
+
+class _HTMLToTextParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._skip_depth = 0
+        self._last_cell = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"script", "style"}:
+            self._skip_depth += 1
+            return
+        if self._skip_depth:
+            return
+        if tag in {"br", "p", "div", "li", "tr", "table", "thead", "tbody", "h1", "h2", "h3"}:
+            self._append("\n")
+            self._last_cell = False
+        if tag in {"td", "th"}:
+            if self._last_cell:
+                self._append(" | ")
+            self._last_cell = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"} and self._skip_depth:
+            self._skip_depth -= 1
+            return
+        if self._skip_depth:
+            return
+        if tag in {"p", "div", "li", "tr", "table", "h1", "h2", "h3"}:
+            self._append("\n")
+            self._last_cell = False
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip_depth:
+            self._append(data)
+
+    def _append(self, value: str) -> None:
+        if value:
+            self.parts.append(value)
+
+
+def _html_to_text(value: str) -> str:
+    if "<" not in value and "&" not in value:
+        return value
+    parser = _HTMLToTextParser()
+    try:
+        parser.feed(value)
+        parser.close()
+    except Exception:
+        clean = re.sub(r"(?is)<(script|style).*?</\1>", " ", value)
+        clean = re.sub(r"(?s)<[^>]+>", " ", clean)
+        return clean
+    return "".join(parser.parts)
+
+
+def _file_type(path: str | None) -> str | None:
+    if not path:
+        return None
+    suffix = PurePosixPath(str(path)).suffix.lower().lstrip(".")
+    return suffix or None
+
+
+def _score_float(score: Any) -> float | None:
+    try:
+        value = float(score)
+    except (TypeError, ValueError):
+        return None
+    if value > 1:
+        value = value / 100
+    return max(0.0, min(1.0, value))
+
+
+def _format_score(score: Any) -> str | None:
+    value = _score_float(score)
+    if value is None:
+        return None
+    return f"{value:.0%}"
+
+
+def _group_sources_by_document(sources: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for source in sources:
+        metadata = _source_metadata(source)
+        key = str(
+            metadata.get("path")
+            or metadata.get("document_id")
+            or metadata.get("document_name")
+            or source.get("name")
+            or source.get("title")
+            or "Quelle"
+        )
+        grouped.setdefault(key, []).append(source)
+    groups = list(grouped.values())
+    for group in groups:
+        group.sort(key=lambda item: (_sort_score(item), _source_rank(item)))
+    groups.sort(key=lambda group: (_sort_score(group[0]), _source_rank(group[0])))
+    return groups
+
+
+def _sort_score(source: dict[str, Any]) -> float:
+    value = _score_float(source.get("score") or _source_metadata(source).get("score"))
+    return -1.0 if value is None else -value
+
+
+def _source_rank(source: dict[str, Any]) -> int:
+    rank = source.get("rank") or _source_metadata(source).get("rank")
+    if rank is None:
+        return 9999
+    try:
+        return int(rank)
+    except (TypeError, ValueError):
+        return 9999
+
+
+def _source_metadata(source: dict[str, Any]) -> dict[str, Any]:
+    metadata = source.get("source_metadata")
+    if isinstance(metadata, dict):
+        return metadata
+    metadata_items = source.get("metadata")
+    if isinstance(metadata_items, list) and metadata_items and isinstance(metadata_items[0], dict):
+        return metadata_items[0]
+    return {}
+
+
+def _source_location(metadata: dict[str, Any]) -> str:
+    parts = []
+    if metadata.get("page") not in (None, ""):
+        parts.append(f"Seite {metadata.get('page')}")
+    if metadata.get("section") not in (None, ""):
+        parts.append(f"Abschnitt {metadata.get('section')}")
+    if metadata.get("line") not in (None, ""):
+        parts.append(f"Zeile {metadata.get('line')}")
+    return " · ".join(parts) or "Fundstelle nicht angegeben"
+
+
+def _relevance_label(metadata: dict[str, Any], source: dict[str, Any]) -> str:
+    score = source.get("score") or metadata.get("score")
+    formatted = _format_score(score)
+    relevance = metadata.get("relevance") or SourceHit(rank=1, title="", score=score).relevance
+    if formatted:
+        return f"Relevanz {relevance} ({formatted})"
+    return f"Relevanz {relevance}"
+
+
+def _source_actions(source: dict[str, Any]) -> str:
+    preview_url = source.get("preview_url") or source.get("url")
+    original_url = source.get("original_url") or _source_metadata(source).get("original_url")
+    links = []
+    if preview_url:
+        links.append(f"[Preview öffnen]({preview_url})")
+    if original_url:
+        links.append(f"[Original öffnen]({original_url})")
+    return " · ".join(links)
+
+
+def _debug_parts(metadata: dict[str, Any]) -> list[str]:
+    parts = []
+    if metadata.get("chunk_id"):
+        parts.append(f"Chunk `{_markdown_plain(str(metadata['chunk_id'])[:12])}`")
+    if metadata.get("document_id"):
+        parts.append(f"Dokument `{_markdown_plain(str(metadata['document_id'])[:12])}`")
+    if metadata.get("dataset_id"):
+        parts.append(f"Dataset `{_markdown_plain(str(metadata['dataset_id'])[:12])}`")
+    if metadata.get("repo_id"):
+        parts.append(f"Repo `{_markdown_plain(str(metadata['repo_id'])[:12])}`")
+    return parts
+
+
+def _compact_markdown_text(text: str, limit: int) -> str:
+    clean = "\n".join(line.rstrip() for line in str(text or "").strip().splitlines())
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 3].rstrip() + "..."
+
+
+def _blockquote(text: str) -> list[str]:
+    lines = str(text or "").splitlines() or [""]
+    return [f"> {_markdown_plain(line)}" if line else ">" for line in lines]
+
+
+def _markdown_plain(text: str) -> str:
+    replacements = {
+        "\\": "\\\\",
+        "`": "\\`",
+        "*": "\\*",
+        "_": "\\_",
+        "{": "\\{",
+        "}": "\\}",
+        "[": "\\[",
+        "]": "\\]",
+        "(": "\\(",
+        ")": "\\)",
+        "#": "\\#",
+        "|": "\\|",
+        "<": "&lt;",
+        ">": "&gt;",
+    }
+    return "".join(replacements.get(char, char) for char in str(text or ""))
 
 
 def _b64encode(value: bytes) -> str:

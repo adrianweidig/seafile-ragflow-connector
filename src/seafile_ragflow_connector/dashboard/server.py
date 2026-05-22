@@ -26,6 +26,7 @@ from seafile_ragflow_connector.openwebui.sources import (
     annotate_answer_citations,
     extract_answer,
     normalize_sources,
+    render_sources_markdown,
     verify_preview_token,
 )
 from seafile_ragflow_connector.persistence.models.file import File
@@ -403,7 +404,7 @@ def _handle_openwebui_chat(
             result = ragflow.chat_completion(
                 chat_id=chat_id,
                 messages=messages,
-                model="model",
+                model=str(payload.get("model") or "model"),
                 stream=True,
             )
         except ApiError as exc:
@@ -602,21 +603,7 @@ def _files_by_document_id(store: DashboardEventStore, repo_id: str) -> dict[str,
 
 
 def _sources_markdown(sources: list[dict[str, Any]]) -> str:
-    if not sources:
-        return "Keine passenden Quellen gefunden."
-    lines = ["## Gefundene Quellen", ""]
-    for index, source in enumerate(sources, start=1):
-        name = source.get("name") or "Quelle"
-        snippet = _clean_source_snippet(source.get("snippet") or "")
-        locator = _source_locator(source)
-        line = f"{index}. **{_markdown_plain(str(name))}**"
-        if locator != "-":
-            line += f" - {_markdown_plain(locator)}"
-        lines.append(line)
-        if not snippet:
-            continue
-        lines.append(f"   > {_compact_markdown_text(snippet, 360)}")
-    return "\n".join(lines)
+    return render_sources_markdown(sources, show_scores=True, show_debug=False)
 
 
 def _source_document_markdown(name: str, url: Any, original_url: Any) -> str:
@@ -667,6 +654,8 @@ def _source_locator(source: dict[str, Any]) -> str:
 
 
 def _format_score(score: Any) -> str:
+    if score in (None, ""):
+        return ""
     try:
         value = float(score)
     except (TypeError, ValueError):
@@ -735,6 +724,10 @@ def _preview_html(settings: Settings, token: str | None) -> str:
     line = escape(str(payload.get("line") or ""))
     repo_id = escape(str(payload.get("repo_id") or ""))
     source_path = escape(str(payload.get("source_path") or ""))
+    file_type = escape(str(payload.get("file_type") or ""))
+    mime_type = escape(str(payload.get("mime_type") or ""))
+    score = _format_score(payload.get("score"))
+    score_text = escape(score or "nicht angegeben")
     original_url = str(payload.get("original_url") or "")
     original_link = (
         f'<a class="button primary" href="{escape(original_url, quote=True)}" target="_blank" rel="noreferrer">Original öffnen</a>'
@@ -743,22 +736,38 @@ def _preview_html(settings: Settings, token: str | None) -> str:
     )
     position_json = json.dumps(payload.get("position"), ensure_ascii=False, default=str)
     position = escape(position_json)
+    debug_payload = dict(payload)
+    debug_payload["snippet"] = snippet_text
+    raw_json = escape(json.dumps(debug_payload, ensure_ascii=False, indent=2, default=str))
+    copy_snippet = escape(snippet_text, quote=True)
     chips = [f"<span>{citation}</span>"]
     if page:
         chips.append(f"<span>Seite {page}</span>")
-    if chunk:
-        chips.append(f"<span>Chunk {chunk[:12]}</span>")
+    if score:
+        chips.append(f"<span>Relevanz {score_text}</span>")
+    if file_type:
+        chips.append(f"<span>{file_type.upper()}</span>")
     details = [
+        ("Quellpfad", source_path),
+        ("Dateityp", file_type),
+        ("MIME-Type", mime_type),
+        ("Fundstelle", " · ".join(part for part in (f"Seite {page}" if page else "", f"Abschnitt {section}" if section else "", f"Zeile {line}" if line else "") if part)),
+        ("Relevanz", score_text),
+    ]
+    debug_details = [
         ("Dataset", dataset),
         ("Dokument-ID", document_id),
         ("Seafile-Repo", repo_id),
-        ("Quellpfad", source_path),
+        ("Chunk-ID", chunk),
         ("Abschnitt", section),
         ("Zeile", line),
         ("Position", f"<code>{position}</code>" if position not in ("null", '""') else ""),
     ]
     details_html = "".join(
         f"<div><dt>{label}</dt><dd>{value}</dd></div>" for label, value in details if value
+    )
+    debug_html = "".join(
+        f"<div><dt>{label}</dt><dd>{value}</dd></div>" for label, value in debug_details if value
     )
     if not snippet:
         snippet = "Kein Textauszug in der RAGFlow-Referenz vorhanden."
@@ -767,23 +776,42 @@ def _preview_html(settings: Settings, token: str | None) -> str:
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{title}</title>"
         "<style>"
-        ":root{color-scheme:light dark;--bg:#f7f8fb;--panel:#ffffff;--text:#172033;--muted:#5d687a;--line:#d9e0ea;--accent:#0f766e;--accent-2:#2563eb;--code:#eef3f8}"
-        "@media(prefers-color-scheme:dark){:root{--bg:#111827;--panel:#172033;--text:#f8fafc;--muted:#b6c0ce;--line:#2c3748;--accent:#2dd4bf;--accent-2:#93c5fd;--code:#0f172a}}"
+        ":root{color-scheme:light dark;--bg:#f8fafc;--panel:#ffffff;--text:#0f172a;--muted:#64748b;--border:#e2e8f0;--accent:#0f766e;--accent-strong:#0d9488;--soft:#f1f5f9;--code:#eef2f7;--mark:#fff2a8}"
+        "@media(prefers-color-scheme:dark){:root{--bg:#0f172a;--panel:#111827;--text:#f8fafc;--muted:#94a3b8;--border:#334155;--accent:#2dd4bf;--accent-strong:#14b8a6;--soft:#1e293b;--code:#0b1220;--mark:#5b4b15}}"
+        "[data-theme=light]{color-scheme:light;--bg:#f8fafc;--panel:#ffffff;--text:#0f172a;--muted:#64748b;--border:#e2e8f0;--accent:#0f766e;--accent-strong:#0d9488;--soft:#f1f5f9;--code:#eef2f7;--mark:#fff2a8}"
+        "[data-theme=dark]{color-scheme:dark;--bg:#0f172a;--panel:#111827;--text:#f8fafc;--muted:#94a3b8;--border:#334155;--accent:#2dd4bf;--accent-strong:#14b8a6;--soft:#1e293b;--code:#0b1220;--mark:#5b4b15}"
         "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,system-ui,-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.55}"
-        "main{max-width:1180px;margin:0 auto;padding:32px 22px 48px}.hero{display:grid;gap:18px;padding:26px 28px;border:1px solid var(--line);border-radius:8px;background:var(--panel);box-shadow:0 12px 28px rgba(15,23,42,.08)}"
-        ".eyebrow{margin:0;color:var(--accent);font-size:.78rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase}h1{margin:0;font-size:clamp(1.55rem,3vw,2.4rem);line-height:1.14;letter-spacing:0;overflow-wrap:anywhere}"
-        ".chips{display:flex;flex-wrap:wrap;gap:8px}.chips span{border:1px solid var(--line);border-radius:999px;padding:5px 10px;color:var(--muted);font-size:.86rem;background:color-mix(in srgb,var(--panel),var(--bg) 42%)}"
-        ".actions{display:flex;flex-wrap:wrap;gap:10px}.button{display:inline-flex;align-items:center;min-height:38px;border:1px solid var(--line);border-radius:7px;padding:8px 12px;color:var(--text);text-decoration:none;font-weight:650}.button.primary{background:var(--accent);border-color:var(--accent);color:white}"
-        ".grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;margin-top:18px}.card{border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden}.card h2{margin:0;padding:16px 18px;border-bottom:1px solid var(--line);font-size:1rem}"
-        "pre{margin:0;padding:20px 22px;white-space:pre-wrap;overflow:auto;background:var(--code);font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:.94rem;line-height:1.65}"
-        "dl{margin:0;padding:12px 18px}dl div{display:grid;grid-template-columns:108px minmax(0,1fr);gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}dl div:last-child{border-bottom:0}dt{color:var(--muted);font-size:.82rem}dd{margin:0;overflow-wrap:anywhere;font-weight:600}code{background:var(--code);padding:2px 5px;border-radius:5px}"
-        ".empty{padding:20px 22px;color:var(--muted)}@media(max-width:820px){main{padding:18px 12px 34px}.hero{padding:20px}.grid{grid-template-columns:1fr}dl div{grid-template-columns:1fr;gap:2px}}"
+        "main{max-width:1120px;margin:0 auto;padding:24px 18px 42px}.hero{display:grid;gap:14px;padding:22px 24px;border:1px solid var(--border);border-radius:8px;background:var(--panel);box-shadow:0 10px 26px rgba(15,23,42,.08)}"
+        ".topbar{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.eyebrow{margin:0;color:var(--accent);font-size:.78rem;font-weight:700;text-transform:uppercase}h1{margin:0;font-size:clamp(1.35rem,2.7vw,2.05rem);line-height:1.16;letter-spacing:0;overflow-wrap:anywhere}.path{margin:0;color:var(--muted);overflow-wrap:anywhere}"
+        ".chips,.actions,.tabs{display:flex;flex-wrap:wrap;gap:8px}.chips span{border:1px solid var(--border);border-radius:999px;padding:5px 10px;color:var(--muted);font-size:.86rem;background:var(--soft)}"
+        ".button,.tab{display:inline-flex;align-items:center;min-height:36px;border:1px solid var(--border);border-radius:7px;padding:7px 11px;background:var(--panel);color:var(--text);text-decoration:none;font-weight:650;cursor:pointer}.button.primary{background:var(--accent-strong);border-color:var(--accent-strong);color:white}.button:hover,.tab:hover{border-color:var(--accent)}"
+        ".tabs{margin-top:16px}.tab[aria-selected=true]{background:var(--accent);border-color:var(--accent);color:white}.panel{display:none;margin-top:12px;border:1px solid var(--border);border-radius:8px;background:var(--panel);overflow:hidden}.panel.active{display:block}"
+        ".section-title{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0;padding:14px 16px;border-bottom:1px solid var(--border);font-size:1rem}.hit{margin:0;padding:20px 22px;white-space:pre-wrap;overflow:auto;background:var(--soft);font-size:1rem;line-height:1.72}.hit mark{background:var(--mark);color:var(--text);padding:1px 2px;border-radius:3px}"
+        "dl{margin:0;padding:12px 18px}dl div{display:grid;grid-template-columns:132px minmax(0,1fr);gap:14px;padding:9px 0;border-bottom:1px solid var(--border)}dl div:last-child{border-bottom:0}dt{color:var(--muted);font-size:.82rem}dd{margin:0;overflow-wrap:anywhere;font-weight:600}code,pre.raw{background:var(--code);border-radius:6px}code{padding:2px 5px}pre.raw{margin:0;padding:16px;white-space:pre-wrap;overflow:auto;font-size:.85rem}"
+        ".muted{padding:20px 22px;color:var(--muted)}@media(max-width:760px){main{padding:14px 10px 30px}.hero{padding:18px}.topbar{display:grid}.actions .button{flex:1 1 auto;justify-content:center}dl div{grid-template-columns:1fr;gap:2px}}"
         "</style></head><body><main>"
-        f"<section class=\"hero\"><p class=\"eyebrow\">RAGFlow Quellenvorschau</p><h1>{title}</h1><div class=\"chips\">{''.join(chips)}</div><div class=\"actions\">{original_link}</div></section>"
-        "<section class=\"grid\">"
-        f"<article class=\"card\"><h2>Fundstelle und Auszug</h2><pre>{snippet}</pre></article>"
-        f"<aside class=\"card\"><h2>Metadaten</h2><dl>{details_html}</dl></aside>"
-        "</section></main></body></html>"
+        "<section class=\"hero\">"
+        "<div class=\"topbar\"><p class=\"eyebrow\">RAGFlow Quellenvorschau</p><button class=\"button\" id=\"theme-toggle\" type=\"button\">Theme wechseln</button></div>"
+        f"<h1>{title}</h1><p class=\"path\">{source_path or citation}</p><div class=\"chips\">{''.join(chips)}</div>"
+        f"<div class=\"actions\">{original_link}<button class=\"button\" type=\"button\" data-copy=\"{copy_snippet}\">Auszug kopieren</button><button class=\"button\" type=\"button\" data-copy-url>Link kopieren</button></div>"
+        "</section>"
+        "<nav class=\"tabs\" aria-label=\"Quellenansicht\">"
+        "<button class=\"tab\" type=\"button\" data-tab=\"hit\" aria-selected=\"true\">Treffer</button>"
+        "<button class=\"tab\" type=\"button\" data-tab=\"context\" aria-selected=\"false\">Kontext</button>"
+        "<button class=\"tab\" type=\"button\" data-tab=\"meta\" aria-selected=\"false\">Metadaten</button>"
+        "<button class=\"tab\" type=\"button\" data-tab=\"debug\" aria-selected=\"false\">Debug</button>"
+        "</nav>"
+        f"<section class=\"panel active\" data-panel=\"hit\"><h2 class=\"section-title\">Gefundener Auszug</h2><pre class=\"hit\"><mark>{snippet}</mark></pre></section>"
+        "<section class=\"panel\" data-panel=\"context\"><h2 class=\"section-title\">Kontext</h2><p class=\"muted\">RAGFlow hat für diese Quelle keinen zusätzlichen Vorher-/Nachher-Kontext geliefert. Der Treffer selbst wird unverändert im Tab Treffer angezeigt.</p></section>"
+        f"<section class=\"panel\" data-panel=\"meta\"><h2 class=\"section-title\">Nutzbare Metadaten</h2><dl>{details_html}</dl></section>"
+        f"<section class=\"panel\" data-panel=\"debug\"><h2 class=\"section-title\">Technische Details</h2><dl>{debug_html}</dl><pre class=\"raw\">{raw_json}</pre></section>"
+        "<script>"
+        "const root=document.documentElement;const saved=localStorage.getItem('source-preview-theme');if(saved){root.dataset.theme=saved;}"
+        "document.getElementById('theme-toggle').addEventListener('click',()=>{const next=root.dataset.theme==='dark'?'light':'dark';root.dataset.theme=next;localStorage.setItem('source-preview-theme',next);});"
+        "document.querySelectorAll('.tab').forEach(tab=>tab.addEventListener('click',()=>{const id=tab.dataset.tab;document.querySelectorAll('.tab').forEach(item=>item.setAttribute('aria-selected',String(item===tab)));document.querySelectorAll('.panel').forEach(panel=>panel.classList.toggle('active',panel.dataset.panel===id));}));"
+        "document.querySelectorAll('[data-copy]').forEach(btn=>btn.addEventListener('click',async()=>{await navigator.clipboard.writeText(btn.dataset.copy||'');btn.textContent='Kopiert';setTimeout(()=>btn.textContent='Auszug kopieren',1400);}));"
+        "document.querySelectorAll('[data-copy-url]').forEach(btn=>btn.addEventListener('click',async()=>{await navigator.clipboard.writeText(location.href);btn.textContent='Kopiert';setTimeout(()=>btn.textContent='Link kopieren',1400);}));"
+        "</script></main></body></html>"
     )
 
 

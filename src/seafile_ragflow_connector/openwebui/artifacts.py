@@ -7,7 +7,7 @@ from textwrap import dedent
 from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "6"
+ARTIFACT_VERSION = "7"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 
 
@@ -46,6 +46,9 @@ def build_tool_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "CONNECTOR_PROXY_CA_BUNDLE": inputs.proxy_ca_bundle or "",
         "DATASET_ID": inputs.dataset_id,
         "TOP_K": 8,
+        "SHOW_SOURCE_SCORES": True,
+        "SHOW_SOURCE_DEBUG": False,
+        "SOURCE_MARKDOWN_MODE": "compact",
     }
     payload: dict[str, object] = {
         "id": artifact_id,
@@ -76,6 +79,9 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "MODEL_ID": model_name,
         "MODEL_NAME": model_name,
         "TOP_K": 8,
+        "SHOW_SOURCE_SCORES": True,
+        "SHOW_SOURCE_DEBUG": False,
+        "SOURCE_MARKDOWN_MODE": "compact",
     }
     payload: dict[str, object] = {
         "id": artifact_id,
@@ -137,14 +143,15 @@ def _definition_hash(payload: dict[str, object], valves: dict[str, object]) -> s
 
 
 def _tool_content() -> str:
-    return dedent(
-        '''
+    return (
+        dedent(
+            '''
         """
         title: RAGFlow Dataset Search
         author: Seafile RAGFlow Connector
-        version: 1.2.1
+        version: 1.3.0
         owner: seafile-ragflow-connector
-        artifact_version: 6
+        artifact_version: 7
         """
 
         import httpx
@@ -161,6 +168,9 @@ def _tool_content() -> str:
                 CONNECTOR_PROXY_CA_BUNDLE: str = Field(default="")
                 DATASET_ID: str = Field(default="")
                 TOP_K: int = Field(default=8, ge=1, le=20)
+                SHOW_SOURCE_SCORES: bool = Field(default=True)
+                SHOW_SOURCE_DEBUG: bool = Field(default=False)
+                SOURCE_MARKDOWN_MODE: str = Field(default="compact")
 
             def __init__(self):
                 self.valves = self.Valves()
@@ -215,7 +225,11 @@ def _tool_content() -> str:
                         )
                     return "Die RAGFlow-Abfrage konnte nicht ausgeführt werden."
 
-                sources = data.get("sources") or []
+                sources = _normalize_sources(
+                    data.get("sources") or [],
+                    show_scores=self.valves.SHOW_SOURCE_SCORES,
+                    show_debug=self.valves.SHOW_SOURCE_DEBUG,
+                )
                 if __event_emitter__:
                     for source in sources:
                         await __event_emitter__({"type": "source", "data": source})
@@ -228,7 +242,11 @@ def _tool_content() -> str:
                             },
                         }
                     )
-                return data.get("answer") or _source_markdown(sources)
+                return data.get("answer") or _source_markdown(
+                    sources,
+                    show_scores=self.valves.SHOW_SOURCE_SCORES,
+                    show_debug=self.valves.SHOW_SOURCE_DEBUG,
+                )
 
 
         def _source_markdown(sources):
@@ -286,19 +304,23 @@ def _tool_content() -> str:
                 return False
             ca_path = str(ca_bundle or "").strip()
             return ca_path or True
-        '''
-    ).strip()
+            '''
+        ).strip()
+        + "\n\n"
+        + _artifact_source_helpers()
+    )
 
 
 def _pipe_content() -> str:
-    return dedent(
-        '''
+    return (
+        dedent(
+            '''
         """
         title: RAGFlow Dataset Pipe
         author: Seafile RAGFlow Connector
-        version: 1.2.1
+        version: 1.3.0
         owner: seafile-ragflow-connector
-        artifact_version: 6
+        artifact_version: 7
         """
 
         import httpx
@@ -318,6 +340,9 @@ def _pipe_content() -> str:
                 MODEL_ID: str = Field(default="")
                 MODEL_NAME: str = Field(default="")
                 TOP_K: int = Field(default=8, ge=1, le=20)
+                SHOW_SOURCE_SCORES: bool = Field(default=True)
+                SHOW_SOURCE_DEBUG: bool = Field(default=False)
+                SOURCE_MARKDOWN_MODE: str = Field(default="compact")
 
             def __init__(self):
                 self.valves = self.Valves()
@@ -358,7 +383,7 @@ def _pipe_content() -> str:
                     "dataset_id": self.valves.DATASET_ID,
                     "chat_id": self.valves.RAGFLOW_CHAT_ID,
                     "messages": body.get("messages") or [],
-                    "model": "model",
+                    "model": body.get("model") or self.valves.MODEL_ID or "model",
                     "top_k": self.valves.TOP_K,
                     "user": {
                         "id": (__user__ or {}).get("id"),
@@ -384,6 +409,43 @@ def _pipe_content() -> str:
                         response = await client.post(url, json=payload, headers=headers)
                         response.raise_for_status()
                         data = response.json()
+                except httpx.TimeoutException:
+                    if __event_emitter__:
+                        await __event_emitter__(
+                            {
+                                "type": "status",
+                                "data": {
+                                    "description": "RAGFlow hat nicht rechtzeitig geantwortet.",
+                                    "done": True,
+                                },
+                            }
+                        )
+                    return "RAGFlow hat nicht rechtzeitig geantwortet."
+                except httpx.HTTPStatusError as exc:
+                    status = exc.response.status_code
+                    if __event_emitter__:
+                        await __event_emitter__(
+                            {
+                                "type": "status",
+                                "data": {
+                                    "description": f"RAGFlow-Proxy antwortete mit HTTP {status}.",
+                                    "done": True,
+                                },
+                            }
+                        )
+                    return f"RAGFlow-Proxy antwortete mit HTTP {status}."
+                except httpx.RequestError:
+                    if __event_emitter__:
+                        await __event_emitter__(
+                            {
+                                "type": "status",
+                                "data": {
+                                    "description": "RAGFlow-Proxy war nicht erreichbar.",
+                                    "done": True,
+                                },
+                            }
+                        )
+                    return "Der RAGFlow-Proxy war nicht erreichbar."
                 except Exception:
                     if __event_emitter__:
                         await __event_emitter__(
@@ -395,9 +457,16 @@ def _pipe_content() -> str:
                                 },
                             }
                         )
-                    return "Die RAGFlow-Antwort konnte nicht erzeugt werden."
+                    return (
+                        "Die RAGFlow-Antwort konnte wegen eines unerwarteten Fehlers "
+                        "nicht erzeugt werden."
+                    )
 
-                sources = data.get("sources") or []
+                sources = _normalize_sources(
+                    data.get("sources") or [],
+                    show_scores=self.valves.SHOW_SOURCE_SCORES,
+                    show_debug=self.valves.SHOW_SOURCE_DEBUG,
+                )
                 if __event_emitter__:
                     for source in sources:
                         await __event_emitter__({"type": "source", "data": source})
@@ -412,8 +481,16 @@ def _pipe_content() -> str:
                     )
                 answer = data.get("answer") or ""
                 if sources and not data.get("citations_emitted", True):
-                    answer = answer + "\\n\\n" + _source_markdown(sources)
-                return answer or _source_markdown(sources) or "RAGFlow hat keine Antwort geliefert."
+                    answer = answer + "\\n\\n" + _source_markdown(
+                        sources,
+                        show_scores=self.valves.SHOW_SOURCE_SCORES,
+                        show_debug=self.valves.SHOW_SOURCE_DEBUG,
+                    )
+                return answer or _source_markdown(
+                    sources,
+                    show_scores=self.valves.SHOW_SOURCE_SCORES,
+                    show_debug=self.valves.SHOW_SOURCE_DEBUG,
+                ) or "RAGFlow hat keine Antwort geliefert."
 
 
         def _normalize_task(task):
@@ -516,5 +593,311 @@ def _pipe_content() -> str:
 
         def _clean(value):
             return " ".join(str(value or "").split())
+            '''
+        ).strip()
+        + "\n\n"
+        + _artifact_source_helpers()
+    )
+
+
+def _artifact_source_helpers() -> str:
+    return dedent(
+        '''
+
+        from html import unescape
+        from typing import Any
+
+
+        class SourceHit(BaseModel):
+            rank: int
+            title: str
+            snippet: str = ""
+            page: object | None = None
+            line: object | None = None
+            chunk_id: str | None = None
+            score: object | None = None
+            preview_url: str | None = None
+            original_url: str | None = None
+            path: str | None = None
+            document_id: str | None = None
+            dataset_id: str | None = None
+            repo_id: str | None = None
+            file_type: str | None = None
+            source_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+        def _normalize_sources(sources, *, show_scores=True, show_debug=False):
+            normalized = []
+            seen = set()
+            for rank, source in enumerate(sources, start=1):
+                hit = _normalize_source(source, rank)
+                key = (
+                    hit.path or hit.title,
+                    hit.document_id or "",
+                    hit.chunk_id or "",
+                    _clean(hit.snippet)[:180],
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                normalized.append(_source_event_data(hit))
+            return normalized
+
+
+        def _normalize_source(source, rank):
+            metadata = _metadata(source)
+            title = (
+                source.get("name")
+                or source.get("document_name")
+                or metadata.get("document_name")
+                or "Quelle"
+            )
+            snippet = _clean_snippet(source.get("text") or source.get("snippet") or "")
+            return SourceHit(
+                rank=rank,
+                title=str(title),
+                snippet=snippet,
+                page=metadata.get("page"),
+                line=metadata.get("line"),
+                chunk_id=_string_or_none(metadata.get("chunk_id")),
+                score=source.get("score") or metadata.get("score"),
+                preview_url=source.get("preview_url") or source.get("url"),
+                original_url=source.get("original_url") or metadata.get("original_url"),
+                path=_string_or_none(metadata.get("path")),
+                document_id=_string_or_none(metadata.get("document_id")),
+                dataset_id=_string_or_none(metadata.get("dataset_id")),
+                repo_id=_string_or_none(metadata.get("repo_id")),
+                file_type=_string_or_none(metadata.get("file_type")),
+                source_metadata=dict(metadata),
+            )
+
+
+        def _source_event_data(hit):
+            metadata = dict(hit.source_metadata)
+            metadata.update(
+                {
+                    "rank": hit.rank,
+                    "score": hit.score,
+                    "relevance": _relevance(hit.score),
+                    "preview_url": hit.preview_url,
+                    "original_url": hit.original_url,
+                    "path": hit.path,
+                    "file_type": hit.file_type,
+                }
+            )
+            metadata = {key: value for key, value in metadata.items() if value not in (None, "")}
+            return {
+                "name": hit.title,
+                "url": hit.preview_url,
+                "preview_url": hit.preview_url,
+                "original_url": hit.original_url,
+                "text": hit.snippet,
+                "snippet": hit.snippet,
+                "document": [hit.snippet or hit.title],
+                "score": hit.score,
+                "relevance": metadata.get("relevance"),
+                "rank": hit.rank,
+                "source_metadata": metadata,
+                "metadata": [metadata],
+                "source": {"name": hit.title, "url": hit.preview_url},
+            }
+
+
+        def _source_markdown(sources, *, show_scores=True, show_debug=False):
+            if not sources:
+                return "Keine passenden Quellen gefunden."
+            groups = _group_sources(sources)
+            lines = ["## Gefundene Quellen", ""]
+            for display_rank, group in enumerate(groups[:6], start=1):
+                source = group[0]
+                metadata = _metadata(source)
+                title = _escape_markdown(source.get("name") or "Quelle")
+                location = _location(metadata)
+                relevance = (
+                    _relevance_text(source.get("score") or metadata.get("score"))
+                    if show_scores
+                    else ""
+                )
+                hit_count = "" if len(group) == 1 else f" · {len(group)} Treffer"
+                lines.append(f"### {display_rank}. {title}")
+                summary = " · ".join(part for part in (location, relevance) if part)
+                if summary or hit_count:
+                    lines.append(f"**{summary}{hit_count}**")
+                actions = _actions(source, metadata)
+                if actions:
+                    lines.append(f"**Aktionen:** {actions}")
+                snippet = _clean_snippet(source.get("text") or source.get("snippet") or "")
+                if snippet:
+                    lines.append("")
+                    lines.extend(_blockquote(_compact(snippet, 420)))
+                if show_debug:
+                    debug = _debug_parts(metadata)
+                    if debug:
+                        lines.append("")
+                        lines.append(f"Debug: {' · '.join(debug)}")
+                lines.append("")
+            return "\\n".join(lines).rstrip()
+
+
+        def _group_sources(sources):
+            grouped = {}
+            for source in sources:
+                metadata = _metadata(source)
+                key = (
+                    metadata.get("path")
+                    or metadata.get("document_id")
+                    or metadata.get("document_name")
+                    or source.get("name")
+                    or "Quelle"
+                )
+                grouped.setdefault(str(key), []).append(source)
+            groups = list(grouped.values())
+            for group in groups:
+                group.sort(key=lambda item: (_score_sort(item), _rank_sort(item)))
+            groups.sort(key=lambda group: (_score_sort(group[0]), _rank_sort(group[0])))
+            return groups
+
+
+        def _score_sort(source):
+            score = _score_float(source.get("score") or _metadata(source).get("score"))
+            return -1.0 if score is None else -score
+
+
+        def _rank_sort(source):
+            try:
+                return int(source.get("rank") or _metadata(source).get("rank") or 9999)
+            except Exception:
+                return 9999
+
+
+        def _metadata(source):
+            metadata = source.get("source_metadata")
+            if isinstance(metadata, dict):
+                return metadata
+            items = source.get("metadata")
+            if isinstance(items, list) and items and isinstance(items[0], dict):
+                return items[0]
+            return {}
+
+
+        def _location(metadata):
+            parts = []
+            if metadata.get("page") not in (None, ""):
+                parts.append(f"Seite {metadata.get('page')}")
+            if metadata.get("line") not in (None, ""):
+                parts.append(f"Zeile {metadata.get('line')}")
+            return " · ".join(parts) or "Fundstelle nicht angegeben"
+
+
+        def _actions(source, metadata):
+            links = []
+            if source.get("preview_url") or source.get("url"):
+                links.append(f"[Preview öffnen]({source.get('preview_url') or source.get('url')})")
+            if source.get("original_url") or metadata.get("original_url"):
+                original = source.get("original_url") or metadata.get("original_url")
+                links.append(f"[Original öffnen]({original})")
+            return " · ".join(links)
+
+
+        def _debug_parts(metadata):
+            parts = []
+            if metadata.get("chunk_id"):
+                parts.append(f"Chunk `{_escape_markdown(str(metadata['chunk_id'])[:12])}`")
+            if metadata.get("document_id"):
+                parts.append(f"Dokument `{_escape_markdown(str(metadata['document_id'])[:12])}`")
+            if metadata.get("dataset_id"):
+                parts.append(f"Dataset `{_escape_markdown(str(metadata['dataset_id'])[:12])}`")
+            if metadata.get("repo_id"):
+                parts.append(f"Repo `{_escape_markdown(str(metadata['repo_id'])[:12])}`")
+            return parts
+
+
+        def _relevance_text(score):
+            formatted = _format_score(score)
+            if formatted:
+                return f"Relevanz {_relevance(score)} ({formatted})"
+            return "Relevanz unbekannt"
+
+
+        def _relevance(score):
+            value = _score_float(score)
+            if value is None:
+                return "unbekannt"
+            if value >= 0.8:
+                return "hoch"
+            if value >= 0.55:
+                return "mittel"
+            return "niedrig"
+
+
+        def _format_score(score):
+            value = _score_float(score)
+            if value is None:
+                return ""
+            return f"{value:.0%}"
+
+
+        def _score_float(score):
+            try:
+                value = float(score)
+            except Exception:
+                return None
+            if value > 1:
+                value = value / 100
+            return max(0.0, min(1.0, value))
+
+
+        def _blockquote(text):
+            return [
+                f"> {_escape_markdown(line)}" if line else ">"
+                for line in str(text).splitlines()
+            ]
+
+
+        def _compact(value, limit=220):
+            clean = _clean(value)
+            return clean if len(clean) <= limit else clean[: limit - 3].rstrip() + "..."
+
+
+        def _clean_snippet(value):
+            clean = str(value or "")
+            clean = re.sub(r"(?is)<(script|style).*?</\\1>", " ", clean)
+            clean = re.sub(r"(?i)</t[dh]>\\s*<t[dh][^>]*>", " | ", clean)
+            clean = re.sub(r"(?i)</tr>\\s*<tr[^>]*>", "\\n", clean)
+            clean = re.sub(r"(?i)<br\\s*/?>", "\\n", clean)
+            clean = re.sub(r"(?s)<[^>]+>", " ", clean)
+            clean = unescape(clean)
+            clean = "\\n".join(" ".join(line.split()) for line in clean.splitlines())
+            return "\\n".join(line for line in clean.splitlines() if line).strip()
+
+
+        def _clean(value):
+            return " ".join(str(value or "").split())
+
+
+        def _escape_markdown(value):
+            replacements = {
+                "\\\\": "\\\\\\\\",
+                "`": "\\\\`",
+                "*": "\\\\*",
+                "_": "\\\\_",
+                "{": "\\\\{",
+                "}": "\\\\}",
+                "[": "\\\\[",
+                "]": "\\\\]",
+                "(": "\\\\(",
+                ")": "\\\\)",
+                "#": "\\\\#",
+                "|": "\\\\|",
+                "<": "&lt;",
+                ">": "&gt;",
+            }
+            return "".join(replacements.get(char, char) for char in str(value or ""))
+
+
+        def _string_or_none(value):
+            if value in (None, ""):
+                return None
+            return str(value)
         '''
     ).strip()

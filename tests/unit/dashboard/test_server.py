@@ -171,7 +171,7 @@ class DashboardServerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _load_mapping(store, dataset_id="dataset-1", tool_id="tool-1")
 
-    def test_openwebui_chat_proxy_uses_ragflow_model_placeholder(self) -> None:
+    def test_openwebui_chat_proxy_uses_requested_openwebui_model(self) -> None:
         store = _store()
         with store.session_factory() as session:
             session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo", status="active"))
@@ -206,7 +206,7 @@ class DashboardServerTests(unittest.TestCase):
             dashboard_server.RAGFlowClient = original_client  # type: ignore[assignment]
 
         self.assertEqual(result["answer"], "answer")
-        self.assertEqual(_FakeRAGFlowClient.last_model, "model")
+        self.assertEqual(_FakeRAGFlowClient.last_model, "ragflow/openwebui-model-id")
 
     def test_openwebui_chat_proxy_falls_back_to_retrieval_when_chat_fails(self) -> None:
         store = _store()
@@ -337,7 +337,7 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("## Gefundene Quellen", result["answer"])
         self.assertIn("demo-a.pdf", result["answer"])
         self.assertIn("demo-b.pdf", result["answer"])
-        self.assertIn("1. **demo-a.pdf**", result["answer"])
+        self.assertIn("### 1. demo-a.pdf", result["answer"])
         self.assertNotIn("| # | Dokument", result["answer"])
         self.assertNotIn("<details", result["answer"])
         self.assertNotIn("<summary", result["answer"])
@@ -405,6 +405,9 @@ class DashboardServerTests(unittest.TestCase):
 
         self.assertIn("RAGFlow Quellenvorschau", html)
         self.assertIn("Original öffnen", html)
+        self.assertIn("Theme wechseln", html)
+        self.assertIn("data-tab=\"debug\"", html)
+        self.assertIn("Auszug kopieren", html)
         self.assertIn("Originaler PDF-Auszug", html)
         self.assertIn("#page=7", html)
 

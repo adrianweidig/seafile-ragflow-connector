@@ -6,6 +6,7 @@ from seafile_ragflow_connector.openwebui.sources import (
     annotate_answer_citations,
     extract_answer,
     normalize_sources,
+    render_sources_markdown,
     sign_preview_payload,
     verify_preview_token,
 )
@@ -127,8 +128,8 @@ class OpenWebUISourceTests(unittest.TestCase):
             sources[0]["original_url"],
             "https://seafile.example/lib/repo-1/file/folder/report%20final.pdf#page=4",
         )
-        self.assertNotIn("source_path", sources[0]["metadata"][0])
-        self.assertNotIn("source_path", sources[0]["source_metadata"])
+        self.assertEqual(sources[0]["source_metadata"]["path"], "/folder/report final.pdf")
+        self.assertEqual(sources[0]["source_metadata"]["repo_id"], "repo-1")
 
         token = sources[0]["preview_url"].rsplit("token=", 1)[1]
         preview = verify_preview_token(token, "proxy-secret", now=100)
@@ -213,8 +214,8 @@ class OpenWebUISourceTests(unittest.TestCase):
 
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0]["name"], "report.pdf")
-        self.assertNotIn("source_path", sources[0]["metadata"][0])
-        self.assertNotIn("source_path", sources[0]["source_metadata"])
+        self.assertEqual(sources[0]["source_metadata"]["path"], "/internal/folder/report.pdf")
+        self.assertEqual(sources[0]["source_metadata"]["repo_id"], "repo-1")
 
     def test_normalize_sources_sanitizes_html_fragments_and_entities(self) -> None:
         sources = normalize_sources(
@@ -239,6 +240,53 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual(sources[0]["snippet"], "Alpha | Über")
         self.assertEqual(sources[0]["document"], ["Alpha | Über"])
         self.assertNotIn("<td>", sources[0]["text"])
+
+    def test_render_sources_markdown_groups_documents_and_hides_debug_ids(self) -> None:
+        settings = self._settings()
+        settings.seafile_file_url_template = (
+            "https://seafile.example/lib/{repo_id_quoted}/file{path_quoted}{page_fragment}"
+        )
+        sources = normalize_sources(
+            {
+                "chunks": [
+                    {
+                        "id": "chunk-a",
+                        "document_id": "doc-1",
+                        "content": "Treffer eins mit # Überschrift und Alpha | Beta",
+                        "positions": [[2, 1, 1, 1, 1]],
+                        "similarity": 0.68,
+                    },
+                    {
+                        "id": "chunk-b",
+                        "document_id": "doc-1",
+                        "content": "Zweiter Treffer im gleichen Dokument",
+                        "positions": [[3, 1, 1, 1, 1]],
+                        "similarity": 0.61,
+                    },
+                ]
+            },
+            settings=settings,
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+            files_by_document_id={
+                "doc-1": {
+                    "repo_id": "repo-1",
+                    "path": "/aehnlicher_inhalt_b.txt",
+                    "ragflow_document_name": "aehnlicher_inhalt_b.txt",
+                }
+            },
+        )
+
+        markdown = render_sources_markdown(sources)
+
+        self.assertIn("### 1. aehnlicher\\_inhalt\\_b.txt", markdown)
+        self.assertIn("Relevanz mittel (68%)", markdown)
+        self.assertIn("2 Treffer", markdown)
+        self.assertIn("Preview öffnen", markdown)
+        self.assertIn("Original öffnen", markdown)
+        self.assertIn("\\# Überschrift", markdown)
+        self.assertIn("Alpha \\| Beta", markdown)
+        self.assertNotIn("chunk-a", markdown)
 
     def test_normalize_sources_removes_text_projection_wrappers(self) -> None:
         sources = normalize_sources(
