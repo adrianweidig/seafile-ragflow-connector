@@ -188,9 +188,7 @@ def _delete_result(response: httpx.Response) -> bool:
 def _is_missing_artifact_response(response: httpx.Response) -> bool:
     if response.status_code == 404:
         return True
-    if response.status_code == 401 and _payload_is_not_found(_safe_payload(response)):
-        return True
-    return False
+    return response.status_code == 401 and _payload_is_not_found(_safe_payload(response))
 
 
 def _payload_is_not_found(payload: Any) -> bool:
