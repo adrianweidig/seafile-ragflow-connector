@@ -459,7 +459,7 @@ def _handle_openwebui_chat(
                 sources = _filter_sources_for_requested_document(sources, question)
     finally:
         ragflow.close()
-    answer = annotate_answer_citations(extract_answer(result), sources)
+    answer = annotate_answer_citations(_clean_answer_text(extract_answer(result)), sources)
     if sources and "## Gefundene Quellen" not in answer:
         answer = (answer.strip() + "\n\n" if answer.strip() else "") + _sources_markdown(sources)
     return {"answer": answer, "sources": sources, "citations_emitted": True}
@@ -695,6 +695,14 @@ def _clean_source_snippet(text: Any) -> str:
     return "\n".join(line for line in clean.splitlines() if line).strip()
 
 
+def _clean_answer_text(text: str) -> str:
+    if not text:
+        return ""
+    if "<" not in text and "&" not in text:
+        return text
+    return _clean_source_snippet(text)
+
+
 def _markdown_plain(text: str) -> str:
     return " ".join(text.split()).replace("[", "\\[").replace("]", "\\]").replace("|", "\\|")
 
@@ -716,7 +724,7 @@ def _preview_html(settings: Settings, token: str | None) -> str:
     except ValueError:
         return _preview_unavailable_html()
     title = escape(str(payload.get("document_name") or "Quelle"))
-    snippet_text = str(payload.get("snippet") or "").strip()
+    snippet_text = _clean_source_snippet(payload.get("snippet") or "")
     snippet = escape(snippet_text)
     dataset = escape(str(payload.get("dataset_name") or payload.get("dataset_id") or ""))
     document_id = escape(str(payload.get("document_id") or ""))
@@ -773,7 +781,7 @@ def _preview_html(settings: Settings, token: str | None) -> str:
         "</style></head><body><main>"
         f"<section class=\"hero\"><p class=\"eyebrow\">RAGFlow Quellenvorschau</p><h1>{title}</h1><div class=\"chips\">{''.join(chips)}</div><div class=\"actions\">{original_link}</div></section>"
         "<section class=\"grid\">"
-        f"<article class=\"card\"><h2>Fundstelle</h2><pre>{snippet}</pre></article>"
+        f"<article class=\"card\"><h2>Fundstelle und Auszug</h2><pre>{snippet}</pre></article>"
         f"<aside class=\"card\"><h2>Metadaten</h2><dl>{details_html}</dl></aside>"
         "</section></main></body></html>"
     )

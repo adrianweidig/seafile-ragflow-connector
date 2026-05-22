@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 
 import structlog
@@ -24,6 +25,12 @@ from seafile_ragflow_connector.dashboard.server import (
     DashboardServerHandle,
     serve_dashboard_forever,
     start_dashboard_server,
+)
+from seafile_ragflow_connector.demo.lifecycle import (
+    bootstrap_demo_environment,
+    cleanup_demo_environment,
+    dumps_summary,
+    write_demo_testset,
 )
 from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
 from seafile_ragflow_connector.jobs.scheduler import PeriodicTask, SimpleScheduler
@@ -137,6 +144,85 @@ def openwebui_sync_once(
         typer.echo(summary.__dict__)
     finally:
         runtime.close()
+
+
+@app.command("demo-fixtures")
+def demo_fixtures(
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            help="Directory where the reproducible demo files are generated.",
+        ),
+    ] = Path("/cache/demo-fixtures"),
+) -> None:
+    """Generate the reproducible local demo file set without contacting services."""
+    summary = {"fixtures": write_demo_testset(output_dir)}
+    typer.echo(dumps_summary(summary))
+
+
+@app.command("demo-cleanup")
+def demo_cleanup(
+    execute: Annotated[
+        bool,
+        typer.Option(
+            "--execute",
+            help="Actually delete safe demo objects. Without this flag only prints the plan.",
+        ),
+    ] = False,
+) -> None:
+    """Delete only clearly named local demo artifacts across Seafile, RAGFlow and OpenWebUI."""
+    settings = _bootstrap()
+    typer.echo(dumps_summary(cleanup_demo_environment(settings, execute=execute)))
+
+
+@app.command("demo-bootstrap")
+def demo_bootstrap(
+    execute: Annotated[
+        bool,
+        typer.Option(
+            "--execute",
+            help=(
+                "Actually create libraries and upload files. "
+                "Without this flag only writes fixtures."
+            ),
+        ),
+    ] = False,
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            help="Directory where the reproducible demo files are generated.",
+        ),
+    ] = Path("/cache/demo-fixtures"),
+    run_sync: Annotated[
+        bool,
+        typer.Option("--run-sync", help="Run connector sync-once after uploading demo files."),
+    ] = False,
+    wait_parse_seconds: Annotated[
+        int,
+        typer.Option(
+            "--wait-parse-seconds",
+            help="Poll parse status for this many seconds after sync.",
+        ),
+    ] = 0,
+) -> None:
+    """Create the canonical demo libraries and optionally run the connector sync path."""
+    settings = _bootstrap()
+    summary = bootstrap_demo_environment(settings, output_dir=output_dir, execute=execute)
+    if execute and run_sync:
+        runtime = build_runtime(settings)
+        try:
+            sync_summary = runtime.orchestrator.sync_once()
+            if wait_parse_seconds > 0:
+                _wait_for_parse(runtime, wait_parse_seconds)
+            summary["sync"] = dict(sync_summary.__dict__)
+            openwebui_summary = _sync_openwebui_if_enabled(runtime)
+            if openwebui_summary is not None:
+                summary["openwebui"] = openwebui_summary
+        finally:
+            runtime.close()
+    typer.echo(dumps_summary(summary))
 
 
 @app.command()

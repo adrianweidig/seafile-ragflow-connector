@@ -135,6 +135,24 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual(preview["source_path"], "/folder/report final.pdf")
         self.assertEqual(preview["original_url"], sources[0]["original_url"])
 
+    def test_preview_token_keeps_long_snippets_compact(self) -> None:
+        long_text = "Preview-Auszug " * 80
+
+        sources = normalize_sources(
+            {"chunks": [{"id": "chunk-1", "document_id": "doc-1", "content": long_text}]},
+            settings=self._settings(),
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+        )
+
+        token = sources[0]["preview_url"].rsplit("token=", 1)[1]
+        preview = verify_preview_token(token, "proxy-secret", now=100)
+
+        self.assertEqual(sources[0]["snippet"], long_text.strip())
+        self.assertLessEqual(len(preview["snippet"]), 123)
+        self.assertTrue(preview["snippet"].endswith("..."))
+        self.assertLess(len(token), 650)
+
     def test_annotate_answer_citations_links_ragflow_inline_ids_to_sources(self) -> None:
         sources = normalize_sources(
             {
@@ -197,6 +215,81 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual(sources[0]["name"], "report.pdf")
         self.assertNotIn("source_path", sources[0]["metadata"][0])
         self.assertNotIn("source_path", sources[0]["source_metadata"])
+
+    def test_normalize_sources_sanitizes_html_fragments_and_entities(self) -> None:
+        sources = normalize_sources(
+            {
+                "chunks": [
+                    {
+                        "id": "chunk-1",
+                        "document_id": "doc-1",
+                        "document_name": "html_fragmente.md",
+                        "content": (
+                            "<table><tr><td>Alpha</td><td>&Uuml;ber</td></tr></table>"
+                            "<script>hidden()</script>"
+                        ),
+                    }
+                ]
+            },
+            settings=self._settings(),
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+        )
+
+        self.assertEqual(sources[0]["snippet"], "Alpha | Über")
+        self.assertEqual(sources[0]["document"], ["Alpha | Über"])
+        self.assertNotIn("<td>", sources[0]["text"])
+
+    def test_normalize_sources_removes_text_projection_wrappers(self) -> None:
+        sources = normalize_sources(
+            {
+                "chunks": [
+                    {
+                        "id": "chunk-1",
+                        "document_id": "doc-1",
+                        "document_name": "html_fragmente.md",
+                        "content": (
+                            "Source path: /html_fragmente.md\n"
+                            "Source path hash: abc\n"
+                            "----- BEGIN SOURCE CONTENT -----\n"
+                            "# HTML-Fragmente\nAlpha und <td>Beta</td>\n"
+                            "----- END SOURCE CONTENT -----"
+                        ),
+                    }
+                ]
+            },
+            settings=self._settings(),
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+        )
+
+        self.assertEqual(sources[0]["snippet"], "# HTML-Fragmente\nAlpha und Beta")
+        self.assertNotIn("Source path", sources[0]["snippet"])
+
+    def test_normalize_sources_prefers_original_seafile_name_over_projection_name(self) -> None:
+        sources = normalize_sources(
+            {
+                "chunks": [
+                    {
+                        "id": "chunk-1",
+                        "document_id": "doc-1",
+                        "document_name": "hash__html_fragmente.md.txt",
+                        "content": "Treffertext",
+                    }
+                ]
+            },
+            settings=self._settings(),
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+            files_by_document_id={
+                "doc-1": {
+                    "path": "/html_fragmente.md",
+                    "ragflow_document_name": "hash__html_fragmente.md.txt",
+                }
+            },
+        )
+
+        self.assertEqual(sources[0]["name"], "html_fragmente.md")
 
     def test_extract_answer_unwraps_native_ragflow_data_payload(self) -> None:
         answer = extract_answer(

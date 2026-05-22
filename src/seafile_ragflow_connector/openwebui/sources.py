@@ -6,6 +6,7 @@ import json
 import re
 import zlib
 from hashlib import sha256
+from html import unescape
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
@@ -14,6 +15,11 @@ if TYPE_CHECKING:
     from seafile_ragflow_connector.config.settings import Settings
 
 _RAGFLOW_INLINE_CITATION_RE = re.compile(r"\[ID:(\d+)\]")
+_PREVIEW_SNIPPET_MAX_CHARS = 120
+_TEXT_PROJECTION_WRAPPER_RE = re.compile(
+    r"(?is)^\s*Source path:.*?----- BEGIN SOURCE CONTENT -----\s*(?P<content>.*?)"
+    r"\s*----- END SOURCE CONTENT -----\s*$"
+)
 
 
 def extract_answer(payload: Any) -> str:
@@ -132,13 +138,15 @@ def _normalize_reference(
         "name",
         "title",
     )
-    snippet = _first_text(raw, "content", "text", "snippet", "content_with_weight")
+    snippet = _clean_reference_text(
+        _first_text(raw, "content", "text", "snippet", "content_with_weight")
+    )
     score = raw.get("score") or raw.get("similarity") or raw.get("vector_similarity")
     position = raw.get("position") or raw.get("positions")
     page = raw.get("page") or raw.get("page_num") or raw.get("page_number") or _first_page(position)
     file_row = files_by_document_id.get(document_id or "")
-    if not document_name and file_row:
-        document_name = _safe_document_name_from_file_row(file_row)
+    if file_row:
+        document_name = _safe_document_name_from_file_row(file_row) or document_name
     source_path = _source_path(raw, file_row)
     repo_id = _repo_id(raw, file_row)
     original_url = _original_source_url(
@@ -249,7 +257,7 @@ def _preview_url(
             "section": section,
             "line": line,
             "position": position,
-            "snippet": snippet,
+            "snippet": _preview_snippet(snippet),
             "repo_id": repo_id,
             "source_path": source_path,
             "original_url": original_url,
@@ -281,6 +289,15 @@ def _ragflow_link(
     ):
         return url
     return None
+
+
+def _preview_snippet(snippet: str | None) -> str | None:
+    if not snippet:
+        return snippet
+    compact = snippet.strip()
+    if len(compact) <= _PREVIEW_SNIPPET_MAX_CHARS:
+        return compact
+    return compact[:_PREVIEW_SNIPPET_MAX_CHARS].rstrip() + "..."
 
 
 def _collect_references(value: Any, references: list[dict[str, Any]]) -> None:
@@ -385,13 +402,30 @@ def _citation_label(*, index: int, page: Any, chunk_id: str | None) -> str:
 
 
 def _safe_document_name_from_file_row(file_row: dict[str, Any]) -> str:
+    path = str(file_row.get("path") or "")
+    if path:
+        return PurePosixPath(path).name or path.rsplit("/", 1)[-1]
     ragflow_name = file_row.get("ragflow_document_name")
     if ragflow_name:
         return str(ragflow_name)
-    path = str(file_row.get("path") or "")
-    if not path:
-        return ""
-    return PurePosixPath(path).name or path.rsplit("/", 1)[-1]
+    return ""
+
+
+def _clean_reference_text(value: str | None) -> str | None:
+    if value in (None, ""):
+        return value
+    clean = str(value)
+    clean = re.sub(r"(?is)<(script|style).*?</\1>", " ", clean)
+    clean = re.sub(r"(?i)</t[dh]>\s*<t[dh][^>]*>", " | ", clean)
+    clean = re.sub(r"(?i)</tr>\s*<tr[^>]*>", "\n", clean)
+    clean = re.sub(r"(?i)<br\s*/?>", "\n", clean)
+    clean = re.sub(r"(?s)<[^>]+>", " ", clean)
+    clean = unescape(clean)
+    match = _TEXT_PROJECTION_WRAPPER_RE.match(clean)
+    if match:
+        clean = match.group("content")
+    clean = "\n".join(" ".join(line.split()) for line in clean.splitlines())
+    return "\n".join(line for line in clean.splitlines() if line).strip()
 
 
 def _b64encode(value: bytes) -> str:

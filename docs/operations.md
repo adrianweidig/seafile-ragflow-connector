@@ -188,6 +188,50 @@ Artefakte nachladen.
 Die folgenden Kommandos prüfen schrittweise, ob Python-Logik, Dockerfile,
 Container-CLI und Compose-Datei funktionieren.
 
+### Sicherer Demo-Lifecycle
+
+Für reproduzierbare Ende-zu-Ende-Tests gibt es drei kanonische
+Beispielbibliotheken: `Connector Demo Wissen`, `Connector Demo Präsentationen`
+und `Connector Demo Edge Cases`. Der Cleanup löscht nur klar benannte
+Demo-Artefakte mit diesen Namen oder den historischen lokalen Präfixen
+`RAG Demo Bibliothek`, `Offline Demo Bibliothek` und `Codex GIF Demo`.
+Bibliotheken wie `Meine Bibliothek`, `testbibliothek` oder andere nicht
+eindeutig zugeordnete Objekte werden nicht gelöscht.
+
+Erst den Plan prüfen:
+
+```powershell
+wsl docker exec seafile-ragflow-connector-demo-connector-controller-1 connector demo-cleanup
+```
+
+Wenn die Zielobjekte eindeutig lokal und testbezogen sind:
+
+```powershell
+wsl docker exec seafile-ragflow-connector-demo-connector-controller-1 connector demo-cleanup --execute
+```
+
+Danach das reproduzierbare Testset erzeugen, in Seafile hochladen und den
+Connector-Lauf einschließlich OpenWebUI-Sync ausführen:
+
+```powershell
+wsl docker exec seafile-ragflow-connector-demo-connector-controller-1 connector demo-bootstrap --execute --run-sync --wait-parse-seconds 240
+```
+
+Für eine vollständige Prüfung der Originaldokument-Links muss
+`SEAFILE_FILE_URL_TEMPLATE` in der lokalen Testumgebung gesetzt sein, zum
+Beispiel:
+
+```env
+SEAFILE_FILE_URL_TEMPLATE=http://localhost:18081/lib/{repo_id_quoted}/file{path_quoted}{page_fragment}
+```
+
+Das Testset enthält PDF, DOCX, TXT, Markdown, CSV, XLSX, PPTX,
+PDF-Präsentationen, Tabelleninhalte, Umlaute, HTML-ähnliche Fragmente und
+ähnliche Texte für Deduplizierung. Wenn der echte OpenWebUI-Browsercheck nicht
+möglich ist, bleiben mindestens Proxy-Antworten, Preview-HTML,
+Originaldokument-Links, PDF-Seitenanker und Quellenformat über die Unit-Tests
+und API-Antworten prüfbar.
+
 ### 1. Python-Schnelltest auf Windows
 
 ```powershell

@@ -343,6 +343,46 @@ class DashboardServerTests(unittest.TestCase):
         self.assertNotIn("<summary", result["answer"])
         self.assertNotIn("<br>", result["answer"])
 
+    def test_openwebui_chat_proxy_sanitizes_html_answer_fragments(self) -> None:
+        store = _store()
+        with store.session_factory() as session:
+            session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo", status="active"))
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                    ragflow_chat_id="chat-1",
+                    openwebui_pipe_id="pipe-1",
+                )
+            )
+            session.commit()
+
+        original_client = dashboard_server.RAGFlowClient
+        dashboard_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        _FakeRAGFlowClient.answer_content = (
+            "<table><tr><td>Alpha</td><td>&Uuml;ber</td></tr></table>"
+        )
+        _FakeRAGFlowClient.retrieval_result = {"chunks": []}
+        try:
+            result = _handle_openwebui_chat(
+                DashboardContext(store=store, settings=_settings(0), started_at=utcnow()),
+                {
+                    "artifact_id": "pipe-1",
+                    "dataset_id": "dataset-1",
+                    "chat_id": "chat-1",
+                    "messages": [{"role": "user", "content": "HTML-Frage"}],
+                },
+                "Bearer proxy-secret",
+            )
+        finally:
+            dashboard_server.RAGFlowClient = original_client  # type: ignore[assignment]
+            _FakeRAGFlowClient.answer_content = "answer"
+
+        self.assertIn("Alpha | Über", result["answer"])
+        self.assertNotIn("<table", result["answer"])
+        self.assertNotIn("<td>", result["answer"])
+
     def test_openwebui_preview_html_renders_source_card_and_original_link(self) -> None:
         settings = _settings(0)
         token = sign_preview_payload(
@@ -368,12 +408,32 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("Originaler PDF-Auszug", html)
         self.assertIn("#page=7", html)
 
+    def test_openwebui_preview_html_sanitizes_source_snippet(self) -> None:
+        settings = _settings(0)
+        token = sign_preview_payload(
+            {
+                "document_name": "html_fragmente.md",
+                "dataset_name": "Dataset",
+                "document_id": "doc-1",
+                "chunk_id": "chunk-1",
+                "citation_label": "Quelle 1",
+                "snippet": "<table><tr><td>Alpha</td><td>&uuml;</td></tr></table>",
+            },
+            "proxy-secret",
+        )
+
+        html = _preview_html(settings, token)
+
+        self.assertIn("Alpha | ü", html)
+        self.assertNotIn("&lt;td&gt;", html)
+
 
 class _FakeRAGFlowClient:
     last_model: str | None = None
     raise_chat_error = False
     retrieve_calls = 0
     retrieval_result: dict[str, object] = {"chunks": []}
+    answer_content = "answer"
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         pass
@@ -386,7 +446,7 @@ class _FakeRAGFlowClient:
             "choices": [
                 {
                     "message": {
-                        "content": "answer",
+                        "content": self.__class__.answer_content,
                         "reference": {"chunks": []},
                     }
                 }
