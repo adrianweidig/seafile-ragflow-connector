@@ -125,6 +125,21 @@ class _ChatHttpClient:
             )
         raise AssertionError(path)
 
+    def stream(self, method: str, path: str, *, json: dict[str, object]) -> _StreamResponse:
+        self.post_paths.append(path)
+        request = httpx.Request(method, f"http://ragflow.local{path}")
+        return _StreamResponse(
+            httpx.Response(
+                200,
+                content=(
+                    b'data:{"code":0,"data":{"answer":"part 1 ","reference":{"chunks":[]}}}\n\n'
+                    b'data:{"code":0,"data":{"answer":"part 2"}}\n\n'
+                    b'data:{"code":0,"data":true}\n\n'
+                ),
+                request=request,
+            )
+        )
+
     def patch(self, path: str, *, json: dict[str, object]) -> httpx.Response:
         request = httpx.Request("PATCH", f"http://ragflow.local{path}")
         self.updated_payload = json
@@ -190,6 +205,12 @@ class RAGFlowClientTests(unittest.TestCase):
             messages=[{"role": "user", "content": "q"}],
         )
         self.assertEqual(response["choices"][0]["message"]["content"], "answer")
+        streamed = client.chat_completion(
+            chat_id="chat-1",
+            messages=[{"role": "user", "content": "q"}],
+            stream=True,
+        )
+        self.assertEqual(streamed["data"]["answer"], "part 1 part 2")
         self.assertIn("/api/v1/openai/chat-1/chat/completions", http_client.post_paths)
         self.assertTrue(client.delete_chats(["chat-1"]))
         self.assertTrue(client.delete_datasets(["ds-1"]))
@@ -200,6 +221,17 @@ class RAGFlowClientTests(unittest.TestCase):
                 ("/api/v1/datasets", {"ids": ["ds-1"]}),
             ],
         )
+
+
+class _StreamResponse:
+    def __init__(self, response: httpx.Response) -> None:
+        self.response = response
+
+    def __enter__(self) -> httpx.Response:
+        return self.response
+
+    def __exit__(self, *args: object) -> None:
+        self.response.close()
 
 
 if __name__ == "__main__":

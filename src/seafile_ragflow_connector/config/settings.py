@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     seafile_rewrite_download_urls: bool = False
     seafile_download_rewrite_from: str | None = None
     seafile_download_rewrite_to: str | None = None
+    seafile_file_url_template: str | None = None
 
     ragflow_base_url: str
     ragflow_internal_url: str | None = None

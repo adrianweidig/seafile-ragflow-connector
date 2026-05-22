@@ -36,6 +36,7 @@ x-connector-env: &connector-env
   SEAFILE_REWRITE_DOWNLOAD_URLS: ${SEAFILE_REWRITE_DOWNLOAD_URLS:-false}
   SEAFILE_DOWNLOAD_REWRITE_FROM: ${SEAFILE_DOWNLOAD_REWRITE_FROM:-}
   SEAFILE_DOWNLOAD_REWRITE_TO: ${SEAFILE_DOWNLOAD_REWRITE_TO:-}
+  SEAFILE_FILE_URL_TEMPLATE: ${SEAFILE_FILE_URL_TEMPLATE:-}
 
   # RAGFlow bleibt Zielsystem. Fehlen Zielartefakte, baut der Connector sie aus
   # Seafile neu auf; Seafile selbst wird dabei nicht geschrieben.

@@ -209,6 +209,9 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         self.assertEqual(second.pipes_reused, 1)
         self.assertEqual(openwebui.tool_valve_updates, ["ragflow_tool_demo_dataset_dataset1"])
         self.assertEqual(openwebui.function_valve_updates, ["ragflow_pipe_demo_dataset_dataset1"])
+        with session_factory() as session:
+            mapping = session.query(OpenWebUIDatasetMapping).one()
+            self.assertEqual(mapping.artifact_version, "4")
 
     def test_foreign_openwebui_artifact_keeps_manual_required_status(self) -> None:
         session_factory = _session_factory()

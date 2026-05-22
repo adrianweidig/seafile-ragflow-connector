@@ -55,6 +55,7 @@ folgenden Werte gesetzt werden:
 | `SEAFILE_BASE_URL` | Aus dem Connector-Container erreichbare Seafile-URL, z. B. `http://host.docker.internal:18081` oder `https://seafile.example.local`. |
 | `SEAFILE_ADMIN_TOKEN` | Seafile Admin-API-Token fuer Library-Discovery. |
 | `SEAFILE_SYNC_USER_TOKEN` | Seafile API-Token fuer Downloads der zu synchronisierenden Dateien. |
+| `SEAFILE_FILE_URL_TEMPLATE` | Optionaler Browser-Link zum Originaldokument fuer OpenWebUI-Quellenpreviews, z. B. mit `{repo_id_quoted}`, `{path_quoted}` und `{page_fragment}`. |
 | `RAGFLOW_BASE_URL` | Aus dem Connector-Container erreichbare RAGFlow-API-URL, z. B. `http://host.docker.internal:19380` oder `http://ragflow:9380`. |
 | `RAGFLOW_API_KEY` | RAGFlow API-Key des Ziel-Users. |
 | `POSTGRES_PASSWORD` | Passwort fuer die vom Stack bereitgestellte Connector-Datenbank. |

@@ -9,12 +9,14 @@ try:
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool
 
-    from seafile_ragflow_connector.config.settings import Settings
     import seafile_ragflow_connector.dashboard.server as dashboard_server
+    from seafile_ragflow_connector.clients.http import ApiError
+    from seafile_ragflow_connector.config.settings import Settings
     from seafile_ragflow_connector.dashboard.server import (
         DashboardContext,
-        _load_mapping,
         _handle_openwebui_chat,
+        _load_mapping,
+        _preview_html,
         start_dashboard_server,
     )
     from seafile_ragflow_connector.dashboard.store import (
@@ -22,7 +24,9 @@ try:
         DashboardLimits,
         utcnow,
     )
+    from seafile_ragflow_connector.openwebui.sources import sign_preview_payload
     from seafile_ragflow_connector.persistence.db import Base
+    from seafile_ragflow_connector.persistence.models.file import File
     from seafile_ragflow_connector.persistence.models.library import Library
     from seafile_ragflow_connector.persistence.models.openwebui import OpenWebUIDatasetMapping
 except ModuleNotFoundError as exc:
@@ -185,6 +189,7 @@ class DashboardServerTests(unittest.TestCase):
         original_client = dashboard_server.RAGFlowClient
         dashboard_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
         _FakeRAGFlowClient.last_model = None
+        _FakeRAGFlowClient.raise_chat_error = False
         try:
             result = _handle_openwebui_chat(
                 DashboardContext(store=store, settings=_settings(0), started_at=utcnow()),
@@ -203,15 +208,179 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(result["answer"], "answer")
         self.assertEqual(_FakeRAGFlowClient.last_model, "model")
 
+    def test_openwebui_chat_proxy_falls_back_to_retrieval_when_chat_fails(self) -> None:
+        store = _store()
+        with store.session_factory() as session:
+            session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo", status="active"))
+            session.add(
+                File(
+                    repo_id="repo-1",
+                    path="/demo.txt",
+                    normalized_path="/demo.txt",
+                    ragflow_document_id="doc-1",
+                    ragflow_document_name="demo.txt",
+                    ingestion_strategy="direct",
+                    sync_status="synced",
+                )
+            )
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                    ragflow_chat_id="chat-1",
+                    openwebui_pipe_id="pipe-1",
+                )
+            )
+            session.commit()
+
+        original_client = dashboard_server.RAGFlowClient
+        dashboard_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        _FakeRAGFlowClient.raise_chat_error = True
+        _FakeRAGFlowClient.retrieve_calls = 0
+        _FakeRAGFlowClient.retrieval_result = {
+            "chunks": [
+                {
+                    "id": "chunk-1",
+                    "document_id": "doc-1",
+                    "content": "Fallbacktext aus RAGFlow Retrieval",
+                }
+            ]
+        }
+        try:
+            result = _handle_openwebui_chat(
+                DashboardContext(store=store, settings=_settings(0), started_at=utcnow()),
+                {
+                    "artifact_id": "pipe-1",
+                    "dataset_id": "dataset-1",
+                    "chat_id": "chat-1",
+                    "messages": [{"role": "user", "content": "Frage"}],
+                },
+                "Bearer proxy-secret",
+            )
+        finally:
+            dashboard_server.RAGFlowClient = original_client  # type: ignore[assignment]
+            _FakeRAGFlowClient.raise_chat_error = False
+            _FakeRAGFlowClient.retrieval_result = {"chunks": []}
+
+        self.assertEqual(_FakeRAGFlowClient.retrieve_calls, 1)
+        self.assertIn("Gefundene Quellen", result["answer"])
+        self.assertIn("Fallbacktext aus RAGFlow Retrieval", result["answer"])
+        self.assertEqual(len(result["sources"]), 1)
+
+    def test_openwebui_chat_proxy_enriches_answer_with_multiple_retrieval_chunks(self) -> None:
+        store = _store()
+        with store.session_factory() as session:
+            session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo", status="active"))
+            session.add_all(
+                [
+                    File(
+                        repo_id="repo-1",
+                        path="/demo-a.pdf",
+                        normalized_path="/demo-a.pdf",
+                        ragflow_document_id="doc-1",
+                        ragflow_document_name="demo-a.pdf",
+                        ingestion_strategy="direct",
+                        sync_status="synced",
+                    ),
+                    File(
+                        repo_id="repo-1",
+                        path="/demo-b.pdf",
+                        normalized_path="/demo-b.pdf",
+                        ragflow_document_id="doc-2",
+                        ragflow_document_name="demo-b.pdf",
+                        ingestion_strategy="direct",
+                        sync_status="synced",
+                    ),
+                ]
+            )
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                    ragflow_chat_id="chat-1",
+                    openwebui_pipe_id="pipe-1",
+                )
+            )
+            session.commit()
+
+        original_client = dashboard_server.RAGFlowClient
+        dashboard_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        _FakeRAGFlowClient.raise_chat_error = False
+        _FakeRAGFlowClient.retrieve_calls = 0
+        _FakeRAGFlowClient.retrieval_result = {
+            "chunks": [
+                {"id": "chunk-a", "document_id": "doc-1", "content": "Erster Treffer"},
+                {"id": "chunk-b", "document_id": "doc-2", "content": "Zweiter Treffer"},
+            ]
+        }
+        try:
+            result = _handle_openwebui_chat(
+                DashboardContext(store=store, settings=_settings(0), started_at=utcnow()),
+                {
+                    "artifact_id": "pipe-1",
+                    "dataset_id": "dataset-1",
+                    "chat_id": "chat-1",
+                    "messages": [{"role": "user", "content": "Frage"}],
+                    "top_k": 8,
+                },
+                "Bearer proxy-secret",
+            )
+        finally:
+            dashboard_server.RAGFlowClient = original_client  # type: ignore[assignment]
+            _FakeRAGFlowClient.retrieval_result = {"chunks": []}
+
+        self.assertEqual(_FakeRAGFlowClient.retrieve_calls, 1)
+        self.assertEqual(len(result["sources"]), 2)
+        self.assertIn("answer", result["answer"])
+        self.assertIn("## Gefundene Quellen", result["answer"])
+        self.assertIn("demo-a.pdf", result["answer"])
+        self.assertIn("demo-b.pdf", result["answer"])
+        self.assertIn("### Auszug 1: demo-a.pdf", result["answer"])
+        self.assertNotIn("<details", result["answer"])
+        self.assertNotIn("<summary", result["answer"])
+        self.assertNotIn("<br>", result["answer"])
+
+    def test_openwebui_preview_html_renders_source_card_and_original_link(self) -> None:
+        settings = _settings(0)
+        token = sign_preview_payload(
+            {
+                "document_name": "report.pdf",
+                "dataset_name": "Dataset",
+                "document_id": "doc-1",
+                "chunk_id": "chunk-123456789",
+                "citation_label": "Quelle 1, Seite 7",
+                "page": 7,
+                "repo_id": "repo-1",
+                "source_path": "/report.pdf",
+                "original_url": "http://seafile.local/lib/repo-1/file/report.pdf#page=7",
+                "snippet": "Originaler PDF-Auszug",
+            },
+            "proxy-secret",
+        )
+
+        html = _preview_html(settings, token)
+
+        self.assertIn("RAGFlow Quellenvorschau", html)
+        self.assertIn("Original öffnen", html)
+        self.assertIn("Originaler PDF-Auszug", html)
+        self.assertIn("#page=7", html)
+
 
 class _FakeRAGFlowClient:
     last_model: str | None = None
+    raise_chat_error = False
+    retrieve_calls = 0
+    retrieval_result: dict[str, object] = {"chunks": []}
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         pass
 
     def chat_completion(self, **kwargs: object) -> dict[str, object]:
         self.__class__.last_model = str(kwargs.get("model"))
+        if self.__class__.raise_chat_error:
+            raise ApiError("API returned an error code", status_code=200, payload={"code": 102})
         return {
             "choices": [
                 {
@@ -224,7 +393,8 @@ class _FakeRAGFlowClient:
         }
 
     def retrieve_chunks(self, **kwargs: object) -> dict[str, object]:
-        return {"chunks": []}
+        self.__class__.retrieve_calls += 1
+        return self.__class__.retrieval_result
 
     def close(self) -> None:
         pass

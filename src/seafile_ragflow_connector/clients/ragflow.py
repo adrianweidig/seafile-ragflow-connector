@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
-from seafile_ragflow_connector.clients.http import ApiError, VerifyConfig, make_client, unwrap_response
+from seafile_ragflow_connector.clients.http import (
+    ApiError,
+    VerifyConfig,
+    make_client,
+    unwrap_response,
+)
 
 
 class RAGFlowClient:
@@ -234,34 +240,99 @@ class RAGFlowClient:
             "extra_body": {"reference": True},
         }
         try:
-            data = unwrap_response(
-                self._client.post(
-                    f"/api/v1/openai/{chat_id}/chat/completions",
-                    json=payload,
-                )
+            path = f"/api/v1/openai/{chat_id}/chat/completions"
+            data = (
+                self._collect_streaming_chat_completion(path, payload)
+                if stream
+                else unwrap_response(self._client.post(path, json=payload))
             )
         except ApiError as exc:
             if not _is_missing_openai_chat_completion_endpoint(exc):
                 raise
             try:
-                data = unwrap_response(
-                    self._client.post(
-                        f"/api/v1/chats_openai/{chat_id}/chat/completions",
-                        json=payload,
-                    )
+                path = f"/api/v1/chats_openai/{chat_id}/chat/completions"
+                data = (
+                    self._collect_streaming_chat_completion(path, payload)
+                    if stream
+                    else unwrap_response(self._client.post(path, json=payload))
                 )
             except ApiError as fallback_exc:
                 if not _is_missing_openai_chat_completion_endpoint(fallback_exc):
                     raise
-                data = unwrap_response(
-                    self._client.post(
+                fallback_payload = {"chat_id": chat_id, "messages": messages, "stream": stream}
+                data = (
+                    self._collect_streaming_chat_completion(
                         "/api/v1/chat/completions",
-                        json={"chat_id": chat_id, "messages": messages, "stream": stream},
+                        fallback_payload,
+                    )
+                    if stream
+                    else unwrap_response(
+                        self._client.post(
+                            "/api/v1/chat/completions",
+                            json=fallback_payload,
+                        )
                     )
                 )
         if isinstance(data, dict):
             return data
         return {"content": str(data or "")}
+
+    def _collect_streaming_chat_completion(
+        self,
+        path: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        answer_parts: list[str] = []
+        last_data: dict[str, Any] = {}
+        reference: dict[str, Any] | None = None
+        with self._client.stream("POST", path, json=payload) as response:
+            if response.is_error:
+                raise ApiError(
+                    f"HTTP {response.status_code} returned by POST {response.request.url}",
+                    status_code=response.status_code,
+                    payload=response.text,
+                )
+            for raw_line in response.iter_lines():
+                line = (
+                    raw_line.decode("utf-8", "replace")
+                    if isinstance(raw_line, bytes)
+                    else raw_line
+                )
+                line = line.strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                event = line.removeprefix("data:").strip()
+                if event == "[DONE]":
+                    break
+                try:
+                    payload_data = json.loads(event)
+                except ValueError:
+                    continue
+                data = payload_data.get("data") if isinstance(payload_data, dict) else payload_data
+                if data is True:
+                    break
+                if not isinstance(data, dict):
+                    continue
+                last_data.update(data)
+                if data.get("answer"):
+                    _merge_streamed_answer(answer_parts, str(data["answer"]))
+                if isinstance(data.get("reference"), dict):
+                    reference = data["reference"]
+        if answer_parts:
+            last_data["answer"] = "".join(answer_parts)
+        if reference is not None:
+            last_data["reference"] = reference
+        return {"data": last_data}
+
+
+def _merge_streamed_answer(answer_parts: list[str], answer: str) -> None:
+    current = "".join(answer_parts)
+    if not answer or answer == current or current.endswith(answer):
+        return
+    if answer.startswith(current):
+        answer_parts[:] = [answer]
+        return
+    answer_parts.append(answer)
 
 
 def _is_missing_dataset_name_response(payload: Any, name: str) -> bool:

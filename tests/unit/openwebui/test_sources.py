@@ -93,6 +93,47 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual(preview["page"], 3)
         self.assertEqual(preview["position"], [[3, 10, 20, 30, 40]])
 
+    def test_normalize_sources_adds_original_file_url_without_path_leak(self) -> None:
+        settings = self._settings()
+        settings.seafile_file_url_template = (
+            "https://seafile.example/lib/{repo_id_quoted}/file{path_quoted}{page_fragment}"
+        )
+
+        sources = normalize_sources(
+            {
+                "chunks": [
+                    {
+                        "id": "chunk-1",
+                        "document_id": "doc-1",
+                        "content": "PDF-Treffertext",
+                        "positions": [[4, 10, 20, 30, 40]],
+                    }
+                ]
+            },
+            settings=settings,
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+            files_by_document_id={
+                "doc-1": {
+                    "repo_id": "repo-1",
+                    "path": "/folder/report final.pdf",
+                    "ragflow_document_name": "report final.pdf",
+                }
+            },
+        )
+
+        self.assertEqual(
+            sources[0]["original_url"],
+            "https://seafile.example/lib/repo-1/file/folder/report%20final.pdf#page=4",
+        )
+        self.assertNotIn("source_path", sources[0]["metadata"][0])
+        self.assertNotIn("source_path", sources[0]["source_metadata"])
+
+        token = sources[0]["preview_url"].rsplit("token=", 1)[1]
+        preview = verify_preview_token(token, "proxy-secret", now=100)
+        self.assertEqual(preview["source_path"], "/folder/report final.pdf")
+        self.assertEqual(preview["original_url"], sources[0]["original_url"])
+
     def test_annotate_answer_citations_links_ragflow_inline_ids_to_sources(self) -> None:
         sources = normalize_sources(
             {
@@ -111,7 +152,10 @@ class OpenWebUISourceTests(unittest.TestCase):
             dataset_name="Demo",
         )
 
-        answer = annotate_answer_citations("Siehe Studienplan [ID:0] und unbekannt [ID:9].", sources)
+        answer = annotate_answer_citations(
+            "Siehe Studienplan [ID:0] und unbekannt [ID:9].",
+            sources,
+        )
 
         self.assertIn("[Quelle 1, Seite 3, Chunk chunk-1](https://connector.example", answer)
         self.assertNotIn("[ID:0]", answer)

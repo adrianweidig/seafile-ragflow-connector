@@ -7,7 +7,7 @@ from textwrap import dedent
 from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "2"
+ARTIFACT_VERSION = "4"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 
 
@@ -45,7 +45,7 @@ def build_tool_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "CONNECTOR_PROXY_VERIFY_SSL": inputs.proxy_verify_ssl,
         "CONNECTOR_PROXY_CA_BUNDLE": inputs.proxy_ca_bundle or "",
         "DATASET_ID": inputs.dataset_id,
-        "TOP_K": 5,
+        "TOP_K": 8,
     }
     payload: dict[str, object] = {
         "id": artifact_id,
@@ -75,6 +75,7 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "RAGFLOW_CHAT_ID": inputs.ragflow_chat_id or "",
         "MODEL_ID": model_name,
         "MODEL_NAME": model_name,
+        "TOP_K": 8,
     }
     payload: dict[str, object] = {
         "id": artifact_id,
@@ -141,9 +142,9 @@ def _tool_content() -> str:
         """
         title: RAGFlow Dataset Search
         author: Seafile RAGFlow Connector
-        version: 1.1.0
+        version: 1.2.1
         owner: seafile-ragflow-connector
-        artifact_version: 2
+        artifact_version: 4
         """
 
         import httpx
@@ -158,7 +159,7 @@ def _tool_content() -> str:
                 CONNECTOR_PROXY_VERIFY_SSL: bool = Field(default=True)
                 CONNECTOR_PROXY_CA_BUNDLE: str = Field(default="")
                 DATASET_ID: str = Field(default="")
-                TOP_K: int = Field(default=5, ge=1, le=20)
+                TOP_K: int = Field(default=8, ge=1, le=20)
 
             def __init__(self):
                 self.valves = self.Valves()
@@ -232,16 +233,50 @@ def _tool_content() -> str:
         def _source_markdown(sources):
             if not sources:
                 return "Keine passenden Quellen gefunden."
-            lines = ["Gefundene Quellen:"]
+            lines = [
+                "## Gefundene Quellen",
+                "",
+                "| # | Dokument | Fundstelle | Auszug |",
+                "|---:|---|---|---|",
+            ]
             for index, source in enumerate(sources, start=1):
                 title = source.get("name") or source.get("document_name") or "Quelle"
                 url = source.get("url") or source.get("preview_url")
+                original_url = source.get("original_url")
                 snippet = source.get("text") or source.get("snippet") or ""
-                label = f"{index}. [{title}]({url})" if url else f"{index}. {title}"
-                lines.append(label)
-                if snippet:
-                    lines.append(f"   {snippet}")
+                document = f"[{_clean(title)}]({url})" if url else _clean(title)
+                if original_url and original_url != url:
+                    document = f"{document} - [Original öffnen]({original_url})"
+                row = (
+                    f"| {index} | {document} | {_source_locator(source)} | "
+                    f"{_compact_cell(snippet)} |"
+                )
+                lines.append(row)
             return "\\n".join(lines)
+
+
+        def _source_locator(source):
+            metadata = source.get("source_metadata") or {}
+            parts = []
+            if metadata.get("page") not in (None, ""):
+                parts.append(f"Seite {metadata.get('page')}")
+            if metadata.get("line") not in (None, ""):
+                parts.append(f"Zeile {metadata.get('line')}")
+            chunk = metadata.get("chunk_id")
+            if chunk not in (None, ""):
+                parts.append(f"Chunk `{str(chunk)[:12]}`")
+            return _clean(", ".join(parts) or "-")
+
+
+        def _compact_cell(value, limit=220):
+            clean = _clean(value).replace("|", "\\\\|")
+            if len(clean) <= limit:
+                return clean or "-"
+            return clean[: limit - 3].rstrip() + "..."
+
+
+        def _clean(value):
+            return " ".join(str(value or "").split())
 
 
         def _httpx_verify(verify_ssl, ca_bundle):
@@ -259,9 +294,9 @@ def _pipe_content() -> str:
         """
         title: RAGFlow Dataset Pipe
         author: Seafile RAGFlow Connector
-        version: 1.1.0
+        version: 1.2.1
         owner: seafile-ragflow-connector
-        artifact_version: 2
+        artifact_version: 4
         """
 
         import httpx
@@ -279,6 +314,7 @@ def _pipe_content() -> str:
                 RAGFLOW_CHAT_ID: str = Field(default="")
                 MODEL_ID: str = Field(default="")
                 MODEL_NAME: str = Field(default="")
+                TOP_K: int = Field(default=8, ge=1, le=20)
 
             def __init__(self):
                 self.valves = self.Valves()
@@ -320,6 +356,7 @@ def _pipe_content() -> str:
                     "chat_id": self.valves.RAGFLOW_CHAT_ID,
                     "messages": body.get("messages") or [],
                     "model": "model",
+                    "top_k": self.valves.TOP_K,
                     "user": {
                         "id": (__user__ or {}).get("id"),
                         "email": (__user__ or {}).get("email"),
@@ -431,15 +468,49 @@ def _pipe_content() -> str:
         def _source_markdown(sources):
             if not sources:
                 return ""
-            lines = ["Quellen:"]
+            lines = [
+                "## Gefundene Quellen",
+                "",
+                "| # | Dokument | Fundstelle | Auszug |",
+                "|---:|---|---|---|",
+            ]
             for index, source in enumerate(sources, start=1):
                 title = source.get("name") or source.get("document_name") or "Quelle"
                 url = source.get("url") or source.get("preview_url")
+                original_url = source.get("original_url")
                 snippet = source.get("text") or source.get("snippet") or ""
-                label = f"{index}. [{title}]({url})" if url else f"{index}. {title}"
-                lines.append(label)
-                if snippet:
-                    lines.append(f"   {snippet}")
+                document = f"[{_clean(title)}]({url})" if url else _clean(title)
+                if original_url and original_url != url:
+                    document = f"{document} - [Original öffnen]({original_url})"
+                row = (
+                    f"| {index} | {document} | {_source_locator(source)} | "
+                    f"{_compact_cell(snippet)} |"
+                )
+                lines.append(row)
             return "\\n".join(lines)
+
+
+        def _source_locator(source):
+            metadata = source.get("source_metadata") or {}
+            parts = []
+            if metadata.get("page") not in (None, ""):
+                parts.append(f"Seite {metadata.get('page')}")
+            if metadata.get("line") not in (None, ""):
+                parts.append(f"Zeile {metadata.get('line')}")
+            chunk = metadata.get("chunk_id")
+            if chunk not in (None, ""):
+                parts.append(f"Chunk `{str(chunk)[:12]}`")
+            return _clean(", ".join(parts) or "-")
+
+
+        def _compact_cell(value, limit=220):
+            clean = _clean(value).replace("|", "\\\\|")
+            if len(clean) <= limit:
+                return clean or "-"
+            return clean[: limit - 3].rstrip() + "..."
+
+
+        def _clean(value):
+            return " ".join(str(value or "").split())
         '''
     ).strip()

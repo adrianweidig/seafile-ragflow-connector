@@ -52,8 +52,11 @@ enthalten keine Admin-Secrets und nutzen ausschließlich den Connector-Proxy.
 
 Quellen werden aus RAGFlow-Referenzen normalisiert und als OpenWebUI-Source- bzw.
 Citation-Metadaten zurückgegeben. Wenn kein stabiler RAGFlow-Deep-Link
-konfiguriert ist, kann der Connector signierte Kurzzeit-Preview-Links erzeugen,
-die nur Metadaten und Auszüge anzeigen.
+konfiguriert ist, kann der Connector signierte Preview-Links erzeugen, die nur
+Metadaten und Auszüge anzeigen. Optional kann die Preview über ein lokales
+Seafile-URL-Template zusätzlich auf das Originaldokument und bei PDFs auf eine
+Seitenposition verweisen. Die Preview ist offline-fähig und lädt keine externen
+Assets.
 
 ## Datei-Ingestion
 

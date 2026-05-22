@@ -132,6 +132,16 @@ def _normalize_reference(
     file_row = files_by_document_id.get(document_id or "")
     if not document_name and file_row:
         document_name = _safe_document_name_from_file_row(file_row)
+    source_path = _source_path(raw, file_row)
+    repo_id = _repo_id(raw, file_row)
+    original_url = _original_source_url(
+        settings,
+        repo_id=repo_id,
+        source_path=source_path,
+        document_id=document_id,
+        chunk_id=chunk_id,
+        page=page,
+    )
     citation_label = _citation_label(index=index, page=page, chunk_id=chunk_id)
     preview_url = _preview_url(
         raw,
@@ -147,6 +157,9 @@ def _normalize_reference(
         section=raw.get("section"),
         line=raw.get("line") or raw.get("line_number"),
         position=position,
+        repo_id=repo_id,
+        source_path=source_path,
+        original_url=original_url,
     )
     metadata = {
         "dataset_id": dataset_id,
@@ -176,6 +189,7 @@ def _normalize_reference(
         "source": {"name": title, "url": preview_url},
         "url": preview_url,
         "preview_url": preview_url,
+        "original_url": original_url,
         "citation": {
             "id": index - 1,
             "marker": f"[ID:{index - 1}]",
@@ -202,6 +216,9 @@ def _preview_url(
     section: Any,
     line: Any,
     position: Any,
+    repo_id: str | None,
+    source_path: str | None,
+    original_url: str | None,
 ) -> str | None:
     if settings.openwebui_source_preview_mode == "disabled":
         return None
@@ -226,6 +243,9 @@ def _preview_url(
             "line": line,
             "position": position,
             "snippet": snippet,
+            "repo_id": repo_id,
+            "source_path": source_path,
+            "original_url": original_url,
         }
         token = sign_preview_payload(payload, settings.openwebui_proxy_shared_secret)
         base_url = settings.openwebui_proxy_public_base_url
@@ -299,6 +319,53 @@ def _first_page(position: Any) -> Any:
     if isinstance(first, list) and first:
         return first[0]
     return None
+
+
+def _source_path(raw: dict[str, Any], file_row: dict[str, Any] | None) -> str | None:
+    if file_row and file_row.get("path"):
+        return str(file_row["path"])
+    return _first_text(raw, "source_path", "path", "file_path")
+
+
+def _repo_id(raw: dict[str, Any], file_row: dict[str, Any] | None) -> str | None:
+    if file_row and file_row.get("repo_id"):
+        return str(file_row["repo_id"])
+    return _first_text(raw, "repo_id", "library_id", "seafile_repo_id")
+
+
+def _original_source_url(
+    settings: Settings,
+    *,
+    repo_id: str | None,
+    source_path: str | None,
+    document_id: str | None,
+    chunk_id: str | None,
+    page: Any,
+) -> str | None:
+    template = settings.seafile_file_url_template
+    if not template or not repo_id or not source_path:
+        return None
+    clean_path = str(source_path)
+    page_text = "" if page in (None, "") else str(page)
+    values = {
+        "repo_id": repo_id,
+        "repo_id_quoted": quote(repo_id, safe=""),
+        "path": clean_path,
+        "path_quoted": quote(clean_path, safe="/"),
+        "path_query": quote(clean_path, safe=""),
+        "path_no_leading_slash": clean_path.lstrip("/"),
+        "path_no_leading_slash_quoted": quote(clean_path.lstrip("/"), safe="/"),
+        "document_id": document_id or "",
+        "document_id_quoted": quote(document_id or "", safe=""),
+        "chunk_id": chunk_id or "",
+        "chunk_id_quoted": quote(chunk_id or "", safe=""),
+        "page": page_text,
+        "page_fragment": f"#page={quote(page_text, safe='')}" if page_text else "",
+    }
+    try:
+        return template.format(**values)
+    except (KeyError, ValueError):
+        return None
 
 
 def _citation_label(*, index: int, page: Any, chunk_id: str | None) -> str:

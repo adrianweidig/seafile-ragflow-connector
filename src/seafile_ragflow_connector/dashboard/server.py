@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 import structlog
 
+from seafile_ragflow_connector.clients.http import ApiError
 from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
 from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.export import audit_export_filename, build_audit_workbook
@@ -291,6 +292,7 @@ def _safe_config(settings: Settings) -> dict[str, Any]:
         "log_format": settings.log_format,
         "dry_run": settings.dry_run,
         "seafile_base_url": settings.seafile_base_url,
+        "seafile_file_url_template": settings.seafile_file_url_template,
         "seafile_skip_encrypted_libraries": settings.seafile_skip_encrypted_libraries,
         "seafile_skip_virtual_repos": settings.seafile_skip_virtual_repos,
         "ragflow_base_url": settings.ragflow_base_url,
@@ -346,7 +348,7 @@ def _handle_openwebui_query(
     artifact_id = _required_text(payload, "artifact_id")
     dataset_id = _required_text(payload, "dataset_id")
     question = _required_text(payload, "question")
-    top_k = int(payload.get("top_k") or 5)
+    top_k = _bounded_top_k(payload.get("top_k"))
     mapping = _load_mapping(context.store, dataset_id=dataset_id, tool_id=artifact_id)
     ragflow = RAGFlowClient(
         context.settings.ragflow_internal_url or context.settings.ragflow_base_url,
@@ -380,6 +382,7 @@ def _handle_openwebui_chat(
     messages = payload.get("messages")
     if not isinstance(messages, list):
         raise ValueError("messages must be a list")
+    top_k = _bounded_top_k(payload.get("top_k"))
     mapping = _load_mapping(
         context.store,
         dataset_id=dataset_id,
@@ -393,13 +396,38 @@ def _handle_openwebui_chat(
         verify=context.settings.ragflow_httpx_verify,
     )
     try:
-        result = ragflow.chat_completion(
-            chat_id=chat_id,
-            messages=messages,
-            model="model",
-            stream=False,
-        )
         files_by_document_id = _files_by_document_id(context.store, mapping.repo_id)
+        question = _last_user_message(messages)
+        try:
+            result = ragflow.chat_completion(
+                chat_id=chat_id,
+                messages=messages,
+                model="model",
+                stream=True,
+            )
+        except ApiError as exc:
+            if not question:
+                raise
+            structlog.get_logger(__name__).warning(
+                "openwebui.chat_completion_failed_fallback_retrieval",
+                dataset_id=dataset_id,
+                chat_id=chat_id,
+                error=str(exc),
+            )
+            sources = _retrieve_openwebui_sources(
+                ragflow,
+                context=context,
+                mapping=mapping,
+                dataset_id=dataset_id,
+                question=question,
+                top_k=top_k,
+                files_by_document_id=files_by_document_id,
+            )
+            return {
+                "answer": _sources_markdown(sources),
+                "sources": sources,
+                "citations_emitted": True,
+            }
         sources = normalize_sources(
             result,
             settings=context.settings,
@@ -407,25 +435,31 @@ def _handle_openwebui_chat(
             dataset_name=mapping.ragflow_dataset_name,
             files_by_document_id=files_by_document_id,
         )
-        if not sources:
-            question = _last_user_message(messages)
-            if question:
-                retrieval_result = ragflow.retrieve_chunks(
+        if question:
+            try:
+                retrieval_sources = _retrieve_openwebui_sources(
+                    ragflow,
+                    context=context,
+                    mapping=mapping,
                     dataset_id=dataset_id,
                     question=question,
-                    top_k=5,
-                    page_size=5,
-                )
-                sources = normalize_sources(
-                    retrieval_result,
-                    settings=context.settings,
-                    dataset_id=dataset_id,
-                    dataset_name=mapping.ragflow_dataset_name,
+                    top_k=top_k,
                     files_by_document_id=files_by_document_id,
                 )
+            except ApiError as exc:
+                structlog.get_logger(__name__).warning(
+                    "openwebui.retrieval_source_enrichment_failed",
+                    dataset_id=dataset_id,
+                    chat_id=chat_id,
+                    error=str(exc),
+                )
+            else:
+                sources = _merge_sources(sources, retrieval_sources)
     finally:
         ragflow.close()
     answer = annotate_answer_citations(extract_answer(result), sources)
+    if sources and "## Gefundene Quellen" not in answer:
+        answer = (answer.strip() + "\n\n" if answer.strip() else "") + _sources_markdown(sources)
     return {"answer": answer, "sources": sources, "citations_emitted": True}
 
 
@@ -462,6 +496,68 @@ def _last_user_message(messages: list[Any]) -> str | None:
             if text:
                 return text
     return None
+
+
+def _bounded_top_k(value: Any, *, default: int = 8, maximum: int = 20) -> int:
+    try:
+        top_k = int(value or default)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(maximum, top_k))
+
+
+def _retrieve_openwebui_sources(
+    ragflow: RAGFlowClient,
+    *,
+    context: DashboardContext,
+    mapping: OpenWebUIDatasetMapping,
+    dataset_id: str,
+    question: str,
+    top_k: int,
+    files_by_document_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    retrieval_result = ragflow.retrieve_chunks(
+        dataset_id=dataset_id,
+        question=question,
+        top_k=top_k,
+        page_size=top_k,
+    )
+    return normalize_sources(
+        retrieval_result,
+        settings=context.settings,
+        dataset_id=dataset_id,
+        dataset_name=mapping.ragflow_dataset_name,
+        files_by_document_id=files_by_document_id,
+    )
+
+
+def _merge_sources(
+    primary: list[dict[str, Any]],
+    additional: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for source in [*primary, *additional]:
+        key = _source_key(source)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(source)
+    return merged
+
+
+def _source_key(source: dict[str, Any]) -> tuple[str, str, str, str]:
+    metadata = source.get("source_metadata")
+    if not isinstance(metadata, dict):
+        metadata_items = source.get("metadata")
+        metadata = metadata_items[0] if isinstance(metadata_items, list) and metadata_items else {}
+    snippet = str(source.get("snippet") or source.get("text") or "")
+    return (
+        str(metadata.get("document_id") or source.get("name") or ""),
+        str(metadata.get("chunk_id") or ""),
+        str(metadata.get("page") or ""),
+        " ".join(snippet.split())[:160],
+    )
 
 
 def _load_mapping(
@@ -506,52 +602,171 @@ def _files_by_document_id(store: DashboardEventStore, repo_id: str) -> dict[str,
 def _sources_markdown(sources: list[dict[str, Any]]) -> str:
     if not sources:
         return "Keine passenden Quellen gefunden."
-    lines = ["Gefundene Quellen:"]
+    lines = [
+        "## Gefundene Quellen",
+        "",
+        "| # | Dokument | Fundstelle | Auszug |",
+        "|---:|---|---|---|",
+    ]
     for index, source in enumerate(sources, start=1):
         name = source.get("name") or "Quelle"
         url = source.get("url")
+        original_url = source.get("original_url")
         snippet = source.get("snippet") or ""
-        lines.append(f"{index}. [{name}]({url})" if url else f"{index}. {name}")
-        if snippet:
-            lines.append(f"   {snippet}")
+        document = _source_document_markdown(str(name), url, original_url)
+        locator = _source_locator(source)
+        excerpt = _markdown_cell(_compact_markdown_text(str(snippet), 220) or "-")
+        lines.append(f"| {index} | {document} | {_markdown_cell(locator)} | {excerpt} |")
+    for index, source in enumerate(sources, start=1):
+        snippet = str(source.get("snippet") or "").strip()
+        if not snippet:
+            continue
+        name = str(source.get("name") or "Quelle")
+        summary = _markdown_plain(f"Auszug {index}: {name}")
+        lines.extend(["", f"### {summary}", "", _blockquote(_compact_markdown_text(snippet, 1400))])
     return "\n".join(lines)
+
+
+def _source_document_markdown(name: str, url: Any, original_url: Any) -> str:
+    title = _markdown_plain(name)
+    links = f"[{title}]({url})" if url else title
+    if original_url and original_url != url:
+        links = f"{links} - [Original öffnen]({original_url})"
+    return links
+
+
+def _source_locator(source: dict[str, Any]) -> str:
+    metadata = source.get("source_metadata")
+    if not isinstance(metadata, dict):
+        metadata_items = source.get("metadata")
+        metadata = metadata_items[0] if isinstance(metadata_items, list) and metadata_items else {}
+    parts = []
+    page = metadata.get("page")
+    if page not in (None, ""):
+        parts.append(f"Seite {page}")
+    section = metadata.get("section")
+    if section not in (None, ""):
+        parts.append(f"Abschnitt {section}")
+    line = metadata.get("line")
+    if line not in (None, ""):
+        parts.append(f"Zeile {line}")
+    chunk_id = metadata.get("chunk_id")
+    if chunk_id not in (None, ""):
+        chunk = str(chunk_id)
+        parts.append(f"Chunk `{chunk[:12]}`")
+    score = metadata.get("score")
+    if score not in (None, ""):
+        parts.append(f"Score {_format_score(score)}")
+    return ", ".join(parts) or "-"
+
+
+def _format_score(score: Any) -> str:
+    try:
+        value = float(score)
+    except (TypeError, ValueError):
+        return str(score)
+    if 0 <= value <= 1:
+        return f"{value:.0%}"
+    return f"{value:.3g}"
+
+
+def _compact_markdown_text(text: str, limit: int) -> str:
+    clean = "\n".join(line.rstrip() for line in str(text or "").strip().splitlines())
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 3].rstrip() + "..."
+
+
+def _markdown_plain(text: str) -> str:
+    return " ".join(text.split()).replace("[", "\\[").replace("]", "\\]").replace("|", "\\|")
+
+
+def _markdown_cell(text: str) -> str:
+    return " ".join(str(text or "").split()).replace("|", "\\|")
+
+
+def _blockquote(text: str) -> str:
+    lines = str(text or "").splitlines() or [""]
+    return "\n".join(f"> {line}" if line else ">" for line in lines)
 
 
 def _preview_html(settings: Settings, token: str | None) -> str:
     if not token or not settings.openwebui_proxy_shared_secret:
-        return "<!doctype html><html><body><h1>Quelle nicht verfügbar</h1></body></html>"
+        return _preview_unavailable_html()
     try:
         payload = verify_preview_token(token, settings.openwebui_proxy_shared_secret)
     except ValueError:
-        return "<!doctype html><html><body><h1>Quelle nicht verfügbar</h1></body></html>"
+        return _preview_unavailable_html()
     title = escape(str(payload.get("document_name") or "Quelle"))
-    snippet = escape(str(payload.get("snippet") or ""))
+    snippet_text = str(payload.get("snippet") or "").strip()
+    snippet = escape(snippet_text)
     dataset = escape(str(payload.get("dataset_name") or payload.get("dataset_id") or ""))
+    document_id = escape(str(payload.get("document_id") or ""))
     chunk = escape(str(payload.get("chunk_id") or ""))
     citation = escape(str(payload.get("citation_label") or "Quelle"))
     page = escape(str(payload.get("page") or ""))
     section = escape(str(payload.get("section") or ""))
     line = escape(str(payload.get("line") or ""))
-    position = escape(json.dumps(payload.get("position"), ensure_ascii=False, default=str))
-    details = [
-        f"<p>Dataset: {dataset}</p>",
-        f"<p>Zitation: {citation}</p>",
-        f"<p>Chunk: {chunk}</p>",
-    ]
+    repo_id = escape(str(payload.get("repo_id") or ""))
+    source_path = escape(str(payload.get("source_path") or ""))
+    original_url = str(payload.get("original_url") or "")
+    original_link = (
+        f'<a class="button primary" href="{escape(original_url, quote=True)}" target="_blank" rel="noreferrer">Original öffnen</a>'
+        if original_url
+        else ""
+    )
+    position_json = json.dumps(payload.get("position"), ensure_ascii=False, default=str)
+    position = escape(position_json)
+    chips = [f"<span>{citation}</span>"]
     if page:
-        details.append(f"<p>Seite: {page}</p>")
-    if section:
-        details.append(f"<p>Abschnitt: {section}</p>")
-    if line:
-        details.append(f"<p>Zeile: {line}</p>")
-    if position not in ("null", '""'):
-        details.append(f"<p>Position: <code>{position}</code></p>")
+        chips.append(f"<span>Seite {page}</span>")
+    if chunk:
+        chips.append(f"<span>Chunk {chunk[:12]}</span>")
+    details = [
+        ("Dataset", dataset),
+        ("Dokument-ID", document_id),
+        ("Seafile-Repo", repo_id),
+        ("Quellpfad", source_path),
+        ("Abschnitt", section),
+        ("Zeile", line),
+        ("Position", f"<code>{position}</code>" if position not in ("null", '""') else ""),
+    ]
+    details_html = "".join(
+        f"<div><dt>{label}</dt><dd>{value}</dd></div>" for label, value in details if value
+    )
+    if not snippet:
+        snippet = "Kein Textauszug in der RAGFlow-Referenz vorhanden."
     return (
         "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{title}</title>"
-        "<style>body{font-family:system-ui,Segoe UI,Arial,sans-serif;margin:2rem;line-height:1.5;max-width:960px}"
-        "code,pre{background:#f1f5f9;padding:.15rem .3rem;border-radius:6px}"
-        "pre{white-space:pre-wrap;padding:1rem}</style></head><body>"
-        f"<h1>{title}</h1>{''.join(details)}<pre>{snippet}</pre></body></html>"
+        "<style>"
+        ":root{color-scheme:light dark;--bg:#f7f8fb;--panel:#ffffff;--text:#172033;--muted:#5d687a;--line:#d9e0ea;--accent:#0f766e;--accent-2:#2563eb;--code:#eef3f8}"
+        "@media(prefers-color-scheme:dark){:root{--bg:#111827;--panel:#172033;--text:#f8fafc;--muted:#b6c0ce;--line:#2c3748;--accent:#2dd4bf;--accent-2:#93c5fd;--code:#0f172a}}"
+        "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,system-ui,-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.55}"
+        "main{max-width:1180px;margin:0 auto;padding:32px 22px 48px}.hero{display:grid;gap:18px;padding:26px 28px;border:1px solid var(--line);border-radius:8px;background:var(--panel);box-shadow:0 12px 28px rgba(15,23,42,.08)}"
+        ".eyebrow{margin:0;color:var(--accent);font-size:.78rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase}h1{margin:0;font-size:clamp(1.55rem,3vw,2.4rem);line-height:1.14;letter-spacing:0;overflow-wrap:anywhere}"
+        ".chips{display:flex;flex-wrap:wrap;gap:8px}.chips span{border:1px solid var(--line);border-radius:999px;padding:5px 10px;color:var(--muted);font-size:.86rem;background:color-mix(in srgb,var(--panel),var(--bg) 42%)}"
+        ".actions{display:flex;flex-wrap:wrap;gap:10px}.button{display:inline-flex;align-items:center;min-height:38px;border:1px solid var(--line);border-radius:7px;padding:8px 12px;color:var(--text);text-decoration:none;font-weight:650}.button.primary{background:var(--accent);border-color:var(--accent);color:white}"
+        ".grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;margin-top:18px}.card{border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden}.card h2{margin:0;padding:16px 18px;border-bottom:1px solid var(--line);font-size:1rem}"
+        "pre{margin:0;padding:20px 22px;white-space:pre-wrap;overflow:auto;background:var(--code);font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:.94rem;line-height:1.65}"
+        "dl{margin:0;padding:12px 18px}dl div{display:grid;grid-template-columns:108px minmax(0,1fr);gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}dl div:last-child{border-bottom:0}dt{color:var(--muted);font-size:.82rem}dd{margin:0;overflow-wrap:anywhere;font-weight:600}code{background:var(--code);padding:2px 5px;border-radius:5px}"
+        ".empty{padding:20px 22px;color:var(--muted)}@media(max-width:820px){main{padding:18px 12px 34px}.hero{padding:20px}.grid{grid-template-columns:1fr}dl div{grid-template-columns:1fr;gap:2px}}"
+        "</style></head><body><main>"
+        f"<section class=\"hero\"><p class=\"eyebrow\">RAGFlow Quellenvorschau</p><h1>{title}</h1><div class=\"chips\">{''.join(chips)}</div><div class=\"actions\">{original_link}</div></section>"
+        "<section class=\"grid\">"
+        f"<article class=\"card\"><h2>Fundstelle</h2><pre>{snippet}</pre></article>"
+        f"<aside class=\"card\"><h2>Metadaten</h2><dl>{details_html}</dl></aside>"
+        "</section></main></body></html>"
+    )
+
+
+def _preview_unavailable_html() -> str:
+    return (
+        "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<title>Quelle nicht verfügbar</title>"
+        "<style>body{font-family:Segoe UI,system-ui,sans-serif;margin:0;display:grid;min-height:100vh;place-items:center;background:#f7f8fb;color:#172033}"
+        "main{max-width:560px;padding:28px;border:1px solid #d9e0ea;border-radius:8px;background:white}h1{margin-top:0}</style>"
+        "</head><body><main><h1>Quelle nicht verfügbar</h1><p>Der Quellenlink ist ungültig oder der Connector-Proxy ist nicht für Vorschauen konfiguriert.</p></main></body></html>"
     )

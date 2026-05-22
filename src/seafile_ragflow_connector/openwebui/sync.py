@@ -15,6 +15,7 @@ from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore, new_sync_id, safe_text
 from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.openwebui.artifacts import (
+    ARTIFACT_VERSION,
     DatasetArtifactInputs,
     OpenWebUIArtifactSpec,
     build_model_name,
@@ -251,6 +252,7 @@ class OpenWebUISyncService:
                 dataset_name,
                 dataset_id,
             )
+            stored_mapping.artifact_version = ARTIFACT_VERSION
             stored_mapping.tool_definition_hash = tool_spec.definition_hash
             stored_mapping.pipe_definition_hash = pipe_spec.definition_hash
             stored_mapping.openwebui_tool_payload = dict(redact_mapping(tool_spec.payload))
