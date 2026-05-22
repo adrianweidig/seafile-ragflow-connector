@@ -4,6 +4,7 @@ import base64
 import hmac
 import json
 import re
+import zlib
 from hashlib import sha256
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
@@ -82,9 +83,8 @@ def annotate_answer_citations(answer: str, sources: list[dict[str, Any]]) -> str
 
 def sign_preview_payload(payload: dict[str, Any], secret: str, *, now: int | None = None) -> str:
     body = dict(payload)
-    encoded = _b64encode(
-        json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    )
+    raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    encoded = "z" + _b64encode(zlib.compress(raw, level=9))
     signature = hmac.new(secret.encode("utf-8"), encoded.encode("ascii"), sha256).digest()
     return f"{encoded}.{_b64encode(signature)}"
 
@@ -99,7 +99,14 @@ def verify_preview_token(token: str, secret: str, *, now: int | None = None) -> 
     )
     if not hmac.compare_digest(signature, expected):
         raise ValueError("invalid preview token signature")
-    payload = json.loads(_b64decode(encoded))
+    raw_payload = (
+        _b64decode_bytes(encoded[1:])
+        if encoded.startswith("z")
+        else _b64decode(encoded).encode("utf-8")
+    )
+    if encoded.startswith("z"):
+        raw_payload = zlib.decompress(raw_payload)
+    payload = json.loads(raw_payload)
     if not isinstance(payload, dict):
         raise ValueError("invalid preview token payload")
     return payload
@@ -392,5 +399,9 @@ def _b64encode(value: bytes) -> str:
 
 
 def _b64decode(value: str) -> str:
+    return _b64decode_bytes(value).decode("utf-8")
+
+
+def _b64decode_bytes(value: str) -> bytes:
     padding = "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode((value + padding).encode("ascii")).decode("utf-8")
+    return base64.urlsafe_b64decode((value + padding).encode("ascii"))

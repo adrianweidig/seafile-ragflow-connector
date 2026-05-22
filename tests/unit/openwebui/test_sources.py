@@ -92,6 +92,7 @@ class OpenWebUISourceTests(unittest.TestCase):
         preview = verify_preview_token(token, "proxy-secret", now=100)
         self.assertEqual(preview["page"], 3)
         self.assertEqual(preview["position"], [[3, 10, 20, 30, 40]])
+        self.assertLess(len(token), 420)
 
     def test_normalize_sources_adds_original_file_url_without_path_leak(self) -> None:
         settings = self._settings()

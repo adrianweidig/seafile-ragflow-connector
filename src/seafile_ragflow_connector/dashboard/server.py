@@ -3,10 +3,11 @@ from __future__ import annotations
 # ruff: noqa: E501
 import hmac
 import json
+import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from html import escape
+from html import escape, unescape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -455,6 +456,7 @@ def _handle_openwebui_chat(
                 )
             else:
                 sources = _merge_sources(sources, retrieval_sources)
+                sources = _filter_sources_for_requested_document(sources, question)
     finally:
         ragflow.close()
     answer = annotate_answer_citations(extract_answer(result), sources)
@@ -602,28 +604,18 @@ def _files_by_document_id(store: DashboardEventStore, repo_id: str) -> dict[str,
 def _sources_markdown(sources: list[dict[str, Any]]) -> str:
     if not sources:
         return "Keine passenden Quellen gefunden."
-    lines = [
-        "## Gefundene Quellen",
-        "",
-        "| # | Dokument | Fundstelle | Auszug |",
-        "|---:|---|---|---|",
-    ]
+    lines = ["## Gefundene Quellen", ""]
     for index, source in enumerate(sources, start=1):
         name = source.get("name") or "Quelle"
-        url = source.get("url")
-        original_url = source.get("original_url")
-        snippet = source.get("snippet") or ""
-        document = _source_document_markdown(str(name), url, original_url)
+        snippet = _clean_source_snippet(source.get("snippet") or "")
         locator = _source_locator(source)
-        excerpt = _markdown_cell(_compact_markdown_text(str(snippet), 220) or "-")
-        lines.append(f"| {index} | {document} | {_markdown_cell(locator)} | {excerpt} |")
-    for index, source in enumerate(sources, start=1):
-        snippet = str(source.get("snippet") or "").strip()
+        line = f"{index}. **{_markdown_plain(str(name))}**"
+        if locator != "-":
+            line += f" - {_markdown_plain(locator)}"
+        lines.append(line)
         if not snippet:
             continue
-        name = str(source.get("name") or "Quelle")
-        summary = _markdown_plain(f"Auszug {index}: {name}")
-        lines.extend(["", f"### {summary}", "", _blockquote(_compact_markdown_text(snippet, 1400))])
+        lines.append(f"   > {_compact_markdown_text(snippet, 360)}")
     return "\n".join(lines)
 
 
@@ -633,6 +625,20 @@ def _source_document_markdown(name: str, url: Any, original_url: Any) -> str:
     if original_url and original_url != url:
         links = f"{links} - [Original öffnen]({original_url})"
     return links
+
+
+def _filter_sources_for_requested_document(
+    sources: list[dict[str, Any]], question: str | None
+) -> list[dict[str, Any]]:
+    if not question:
+        return sources
+    question_lower = question.lower()
+    requested = [
+        source
+        for source in sources
+        if str(source.get("name") or "").lower() in question_lower
+    ]
+    return requested or sources
 
 
 def _source_locator(source: dict[str, Any]) -> str:
@@ -675,6 +681,18 @@ def _compact_markdown_text(text: str, limit: int) -> str:
     if len(clean) <= limit:
         return clean
     return clean[: limit - 3].rstrip() + "..."
+
+
+def _clean_source_snippet(text: Any) -> str:
+    clean = str(text or "")
+    clean = re.sub(r"(?is)<(script|style).*?</\1>", " ", clean)
+    clean = re.sub(r"(?i)</t[dh]>\s*<t[dh][^>]*>", " | ", clean)
+    clean = re.sub(r"(?i)</tr>\s*<tr[^>]*>", "\n", clean)
+    clean = re.sub(r"(?i)<br\s*/?>", "\n", clean)
+    clean = re.sub(r"(?s)<[^>]+>", " ", clean)
+    clean = unescape(clean)
+    clean = "\n".join(" ".join(line.split()) for line in clean.splitlines())
+    return "\n".join(line for line in clean.splitlines() if line).strip()
 
 
 def _markdown_plain(text: str) -> str:

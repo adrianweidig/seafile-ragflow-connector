@@ -7,7 +7,7 @@ from textwrap import dedent
 from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "4"
+ARTIFACT_VERSION = "6"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 
 
@@ -144,10 +144,11 @@ def _tool_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.2.1
         owner: seafile-ragflow-connector
-        artifact_version: 4
+        artifact_version: 6
         """
 
         import httpx
+        import re
         from pydantic import BaseModel, Field
 
 
@@ -233,25 +234,17 @@ def _tool_content() -> str:
         def _source_markdown(sources):
             if not sources:
                 return "Keine passenden Quellen gefunden."
-            lines = [
-                "## Gefundene Quellen",
-                "",
-                "| # | Dokument | Fundstelle | Auszug |",
-                "|---:|---|---|---|",
-            ]
+            lines = ["## Gefundene Quellen", ""]
             for index, source in enumerate(sources, start=1):
                 title = source.get("name") or source.get("document_name") or "Quelle"
-                url = source.get("url") or source.get("preview_url")
-                original_url = source.get("original_url")
-                snippet = source.get("text") or source.get("snippet") or ""
-                document = f"[{_clean(title)}]({url})" if url else _clean(title)
-                if original_url and original_url != url:
-                    document = f"{document} - [Original öffnen]({original_url})"
-                row = (
-                    f"| {index} | {document} | {_source_locator(source)} | "
-                    f"{_compact_cell(snippet)} |"
-                )
-                lines.append(row)
+                snippet = _clean_snippet(source.get("text") or source.get("snippet") or "")
+                locator = _source_locator(source)
+                line = f"{index}. **{_clean(title)}**"
+                if locator != "-":
+                    line += f" - {locator}"
+                lines.append(line)
+                if snippet:
+                    lines.append(f"   > {_compact(snippet, 360)}")
             return "\\n".join(lines)
 
 
@@ -268,11 +261,20 @@ def _tool_content() -> str:
             return _clean(", ".join(parts) or "-")
 
 
-        def _compact_cell(value, limit=220):
-            clean = _clean(value).replace("|", "\\\\|")
-            if len(clean) <= limit:
-                return clean or "-"
-            return clean[: limit - 3].rstrip() + "..."
+        def _compact(value, limit=220):
+            clean = _clean(value)
+            return clean if len(clean) <= limit else clean[: limit - 3].rstrip() + "..."
+
+
+        def _clean_snippet(value):
+            clean = str(value or "")
+            clean = re.sub(r"(?is)<(script|style).*?</\\1>", " ", clean)
+            clean = re.sub(r"(?i)</t[dh]>\\s*<t[dh][^>]*>", " | ", clean)
+            clean = re.sub(r"(?i)</tr>\\s*<tr[^>]*>", "\\n", clean)
+            clean = re.sub(r"(?i)<br\\s*/?>", "\\n", clean)
+            clean = re.sub(r"(?s)<[^>]+>", " ", clean)
+            clean = "\\n".join(" ".join(line.split()) for line in clean.splitlines())
+            return "\\n".join(line for line in clean.splitlines() if line).strip()
 
 
         def _clean(value):
@@ -296,10 +298,11 @@ def _pipe_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.2.1
         owner: seafile-ragflow-connector
-        artifact_version: 4
+        artifact_version: 6
         """
 
         import httpx
+        import re
         from pydantic import BaseModel, Field
 
 
@@ -468,25 +471,17 @@ def _pipe_content() -> str:
         def _source_markdown(sources):
             if not sources:
                 return ""
-            lines = [
-                "## Gefundene Quellen",
-                "",
-                "| # | Dokument | Fundstelle | Auszug |",
-                "|---:|---|---|---|",
-            ]
+            lines = ["## Gefundene Quellen", ""]
             for index, source in enumerate(sources, start=1):
                 title = source.get("name") or source.get("document_name") or "Quelle"
-                url = source.get("url") or source.get("preview_url")
-                original_url = source.get("original_url")
-                snippet = source.get("text") or source.get("snippet") or ""
-                document = f"[{_clean(title)}]({url})" if url else _clean(title)
-                if original_url and original_url != url:
-                    document = f"{document} - [Original öffnen]({original_url})"
-                row = (
-                    f"| {index} | {document} | {_source_locator(source)} | "
-                    f"{_compact_cell(snippet)} |"
-                )
-                lines.append(row)
+                snippet = _clean_snippet(source.get("text") or source.get("snippet") or "")
+                locator = _source_locator(source)
+                line = f"{index}. **{_clean(title)}**"
+                if locator != "-":
+                    line += f" - {locator}"
+                lines.append(line)
+                if snippet:
+                    lines.append(f"   > {_compact(snippet, 360)}")
             return "\\n".join(lines)
 
 
@@ -503,11 +498,20 @@ def _pipe_content() -> str:
             return _clean(", ".join(parts) or "-")
 
 
-        def _compact_cell(value, limit=220):
-            clean = _clean(value).replace("|", "\\\\|")
-            if len(clean) <= limit:
-                return clean or "-"
-            return clean[: limit - 3].rstrip() + "..."
+        def _compact(value, limit=220):
+            clean = _clean(value)
+            return clean if len(clean) <= limit else clean[: limit - 3].rstrip() + "..."
+
+
+        def _clean_snippet(value):
+            clean = str(value or "")
+            clean = re.sub(r"(?is)<(script|style).*?</\\1>", " ", clean)
+            clean = re.sub(r"(?i)</t[dh]>\\s*<t[dh][^>]*>", " | ", clean)
+            clean = re.sub(r"(?i)</tr>\\s*<tr[^>]*>", "\\n", clean)
+            clean = re.sub(r"(?i)<br\\s*/?>", "\\n", clean)
+            clean = re.sub(r"(?s)<[^>]+>", " ", clean)
+            clean = "\\n".join(" ".join(line.split()) for line in clean.splitlines())
+            return "\\n".join(line for line in clean.splitlines() if line).strip()
 
 
         def _clean(value):
