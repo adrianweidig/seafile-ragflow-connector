@@ -100,8 +100,9 @@ def main() -> None:
     args = parser.parse_args()
 
     Handler.service_name = args.name
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)  # nosec B104
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(args.cert, args.key)
     server.socket = context.wrap_socket(server.socket, server_side=True)
     print(f"{args.name} listening on https://0.0.0.0:{args.port}", flush=True)

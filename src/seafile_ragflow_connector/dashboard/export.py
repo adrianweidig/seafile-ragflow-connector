@@ -5,7 +5,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from io import BytesIO
 from typing import Any
-from xml.sax.saxutils import escape
+from xml.sax.saxutils import escape  # nosec B406
 from zipfile import ZIP_DEFLATED, ZipFile
 
 MAX_CELL_CHARS = 32767

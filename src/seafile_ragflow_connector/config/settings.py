@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     connector_ca_bundle: str | None = None
 
     connector_dashboard_enabled: bool = False
-    connector_dashboard_host: str = "0.0.0.0"
+    connector_dashboard_host: str = "0.0.0.0"  # nosec B104
     connector_dashboard_port: int = 8080
     connector_dashboard_max_log_entries: int = 5000
     connector_dashboard_max_event_entries: int = 10000

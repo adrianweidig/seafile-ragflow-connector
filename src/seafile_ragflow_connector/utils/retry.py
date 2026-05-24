@@ -12,5 +12,4 @@ def exponential_backoff_seconds(
 ) -> int:
     raw = min(max_seconds, base_seconds * (2 ** max(0, attempt - 1)))
     jitter = raw * jitter_ratio
-    return int(max(1, raw + random.uniform(-jitter, jitter)))
-
+    return int(max(1, raw + random.uniform(-jitter, jitter)))  # nosec B311

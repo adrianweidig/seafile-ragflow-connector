@@ -122,6 +122,12 @@ erzwungen, wenn `--with-compose` gesetzt ist.
 - `*_VERIFY_SSL=false` ist nur für Diagnose/Entwicklung gedacht und darf nicht
   als produktive Empfehlung dokumentiert werden.
 - Produktive Dienste nicht ohne konkreten Auftrag mutieren.
+- HTML- oder Markdown-Fragmente aus RAGFlow/OpenWebUI nicht mit unbounded
+  regulären Ausdrücken bereinigen. Für Vorschauen und Snippets parserbasierte
+  Bereinigung oder strikt begrenzte Eingaben verwenden, damit CodeQL-ReDoS-
+  Alerts nicht erneut entstehen.
+- TLS-Testserver und lokale HTTPS-Mocks müssen TLS 1.2 oder neuer erzwingen,
+  auch wenn sie nur für Tests oder lokale Labs gedacht sind.
 
 ## Definition of Done
 

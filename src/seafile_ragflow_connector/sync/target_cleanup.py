@@ -249,7 +249,8 @@ class TargetCleanupService:
         return orphan_ids
 
     def _orphan_openwebui_tool_ids(self, expected_tool_ids: set[str]) -> list[str]:
-        assert self.openwebui_client is not None
+        if self.openwebui_client is None:
+            raise RuntimeError("OpenWebUI cleanup requires an OpenWebUI client")
         orphan_ids: list[str] = []
         for tool in self.openwebui_client.list_tools():
             tool_id = _string_or_none(tool.get("id"))
@@ -258,7 +259,8 @@ class TargetCleanupService:
         return orphan_ids
 
     def _orphan_openwebui_function_ids(self, expected_function_ids: set[str]) -> list[str]:
-        assert self.openwebui_client is not None
+        if self.openwebui_client is None:
+            raise RuntimeError("OpenWebUI cleanup requires an OpenWebUI client")
         orphan_ids: list[str] = []
         for function in self.openwebui_client.list_functions():
             function_id = _string_or_none(function.get("id"))

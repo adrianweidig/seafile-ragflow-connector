@@ -47,6 +47,7 @@ class _HttpsServer:
     def __enter__(self) -> _HttpsServer:
         server = ThreadingHTTPServer(("127.0.0.1", 0), _HealthHandler)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(str(self.cert_path), str(self.key_path))
         server.socket = context.wrap_socket(server.socket, server_side=True)
         self.server = server

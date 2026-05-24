@@ -41,7 +41,8 @@ def build_tool_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
     valves: dict[str, object] = {
         "ARTIFACT_ID": artifact_id,
         "CONNECTOR_PROXY_BASE_URL": inputs.proxy_base_url or "",
-        "CONNECTOR_PROXY_SHARED_SECRET": "",
+        # OpenWebUI valve placeholder, not a committed secret.
+        "CONNECTOR_PROXY_SHARED_SECRET": "",  # nosec B105
         "CONNECTOR_PROXY_VERIFY_SSL": inputs.proxy_verify_ssl,
         "CONNECTOR_PROXY_CA_BUNDLE": inputs.proxy_ca_bundle or "",
         "TLS_DEBUG": False,
@@ -72,7 +73,8 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
     valves: dict[str, object] = {
         "ARTIFACT_ID": artifact_id,
         "CONNECTOR_PROXY_BASE_URL": inputs.proxy_base_url or "",
-        "CONNECTOR_PROXY_SHARED_SECRET": "",
+        # OpenWebUI valve placeholder, not a committed secret.
+        "CONNECTOR_PROXY_SHARED_SECRET": "",  # nosec B105
         "CONNECTOR_PROXY_VERIFY_SSL": inputs.proxy_verify_ssl,
         "CONNECTOR_PROXY_CA_BUNDLE": inputs.proxy_ca_bundle or "",
         "TLS_DEBUG": False,

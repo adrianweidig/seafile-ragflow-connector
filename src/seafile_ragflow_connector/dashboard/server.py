@@ -3,11 +3,11 @@ from __future__ import annotations
 # ruff: noqa: E501
 import hmac
 import json
-import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from html import escape, unescape
+from html import escape
+from html.parser import HTMLParser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -710,15 +710,62 @@ def _compact_markdown_text(text: str, limit: int) -> str:
 
 
 def _clean_source_snippet(text: Any) -> str:
-    clean = str(text or "")
-    clean = re.sub(r"(?is)<(script|style).*?</\1>", " ", clean)
-    clean = re.sub(r"(?i)</t[dh]>\s*<t[dh][^>]*>", " | ", clean)
-    clean = re.sub(r"(?i)</tr>\s*<tr[^>]*>", "\n", clean)
-    clean = re.sub(r"(?i)<br\s*/?>", "\n", clean)
-    clean = re.sub(r"(?s)<[^>]+>", " ", clean)
-    clean = unescape(clean)
+    parser = _SnippetHTMLTextExtractor()
+    parser.feed(str(text or ""))
+    parser.close()
+    clean = parser.text
     clean = "\n".join(" ".join(line.split()) for line in clean.splitlines())
     return "\n".join(line for line in clean.splitlines() if line).strip()
+
+
+class _SnippetHTMLTextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._ignored_depth = 0
+
+    @property
+    def text(self) -> str:
+        return "".join(self._parts)
+
+    def handle_starttag(self, tag: str, _attrs: list[tuple[str, str | None]]) -> None:
+        name = tag.lower()
+        if name in {"script", "style"}:
+            self._ignored_depth += 1
+            return
+        if self._ignored_depth:
+            return
+        if name == "br":
+            self._parts.append("\n")
+        elif name == "tr":
+            self._append_line_break()
+        elif name in {"td", "th"}:
+            self._append_table_cell_separator()
+
+    def handle_endtag(self, tag: str) -> None:
+        name = tag.lower()
+        if name in {"script", "style"} and self._ignored_depth:
+            self._ignored_depth -= 1
+            return
+        if self._ignored_depth:
+            return
+        if name == "tr":
+            self._append_line_break()
+
+    def handle_data(self, data: str) -> None:
+        if not self._ignored_depth:
+            self._parts.append(data)
+
+    def _append_line_break(self) -> None:
+        if self._parts and self._parts[-1] != "\n":
+            self._parts.append("\n")
+
+    def _append_table_cell_separator(self) -> None:
+        if not self._parts:
+            return
+        current = "".join(self._parts).rstrip()
+        if current and not current.endswith(("\n", "|")):
+            self._parts.append(" | ")
 
 
 def _clean_answer_text(text: str) -> str:

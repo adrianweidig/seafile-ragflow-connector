@@ -14,6 +14,7 @@ try:
     from seafile_ragflow_connector.config.settings import Settings
     from seafile_ragflow_connector.dashboard.server import (
         DashboardContext,
+        _clean_source_snippet,
         _handle_openwebui_chat,
         _load_mapping,
         _preview_html,
@@ -451,6 +452,15 @@ class DashboardServerTests(unittest.TestCase):
 
         self.assertIn("Alpha | ü", html)
         self.assertNotIn("&lt;td&gt;", html)
+
+    def test_source_snippet_cleaner_ignores_script_style_without_regex_backtracking(self) -> None:
+        hostile_markup = "<style" * 4000 + "<table><tr><td>Alpha</td><td>&uuml;</td></tr></table>"
+
+        cleaned = _clean_source_snippet(hostile_markup)
+
+        self.assertIn("Alpha | ü", cleaned)
+        self.assertNotIn("<td>", cleaned)
+        self.assertNotIn("style", cleaned.lower())
 
 
 class _FakeRAGFlowClient:
