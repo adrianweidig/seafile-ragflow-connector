@@ -5,7 +5,8 @@
 <h1 align="center">Seafile RAGFlow Connector</h1>
 
 <p align="center">
-  Offline-fähiger Sync-Orchestrator für bestehende Seafile-, RAGFlow- und optionale OpenWebUI-Umgebungen.
+  Aus Seafile-Libraries werden reproduzierbare RAGFlow-Datasets und optional OpenWebUI Custom Models:
+  mit Delta-Sync, Delete-Propagation, Drift-Repair, TLS, Audit und Portainer-tauglichem Betrieb.
 </p>
 
 <p align="center">
@@ -20,17 +21,17 @@
 
 ## Überblick
 
-Der Seafile RAGFlow Connector betreibt eine eigene Control Plane zwischen einem
-bestehenden Seafile-Server und einem bestehenden RAGFlow-Server. Seafile bleibt
-die Quelle der Wahrheit. Der Connector entdeckt Libraries, erzeugt pro Library
-ein RAGFlow-Dataset aus einem `connector_template`, importiert Dateien, erkennt
-Änderungen, löscht entfernte Zielartefakte kontrolliert und repariert Drift aus
-Seafile heraus.
+Der Connector ist keine dünne Upload-Schleife. Er ist eine eigenständige
+Sync-Control-Plane für Umgebungen, in denen Seafile die Dokumentenquelle bleibt
+und RAGFlow daraus zuverlässig nutzbare Knowledge-Datasets bekommt.
 
-Optional synchronisiert der Connector RAGFlow-Chats, OpenWebUI-Tools und
-OpenWebUI-Pipes, damit RAGFlow-Datasets in OpenWebUI als Custom Models genutzt
-werden können. Seafile, RAGFlow und OpenWebUI werden dabei nicht ersetzt,
-sondern als externe Systeme angebunden.
+Für jede Seafile-Library kann der Connector ein RAGFlow-Dataset aus einem
+Template erzeugen, Dateien inkrementell importieren, entfernte Dateien und
+Libraries kontrolliert in den Zielsystemen nachvollziehen und verlorene oder
+extern gelöschte Zielartefakte wieder aus Seafile aufbauen. OpenWebUI kann
+additiv angebunden werden: pro Dataset entstehen deterministische RAGFlow-Chats,
+Tools und Pipes, sodass die Inhalte als Custom Models nutzbar werden, ohne
+RAGFlow-Secrets in OpenWebUI-Funktionen abzulegen.
 
 ## Quick Links
 
@@ -44,25 +45,32 @@ sondern als externe Systeme angebunden.
 | Entwicklung | [Entwicklungschecks](#entwicklung) und [Tests](docs/testing.md) |
 | Mitarbeit | [CONTRIBUTING.md](CONTRIBUTING.md), [Security Policy](SECURITY.md), [Support](SUPPORT.md) |
 
-## Kernprinzipien
+## Was dieses Repository besonders macht
 
-- Die Seafile API ist die Quelle der Wahrheit.
-- Die RAGFlow API und optional OpenWebUI sind Zielsysteme.
-- Seafile wird nie geändert, nur weil Zielartefakte in RAGFlow oder OpenWebUI fehlen, gelöscht wurden oder driften.
-- Entfernte Seafile-Dateien und -Libraries werden in den Zielsystemen nachvollzogen.
-- Extern gelöschte RAGFlow- oder OpenWebUI-Artefakte werden aus Seafile und dem lokalen Connector-State repariert.
-- PostgreSQL speichert den dauerhaften Sync-Zustand.
-- Redis übernimmt Queueing, Retries und Backpressure.
-- RAGFlow-Dataset-Einstellungen bleiben nach der Erstellung live. Das Template wird nur für neue Datasets genutzt.
-- Der Runtime-Betrieb ist offline-fähig: keine Paket-Downloads, keine Telemetrie und keine externen Service-Abhängigkeiten außerhalb der konfigurierten Seafile-, RAGFlow- und optionalen OpenWebUI-URLs.
+| Bereich | Was der Connector leistet |
+| --- | --- |
+| Source of truth | Seafile bleibt maßgeblich. Zielsystem-Drift wird repariert, nicht nach Seafile zurückgeschrieben. |
+| Dataset-Lifecycle | Libraries werden entdeckt, Datasets aus `connector_template` erzeugt, Dokumente importiert und Parse-Läufe angestoßen. |
+| Delta und Delete | Änderungen, entfernte Dateien und gelöschte Libraries werden nachvollziehbar in RAGFlow und optional OpenWebUI propagiert. |
+| Repair statt Fragilität | Extern gelöschte RAGFlow-Datasets, Dokumente, Chats, Tools oder Pipes werden aus State und Seafile wieder aufgebaut. |
+| OpenWebUI | Datasets können als Custom Models erscheinen; Tool und Pipe nutzen einen Connector-Proxy statt eingebetteter RAGFlow-Secrets. |
+| Betrieb | PostgreSQL-State, Redis-Jobs, Dashboard, Health, Metriken, Excel-Audit-Export, TLS/CA-Bundles, GHCR, Portainer, Compose und Swarm. |
 
 ## Architektur
 
-```text
-Seafile API -> controller -> PostgreSQL state -> Redis jobs -> workers -> RAGFlow API
-                         \-> reconciler ------------------------/
-                         \-> OpenWebUI sync -> OpenWebUI API
-                         \-> HTTP proxy ----> RAGFlow API
+```mermaid
+flowchart LR
+    S["Seafile<br/>Libraries, folders, files"] --> C["connector-controller<br/>discovery, scheduling, dashboard"]
+    C --> DB[("PostgreSQL<br/>sync state")]
+    C --> Q[("Redis<br/>jobs, retries")]
+    Q --> W["connector-worker<br/>download, classify, upload, parse"]
+    W --> R["RAGFlow<br/>datasets and documents"]
+    C --> O["OpenWebUI sync<br/>chats, tools, pipes"]
+    O --> OW["OpenWebUI<br/>custom models"]
+    OW --> P["Connector proxy<br/>query, chat, citations"]
+    P --> R
+    R -. "drift detected" .-> RC["connector-reconciler"]
+    RC -. "rebuild from Seafile" .-> C
 ```
 
 | Komponente | Aufgabe |
@@ -77,19 +85,28 @@ Seafile API -> controller -> PostgreSQL state -> Redis jobs -> workers -> RAGFlo
 
 Mehr Details stehen in [docs/architecture.md](docs/architecture.md).
 
-## Features
+## Funktionsumfang
 
-- Seafile-Library-Discovery über Admin-API.
-- RAGFlow-Dataset-Erzeugung aus einem vorhandenen Template-Dataset.
-- Delta-Sync, Delete-Propagation und Drift-Reparatur.
-- Textartefakt-Erzeugung für unterstützte und textbasierte Dateiformate.
-- Wiederholbare Jobs mit Redis, PostgreSQL-State und konservativer Retry-Logik.
-- Lesendes Dashboard mit Health, Sync-Historie, Logs, Diagnose und Excel-Audit-Export.
-- Optionale OpenWebUI-Integration mit deterministischen Tools, Pipes und Custom-Model-Namen.
-- TLS-/CA-Bundle-Konfiguration für Seafile, RAGFlow, OpenWebUI und Connector-Proxy.
-- Portainer-, Docker-Compose- und Docker-Swarm-Artefakte.
-- Lokales TLS-Lab und `.top.secret`-Compose-Runbook für Windows-/WSL-Prüfungen.
-- CI für Linting, Typechecking und Tests sowie Docker-Image-Build/Publish nach GHCR.
+| Funktion | Details |
+| --- | --- |
+| Seafile Discovery | Library-Discovery über Admin-API, rekursive Datei-Iteration, Download-Rewrite für unterschiedliche Netzwerkpfade. |
+| RAGFlow Provisioning | Dataset-Erzeugung aus `connector_template`, Erhalt live geänderter Dataset-Einstellungen, Upload und Parse-Steuerung. |
+| Sync und Cleanup | Delta-Sync, Full-Sync, Delete-Propagation, orphan cleanup, Schutz vor unklaren Fremdartefakten. |
+| Drift Repair | Wiederaufbau fehlender Datasets und Dokumente aus Seafile, Reparatur eigener OpenWebUI-Artefakte. |
+| OpenWebUI Integration | deterministische Chats, Tools, Pipes, Custom-Model-Namen, Quellen/Citations und optionaler Preview-Viewer. |
+| Dashboard und Audit | Health, Sync-Historie, Änderungen, Logs, Diagnose, TLS-Status und Excel-Audit-Export ohne Dateiinhaltsexfiltration. |
+| Deployment | GHCR-Image, Portainer-Stack, direkte Compose-Varianten, Shared-Network-Modus, Swarm-Stack und Offline-Image-Workflow. |
+| TLS und Betrieb | interne CAs, mTLS-Dateien, `.top.secret`-Lab, lokale HTTPS-Mocks und Troubleshooting für Zertifikatsketten. |
+| Qualität | Ruff, mypy strict, pytest, unittest, CodeQL, Docker-Build-Workflow und Dependabot. |
+
+## Leitplanken
+
+- Seafile wird nie geändert, nur weil RAGFlow oder OpenWebUI driften.
+- Der Connector löscht nur eigene, eindeutig zuordenbare Zielartefakte.
+- RAGFlow-Dataset-Einstellungen bleiben nach der Erstellung live; das Template wird nur für neue Datasets genutzt.
+- OpenWebUI-Funktionen bekommen keine RAGFlow-Admin-Secrets, sondern sprechen mit dem Connector-Proxy.
+- Der Runtime-Betrieb ist offline-fähig: keine Telemetrie und keine externen Service-Abhängigkeiten außerhalb der konfigurierten Zielsysteme.
+- Das Dashboard ist lesend; Schreib- und Löschaktionen laufen über explizite CLI-/Runtime-Pfade.
 
 ## Voraussetzungen
 

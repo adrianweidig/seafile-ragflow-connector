@@ -1,47 +1,115 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="520" viewBox="0 0 1280 520" role="img" aria-labelledby="title desc">
   <title id="title">Seafile RAGFlow Connector</title>
-  <desc id="desc">A restrained architecture graphic showing Seafile flowing through the connector to RAGFlow and optional OpenWebUI.</desc>
+  <desc id="desc">A professional architecture diagram showing Seafile as source of truth, a connector control plane, RAGFlow datasets, optional OpenWebUI models, state, jobs, repair, audit, TLS and Portainer deployment paths.</desc>
   <defs>
-    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
-      <stop offset="0" stop-color="#f7fbff"/>
-      <stop offset="1" stop-color="#edf7f3"/>
+    <linearGradient id="canvas" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#f8fbff"/>
+      <stop offset="0.48" stop-color="#f5faf7"/>
+      <stop offset="1" stop-color="#fff8ec"/>
     </linearGradient>
-    <linearGradient id="rail" x1="0" x2="1">
-      <stop offset="0" stop-color="#1f6feb"/>
-      <stop offset="0.55" stop-color="#168a6a"/>
-      <stop offset="1" stop-color="#6f42c1"/>
+    <linearGradient id="plane" x1="0" x2="1">
+      <stop offset="0" stop-color="#1769e0"/>
+      <stop offset="0.5" stop-color="#14906f"/>
+      <stop offset="1" stop-color="#8c5a18"/>
     </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#0f172a" flood-opacity="0.16"/>
+    <linearGradient id="connector" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#0f7b68"/>
+      <stop offset="1" stop-color="#0f5f9f"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#102033" flood-opacity="0.14"/>
     </filter>
+    <pattern id="grid" width="44" height="44" patternUnits="userSpaceOnUse">
+      <path d="M44 0H0V44" fill="none" stroke="#d9e4ef" stroke-width="1" opacity="0.45"/>
+    </pattern>
+    <marker id="arrowBlue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2L10 6L2 10Z" fill="#1769e0"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2L10 6L2 10Z" fill="#14906f"/>
+    </marker>
+    <marker id="arrowAmber" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2L10 6L2 10Z" fill="#a96d0a"/>
+    </marker>
   </defs>
-  <rect width="1280" height="420" rx="28" fill="url(#bg)"/>
-  <rect x="42" y="38" width="1196" height="344" rx="24" fill="#ffffff" filter="url(#shadow)"/>
-  <text x="640" y="96" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="40" font-weight="700" fill="#172033">Seafile RAGFlow Connector</text>
-  <text x="640" y="132" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18" fill="#536173">Offline sync control plane for Seafile, RAGFlow and optional OpenWebUI</text>
-  <line x1="266" y1="226" x2="1014" y2="226" stroke="url(#rail)" stroke-width="10" stroke-linecap="round"/>
-  <g font-family="Inter, Segoe UI, Arial, sans-serif" text-anchor="middle">
-    <g transform="translate(234 226)">
-      <rect x="-104" y="-56" width="208" height="112" rx="16" fill="#eef6ff" stroke="#1f6feb" stroke-width="2"/>
-      <circle cx="-58" cy="-2" r="20" fill="#1f6feb" opacity="0.14"/>
-      <path d="M-70 -2h24M-58 -14v24" stroke="#1f6feb" stroke-width="5" stroke-linecap="round"/>
-      <text y="-8" font-size="20" font-weight="700" fill="#172033">Seafile</text>
-      <text y="24" font-size="14" fill="#536173">source of truth</text>
-    </g>
-    <g transform="translate(640 226)">
-      <rect x="-134" y="-70" width="268" height="140" rx="18" fill="#effaf5" stroke="#168a6a" stroke-width="2"/>
-      <rect x="-82" y="-30" width="164" height="20" rx="10" fill="#168a6a" opacity="0.18"/>
-      <rect x="-82" y="0" width="164" height="20" rx="10" fill="#168a6a" opacity="0.26"/>
-      <text y="-40" font-size="21" font-weight="700" fill="#172033">Connector</text>
-      <text y="44" font-size="14" fill="#536173">state, jobs, repair</text>
-    </g>
-    <g transform="translate(1046 226)">
-      <rect x="-104" y="-56" width="208" height="112" rx="16" fill="#f6f1ff" stroke="#6f42c1" stroke-width="2"/>
-      <path d="M-64 0c18-28 43-28 61 0s43 28 61 0" fill="none" stroke="#6f42c1" stroke-width="6" stroke-linecap="round"/>
-      <text y="-8" font-size="20" font-weight="700" fill="#172033">RAGFlow</text>
-      <text y="24" font-size="14" fill="#536173">datasets and parsing</text>
-    </g>
+
+  <rect width="1280" height="520" rx="34" fill="url(#canvas)"/>
+  <rect width="1280" height="520" rx="34" fill="url(#grid)" opacity="0.9"/>
+
+  <g font-family="Inter, Segoe UI, Arial, sans-serif">
+    <text x="640" y="66" text-anchor="middle" font-size="42" font-weight="800" fill="#172033">Seafile RAGFlow Connector</text>
+    <text x="640" y="101" text-anchor="middle" font-size="18" font-weight="500" fill="#4b5d70">Source-of-truth sync control plane for RAGFlow datasets and optional OpenWebUI models</text>
   </g>
-  <path d="M640 296c78 42 160 42 246 0" fill="none" stroke="#d19a00" stroke-width="4" stroke-linecap="round" stroke-dasharray="1 12"/>
-  <text x="766" y="340" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="15" fill="#725400">optional OpenWebUI tools, pipes and proxy</text>
+
+  <g filter="url(#softShadow)">
+    <rect x="52" y="136" width="1176" height="296" rx="28" fill="#ffffff"/>
+  </g>
+
+  <g font-family="Inter, Segoe UI, Arial, sans-serif">
+    <g transform="translate(178 258)">
+      <rect x="-104" y="-78" width="208" height="156" rx="20" fill="#f0f7ff" stroke="#1769e0" stroke-width="2"/>
+      <circle cx="-56" cy="-18" r="22" fill="#1769e0" opacity="0.13"/>
+      <path d="M-68 -18h24M-56 -30v24" stroke="#1769e0" stroke-width="5" stroke-linecap="round"/>
+      <text x="0" y="-42" text-anchor="middle" font-size="22" font-weight="800" fill="#172033">Seafile</text>
+      <text x="0" y="-10" text-anchor="middle" font-size="14" fill="#536173">source of truth</text>
+      <text x="0" y="22" text-anchor="middle" font-size="13" fill="#536173">libraries, folders, files</text>
+      <text x="0" y="48" text-anchor="middle" font-size="13" fill="#536173">delete intent lives here</text>
+    </g>
+
+    <g transform="translate(522 258)">
+      <rect x="-148" y="-96" width="296" height="192" rx="24" fill="url(#connector)"/>
+      <text x="0" y="-58" text-anchor="middle" font-size="23" font-weight="800" fill="#ffffff">Connector Control Plane</text>
+      <text x="0" y="-31" text-anchor="middle" font-size="14" fill="#e9fffb">discovery, delta sync, repair</text>
+      <g fill="#ffffff" opacity="0.18">
+        <rect x="-112" y="-3" width="224" height="18" rx="9"/>
+        <rect x="-112" y="28" width="168" height="18" rx="9"/>
+        <rect x="-112" y="59" width="206" height="18" rx="9"/>
+      </g>
+      <g font-size="12" font-weight="700">
+        <text x="-98" y="10" fill="#ffffff">PostgreSQL state</text>
+        <text x="-98" y="41" fill="#ffffff">Redis jobs</text>
+        <text x="-98" y="72" fill="#ffffff">Audit + metrics</text>
+      </g>
+    </g>
+
+    <g transform="translate(870 258)">
+      <rect x="-112" y="-78" width="224" height="156" rx="20" fill="#f4fbf7" stroke="#14906f" stroke-width="2"/>
+      <path d="M-58 -18c18-29 42-29 60 0s42 29 60 0" fill="none" stroke="#14906f" stroke-width="6" stroke-linecap="round"/>
+      <text x="0" y="-42" text-anchor="middle" font-size="22" font-weight="800" fill="#172033">RAGFlow</text>
+      <text x="0" y="-10" text-anchor="middle" font-size="14" fill="#536173">datasets from template</text>
+      <text x="0" y="22" text-anchor="middle" font-size="13" fill="#536173">documents, parse control</text>
+      <text x="0" y="48" text-anchor="middle" font-size="13" fill="#536173">rebuilds drift from Seafile</text>
+    </g>
+
+    <g transform="translate(1100 258)">
+      <rect x="-90" y="-78" width="180" height="156" rx="20" fill="#fff6e7" stroke="#a96d0a" stroke-width="2"/>
+      <path d="M-45 -20h90M-45 0h90M-45 20h58" stroke="#a96d0a" stroke-width="6" stroke-linecap="round" opacity="0.8"/>
+      <text x="0" y="-42" text-anchor="middle" font-size="21" font-weight="800" fill="#172033">OpenWebUI</text>
+      <text x="0" y="-10" text-anchor="middle" font-size="14" fill="#536173">optional custom models</text>
+      <text x="0" y="22" text-anchor="middle" font-size="13" fill="#536173">tools, pipes, citations</text>
+      <text x="0" y="48" text-anchor="middle" font-size="13" fill="#536173">proxy without secrets</text>
+    </g>
+
+    <path d="M286 258H362" stroke="#1769e0" stroke-width="6" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+    <path d="M670 258H746" stroke="#14906f" stroke-width="6" stroke-linecap="round" marker-end="url(#arrowGreen)"/>
+    <path d="M982 258H999" stroke="#a96d0a" stroke-width="6" stroke-linecap="round" marker-end="url(#arrowAmber)" stroke-dasharray="8 10"/>
+
+    <path d="M870 350C724 415 378 415 214 348" fill="none" stroke="#1769e0" stroke-width="3" stroke-linecap="round" stroke-dasharray="3 10" opacity="0.75"/>
+    <text x="524" y="408" text-anchor="middle" font-size="14" font-weight="700" fill="#1769e0">repair loop: target drift is rebuilt from Seafile, not written back to Seafile</text>
+  </g>
+
+  <g font-family="Inter, Segoe UI, Arial, sans-serif" font-size="13" font-weight="700">
+    <rect x="126" y="456" width="150" height="28" rx="14" fill="#eef6ff" stroke="#bed8ff"/>
+    <text x="201" y="475" text-anchor="middle" fill="#174a8b">Portainer-ready</text>
+    <rect x="300" y="456" width="154" height="28" rx="14" fill="#effaf5" stroke="#bce6d7"/>
+    <text x="377" y="475" text-anchor="middle" fill="#0f6f59">Offline runtime</text>
+    <rect x="478" y="456" width="156" height="28" rx="14" fill="#fff4df" stroke="#f0d19b"/>
+    <text x="556" y="475" text-anchor="middle" fill="#875200">TLS and CA bundles</text>
+    <rect x="658" y="456" width="150" height="28" rx="14" fill="#f6f1ff" stroke="#d9c7ff"/>
+    <text x="733" y="475" text-anchor="middle" fill="#6840a0">Audit export</text>
+    <rect x="832" y="456" width="142" height="28" rx="14" fill="#f2f6f8" stroke="#cbd8df"/>
+    <text x="903" y="475" text-anchor="middle" fill="#425260">Swarm-ready</text>
+    <rect x="998" y="456" width="156" height="28" rx="14" fill="#eef8fb" stroke="#b9dde8"/>
+    <text x="1076" y="475" text-anchor="middle" fill="#236070">GHCR image</text>
+  </g>
 </svg>
