@@ -72,7 +72,17 @@ class DashboardServerTests(unittest.TestCase):
     def test_health_status_and_log_endpoints_return_bounded_json(self) -> None:
         store = _store()
         store.record_log(level="info", message="server-log", component="unit", sync_id="sync-a")
+        original_dashboard_health = dashboard_server.collect_dashboard_health
         original_tls_health = dashboard_server.collect_tls_health
+        dashboard_server.collect_dashboard_health = lambda **kwargs: {
+            "status": "degraded",
+            "checks": [
+                {"name": "database", "status": "ok"},
+                {"name": "redis", "status": "error"},
+                {"name": "seafile", "status": "error"},
+                {"name": "ragflow", "status": "error"},
+            ],
+        }
         dashboard_server.collect_tls_health = lambda settings: {
             "seafile": {"tls": "failed", "hint": "SEAFILE_CA_BUNDLE prüfen"},
             "ragflow": {"tls": "failed", "hint": "RAGFLOW_CA_BUNDLE prüfen"},
@@ -88,6 +98,7 @@ class DashboardServerTests(unittest.TestCase):
             logs = _get_json(port, "/api/logs?limit=1&sync_id=sync-a")
         finally:
             handle.stop()
+            dashboard_server.collect_dashboard_health = original_dashboard_health
             dashboard_server.collect_tls_health = original_tls_health
 
         self.assertEqual(health["status"], "degraded")

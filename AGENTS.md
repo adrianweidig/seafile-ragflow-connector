@@ -39,13 +39,21 @@ python -m compileall src tests migrations
 Standardchecks:
 
 ```bash
+python scripts/verify.py --skip-compose
+```
+
+Einzelchecks:
+
+```bash
 uv run ruff check .
 uv run mypy src
 uv run pytest
 ```
 
 Falls ohne `uv` getestet wird, muss `PYTHONPATH=src` gesetzt sein und die
-Projektabhängigkeiten müssen installiert sein.
+Projektabhängigkeiten müssen installiert sein. Für Diagnosefälle kann der
+Verify-Runner einzelne Schritte sichtbar ausgeben; Docker Compose wird nur
+erzwungen, wenn `--with-compose` gesetzt ist.
 
 ## Betrieb und Deployment
 
@@ -98,8 +106,8 @@ Projektabhängigkeiten müssen installiert sein.
 
 - Keine Secrets, Tokens, Passwörter, API-Keys oder produktiven Zertifikate in
   Dateien schreiben oder ausgeben.
-- Test-Private-Keys unter `tests/fixtures/tls/` sind reine Fixture-Artefakte und
-  dürfen nicht außerhalb von Tests oder TLS-Lab-Szenarien verwendet werden.
+- TLS-Testzertifikate werden zur Laufzeit temporär erzeugt. Generierte
+  Private Keys dürfen nicht eingecheckt werden.
 - `*_VERIFY_SSL=false` ist nur für Diagnose/Entwicklung gedacht und darf nicht
   als produktive Empfehlung dokumentiert werden.
 - Produktive Dienste nicht ohne konkreten Auftrag mutieren.
@@ -110,7 +118,7 @@ Projektabhängigkeiten müssen installiert sein.
 - `README.md`, `docs/README.md`, `connector.env.example` und Deployment-
   Beispiele widersprechen sich nicht.
 - Lizenzangaben in `LICENSE`, `README.md` und `pyproject.toml` sind konsistent.
-- `uv run ruff check .`, `uv run mypy src`, `uv run pytest` oder begründete
-  Alternativen wurden ausgeführt und dokumentiert.
+- `python scripts/verify.py --skip-compose` oder begründete Alternativen
+  wurden ausgeführt und dokumentiert.
 - `git diff --check` ist sauber.
 - Es wurden keine Secrets oder lokalen privaten Dateien hinzugefügt.

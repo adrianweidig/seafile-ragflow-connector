@@ -11,6 +11,8 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
 - `operations.md` enthält Portainer-Betrieb, Docker-Compose-Varianten,
   Docker-Swarm-Betrieb, GHCR-/Offline-Hinweise, Recovery, Troubleshooting und
   lokale WSL-/Docker-Prüfungen.
+- `testing.md` beschreibt den wiederholbaren lokalen und CI-nahen Testablauf
+  für Codex und Entwickler.
 - `ragflow-template.md` beschreibt, wie das RAGFlow-Template beim Erzeugen neuer
   Datasets genutzt wird.
 - `tls-topology.md`, `tls-certificates.md`, `docker-compose-tls.md` und

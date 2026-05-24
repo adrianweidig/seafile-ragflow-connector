@@ -331,6 +331,19 @@ uv run mypy src
 uv run pytest
 ```
 
+Für wiederholbare lokale Prüfungen gibt es einen zentralen Verify-Runner:
+
+```bash
+python scripts/verify.py --skip-compose
+```
+
+Wenn Docker Compose auf dem Host verfügbar ist, prüft der Runner zusätzlich die
+Portainer-Compose-Konfiguration. Erzwingen lässt sich diese Prüfung mit:
+
+```bash
+python scripts/verify.py --with-compose
+```
+
 ## Hinweise für Codex und andere Agenten
 
 Projektbezogene Arbeitsregeln stehen in [`AGENTS.md`](AGENTS.md). Wichtig sind
@@ -349,6 +362,7 @@ menschlich geprüft werden.
 - [Architektur](docs/architecture.md)
 - [Konfiguration](docs/configuration.md)
 - [Environment-Variablen](docs/environment.md)
+- [Test- und Ausführungsmodell](docs/testing.md)
 - [Betrieb, Offline-Deployment und WSL-/Docker-Prüfung](docs/operations.md)
 - [RAGFlow-Template-Verhalten](docs/ragflow-template.md)
 - [TLS-Zertifikate](docs/tls-certificates.md)
