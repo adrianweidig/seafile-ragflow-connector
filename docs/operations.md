@@ -265,7 +265,7 @@ Erwartung: Beide Kommandos geben eine Version aus.
 ### 3. Dockerfile statisch prüfen
 
 ```powershell
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker build --check -f deploy/docker/Dockerfile .'
+wsl bash -lc 'cd /mnt/e/Codex_Workspace/repos/seafile-ragflow-connector && docker build --check -f deploy/docker/Dockerfile .'
 ```
 
 Erwartung: `Check complete, no warnings found.`
@@ -273,7 +273,7 @@ Erwartung: `Check complete, no warnings found.`
 ### 4. Image lokal bauen
 
 ```powershell
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker build -t ghcr.io/adrianweidig/seafile-ragflow-connector:local-test -f deploy/docker/Dockerfile .'
+wsl bash -lc 'cd /mnt/e/Codex_Workspace/repos/seafile-ragflow-connector && docker build -t ghcr.io/adrianweidig/seafile-ragflow-connector:local-test -f deploy/docker/Dockerfile .'
 ```
 
 Erwartung: Das Image wird erfolgreich gebaut. Zur Container-Laufzeit findet keine
@@ -290,7 +290,7 @@ Copy-Item connector.env.example connector.env
 Dann:
 
 ```powershell
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker run --rm --env-file connector.env ghcr.io/adrianweidig/seafile-ragflow-connector:local-test check-config'
+wsl bash -lc 'cd /mnt/e/Codex_Workspace/repos/seafile-ragflow-connector && docker run --rm --env-file connector.env ghcr.io/adrianweidig/seafile-ragflow-connector:local-test check-config'
 ```
 
 Erwartung: `check-config` gibt zentrale Werte aus und beendet sich mit Exit-Code 0.
@@ -299,7 +299,7 @@ Es ist keine Verbindung zu Seafile oder RAGFlow notwendig.
 ### 6. Compose-Syntax prüfen
 
 ```powershell
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker compose --env-file connector.env -f deploy/portainer/docker-compose.yml config --quiet'
+wsl bash -lc 'cd /mnt/e/Codex_Workspace/repos/seafile-ragflow-connector && docker compose --env-file connector.env -f deploy/portainer/docker-compose.yml config --quiet'
 ```
 
 Erwartung: Exit-Code 0. Die Compose-Datei darf keine `env_file`-Abhängigkeit
@@ -324,9 +324,9 @@ Nur ausführen, wenn `postgres:16` und `redis:7` lokal verfügbar sind oder Pull
 erlaubt sind:
 
 ```powershell
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker compose -f deploy/portainer/docker-compose.yml --env-file connector.env up -d connector-postgres connector-redis'
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker compose -f deploy/portainer/docker-compose.yml --env-file connector.env ps'
-wsl bash -lc 'cd /mnt/c/Users/adria/Documents/Seafile-RAGFlow-Connector && docker compose -f deploy/portainer/docker-compose.yml --env-file connector.env down'
+wsl bash -lc 'cd /mnt/e/Codex_Workspace/repos/seafile-ragflow-connector && docker compose -f deploy/portainer/docker-compose.yml --env-file connector.env up -d connector-postgres connector-redis'
+wsl bash -lc 'cd /mnt/e/Codex_Workspace/repos/seafile-ragflow-connector && docker compose -f deploy/portainer/docker-compose.yml --env-file connector.env ps'
+wsl bash -lc 'cd /mnt/e/Codex_Workspace/repos/seafile-ragflow-connector && docker compose -f deploy/portainer/docker-compose.yml --env-file connector.env down'
 ```
 
 Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppen.
