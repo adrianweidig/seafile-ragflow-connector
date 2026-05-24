@@ -27,9 +27,9 @@ cd deploy/swarm
 cp ../../connector.env.example stack.env
 ```
 
-`stack.env` bearbeiten, alle `change-me` Werte ersetzen und
+`stack.env` bearbeiten, die Minimalpflichtwerte ersetzen und
 `CONNECTOR_DASHBOARD_PUBLISHED_PORT` auf eine reine Portnummer wie `18080`
-setzen. Danach:
+setzen. OpenWebUI-Werte nur setzen, wenn die Anbindung aktiviert wird. Danach:
 
 ```bash
 set -a

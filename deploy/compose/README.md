@@ -8,8 +8,10 @@ zentrale Datei im Repo-Root:
 cp connector.env.example connector.env
 ```
 
-Ersetze in `connector.env` alle `change-me` Werte sowie die Base-URLs und
-starte Compose mit `--env-file connector.env`. Die älteren
+Ersetze in `connector.env` nur die Pflichtwerte für den gewählten Modus. Für
+den Minimalbetrieb sind das `SEAFILE_BASE_URL`, `SEAFILE_ADMIN_TOKEN`,
+`SEAFILE_SYNC_USER_TOKEN`, `RAGFLOW_BASE_URL`, `RAGFLOW_API_KEY` und
+`POSTGRES_PASSWORD` oder alternativ `DATABASE_URL`. Die älteren
 `*.stack.env.example` Dateien bleiben als szenariospezifische Referenz
 erhalten.
 
@@ -25,6 +27,7 @@ Mit `CONNECTOR_IMAGE_PULL_POLICY=never`, `POSTGRES_IMAGE_PULL_POLICY=never` und
 | Externe Dienste über Host/LAN | `external-services.compose.yml` | `../../connector.env.example` | Seafile, RAGFlow und optional OpenWebUI laufen außerhalb des Stacks, z. B. über Reverse Proxy, LAN-IP oder veröffentlichte Host-Ports. |
 | Bestehendes Docker-Netz | `shared-network.compose.yml` | `../../connector.env.example` | Connector, Seafile, RAGFlow und optional OpenWebUI hängen im selben Docker-Netz und sprechen sich über Service-Namen an. |
 | OpenWebUI zusätzlich anbinden | `openwebui.compose.yml` | `../../connector.env.example` | Wie Shared-Network, zusätzlich mit Dashboard/Proxy und aktivierter OpenWebUI-Synchronisation. |
+| Internes CA-Bundle | `docker-compose.tls-example.yml` als Overlay | `../../connector.env.example` | Ergänzt read-only CA-Mounts und TLS-Env-Variablen für HTTPS-Setups mit interner CA. |
 
 ## Startbeispiele
 
@@ -47,6 +50,16 @@ docker compose \
   --env-file connector.env \
   -f deploy/compose/openwebui.compose.yml \
   up -d
+```
+
+TLS-Overlay:
+
+```bash
+docker compose \
+  --env-file connector.env \
+  -f deploy/compose/openwebui.compose.yml \
+  -f deploy/compose/docker-compose.tls-example.yml \
+  config --quiet
 ```
 
 ## Wichtige Betriebsregel

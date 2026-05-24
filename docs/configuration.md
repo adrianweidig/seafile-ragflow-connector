@@ -2,10 +2,26 @@
 
 Die Konfiguration erfolgt über Environment-Variablen. Für Installationen ist
 `connector.env.example` im Repo-Root die zentrale Schnittstelle: Datei zu
-`connector.env` kopieren, `change-me` Werte und Base-URLs ersetzen und dieselbe
-Datei mit Docker Compose oder Portainer verwenden. Secrets müssen über
-Portainer-Environment-Management, Docker Secrets oder eine lokale nicht
-committed Env-Datei bereitgestellt werden.
+`connector.env` kopieren, nur die Pflichtwerte für den gewählten Betriebsmodus
+setzen und dieselbe Datei mit Docker Compose oder Portainer verwenden. Die
+vollständige Pflicht-/Optional-Liste steht in
+[`environment.md`](environment.md).
+
+Minimalpflicht für Seafile -> RAGFlow mit Stack-Postgres:
+
+```env
+SEAFILE_BASE_URL=
+SEAFILE_ADMIN_TOKEN=
+SEAFILE_SYNC_USER_TOKEN=
+RAGFLOW_BASE_URL=
+RAGFLOW_API_KEY=
+POSTGRES_PASSWORD=
+```
+
+Alternativ ersetzt `DATABASE_URL` die `POSTGRES_*`-Anwendungswerte. OpenWebUI,
+Dashboard, TLS-CA-Bundles, URL-Rewrites und Tuning sind optionale Erweiterungen.
+Secrets müssen über Portainer-Environment-Management, Docker Secrets oder eine
+lokale nicht committete Env-Datei bereitgestellt werden.
 
 ## TLS und interne Zertifizierungsstellen
 
@@ -151,7 +167,7 @@ OPENWEBUI_INTEGRATION_ENABLED=false
 OPENWEBUI_BASE_URL=http://localhost:3000
 OPENWEBUI_ADMIN_API_KEY=
 OPENWEBUI_SYNC_ON_STARTUP=true
-OPENWEBUI_SYNC_MODE=sync
+OPENWEBUI_SYNC_MODE=disabled
 OPENWEBUI_CREATE_TOOLS=true
 OPENWEBUI_CREATE_PIPES=true
 OPENWEBUI_REQUEST_TIMEOUT_SECONDS=180
@@ -181,11 +197,13 @@ RAGFLOW_DOCUMENT_URL_TEMPLATE=
 - `OPENWEBUI_ADMIN_API_KEY`: nur für `sync` und `repair` erforderlich. Der Wert
   wird maskiert und nicht in generierte Tools oder Pipes geschrieben.
 - `OPENWEBUI_PROXY_SHARED_SECRET`: schützt den Connector-Proxy, den die
-  OpenWebUI-Functions aufrufen. Es wird als Valve gesetzt, nicht als
-  Python-Literal im generierten Code.
+  OpenWebUI-Functions aufrufen. Erforderlich ist er nur, wenn Tools oder Pipes
+  in `sync` oder `repair` synchronisiert werden. Es wird als Valve gesetzt,
+  nicht als Python-Literal im generierten Code.
 - `OPENWEBUI_PROXY_INTERNAL_BASE_URL`: URL, die OpenWebUI serverseitig zum
-  Connector erreicht. Wenn leer, wird `OPENWEBUI_PROXY_PUBLIC_BASE_URL`
-  verwendet.
+  Connector erreicht. Erforderlich ist eine interne oder öffentliche Proxy-URL
+  nur, wenn Tools oder Pipes in `sync` oder `repair` synchronisiert werden.
+  Wenn leer, wird `OPENWEBUI_PROXY_PUBLIC_BASE_URL` verwendet.
 - `OPENWEBUI_SOURCE_PREVIEW_MODE`: `ragflow_link`, `connector_viewer`,
   `citation_only` oder `disabled`.
 - `OPENWEBUI_DATASET_ALLOWLIST`: optionale CSV aus Repo-IDs oder

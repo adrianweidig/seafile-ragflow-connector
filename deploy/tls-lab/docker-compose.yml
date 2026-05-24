@@ -1,0 +1,153 @@
+name: seafile-ragflow-connector-tls-lab
+
+services:
+  ragflow-mock:
+    image: python:3.12-slim
+    command:
+      - python
+      - /lab/https_mock.py
+      - --name
+      - ragflow
+      - --port
+      - "8443"
+      - --cert
+      - /certs/rag.top.secret.cert.pem
+      - --key
+      - /certs/rag.top.secret.key.pem
+    volumes:
+      - ./https_mock.py:/lab/https_mock.py:ro
+      - ./certs:/certs:ro
+    ports:
+      - "18443:8443"
+    networks:
+      tls-lab:
+        aliases:
+          - rag.top.secret
+
+  seafile-mock:
+    image: python:3.12-slim
+    command:
+      - python
+      - /lab/https_mock.py
+      - --name
+      - seafile
+      - --port
+      - "8443"
+      - --cert
+      - /certs/seafile.top.secret.cert.pem
+      - --key
+      - /certs/seafile.top.secret.key.pem
+    volumes:
+      - ./https_mock.py:/lab/https_mock.py:ro
+      - ./certs:/certs:ro
+    ports:
+      - "18444:8443"
+    networks:
+      tls-lab:
+        aliases:
+          - seafile.top.secret
+
+  connector-proxy-mock:
+    image: python:3.12-slim
+    command:
+      - python
+      - /lab/https_mock.py
+      - --name
+      - connector-proxy
+      - --port
+      - "8443"
+      - --cert
+      - /certs/connector.top.secret.cert.pem
+      - --key
+      - /certs/connector.top.secret.key.pem
+    volumes:
+      - ./https_mock.py:/lab/https_mock.py:ro
+      - ./certs:/certs:ro
+    ports:
+      - "18445:8443"
+    networks:
+      tls-lab:
+        aliases:
+          - connector.top.secret
+
+  selfsigned-rag-mock:
+    image: python:3.12-slim
+    command:
+      - python
+      - /lab/https_mock.py
+      - --name
+      - selfsigned-ragflow
+      - --port
+      - "8443"
+      - --cert
+      - /certs/selfsigned-rag.top.secret.cert.pem
+      - --key
+      - /certs/selfsigned-rag.top.secret.key.pem
+    volumes:
+      - ./https_mock.py:/lab/https_mock.py:ro
+      - ./certs:/certs:ro
+    networks:
+      tls-lab:
+        aliases:
+          - selfsigned-rag.top.secret
+
+  wronghost-rag-mock:
+    image: python:3.12-slim
+    command:
+      - python
+      - /lab/https_mock.py
+      - --name
+      - wronghost-ragflow
+      - --port
+      - "8443"
+      - --cert
+      - /certs/wronghost.top.secret.cert.pem
+      - --key
+      - /certs/wronghost.top.secret.key.pem
+    volumes:
+      - ./https_mock.py:/lab/https_mock.py:ro
+      - ./certs:/certs:ro
+    networks:
+      tls-lab:
+        aliases:
+          - wronghost.top.secret
+
+  expired-rag-mock:
+    image: python:3.12-slim
+    command:
+      - python
+      - /lab/https_mock.py
+      - --name
+      - expired-ragflow
+      - --port
+      - "8443"
+      - --cert
+      - /certs/expired-rag.top.secret.cert.pem
+      - --key
+      - /certs/expired-rag.top.secret.key.pem
+    volumes:
+      - ./https_mock.py:/lab/https_mock.py:ro
+      - ./certs:/certs:ro
+    networks:
+      tls-lab:
+        aliases:
+          - expired-rag.top.secret
+
+  tls-probe:
+    image: ${CONNECTOR_IMAGE:-ghcr.io/adrianweidig/seafile-ragflow-connector:latest}
+    command: ["python", "/lab/probe_tls.py"]
+    volumes:
+      - ./probe_tls.py:/lab/probe_tls.py:ro
+      - ./certs:/certs:ro
+    depends_on:
+      - ragflow-mock
+      - seafile-mock
+      - connector-proxy-mock
+      - selfsigned-rag-mock
+      - wronghost-rag-mock
+      - expired-rag-mock
+    networks:
+      - tls-lab
+
+networks:
+  tls-lab:

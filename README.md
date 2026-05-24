@@ -23,20 +23,21 @@ Dokumente sicher und läuft nach Neustarts weiter.
   und keine externen Service-Abhängigkeiten außerhalb der konfigurierten
   Seafile- und RAGFlow-URLs.
 
-## Schnellstart fuer externe Umgebungen
+## Schnellstart für externe Umgebungen
 
 Der Connector wird als eigener Docker-Stack betrieben. Seafile, RAGFlow und
 optional OpenWebUI bleiben bestehende externe Systeme. Die einzige
-Konfigurationsschnittstelle fuer Betreiber ist die Datei
+Konfigurationsschnittstelle für Betreiber ist die Datei
 [`connector.env.example`](connector.env.example). Kopiere sie zu
-`connector.env`, ersetze die Platzhalter und starte danach den Stack.
+`connector.env`, setze nur die Pflichtwerte für deinen Betriebsmodus und starte
+danach den Stack.
 
-### 1. Voraussetzungen pruefen
+### 1. Voraussetzungen prüfen
 
 - Docker mit Docker Compose Plugin oder Portainer.
 - Ein erreichbarer Seafile-Server mit Admin-API-Token.
 - Ein erreichbarer RAGFlow-Server mit API-Key.
-- In RAGFlow existiert ein Template-Dataset, standardmaessig
+- In RAGFlow existiert ein Template-Dataset, standardmäßig
   `connector_template`. Neue Library-Datasets werden daraus erzeugt.
 - Optional: eine erreichbare OpenWebUI-Instanz mit Admin-API-Key, wenn Tools
   und Pipes automatisch synchronisiert werden sollen.
@@ -47,25 +48,23 @@ Konfigurationsschnittstelle fuer Betreiber ist die Datei
 cp connector.env.example connector.env
 ```
 
-Bearbeite danach `connector.env`. Fuer einen normalen Start muessen nur die
-folgenden Werte gesetzt werden:
+Bearbeite danach `connector.env`. Für den Minimalbetrieb Seafile -> RAGFlow
+müssen nur die folgenden Werte gesetzt werden:
 
-| Variable | Zweck |
-| --- | --- |
-| `SEAFILE_BASE_URL` | Aus dem Connector-Container erreichbare Seafile-URL, z. B. `http://host.docker.internal:18081` oder `https://seafile.example.local`. |
-| `SEAFILE_ADMIN_TOKEN` | Seafile Admin-API-Token fuer Library-Discovery. |
-| `SEAFILE_SYNC_USER_TOKEN` | Seafile API-Token fuer Downloads der zu synchronisierenden Dateien. |
-| `SEAFILE_FILE_URL_TEMPLATE` | Optionaler Browser-Link zum Originaldokument fuer OpenWebUI-Quellenpreviews, z. B. mit `{repo_id_quoted}`, `{path_quoted}` und `{page_fragment}`. |
-| `RAGFLOW_BASE_URL` | Aus dem Connector-Container erreichbare RAGFlow-API-URL, z. B. `http://host.docker.internal:19380` oder `http://ragflow:9380`. |
-| `RAGFLOW_API_KEY` | RAGFlow API-Key des Ziel-Users. |
-| `POSTGRES_PASSWORD` | Passwort fuer die vom Stack bereitgestellte Connector-Datenbank. |
-| `OPENWEBUI_BASE_URL` | Nur bei OpenWebUI-Anbindung: aus dem Connector erreichbare OpenWebUI-URL. |
-| `OPENWEBUI_ADMIN_API_KEY` | Nur bei OpenWebUI-Anbindung: Admin-API-Key fuer Tool-/Pipe-Sync. |
-| `OPENWEBUI_PROXY_PUBLIC_BASE_URL` | Browser-URL zum Connector-Dashboard/Proxy, z. B. `http://localhost:18080`. |
-| `OPENWEBUI_PROXY_INTERNAL_BASE_URL` | URL, die OpenWebUI serverseitig zum Connector erreicht. |
-| `OPENWEBUI_PROXY_SHARED_SECRET` | Eigenes langes Zufallssecret fuer den geschuetzten Connector-Proxy. |
+| Variable | Pflicht | Zweck |
+| --- | --- | --- |
+| `SEAFILE_BASE_URL` | ja | Aus dem Connector-Container erreichbare Seafile-URL, z. B. `http://host.docker.internal:18081` oder `https://seafile.example.local`. |
+| `SEAFILE_ADMIN_TOKEN` | ja | Seafile Admin-API-Token für Library-Discovery. |
+| `SEAFILE_SYNC_USER_TOKEN` | ja | Seafile API-Token für Downloads der zu synchronisierenden Dateien. |
+| `RAGFLOW_BASE_URL` | ja | Aus dem Connector-Container erreichbare RAGFlow-API-URL, z. B. `http://host.docker.internal:19380` oder `http://ragflow:9380`. |
+| `RAGFLOW_API_KEY` | ja | RAGFlow API-Key des Ziel-Users. |
+| `POSTGRES_PASSWORD` | ja | Passwort für die vom Stack bereitgestellte Connector-Datenbank. |
 
-Wenn OpenWebUI nicht angebunden werden soll, setze:
+`DATABASE_URL` kann `POSTGRES_PASSWORD` ersetzen, wenn eine externe Datenbank
+genutzt wird. Alle anderen Werte sind optional oder modusabhängig; die
+vollständige Liste steht in [`docs/environment.md`](docs/environment.md).
+
+OpenWebUI ist standardmäßig nicht erforderlich:
 
 ```env
 OPENWEBUI_INTEGRATION_ENABLED=false
@@ -86,12 +85,14 @@ RAGFLOW_VERIFY_SSL=true
 OPENWEBUI_VERIFY_SSL=true
 ```
 
-`CONNECTOR_CA_BUNDLE` gilt fuer Seafile, RAGFlow und OpenWebUI. Falls nur ein
+`CONNECTOR_CA_BUNDLE` gilt für Seafile, RAGFlow und OpenWebUI. Falls nur ein
 Dienst betroffen ist, kann stattdessen `SEAFILE_CA_BUNDLE`,
 `RAGFLOW_CA_BUNDLE` oder `OPENWEBUI_CA_BUNDLE` gesetzt werden.
 `*_VERIFY_SSL=false` ist nur als kurzfristige Diagnose gedacht.
+Für lokale Root-CA-, Leaf-Zertifikat-, Hostname- und Ablaufdatumstests gibt es
+ein HTTPS-Lab unter [`deploy/tls-lab`](deploy/tls-lab/README.md).
 
-### 3. Netzwerkvariante waehlen
+### 3. Netzwerkvariante wählen
 
 Host/LAN/Reverse Proxy ist der einfachste Fall. Behalte:
 
@@ -123,7 +124,7 @@ docker compose \
   config --quiet
 ```
 
-Wenn die Konfiguration gueltig ist:
+Wenn die Konfiguration gültig ist:
 
 ```bash
 docker compose \
@@ -164,8 +165,9 @@ http://127.0.0.1:18080
    dieses Repository als Git-Stack verwenden.
 5. Den Inhalt von `connector.env.example` im Stack-Bereich `Environment
    variables` importieren.
-6. Alle `change-me` Werte und die Base-URLs ersetzen.
-7. `CONNECTOR_IMAGE`, `POSTGRES_IMAGE` und `REDIS_IMAGE` muessen exakt den
+6. Nur die Pflichtwerte aus dem Minimalblock ersetzen; OpenWebUI-Werte nur
+   setzen, wenn die Anbindung aktiviert wird.
+7. `CONNECTOR_IMAGE`, `POSTGRES_IMAGE` und `REDIS_IMAGE` müssen exakt den
    Image-Namen entsprechen, die Portainer unter `Images` anzeigt. Wenn alle
    Images lokal vorhanden sind und nicht gepullt werden sollen, setze:
 
@@ -177,11 +179,11 @@ http://127.0.0.1:18080
 
 8. Stack deployen.
 9. Logs von `connector-controller`, `connector-worker` und
-   `connector-reconciler` pruefen.
-10. Dashboard-Health unter `http://<docker-host>:18080/api/health` pruefen,
-    wenn der Dashboard-Port entsprechend veroeffentlicht wurde.
+   `connector-reconciler` prüfen.
+10. Dashboard-Health unter `http://<docker-host>:18080/api/health` prüfen,
+    wenn der Dashboard-Port entsprechend veröffentlicht wurde.
 
-Wichtig fuer Portainer-Image-Uploads: Der Stack startet genau das Image, dessen
+Wichtig für Portainer-Image-Uploads: Der Stack startet genau das Image, dessen
 Name in `CONNECTOR_IMAGE` steht. Wenn das hochgeladene Image z. B. als
 `seafile-ragflow-connector:latest` angezeigt wird, muss `CONNECTOR_IMAGE` auch
 genau diesen Wert haben. Wenn es als
@@ -190,13 +192,13 @@ der Defaultwert bleiben.
 
 ### 6. Offline-Installation
 
-Der Online-Start nutzt das veroeffentlichte GHCR-Image:
+Der Online-Start nutzt das veröffentlichte GHCR-Image:
 
 ```bash
 docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:latest
 ```
 
-Fuer Offline-Umgebungen koennen die benoetigten Images vorab exportiert und auf
+Für Offline-Umgebungen können die benötigten Images vorab exportiert und auf
 dem Zielhost importiert werden:
 
 ```bash
@@ -220,22 +222,22 @@ POSTGRES_IMAGE=postgres:16
 REDIS_IMAGE=redis:7
 ```
 
-### 7. Betrieb pruefen
+### 7. Betrieb prüfen
 
 Nach dem Start sollten diese Punkte stimmen:
 
-- Dashboard-Health meldet fuer Dashboard, Datenbank, Redis, Seafile und RAGFlow
+- Dashboard-Health meldet für Dashboard, Datenbank, Redis, Seafile und RAGFlow
   `ok`.
 - In RAGFlow entsteht pro Seafile-Library ein Dataset aus dem Template.
 - Dateien werden in RAGFlow hochgeladen und geparst.
 - Wenn OpenWebUI aktiviert ist, erscheinen pro Dataset ein Tool und eine Pipe
   beziehungsweise ein auswählbares Custom Model.
-- Wird eine Seafile-Library geloescht, entfernt der Connector die zugehoerigen
+- Wird eine Seafile-Library gelöscht, entfernt der Connector die zugehörigen
   eigenen RAGFlow- und OpenWebUI-Artefakte.
 
 Die Compose-Datei referenziert keine lokale `env_file`. Docker Compose bekommt
-die Werte ueber `--env-file connector.env`; Portainer bekommt dieselben Werte
-ueber den Environment-Variablen-Import.
+die Werte über `--env-file connector.env`; Portainer bekommt dieselben Werte
+über den Environment-Variablen-Import.
 
 ## Repository-Struktur
 
@@ -303,9 +305,11 @@ OPENWEBUI_PROXY_SHARED_SECRET=change-me
 ```
 
 `OPENWEBUI_SYNC_MODE` unterstützt `disabled`, `dry-run`, `sync` und `repair`.
-Die bereitgestellten Testvorlagen sind auf `sync` gestellt, damit Chats, Tools
-und Pipes direkt erzeugt werden. Für eine reine Vorprüfung kann jederzeit
-`dry-run` gesetzt werden. Quellen werden primär
+Für `sync` und `repair` sind `OPENWEBUI_ADMIN_API_KEY`,
+`OPENWEBUI_PROXY_SHARED_SECRET` und eine Proxy-Base-URL erforderlich, wenn
+Tools oder Pipes erzeugt werden. Für eine reine Vorprüfung kann `dry-run`
+gesetzt werden; dann sind Proxy-Secret und Preview-URL nicht erforderlich.
+Quellen werden primär
 als OpenWebUI-Citations mit Preview-URL bereitgestellt; wenn RAGFlow keinen
 stabilen öffentlichen Deep Link hat, kann `OPENWEBUI_SOURCE_PREVIEW_MODE` auf
 `connector_viewer` gesetzt werden.
@@ -313,6 +317,7 @@ stabilen öffentlichen Deep Link hat, kann `OPENWEBUI_SOURCE_PREVIEW_MODE` auf
 ## Entwicklungschecks
 
 ```bash
+uv sync --locked --all-extras
 python -m compileall src tests migrations
 PYTHONPATH=src python -m unittest discover -s tests/unit
 ```
@@ -326,9 +331,27 @@ uv run mypy src
 uv run pytest
 ```
 
+## Hinweise für Codex und andere Agenten
+
+Projektbezogene Arbeitsregeln stehen in [`AGENTS.md`](AGENTS.md). Wichtig sind
+vor allem: vor Änderungen den Git-Zustand prüfen, bestehende Änderungen
+bewahren, keine Secrets ausgeben oder persistieren, keine produktiven Dienste
+ohne Auftrag mutieren und Löschungen nur nach Referenzprüfung durchführen.
+
+## Lizenz
+
+Dieses Projekt steht unter der MIT-Lizenz. Details stehen in [`LICENSE`](LICENSE);
+bei kommerziell oder rechtlich kritischer Nutzung sollte die Lizenzentscheidung
+menschlich geprüft werden.
+
 ## Dokumentation
 
 - [Architektur](docs/architecture.md)
 - [Konfiguration](docs/configuration.md)
+- [Environment-Variablen](docs/environment.md)
 - [Betrieb, Offline-Deployment und WSL-/Docker-Prüfung](docs/operations.md)
 - [RAGFlow-Template-Verhalten](docs/ragflow-template.md)
+- [TLS-Zertifikate](docs/tls-certificates.md)
+- [TLS-Topologie](docs/tls-topology.md)
+- [Docker-Compose mit TLS](docs/docker-compose-tls.md)
+- [SSL-/TLS-Troubleshooting](docs/troubleshooting-ssl.md)

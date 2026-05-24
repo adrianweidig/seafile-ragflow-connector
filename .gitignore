@@ -14,6 +14,8 @@ build/
 connector.env
 stack.env
 deploy/portainer/stack.env
+deploy/tls-lab/certs/
+output/
 *.log
 cache/
 tmp/

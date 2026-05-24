@@ -13,13 +13,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import structlog
 
 from seafile_ragflow_connector.clients.http import ApiError
 from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
+from seafile_ragflow_connector.clients.tls import classify_httpx_error, safe_url_for_logs
 from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.export import audit_export_filename, build_audit_workbook
-from seafile_ragflow_connector.dashboard.health import collect_dashboard_health
+from seafile_ragflow_connector.dashboard.health import collect_dashboard_health, collect_tls_health
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore
 from seafile_ragflow_connector.dashboard.ui import DASHBOARD_HTML
 from seafile_ragflow_connector.openwebui.sources import (
@@ -106,6 +108,9 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                             started_at=context.started_at,
                         )
                     )
+                    return
+                if parsed.path in {"/health/tls", "/api/health/tls"}:
+                    self._send_json(collect_tls_health(context.settings))
                     return
                 if parsed.path == "/api/status":
                     self._send_json(context.store.connector_status(started_at=context.started_at))
@@ -214,11 +219,8 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
             except ValueError as exc:
                 self._send_json({"error": "bad request", "message": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             except Exception as exc:
-                structlog.get_logger(__name__).warning("openwebui.proxy_failed", path=parsed.path, error=str(exc))
-                self._send_json(
-                    {"error": "proxy request failed", "message": "Die RAGFlow-Abfrage konnte nicht geladen werden."},
-                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
-                )
+                payload, status = _proxy_error_response(context.settings, parsed.path, exc)
+                self._send_json(payload, status=status)
 
         def log_message(self, format: str, *args: Any) -> None:
             structlog.get_logger(__name__).debug("dashboard.http_access", message=format % args)
@@ -464,6 +466,41 @@ def _handle_openwebui_chat(
     if sources and "## Gefundene Quellen" not in answer:
         answer = (answer.strip() + "\n\n" if answer.strip() else "") + _sources_markdown(sources)
     return {"answer": answer, "sources": sources, "citations_emitted": True}
+
+
+def _proxy_error_response(
+    settings: Settings,
+    path: str,
+    exc: Exception,
+) -> tuple[dict[str, str], HTTPStatus]:
+    route = "Connector Proxy -> RAGFlow"
+    target = safe_url_for_logs(settings.ragflow_internal_url or settings.ragflow_base_url)
+    error_type = _proxy_error_type(exc)
+    status = HTTPStatus.BAD_GATEWAY
+    message = "Die RAGFlow-Abfrage konnte nicht geladen werden."
+    if isinstance(exc, httpx.TimeoutException):
+        message = "RAGFlow hat nicht rechtzeitig geantwortet."
+        status = HTTPStatus.GATEWAY_TIMEOUT
+    elif isinstance(exc, ApiError):
+        message = "RAGFlow antwortete mit einem Fehlerstatus."
+    elif isinstance(exc, httpx.ConnectError | httpx.RequestError):
+        message = "RAGFlow war über den Connector-Proxy nicht erreichbar."
+
+    structlog.get_logger(__name__).warning(
+        "openwebui.proxy_upstream_failed",
+        path=path,
+        route=route,
+        target=target,
+        error_type=error_type,
+        hint="RAGFLOW_CA_BUNDLE prüfen, wenn dies ein TLS- oder Zertifikatsfehler ist.",
+    )
+    return {"error": "proxy request failed", "message": message}, status
+
+
+def _proxy_error_type(exc: Exception) -> str:
+    if isinstance(exc, ApiError):
+        return f"HTTP_{exc.status_code or 'API_ERROR'}"
+    return classify_httpx_error(exc)
 
 
 def _require_proxy_secret(settings: Settings, authorization: str | None) -> None:

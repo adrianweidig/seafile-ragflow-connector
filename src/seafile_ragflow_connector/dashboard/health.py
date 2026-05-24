@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 from redis import Redis
 
+from seafile_ragflow_connector.clients.tls import classify_httpx_error, safe_url_for_logs
 from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.store import (
     DashboardEventStore,
@@ -17,6 +18,7 @@ from seafile_ragflow_connector.dashboard.store import (
 )
 
 HEALTH_TIMEOUT_SECONDS = 0.5
+RAGFLOW_HEALTH_TIMEOUT_SECONDS = 3.0
 
 
 def collect_dashboard_health(
@@ -51,6 +53,31 @@ def collect_dashboard_health(
         "generated_at": isoformat(utcnow()),
         "checks": checks,
         "summary": summary,
+    }
+
+
+def collect_tls_health(settings: Settings) -> dict[str, Any]:
+    return {
+        "seafile": _tls_probe(
+            name="seafile",
+            route="Connector Proxy -> Seafile",
+            url=(settings.seafile_internal_url or settings.seafile_base_url).rstrip("/"),
+            path="/api/v2.1/admin/libraries/",
+            headers={"Authorization": f"Token {settings.seafile_admin_token}"},
+            params={"page": 1, "per_page": 1},
+            verify=settings.seafile_httpx_verify,
+            ca_hint="SEAFILE_CA_BUNDLE prüfen",
+        ),
+        "ragflow": _tls_probe(
+            name="ragflow",
+            route="Connector Proxy -> RAGFlow",
+            url=(settings.ragflow_internal_url or settings.ragflow_base_url).rstrip("/"),
+            path="/api/v1/datasets",
+            headers={"Authorization": f"Bearer {settings.ragflow_api_key}"},
+            params={"page": 1, "page_size": 1},
+            verify=settings.ragflow_httpx_verify,
+            ca_hint="RAGFLOW_CA_BUNDLE prüfen",
+        ),
     }
 
 
@@ -135,7 +162,7 @@ def _check_ragflow(settings: Settings) -> Callable[[], dict[str, Any]]:
         with httpx.Client(
             base_url=base_url,
             headers={"Authorization": f"Bearer {settings.ragflow_api_key}"},
-            timeout=HEALTH_TIMEOUT_SECONDS,
+            timeout=RAGFLOW_HEALTH_TIMEOUT_SECONDS,
             verify=settings.ragflow_httpx_verify,
         ) as client:
             response = client.get(
@@ -227,6 +254,44 @@ def _check_sync_jobs(status: dict[str, Any]) -> dict[str, Any]:
         "latency_ms": 0,
         "message": message,
     }
+
+
+def _tls_probe(
+    *,
+    name: str,
+    route: str,
+    url: str,
+    path: str,
+    headers: dict[str, str],
+    params: dict[str, str | int | float | bool | None],
+    verify: bool | str,
+    ca_hint: str,
+) -> dict[str, Any]:
+    safe_url = safe_url_for_logs(url)
+    try:
+        with httpx.Client(
+            base_url=url,
+            headers=headers,
+            timeout=3.0,
+            verify=verify,
+            follow_redirects=False,
+        ) as client:
+            response = client.get(path, params=params)
+        return {
+            "url": safe_url,
+            "route": route,
+            "tls": "ok",
+            "status": response.status_code,
+        }
+    except Exception as exc:
+        return {
+            "url": safe_url,
+            "route": route,
+            "tls": "failed",
+            "error_type": classify_httpx_error(exc),
+            "hint": ca_hint,
+            "name": name,
+        }
 
 
 def _safe_json(response: httpx.Response) -> Any:

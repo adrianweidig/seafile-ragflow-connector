@@ -37,10 +37,10 @@ except ModuleNotFoundError as exc:
 
 def _settings(port: int) -> Settings:
     settings = Settings(
-        seafile_base_url="http://127.0.0.1:9",
+        seafile_base_url="http://127.0.0.1:1",
         seafile_admin_token="admin-token",
         seafile_sync_user_token="sync-token",
-        ragflow_base_url="http://127.0.0.1:9",
+        ragflow_base_url="http://127.0.0.1:1",
         ragflow_api_key="ragflow-token",
         database_url="sqlite://",
         redis_url="redis://127.0.0.1:1/0",
@@ -72,16 +72,23 @@ class DashboardServerTests(unittest.TestCase):
     def test_health_status_and_log_endpoints_return_bounded_json(self) -> None:
         store = _store()
         store.record_log(level="info", message="server-log", component="unit", sync_id="sync-a")
+        original_tls_health = dashboard_server.collect_tls_health
+        dashboard_server.collect_tls_health = lambda settings: {
+            "seafile": {"tls": "failed", "hint": "SEAFILE_CA_BUNDLE prüfen"},
+            "ragflow": {"tls": "failed", "hint": "RAGFLOW_CA_BUNDLE prüfen"},
+        }
         handle = start_dashboard_server(
             DashboardContext(store=store, settings=_settings(0), started_at=utcnow())
         )
         port = handle.server.server_address[1]
         try:
             health = _get_json(port, "/api/health")
+            tls_health = _get_json(port, "/health/tls")
             status = _get_json(port, "/api/status")
             logs = _get_json(port, "/api/logs?limit=1&sync_id=sync-a")
         finally:
             handle.stop()
+            dashboard_server.collect_tls_health = original_tls_health
 
         self.assertEqual(health["status"], "degraded")
         self.assertIn("checks", health)
@@ -90,6 +97,10 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(checks["redis"]["status"], "error")
         self.assertEqual(checks["seafile"]["status"], "error")
         self.assertEqual(checks["ragflow"]["status"], "error")
+        self.assertEqual(tls_health["seafile"]["tls"], "failed")
+        self.assertEqual(tls_health["ragflow"]["tls"], "failed")
+        self.assertIn("SEAFILE_CA_BUNDLE", tls_health["seafile"]["hint"])
+        self.assertIn("RAGFLOW_CA_BUNDLE", tls_health["ragflow"]["hint"])
         self.assertIn("state", status)
         self.assertEqual(logs["limit"], 1)
         self.assertEqual(logs["items"][0]["message"], "server-log")

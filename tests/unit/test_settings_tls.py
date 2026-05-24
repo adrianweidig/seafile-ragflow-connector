@@ -30,9 +30,9 @@ class SettingsTlsTests(unittest.TestCase):
 
             settings = _settings(connector_ca_bundle=str(ca_bundle))
 
-        self.assertEqual(settings.seafile_httpx_verify, str(ca_bundle))
-        self.assertEqual(settings.ragflow_httpx_verify, str(ca_bundle))
-        self.assertEqual(settings.openwebui_httpx_verify, str(ca_bundle))
+            self.assertEqual(settings.seafile_httpx_verify, str(ca_bundle))
+            self.assertEqual(settings.ragflow_httpx_verify, str(ca_bundle))
+            self.assertEqual(settings.openwebui_httpx_verify, str(ca_bundle))
 
     def test_service_ca_bundle_overrides_connector_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -47,13 +47,29 @@ class SettingsTlsTests(unittest.TestCase):
                 ragflow_verify_ssl=False,
             )
 
-        self.assertEqual(settings.seafile_httpx_verify, str(seafile))
-        self.assertFalse(settings.ragflow_httpx_verify)
-        self.assertEqual(settings.openwebui_httpx_verify, str(shared))
+            self.assertEqual(settings.seafile_httpx_verify, str(seafile))
+            self.assertFalse(settings.ragflow_httpx_verify)
+            self.assertEqual(settings.openwebui_httpx_verify, str(shared))
 
     def test_missing_ca_bundle_fails_config_validation(self) -> None:
         with self.assertRaises(ValidationError):
             _settings(connector_ca_bundle="/certs/missing-ca.pem")
+
+    def test_openwebui_proxy_accepts_connector_proxy_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ca_bundle = Path(tmpdir) / "connector-proxy-ca.pem"
+            ca_bundle.write_text("ca")
+
+            settings = _settings(
+                CONNECTOR_PROXY_VERIFY_SSL=True,
+                CONNECTOR_PROXY_CA_BUNDLE=str(ca_bundle),
+            )
+
+            self.assertEqual(settings.openwebui_proxy_httpx_verify, str(ca_bundle))
+
+    def test_openwebui_proxy_ca_bundle_is_validated(self) -> None:
+        with self.assertRaises(ValidationError):
+            _settings(openwebui_proxy_ca_bundle="/certs/missing-openwebui-proxy-ca.pem")
 
 
 if __name__ == "__main__":

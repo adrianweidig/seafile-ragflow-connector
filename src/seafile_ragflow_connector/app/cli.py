@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
@@ -17,6 +17,7 @@ from seafile_ragflow_connector.app.runtime import (
     check_database,
     check_redis,
 )
+from seafile_ragflow_connector.clients import OpenWebUIClient
 from seafile_ragflow_connector.config import get_settings
 from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.server import (
@@ -37,6 +38,7 @@ from seafile_ragflow_connector.jobs.scheduler import PeriodicTask, SimpleSchedul
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 from seafile_ragflow_connector.jobs.worker import WorkerRunner
 from seafile_ragflow_connector.persistence.db import init_database
+from seafile_ragflow_connector.sync.target_cleanup import LibrarySourceLike, TargetCleanupService
 
 app = typer.Typer(help="Offline-first Seafile to RAGFlow connector")
 PROCESS_STARTED_AT = datetime.now(UTC)
@@ -115,6 +117,71 @@ def sync_once(
             payload["openwebui"] = openwebui_summary
         typer.echo(payload)
     finally:
+        runtime.close()
+
+
+@app.command("cleanup-orphans")
+def cleanup_orphans(
+    execute: Annotated[
+        bool,
+        typer.Option(
+            "--execute",
+            help="Delete the planned connector-owned orphan target artifacts.",
+        ),
+    ] = False,
+    run_sync: Annotated[
+        bool,
+        typer.Option(
+            "--run-sync",
+            help="Run sync-once after cleanup so current Seafile libraries are rebuilt.",
+        ),
+    ] = False,
+    wait_parse_seconds: Annotated[
+        int,
+        typer.Option(
+            "--wait-parse-seconds",
+            help="Poll parse status for this many seconds after the optional sync.",
+        ),
+    ] = 0,
+) -> None:
+    """Plan or delete connector-owned orphan RAGFlow/OpenWebUI artifacts."""
+    settings = _bootstrap()
+    runtime = build_runtime(settings)
+    extra_openwebui_client: OpenWebUIClient | None = None
+    try:
+        current_libraries = runtime.orchestrator.discover_libraries()
+        openwebui_client = runtime.openwebui_client
+        if openwebui_client is None and settings.openwebui_admin_api_key:
+            extra_openwebui_client = OpenWebUIClient(
+                settings.openwebui_base_url,
+                settings.openwebui_admin_api_key,
+                timeout=settings.openwebui_request_timeout_seconds,
+                verify=settings.openwebui_httpx_verify,
+            )
+            openwebui_client = extra_openwebui_client
+        cleanup_service = TargetCleanupService(
+            session_factory=runtime.orchestrator.session_factory,
+            ragflow_client=runtime.ragflow_client,
+            openwebui_client=openwebui_client,
+            openwebui_namespace=settings.openwebui_function_namespace,
+        )
+        summary = cleanup_service.cleanup(
+            cast(Sequence[LibrarySourceLike], current_libraries),
+            execute=execute,
+        )
+        payload: dict[str, Any] = dict(summary.__dict__)
+        if execute and run_sync:
+            sync_summary = runtime.orchestrator.sync_once()
+            if wait_parse_seconds > 0:
+                _wait_for_parse(runtime, wait_parse_seconds)
+            payload["sync"] = dict(sync_summary.__dict__)
+            openwebui_summary = _sync_openwebui_if_enabled(runtime)
+            if openwebui_summary is not None:
+                payload["openwebui"] = openwebui_summary
+        typer.echo(payload)
+    finally:
+        if extra_openwebui_client is not None:
+            extra_openwebui_client.close()
         runtime.close()
 
 

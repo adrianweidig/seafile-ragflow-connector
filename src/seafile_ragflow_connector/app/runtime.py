@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import structlog
 from redis import Redis
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
@@ -15,6 +16,7 @@ from seafile_ragflow_connector.clients import (
     SeafileAdminClient,
     SeafileSyncClient,
 )
+from seafile_ragflow_connector.clients.tls import safe_url_for_logs
 from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore, DashboardLimits
 from seafile_ragflow_connector.domain.file_classification import FilePolicy
@@ -59,6 +61,7 @@ def build_file_policy(settings: Settings) -> FilePolicy:
 
 
 def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Runtime:
+    _warn_insecure_tls(settings)
     if initialize_database:
         _retry(lambda: init_database(settings.database_url), "database")
     _retry(lambda: check_redis(settings.redis_url), "redis")
@@ -156,6 +159,29 @@ def _build_openwebui_client(settings: Settings) -> OpenWebUIClient | None:
         timeout=settings.openwebui_request_timeout_seconds,
         verify=settings.openwebui_httpx_verify,
     )
+
+
+def _warn_insecure_tls(settings: Settings) -> None:
+    logger = structlog.get_logger(__name__)
+    checks = (
+        ("Connector -> Seafile", settings.seafile_base_url, settings.seafile_verify_ssl),
+        ("Connector -> RAGFlow", settings.ragflow_base_url, settings.ragflow_verify_ssl),
+        ("Connector -> OpenWebUI", settings.openwebui_base_url, settings.openwebui_verify_ssl),
+        (
+            "OpenWebUI Pipe -> Connector Proxy",
+            settings.openwebui_proxy_base_url_for_functions or "",
+            settings.openwebui_proxy_verify_ssl,
+        ),
+    )
+    for route, target_url, verify_ssl in checks:
+        if verify_ssl:
+            continue
+        logger.warning(
+            "tls.verify_disabled",
+            route=route,
+            target=safe_url_for_logs(target_url),
+            hint="VERIFY_SSL=false ist nur für Debug/Dev vorgesehen.",
+        )
 
 
 def check_database(database_url: str) -> None:

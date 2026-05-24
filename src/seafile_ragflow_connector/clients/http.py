@@ -5,7 +5,9 @@ from typing import Any
 
 import httpx
 
-VerifyConfig = bool | str
+from seafile_ragflow_connector.clients.tls import VerifyConfig
+
+__all__ = ["ApiError", "VerifyConfig", "make_client", "unwrap_response"]
 
 
 class ApiError(RuntimeError):

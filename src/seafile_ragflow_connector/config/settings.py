@@ -5,8 +5,13 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import quote, urlparse
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from seafile_ragflow_connector.clients.tls import (
+    build_service_httpx_verify,
+    validate_tls_file,
+)
 
 
 def _split_csv(value: str | list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
@@ -21,12 +26,15 @@ class Settings(BaseSettings):
         env_file="stack.env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     app_env: str = "production"
     log_level: str = "INFO"
     log_format: Literal["json", "console"] = "json"
     dry_run: bool = False
+    ssl_cert_file: str | None = Field(default=None, validation_alias="SSL_CERT_FILE")
+    requests_ca_bundle: str | None = Field(default=None, validation_alias="REQUESTS_CA_BUNDLE")
     connector_ca_bundle: str | None = None
 
     connector_dashboard_enabled: bool = False
@@ -85,8 +93,20 @@ class Settings(BaseSettings):
     openwebui_proxy_public_base_url: str | None = None
     openwebui_proxy_internal_base_url: str | None = None
     openwebui_proxy_shared_secret: str | None = None
-    openwebui_proxy_verify_ssl: bool = True
-    openwebui_proxy_ca_bundle: str | None = None
+    openwebui_proxy_verify_ssl: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("OPENWEBUI_PROXY_VERIFY_SSL", "CONNECTOR_PROXY_VERIFY_SSL"),
+    )
+    openwebui_proxy_ca_bundle: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENWEBUI_PROXY_CA_BUNDLE", "CONNECTOR_PROXY_CA_BUNDLE"),
+    )
+    ragflow_client_cert_file: str | None = None
+    ragflow_client_key_file: str | None = None
+    seafile_client_cert_file: str | None = None
+    seafile_client_key_file: str | None = None
+    connector_proxy_client_cert_file: str | None = None
+    connector_proxy_client_key_file: str | None = None
     openwebui_sync_interval_seconds: int = 300
     openwebui_dataset_allowlist_csv: str = Field(
         default="",
@@ -169,10 +189,18 @@ class Settings(BaseSettings):
 
     @field_validator(
         "connector_ca_bundle",
+        "ssl_cert_file",
+        "requests_ca_bundle",
         "seafile_ca_bundle",
         "ragflow_ca_bundle",
         "openwebui_ca_bundle",
         "openwebui_proxy_ca_bundle",
+        "ragflow_client_cert_file",
+        "ragflow_client_key_file",
+        "seafile_client_cert_file",
+        "seafile_client_key_file",
+        "connector_proxy_client_cert_file",
+        "connector_proxy_client_key_file",
         mode="before",
     )
     @classmethod
@@ -257,22 +285,32 @@ class Settings(BaseSettings):
                 raise ValueError(msg)
         for name in (
             "connector_ca_bundle",
+            "ssl_cert_file",
+            "requests_ca_bundle",
             "seafile_ca_bundle",
             "ragflow_ca_bundle",
             "openwebui_ca_bundle",
+            "openwebui_proxy_ca_bundle",
+            "ragflow_client_cert_file",
+            "ragflow_client_key_file",
+            "seafile_client_cert_file",
+            "seafile_client_key_file",
+            "connector_proxy_client_cert_file",
+            "connector_proxy_client_key_file",
         ):
             value = getattr(self, name)
-            if value and not Path(value).is_file():
-                msg = f"{name.upper()} must point to a readable PEM CA bundle file"
-                raise ValueError(msg)
+            if value:
+                validate_tls_file(str(value), label=name.upper())
         if self.openwebui_integration_enabled:
             mode = self.openwebui_effective_sync_mode
+            writes_openwebui_artifacts = mode in {"sync", "repair"} and (
+                self.openwebui_create_tools or self.openwebui_create_pipes
+            )
             if mode in {"sync", "repair"} and not self.openwebui_admin_api_key:
                 msg = "OPENWEBUI_ADMIN_API_KEY must be set when OpenWebUI sync or repair is enabled"
                 raise ValueError(msg)
             if (
-                mode in {"sync", "repair"}
-                and (self.openwebui_create_tools or self.openwebui_create_pipes)
+                writes_openwebui_artifacts
                 and not self.openwebui_proxy_shared_secret
             ):
                 msg = (
@@ -281,8 +319,7 @@ class Settings(BaseSettings):
                 )
                 raise ValueError(msg)
             if (
-                mode in {"sync", "repair"}
-                and (self.openwebui_create_tools or self.openwebui_create_pipes)
+                writes_openwebui_artifacts
                 and not self.openwebui_proxy_base_url_for_functions
             ):
                 msg = (
@@ -291,15 +328,13 @@ class Settings(BaseSettings):
                 )
                 raise ValueError(msg)
             if (
-                self.openwebui_source_preview_mode == "connector_viewer"
-                and (
-                    not self.openwebui_proxy_public_base_url
-                    or not self.openwebui_proxy_shared_secret
-                )
+                writes_openwebui_artifacts
+                and self.openwebui_source_preview_mode == "connector_viewer"
+                and not self.openwebui_proxy_public_base_url
             ):
                 msg = (
-                    "OPENWEBUI_PROXY_PUBLIC_BASE_URL and OPENWEBUI_PROXY_SHARED_SECRET "
-                    "must be set for connector_viewer preview mode"
+                    "OPENWEBUI_PROXY_PUBLIC_BASE_URL must be set for connector_viewer "
+                    "preview mode when OpenWebUI tools or pipes are synced"
                 )
                 raise ValueError(msg)
             if not _is_http_url(self.openwebui_base_url):
@@ -355,10 +390,19 @@ class Settings(BaseSettings):
     def openwebui_httpx_verify(self) -> bool | str:
         return self._httpx_verify(self.openwebui_verify_ssl, self.openwebui_ca_bundle)
 
+    @property
+    def openwebui_proxy_httpx_verify(self) -> bool | str:
+        return self._httpx_verify(
+            self.openwebui_proxy_verify_ssl,
+            self.openwebui_proxy_ca_bundle,
+        )
+
     def _httpx_verify(self, verify_ssl: bool, service_ca_bundle: str | None) -> bool | str:
-        if not verify_ssl:
-            return False
-        return service_ca_bundle or self.connector_ca_bundle or True
+        return build_service_httpx_verify(
+            verify_ssl,
+            service_ca_bundle,
+            fallback_ca_bundle=self.connector_ca_bundle,
+        )
 
 
 def _is_http_url(value: str) -> bool:

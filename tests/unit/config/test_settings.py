@@ -132,6 +132,46 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Settings(**values)
 
+    def test_openwebui_dry_run_does_not_require_proxy_secret_or_preview_url(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "openwebui_integration_enabled": True,
+                "openwebui_sync_mode": "dry-run",
+                "openwebui_source_preview_mode": "connector_viewer",
+            }
+        )
+
+        settings = Settings(**values)
+
+        self.assertEqual(settings.openwebui_effective_sync_mode, "dry-run")
+        self.assertIsNone(settings.openwebui_proxy_shared_secret)
+
+    def test_connector_viewer_requires_public_proxy_url_only_when_artifacts_are_synced(
+        self,
+    ) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "openwebui_integration_enabled": True,
+                "openwebui_sync_mode": "sync",
+                "openwebui_admin_api_key": "admin-key",
+                "openwebui_proxy_shared_secret": "proxy-secret",
+                "openwebui_proxy_internal_base_url": "http://connector:8080",
+                "openwebui_source_preview_mode": "connector_viewer",
+            }
+        )
+
+        with self.assertRaises(ValueError):
+            Settings(**values)
+
+        values["openwebui_proxy_public_base_url"] = "http://localhost:18080"
+        settings = Settings(**values)
+
+        self.assertEqual(settings.openwebui_source_preview_mode, "connector_viewer")
+
     def test_global_dry_run_forces_openwebui_dry_run(self) -> None:
         values = self.base_values()
         values.update(

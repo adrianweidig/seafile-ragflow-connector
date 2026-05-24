@@ -25,7 +25,11 @@ Portainer-Start:
    verwenden.
 5. Inhalt von `../../connector.env.example` in Portainer unter `Environment
    variables` importieren.
-6. Alle `change-me` Werte und die Base-URLs ersetzen.
+6. Die Minimalpflichtwerte ersetzen: `SEAFILE_BASE_URL`,
+   `SEAFILE_ADMIN_TOKEN`, `SEAFILE_SYNC_USER_TOKEN`, `RAGFLOW_BASE_URL`,
+   `RAGFLOW_API_KEY` und `POSTGRES_PASSWORD` oder alternativ `DATABASE_URL`.
+   OpenWebUI-Werte nur setzen, wenn `OPENWEBUI_INTEGRATION_ENABLED=true`
+   genutzt wird.
    Wenn interne Zertifikate genutzt werden, die CA-PEM-Datei in ein
    Host-Verzeichnis legen, `CONNECTOR_CERTS_HOST_DIR` auf dieses Verzeichnis
    und `CONNECTOR_CA_BUNDLE=/certs/<datei>.pem` setzen.

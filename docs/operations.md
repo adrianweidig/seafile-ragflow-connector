@@ -31,7 +31,9 @@ aus `connector.env.example` im Bereich `Environment variables` zu importieren.
 3. In Portainer einen neuen Stack erstellen.
 4. Inhalt von `deploy/portainer/docker-compose.yml` einfügen.
 5. `connector.env.example` in Portainer importieren.
-6. Alle `change-me` Werte ersetzen.
+6. Die Minimalpflichtwerte ersetzen: `SEAFILE_BASE_URL`,
+   `SEAFILE_ADMIN_TOKEN`, `SEAFILE_SYNC_USER_TOKEN`, `RAGFLOW_BASE_URL`,
+   `RAGFLOW_API_KEY` und `POSTGRES_PASSWORD` oder alternativ `DATABASE_URL`.
 7. `CONNECTOR_IMAGE`, `POSTGRES_IMAGE` und `REDIS_IMAGE` müssen exakt den
    Image-Namen entsprechen, die Portainer unter `Images` anzeigt. Wenn nur
    lokale Images genutzt werden sollen, `CONNECTOR_IMAGE_PULL_POLICY=never`,
@@ -65,8 +67,9 @@ Start ebenfalls die zentrale Konfigurationsdatei:
 cp connector.env.example connector.env
 ```
 
-Danach `connector.env` bearbeiten, alle `change-me` Werte ersetzen und den
-Stack starten:
+Danach `connector.env` bearbeiten, die Minimalpflichtwerte ersetzen und den
+Stack starten. OpenWebUI-, TLS- und Tuning-Werte nur setzen, wenn sie für den
+gewählten Betriebsmodus gebraucht werden:
 
 ```bash
 docker compose \
@@ -380,6 +383,13 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
 - RAGFlow-Dataset oder Dokumente extern gelöscht: `connector sync-once` baut das
   Dataset aus dem Template neu auf und lädt die weiterhin in Seafile vorhandenen
   Dateien erneut hoch.
+- Alte connector-eigene Zielartefakte bereinigen: erst
+  `connector cleanup-orphans` ausführen und den Plan prüfen. Mit
+  `connector cleanup-orphans --execute --run-sync --wait-parse-seconds 240`
+  werden nur connector-eigene RAGFlow-Datasets mit `seafile__`-Präfix,
+  connector-eigene RAGFlow-Chats sowie OpenWebUI-Tools/Functions mit
+  Connector-Marker gelöscht; anschließend werden aktuelle Seafile-Libraries
+  wieder synchronisiert.
 - Audit-Excel leer: prüfen, ob bereits Sync-Läufe, Änderungsereignisse oder
   Logs existieren. Frische Umgebungen exportieren leere Tabellenblätter mit
   Kopfzeilen.

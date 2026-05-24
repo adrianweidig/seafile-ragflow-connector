@@ -9,6 +9,7 @@ __pycache__
 htmlcov
 dist
 build
+output
 cache
 tmp
 stack.env

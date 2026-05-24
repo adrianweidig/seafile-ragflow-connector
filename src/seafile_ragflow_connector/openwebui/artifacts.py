@@ -7,7 +7,7 @@ from textwrap import dedent
 from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "7"
+ARTIFACT_VERSION = "8"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 
 
@@ -44,6 +44,7 @@ def build_tool_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "CONNECTOR_PROXY_SHARED_SECRET": "",
         "CONNECTOR_PROXY_VERIFY_SSL": inputs.proxy_verify_ssl,
         "CONNECTOR_PROXY_CA_BUNDLE": inputs.proxy_ca_bundle or "",
+        "TLS_DEBUG": False,
         "DATASET_ID": inputs.dataset_id,
         "TOP_K": 8,
         "SHOW_SOURCE_SCORES": True,
@@ -74,6 +75,7 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "CONNECTOR_PROXY_SHARED_SECRET": "",
         "CONNECTOR_PROXY_VERIFY_SSL": inputs.proxy_verify_ssl,
         "CONNECTOR_PROXY_CA_BUNDLE": inputs.proxy_ca_bundle or "",
+        "TLS_DEBUG": False,
         "DATASET_ID": inputs.dataset_id,
         "RAGFLOW_CHAT_ID": inputs.ragflow_chat_id or "",
         "MODEL_ID": model_name,
@@ -151,11 +153,14 @@ def _tool_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.3.0
         owner: seafile-ragflow-connector
-        artifact_version: 7
+        artifact_version: 8
         """
 
         import httpx
+        import logging
         import re
+        from pathlib import Path
+        from urllib.parse import urlsplit, urlunsplit
         from pydantic import BaseModel, Field
 
 
@@ -166,6 +171,7 @@ def _tool_content() -> str:
                 CONNECTOR_PROXY_SHARED_SECRET: str = Field(default="")
                 CONNECTOR_PROXY_VERIFY_SSL: bool = Field(default=True)
                 CONNECTOR_PROXY_CA_BUNDLE: str = Field(default="")
+                TLS_DEBUG: bool = Field(default=False)
                 DATASET_ID: str = Field(default="")
                 TOP_K: int = Field(default=8, ge=1, le=20)
                 SHOW_SOURCE_SCORES: bool = Field(default=True)
@@ -197,22 +203,77 @@ def _tool_content() -> str:
                     "Authorization": f"Bearer {self.valves.CONNECTOR_PROXY_SHARED_SECRET}",
                     "Content-Type": "application/json",
                 }
+                url = (
+                    self.valves.CONNECTOR_PROXY_BASE_URL.rstrip("/")
+                    + "/api/openwebui/proxy/query"
+                )
                 try:
+                    verify = _httpx_verify(
+                        self.valves.CONNECTOR_PROXY_VERIFY_SSL,
+                        self.valves.CONNECTOR_PROXY_CA_BUNDLE,
+                    )
                     async with httpx.AsyncClient(
                         timeout=60,
-                        verify=_httpx_verify(
-                            self.valves.CONNECTOR_PROXY_VERIFY_SSL,
-                            self.valves.CONNECTOR_PROXY_CA_BUNDLE,
-                        ),
+                        verify=verify,
                     ) as client:
-                        url = (
-                            self.valves.CONNECTOR_PROXY_BASE_URL.rstrip("/")
-                            + "/api/openwebui/proxy/query"
-                        )
                         response = await client.post(url, json=payload, headers=headers)
                         response.raise_for_status()
                         data = response.json()
-                except Exception:
+                except ValueError as exc:
+                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
+                    if __event_emitter__:
+                        await __event_emitter__(
+                            {
+                                "type": "status",
+                                "data": {
+                                    "description": "TLS-Konfiguration ungültig.",
+                                    "done": True,
+                                },
+                            }
+                        )
+                    return "Die TLS-Konfiguration der RAGFlow-Pipe ist ungültig."
+                except httpx.TimeoutException as exc:
+                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
+                    if __event_emitter__:
+                        await __event_emitter__(
+                            {
+                                "type": "status",
+                                "data": {
+                                    "description": "RAGFlow-Proxy-Timeout.",
+                                    "done": True,
+                                },
+                            }
+                        )
+                    return "Der RAGFlow-Proxy hat nicht rechtzeitig geantwortet."
+                except httpx.HTTPStatusError as exc:
+                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
+                    status = exc.response.status_code
+                    if __event_emitter__:
+                        await __event_emitter__(
+                            {
+                                "type": "status",
+                                "data": {
+                                    "description": f"RAGFlow-Proxy antwortete mit HTTP {status}.",
+                                    "done": True,
+                                },
+                            }
+                        )
+                    return f"RAGFlow-Proxy antwortete mit HTTP {status}."
+                except httpx.ConnectError as exc:
+                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
+                    if __event_emitter__:
+                        await __event_emitter__(
+                            {
+                                "type": "status",
+                                "data": {
+                                    "description": "RAGFlow-Proxy war nicht erreichbar.",
+                                    "done": True,
+                                },
+                            }
+                        )
+                    return "Der RAGFlow-Proxy war nicht erreichbar."
+                except Exception as exc:
+                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
                     if __event_emitter__:
                         await __event_emitter__(
                             {
@@ -298,12 +359,6 @@ def _tool_content() -> str:
         def _clean(value):
             return " ".join(str(value or "").split())
 
-
-        def _httpx_verify(verify_ssl, ca_bundle):
-            if not bool(verify_ssl):
-                return False
-            ca_path = str(ca_bundle or "").strip()
-            return ca_path or True
             '''
         ).strip()
         + "\n\n"
@@ -320,11 +375,14 @@ def _pipe_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.3.0
         owner: seafile-ragflow-connector
-        artifact_version: 7
+        artifact_version: 8
         """
 
         import httpx
+        import logging
         import re
+        from pathlib import Path
+        from urllib.parse import urlsplit, urlunsplit
         from pydantic import BaseModel, Field
 
 
@@ -335,6 +393,7 @@ def _pipe_content() -> str:
                 CONNECTOR_PROXY_SHARED_SECRET: str = Field(default="")
                 CONNECTOR_PROXY_VERIFY_SSL: bool = Field(default=True)
                 CONNECTOR_PROXY_CA_BUNDLE: str = Field(default="")
+                TLS_DEBUG: bool = Field(default=False)
                 DATASET_ID: str = Field(default="")
                 RAGFLOW_CHAT_ID: str = Field(default="")
                 MODEL_ID: str = Field(default="")
@@ -394,22 +453,37 @@ def _pipe_content() -> str:
                     "Authorization": f"Bearer {self.valves.CONNECTOR_PROXY_SHARED_SECRET}",
                     "Content-Type": "application/json",
                 }
+                url = (
+                    self.valves.CONNECTOR_PROXY_BASE_URL.rstrip("/")
+                    + "/api/openwebui/proxy/chat"
+                )
                 try:
+                    verify = _httpx_verify(
+                        self.valves.CONNECTOR_PROXY_VERIFY_SSL,
+                        self.valves.CONNECTOR_PROXY_CA_BUNDLE,
+                    )
                     async with httpx.AsyncClient(
                         timeout=180,
-                        verify=_httpx_verify(
-                            self.valves.CONNECTOR_PROXY_VERIFY_SSL,
-                            self.valves.CONNECTOR_PROXY_CA_BUNDLE,
-                        ),
+                        verify=verify,
                     ) as client:
-                        url = (
-                            self.valves.CONNECTOR_PROXY_BASE_URL.rstrip("/")
-                            + "/api/openwebui/proxy/chat"
-                        )
                         response = await client.post(url, json=payload, headers=headers)
                         response.raise_for_status()
                         data = response.json()
-                except httpx.TimeoutException:
+                except ValueError as exc:
+                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
+                    if __event_emitter__:
+                        await __event_emitter__(
+                            {
+                                "type": "status",
+                                "data": {
+                                    "description": "TLS-Konfiguration ungültig.",
+                                    "done": True,
+                                },
+                            }
+                        )
+                    return "Die TLS-Konfiguration der RAGFlow-Pipe ist ungültig."
+                except httpx.TimeoutException as exc:
+                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
                     if __event_emitter__:
                         await __event_emitter__(
                             {
@@ -422,6 +496,7 @@ def _pipe_content() -> str:
                         )
                     return "RAGFlow hat nicht rechtzeitig geantwortet."
                 except httpx.HTTPStatusError as exc:
+                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
                     status = exc.response.status_code
                     if __event_emitter__:
                         await __event_emitter__(
@@ -434,7 +509,8 @@ def _pipe_content() -> str:
                             }
                         )
                     return f"RAGFlow-Proxy antwortete mit HTTP {status}."
-                except httpx.RequestError:
+                except httpx.ConnectError as exc:
+                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
                     if __event_emitter__:
                         await __event_emitter__(
                             {
@@ -446,7 +522,21 @@ def _pipe_content() -> str:
                             }
                         )
                     return "Der RAGFlow-Proxy war nicht erreichbar."
-                except Exception:
+                except httpx.RequestError as exc:
+                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
+                    if __event_emitter__:
+                        await __event_emitter__(
+                            {
+                                "type": "status",
+                                "data": {
+                                    "description": "RAGFlow-Proxy war nicht erreichbar.",
+                                    "done": True,
+                                },
+                            }
+                        )
+                    return "Der RAGFlow-Proxy war nicht erreichbar."
+                except Exception as exc:
+                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
                     if __event_emitter__:
                         await __event_emitter__(
                             {
@@ -537,14 +627,6 @@ def _pipe_content() -> str:
                 return clean
             return clean[: max_length - 1].rstrip() + "..."
 
-
-        def _httpx_verify(verify_ssl, ca_bundle):
-            if not bool(verify_ssl):
-                return False
-            ca_path = str(ca_bundle or "").strip()
-            return ca_path or True
-
-
         def _source_markdown(sources):
             if not sources:
                 return ""
@@ -606,6 +688,61 @@ def _artifact_source_helpers() -> str:
 
         from html import unescape
         from typing import Any
+
+
+        def _httpx_verify(verify_ssl, ca_bundle):
+            if not bool(verify_ssl):
+                logging.getLogger(__name__).warning(
+                    "OpenWebUI Pipe -> Connector Proxy uses VERIFY_SSL=false; "
+                    "this is only intended for debug/dev."
+                )
+                return False
+            ca_path = str(ca_bundle or "").strip()
+            if not ca_path:
+                return True
+            path = Path(ca_path)
+            if not path.exists():
+                raise ValueError(f"CA bundle does not exist: {ca_path}")
+            if not path.is_file():
+                raise ValueError(f"CA bundle is not a file: {ca_path}")
+            return ca_path
+
+
+        def _log_proxy_error(exc, url, ca_bundle):
+            logging.getLogger(__name__).warning(
+                "OpenWebUI Pipe -> Connector Proxy failed "
+                "target=%s error_class=%s ca_bundle_set=%s",
+                _safe_url(url),
+                _error_class(exc),
+                bool(str(ca_bundle or "").strip()),
+            )
+
+
+        def _safe_url(url):
+            parsed = urlsplit(str(url or ""))
+            if not parsed.scheme or not parsed.netloc:
+                return str(url or "").split("?", 1)[0]
+            host = parsed.hostname or ""
+            if parsed.port is not None:
+                host = f"{host}:{parsed.port}"
+            return urlunsplit((parsed.scheme, host, parsed.path.rstrip("/") or "", "", ""))
+
+
+        def _error_class(exc):
+            if isinstance(exc, httpx.TimeoutException):
+                return "TIMEOUT"
+            if isinstance(exc, httpx.HTTPStatusError):
+                return f"HTTP_{exc.response.status_code}"
+            if isinstance(exc, httpx.ConnectError):
+                text = str(exc).lower()
+                if "certificate" in text or "cert" in text or "ssl" in text:
+                    return "CERTIFICATE_VERIFY_FAILED"
+                return "CONNECT_ERROR"
+            if isinstance(exc, httpx.RequestError):
+                return exc.__class__.__name__.upper()
+            if isinstance(exc, ValueError):
+                return "TLS_CONFIGURATION_ERROR"
+            return exc.__class__.__name__.upper()
 
 
         class SourceHit(BaseModel):
