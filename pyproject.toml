@@ -8,6 +8,26 @@ license = { text = "MIT" }
 authors = [
   { name = "Seafile RAGFlow Connector Maintainers" }
 ]
+keywords = [
+  "seafile",
+  "ragflow",
+  "openwebui",
+  "portainer",
+  "docker-compose",
+  "sync",
+  "rag",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: System :: Systems Administration",
+  "Topic :: Utilities",
+]
 dependencies = [
   "alembic>=1.13",
   "dramatiq[redis]>=1.17",
@@ -35,6 +55,12 @@ dev = [
 
 [project.scripts]
 connector = "seafile_ragflow_connector.app.cli:app"
+
+[project.urls]
+Repository = "https://github.com/adrianweidig/seafile-ragflow-connector"
+Issues = "https://github.com/adrianweidig/seafile-ragflow-connector/issues"
+Documentation = "https://github.com/adrianweidig/seafile-ragflow-connector/tree/master/docs"
+"Docker image" = "https://github.com/adrianweidig/seafile-ragflow-connector/pkgs/container/seafile-ragflow-connector"
 
 [build-system]
 requires = ["hatchling"]

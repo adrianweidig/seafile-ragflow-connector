@@ -1,0 +1,85 @@
+name: Fehlerbericht
+description: Reproduzierbares Problem im Connector melden
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke für den Bericht. Bitte keine Tokens, Passwörter, privaten Schlüssel, produktiven Zertifikate oder vollständigen Env-Dateien einfügen.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Kurzbeschreibung
+      description: Was ist passiert?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Betroffener Bereich
+      options:
+        - Seafile Discovery oder Download
+        - RAGFlow Dataset, Upload oder Parse
+        - Delete- oder Repair-Logik
+        - OpenWebUI Sync, Tool, Pipe oder Proxy
+        - Dashboard oder Export
+        - Docker Compose, Portainer oder Swarm
+        - TLS oder Zertifikate
+        - Tests, CI oder Packaging
+        - Dokumentation
+        - Unklar
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduktionsschritte
+      description: Welche Schritte führen zum Problem?
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Erwartetes Verhalten
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Tatsächliches Verhalten
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Umgebung
+      description: Bitte nur nicht-sensitive Informationen eintragen.
+      placeholder: |
+        Connector-Version oder Commit:
+        Betrieb: Docker Compose / Portainer / Swarm / lokal:
+        Python-Version:
+        Docker-/Compose-Version:
+        Seafile-/RAGFlow-/OpenWebUI-Anbindung:
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevante Logs oder Ausgabe
+      description: Secrets vorher redigieren.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Vorab geprüft
+      options:
+        - label: Ich habe Secrets aus Logs und Beispielen entfernt.
+          required: true
+        - label: Ich habe README, docs/README.md oder SUPPORT.md geprüft.
+          required: false
+        - label: Ich habe, falls möglich, `python scripts/verify.py --skip-compose` ausgeführt.
+          required: false

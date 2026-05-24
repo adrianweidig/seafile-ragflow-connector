@@ -24,6 +24,10 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
 - `https-edge-testbed.md` dokumentiert den lokal geprüften Nginx-/Root-CA-
   Teststand mit `.top.secret`-Domains, Compose-Stacks und den abgeleiteten
   Connector-Anpassungen.
+- `FAQ.md` beantwortet wiederkehrende Betriebs- und Integrationsfragen.
+- `RELEASE_PROCESS.md` beschreibt den vorsichtigen manuellen Release-Ablauf.
+- `MAINTAINER_CHECKLIST.md` bündelt GitHub-Einstellungen, Security-Optionen und
+  Release-Aufgaben, die Maintainer außerhalb des Arbeitsbaums prüfen müssen.
 - `../deploy/tls-lab/README.md` beschreibt das lokale HTTPS-Lab mit eigener
   Test-Root-CA und `.top.secret`-Domains.
 

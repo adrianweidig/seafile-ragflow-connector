@@ -90,6 +90,12 @@ erzwungen, wenn `--with-compose` gesetzt ist.
 - `README.md` ist die zentrale Einstiegsdatei.
 - Ausführliche Betriebs-, TLS- und Architekturdetails bleiben in `docs/` und
   werden aus der README verlinkt.
+- Öffentliche Community-Dokumente wie `CONTRIBUTING.md`, `SECURITY.md`,
+  `SUPPORT.md`, `CHANGELOG.md` und `.github/ISSUE_TEMPLATE/*` müssen konkrete
+  Projektregeln enthalten und dürfen keine generischen Platzhaltertexte
+  verwenden.
+- README-Badges und GitHub-Links nur setzen, wenn Owner, Repository und
+  Workflow-Dateien eindeutig vorhanden sind.
 - Deutsche Fließtexte verwenden echte UTF-8-Umlaute. Keine blinden globalen
   Ersetzungen in Code, Pfaden, Env-Variablen, IDs oder technischen Strings.
 - Beispielwerte bleiben offensichtliche Platzhalter wie `change-me` oder
