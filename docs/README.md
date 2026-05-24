@@ -18,6 +18,9 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
 - `tls-topology.md`, `tls-certificates.md`, `docker-compose-tls.md` und
   `troubleshooting-ssl.md` beschreiben TLS-Strecken, CA-Bundles,
   Compose-Mounts und SSL-Fehlerdiagnose.
+- `local-https-compose.md` beschreibt den produktionsnahen lokalen
+  WSL-Docker-Betrieb mit Compose-Updatepfad, lokalen HTTPS-Mocks und
+  `https://connector.top.secret`.
 - `https-edge-testbed.md` dokumentiert den lokal geprüften Nginx-/Root-CA-
   Teststand mit `.top.secret`-Domains, Compose-Stacks und den abgeleiteten
   Connector-Anpassungen.

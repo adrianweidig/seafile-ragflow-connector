@@ -364,6 +364,7 @@ menschlich geprüft werden.
 - [Environment-Variablen](docs/environment.md)
 - [Test- und Ausführungsmodell](docs/testing.md)
 - [Betrieb, Offline-Deployment und WSL-/Docker-Prüfung](docs/operations.md)
+- [Lokaler HTTPS-Compose-Betrieb mit connector.top.secret](docs/local-https-compose.md)
 - [RAGFlow-Template-Verhalten](docs/ragflow-template.md)
 - [TLS-Zertifikate](docs/tls-certificates.md)
 - [TLS-Topologie](docs/tls-topology.md)

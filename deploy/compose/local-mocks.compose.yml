@@ -1,0 +1,101 @@
+# Docker Compose Overlay: lokale HTTPS-Mocks fuer Seafile und RAGFlow.
+#
+# Dieses Overlay ist fuer reproduzierbare WSL-/Docker-Smoke-Tests gedacht,
+# wenn kein echter lokaler Seafile-/RAGFlow-Stack verfuegbar ist. Es stellt nur
+# die API-Pfade bereit, die `connector check-live` und Dashboard-Health pruefen.
+#
+# Beispiel:
+#   docker compose --env-file connector.env \
+#     -f deploy/compose/external-services.compose.yml \
+#     -f deploy/compose/local-mocks.compose.yml \
+#     -f deploy/compose/connector-top-secret.compose.yml up -d
+
+services:
+  seafile-mock:
+    image: ${CONNECTOR_LOCAL_MOCK_IMAGE:-python:3.12-alpine}
+    pull_policy: ${CONNECTOR_LOCAL_MOCK_IMAGE_PULL_POLICY:-missing}
+    restart: unless-stopped
+    command:
+      [
+        "python",
+        "/mock/https_mock.py",
+        "--name",
+        "seafile-mock",
+        "--port",
+        "8443",
+        "--cert",
+        "/certs/seafile.top.secret.cert.pem",
+        "--key",
+        "/certs/seafile.top.secret.key.pem",
+      ]
+    volumes:
+      - ../tls-lab/https_mock.py:/mock/https_mock.py:ro
+      - ${CONNECTOR_CERTS_HOST_DIR:-./certs}:/certs:ro
+    networks:
+      connector-net:
+        aliases:
+          - seafile.top.secret
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python - <<'PY'\nimport ssl, urllib.request\nctx=ssl._create_unverified_context()\nurllib.request.urlopen('https://127.0.0.1:8443/api/health', context=ctx, timeout=5).read()\nPY",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  ragflow-mock:
+    image: ${CONNECTOR_LOCAL_MOCK_IMAGE:-python:3.12-alpine}
+    pull_policy: ${CONNECTOR_LOCAL_MOCK_IMAGE_PULL_POLICY:-missing}
+    restart: unless-stopped
+    command:
+      [
+        "python",
+        "/mock/https_mock.py",
+        "--name",
+        "ragflow-mock",
+        "--port",
+        "8443",
+        "--cert",
+        "/certs/rag.top.secret.cert.pem",
+        "--key",
+        "/certs/rag.top.secret.key.pem",
+      ]
+    volumes:
+      - ../tls-lab/https_mock.py:/mock/https_mock.py:ro
+      - ${CONNECTOR_CERTS_HOST_DIR:-./certs}:/certs:ro
+    networks:
+      connector-net:
+        aliases:
+          - rag.top.secret
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python - <<'PY'\nimport ssl, urllib.request\nctx=ssl._create_unverified_context()\nurllib.request.urlopen('https://127.0.0.1:8443/api/health', context=ctx, timeout=5).read()\nPY",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  connector-controller:
+    depends_on:
+      seafile-mock:
+        condition: service_healthy
+      ragflow-mock:
+        condition: service_healthy
+
+  connector-worker:
+    depends_on:
+      seafile-mock:
+        condition: service_healthy
+      ragflow-mock:
+        condition: service_healthy
+
+  connector-reconciler:
+    depends_on:
+      seafile-mock:
+        condition: service_healthy
+      ragflow-mock:
+        condition: service_healthy

@@ -18,7 +18,8 @@ Portainer und Swarm.
 - `deploy/docker/`: Dockerfile und Entrypoint.
 - `deploy/portainer/`: Portainer-fähiger Compose-Stack.
 - `deploy/compose/`: direkte Compose-Varianten für Host/LAN, Shared Network,
-  OpenWebUI und TLS-Beispiele.
+  OpenWebUI, lokale HTTPS-Mocks, lokalen `connector.top.secret`-HTTPS-Edge und
+  TLS-Beispiele.
 - `deploy/swarm/`: Docker-Swarm-Stackfile und Env-Vorlage.
 - `deploy/tls-lab/`: lokales TLS-Lab; generierte Zertifikate bleiben
   ungetrackt.
@@ -63,6 +64,10 @@ erzwungen, wenn `--with-compose` gesetzt ist.
 - Portainer und Docker Compose bekommen dieselben Werte über Environment-
   Variablen; die Compose-Dateien dürfen nicht von lokalen `env_file`-Pfaden
   abhängig werden.
+- Für lokale Windows-/WSL-Prüfungen über `https://connector.top.secret` die
+  Anleitung in `docs/local-https-compose.md` verwenden. Das Overlay
+  `deploy/compose/connector-top-secret.compose.yml` darf nur lokale
+  Testzertifikate aus ungetrackten Pfaden mounten.
 - Seafile, RAGFlow und OpenWebUI sind externe Systeme und werden nicht durch
   diesen Connector ersetzt.
 - Bestehende Docker-Volumes und produktive Daten dürfen bei Cleanup-Arbeiten

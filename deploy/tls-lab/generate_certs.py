@@ -9,10 +9,13 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
+DEFAULT_CRL_URL = "http://connector.top.secret/top-secret-root-ca.crl"
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out-dir", default=str(Path(__file__).with_name("certs")))
+    parser.add_argument("--crl-url", default=DEFAULT_CRL_URL)
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -22,10 +25,18 @@ def main() -> None:
     root_cert = _root_ca(root_key)
     _write_cert(out_dir / "top-secret-root-ca.pem", root_cert)
     _write_key(out_dir / "top-secret-root-ca.key.pem", root_key)
+    _write_crl(out_dir / "top-secret-root-ca.crl", _empty_crl(root_cert, root_key))
+    _write_crl_pem(out_dir / "top-secret-root-ca.crl.pem", _empty_crl(root_cert, root_key))
 
     for name in ("rag.top.secret", "seafile.top.secret", "connector.top.secret"):
         key = _new_key()
-        cert = _server_cert(name, key, issuer_cert=root_cert, issuer_key=root_key)
+        cert = _server_cert(
+            name,
+            key,
+            issuer_cert=root_cert,
+            issuer_key=root_key,
+            crl_url=args.crl_url,
+        )
         _write_pair(out_dir, name, cert, key)
 
     wrong_key = _new_key()
@@ -34,6 +45,7 @@ def main() -> None:
         wrong_key,
         issuer_cert=root_cert,
         issuer_key=root_key,
+        crl_url=args.crl_url,
     )
     _write_pair(out_dir, "wronghost.top.secret", wrong_cert, wrong_key)
 
@@ -45,6 +57,7 @@ def main() -> None:
         issuer_key=root_key,
         not_before=datetime.now(UTC) - timedelta(days=10),
         not_after=datetime.now(UTC) - timedelta(days=1),
+        crl_url=args.crl_url,
     )
     _write_pair(out_dir, "expired-rag.top.secret", expired_cert, expired_key)
 
@@ -103,6 +116,24 @@ def _root_ca(key: rsa.RSAPrivateKey) -> x509.Certificate:
     )
 
 
+def _empty_crl(
+    issuer_cert: x509.Certificate,
+    issuer_key: rsa.RSAPrivateKey,
+) -> x509.CertificateRevocationList:
+    now = datetime.now(UTC)
+    return (
+        x509.CertificateRevocationListBuilder()
+        .issuer_name(issuer_cert.subject)
+        .last_update(now - timedelta(minutes=5))
+        .next_update(now + timedelta(days=30))
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_key.public_key()),
+            critical=False,
+        )
+        .sign(private_key=issuer_key, algorithm=hashes.SHA256())
+    )
+
+
 def _server_cert(
     dns_name: str,
     key: rsa.RSAPrivateKey,
@@ -111,6 +142,7 @@ def _server_cert(
     issuer_key: rsa.RSAPrivateKey,
     not_before: datetime | None = None,
     not_after: datetime | None = None,
+    crl_url: str | None = None,
 ) -> x509.Certificate:
     now = datetime.now(UTC)
     subject = x509.Name(
@@ -120,7 +152,7 @@ def _server_cert(
         ]
     )
     issuer = issuer_cert.subject if issuer_cert is not None else subject
-    return (
+    builder = (
         x509.CertificateBuilder()
         .subject_name(subject)
         .issuer_name(issuer)
@@ -153,8 +185,22 @@ def _server_cert(
             x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
             critical=False,
         )
-        .sign(issuer_key, hashes.SHA256())
     )
+    if crl_url and issuer_cert is not None:
+        builder = builder.add_extension(
+            x509.CRLDistributionPoints(
+                [
+                    x509.DistributionPoint(
+                        full_name=[x509.UniformResourceIdentifier(crl_url)],
+                        relative_name=None,
+                        reasons=None,
+                        crl_issuer=None,
+                    )
+                ]
+            ),
+            critical=False,
+        )
+    return builder.sign(issuer_key, hashes.SHA256())
 
 
 def _write_pair(
@@ -169,6 +215,14 @@ def _write_pair(
 
 def _write_cert(path: Path, cert: x509.Certificate) -> None:
     path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+
+
+def _write_crl(path: Path, crl: x509.CertificateRevocationList) -> None:
+    path.write_bytes(crl.public_bytes(serialization.Encoding.DER))
+
+
+def _write_crl_pem(path: Path, crl: x509.CertificateRevocationList) -> None:
+    path.write_bytes(crl.public_bytes(serialization.Encoding.PEM))
 
 
 def _write_key(path: Path, key: rsa.RSAPrivateKey) -> None:

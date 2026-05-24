@@ -89,8 +89,10 @@ können ebenfalls mit `--env-file connector.env` gestartet werden:
 | Anwendungsfall | Compose-Datei |
 | --- | --- |
 | Seafile/RAGFlow über Host, LAN oder Reverse Proxy | `deploy/compose/external-services.compose.yml` |
+| Lokaler Smoke-Test mit Seafile-/RAGFlow-HTTPS-Mocks | zusätzlich `deploy/compose/local-mocks.compose.yml` |
 | Seafile/RAGFlow im bestehenden Docker-Netz | `deploy/compose/shared-network.compose.yml` |
 | Seafile/RAGFlow/OpenWebUI im gemeinsamen Docker-Netz | `deploy/compose/openwebui.compose.yml` |
+| Lokaler HTTPS-Edge für Windows/WSL unter `connector.top.secret` | zusätzlich `deploy/compose/connector-top-secret.compose.yml` |
 
 Beispiel:
 
@@ -106,6 +108,13 @@ Für das Shared-Network- und OpenWebUI-Szenario muss
 zeigen. Die OpenWebUI-Variante aktiviert das Dashboard, weil die generierten
 Tools/Pipes den Connector-Proxy unter `/api/openwebui/proxy/*` erreichen
 müssen.
+
+Für den lokalen Windows-/WSL-Zugriff über `https://connector.top.secret` kann
+das Overlay `deploy/compose/connector-top-secret.compose.yml` ergänzt werden.
+Es aktiviert das lesende Dashboard im Controller und startet einen Nginx-Edge
+mit lokalem Zertifikat aus `CONNECTOR_CERTS_HOST_DIR`. Die vollständige
+Runbook-Anleitung einschließlich Windows-Hosts-Eintrag, Root-CA-Import,
+Update-Test und Rollback steht in `docs/local-https-compose.md`.
 
 ## Docker Swarm
 

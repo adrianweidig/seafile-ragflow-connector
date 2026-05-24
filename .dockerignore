@@ -12,6 +12,9 @@ build
 output
 cache
 tmp
+.env
+connector.env
+deploy/tls-lab/certs
 stack.env
 deploy/portainer/stack.env
 *.log

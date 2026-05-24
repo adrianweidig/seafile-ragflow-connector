@@ -45,6 +45,7 @@ Erzeugte Dateien:
 | Datei | Zweck |
 | --- | --- |
 | `certs/top-secret-root-ca.pem` | Root-CA-Bundle für `*_CA_BUNDLE`. |
+| `certs/top-secret-root-ca.crl` | Leere lokale CRL für Windows/SChannel-Revocation-Checks. |
 | `certs/rag.top.secret.cert.pem` | Leaf-Zertifikat für RAGFlow-Mock. |
 | `certs/rag.top.secret.key.pem` | Test-Private-Key für RAGFlow-Mock. |
 | `certs/seafile.top.secret.cert.pem` | Leaf-Zertifikat für Seafile-Mock. |
