@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/hero.svg" alt="Seafile RAGFlow Connector: offline-fähige Sync-Control-Plane zwischen Seafile, RAGFlow und optional OpenWebUI">
+  <img src="docs/assets/hero.png" alt="Seafile RAGFlow Connector: offline-fähige Sync-Control-Plane zwischen Seafile, RAGFlow und optional OpenWebUI">
 </p>
 
 <h1 align="center">Seafile RAGFlow Connector</h1>
