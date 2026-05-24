@@ -924,7 +924,7 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "cryptography", marker = "extra == 'dev'", specifier = ">=48.0.0" },
-    { name = "dramatiq", extras = ["redis"], specifier = ">=1.17" },
+    { name = "dramatiq", extras = ["redis"], specifier = ">=2.1.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "prometheus-client", specifier = ">=0.20" },
