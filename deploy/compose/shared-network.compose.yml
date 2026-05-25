@@ -24,6 +24,8 @@ x-connector-env: &connector-env
   CONNECTOR_DASHBOARD_ENABLED: ${CONNECTOR_DASHBOARD_ENABLED:-false}
   CONNECTOR_DASHBOARD_HOST: ${CONNECTOR_DASHBOARD_HOST:-0.0.0.0}
   CONNECTOR_DASHBOARD_PORT: ${CONNECTOR_DASHBOARD_PORT:-8080}
+  CONNECTOR_DASHBOARD_AUTH_USERNAME: ${CONNECTOR_DASHBOARD_AUTH_USERNAME:-}
+  CONNECTOR_DASHBOARD_AUTH_PASSWORD: ${CONNECTOR_DASHBOARD_AUTH_PASSWORD:-}
 
   # In dieser Variante zeigen die URLs typischerweise auf Docker-Service-Namen.
   SEAFILE_BASE_URL: ${SEAFILE_BASE_URL:?set SEAFILE_BASE_URL}
@@ -182,7 +184,9 @@ volumes:
 
 networks:
   connector-net:
-    # Dieses Netz muss bereits existieren:
-    #   docker network create <name>
-    name: ${CONNECTOR_DOCKER_NETWORK_NAME:?set CONNECTOR_DOCKER_NETWORK_NAME}
+    # Dieses Netz muss bei `up` bereits existieren:
+    #   docker network create seafile-ragflow-connector-net
+    # In bestehenden Stacks CONNECTOR_DOCKER_NETWORK_NAME auf das gemeinsame
+    # Seafile/RAGFlow-Netz setzen.
+    name: ${CONNECTOR_DOCKER_NETWORK_NAME:-seafile-ragflow-connector-net}
     external: true

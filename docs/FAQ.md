@@ -32,10 +32,10 @@ Retries und Backpressure für Worker-Prozesse.
 
 ## Ist das Dashboard geschützt?
 
-Das Dashboard ist bewusst lesend und erzwingt keine eigene Authentifizierung.
-Der Zugriff muss über Netzwerkexposition, Reverse Proxy oder Portbindung
-gesteuert werden. Wer das Dashboard nicht erreichbar machen will, aktiviert es
-nicht oder veröffentlicht den Port nicht.
+Ja, wenn `CONNECTOR_DASHBOARD_AUTH_USERNAME` und
+`CONNECTOR_DASHBOARD_AUTH_PASSWORD` gesetzt sind. Dann schützt HTTP Basic Auth
+die Weboberfläche und die lesenden Dashboard-API-Endpunkte. Die OpenWebUI-Proxy-
+Endpunkte nutzen weiterhin ihr separates `OPENWEBUI_PROXY_SHARED_SECRET`.
 
 ## Darf `*_VERIFY_SSL=false` produktiv genutzt werden?
 

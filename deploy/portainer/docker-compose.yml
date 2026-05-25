@@ -1,14 +1,37 @@
+# Portainer-/Compose-Stack fuer den Seafile-RAGFlow-Connector.
+#
+# Aufbau:
+# - x-connector-env sammelt alle Runtime-Werte, damit Controller, Worker und
+#   Reconciler exakt dieselbe Konfiguration sehen.
+# - x-connector-common sammelt Image, Volumes, Netzwerk und Healthcheck.
+# - services enthaelt nur noch die konkreten Rollen und die State-Dienste.
+#
+# Nutzer muessen normalerweise nur die Werte in stack.env/connector.env setzen.
+# OpenWebUI bleibt optional: Fehlen OpenWebUI-Werte, laeuft der Stack weiterhin
+# als Seafile -> RAGFlow Connector.
+
 name: ${COMPOSE_PROJECT_NAME:-seafile-ragflow-connector}
 
 x-connector-env: &connector-env
+  # -------------------------------------------------------------------
+  # Runtime und Logging
+  # -------------------------------------------------------------------
   TZ: ${TZ:-Europe/Berlin}
   APP_ENV: ${APP_ENV:-production}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   LOG_FORMAT: ${LOG_FORMAT:-json}
   DRY_RUN: ${DRY_RUN:-false}
+
+  # -------------------------------------------------------------------
+  # TLS-Vertrauen fuer interne oder private Zertifizierungsstellen
+  # -------------------------------------------------------------------
   CONNECTOR_CA_BUNDLE: ${CONNECTOR_CA_BUNDLE:-}
   SSL_CERT_FILE: ${SSL_CERT_FILE:-}
   REQUESTS_CA_BUNDLE: ${REQUESTS_CA_BUNDLE:-}
+
+  # -------------------------------------------------------------------
+  # Lesendes Dashboard und geschuetzter OpenWebUI-Proxy
+  # -------------------------------------------------------------------
   CONNECTOR_DASHBOARD_ENABLED: ${CONNECTOR_DASHBOARD_ENABLED:-false}
   CONNECTOR_DASHBOARD_HOST: ${CONNECTOR_DASHBOARD_HOST:-0.0.0.0}
   CONNECTOR_DASHBOARD_PORT: ${CONNECTOR_DASHBOARD_PORT:-8080}
@@ -17,7 +40,15 @@ x-connector-env: &connector-env
   CONNECTOR_DASHBOARD_MAX_SYNC_RUNS: ${CONNECTOR_DASHBOARD_MAX_SYNC_RUNS:-1000}
   CONNECTOR_DASHBOARD_LOG_PAGE_SIZE: ${CONNECTOR_DASHBOARD_LOG_PAGE_SIZE:-100}
   CONNECTOR_DASHBOARD_MAX_FIELD_LENGTH: ${CONNECTOR_DASHBOARD_MAX_FIELD_LENGTH:-4000}
+  CONNECTOR_DASHBOARD_AUTH_USERNAME: ${CONNECTOR_DASHBOARD_AUTH_USERNAME:-}
+  CONNECTOR_DASHBOARD_AUTH_PASSWORD: ${CONNECTOR_DASHBOARD_AUTH_PASSWORD:-}
 
+  # -------------------------------------------------------------------
+  # Quelle: bestehender Seafile-Server
+  # -------------------------------------------------------------------
+  # Muss aus dem Connector-Container erreichbar sein. Der Connector versucht
+  # zur Laufzeit zuerst HTTPS auf derselben Host/Port-Kombination und faellt
+  # nur bei technischem HTTPS-Fehler auf HTTP zurueck.
   SEAFILE_BASE_URL: ${SEAFILE_BASE_URL:?set SEAFILE_BASE_URL}
   SEAFILE_INTERNAL_URL: ${SEAFILE_INTERNAL_URL:-}
   SEAFILE_ADMIN_TOKEN: ${SEAFILE_ADMIN_TOKEN:?set SEAFILE_ADMIN_TOKEN}
@@ -34,6 +65,12 @@ x-connector-env: &connector-env
   SEAFILE_DOWNLOAD_REWRITE_TO: ${SEAFILE_DOWNLOAD_REWRITE_TO:-}
   SEAFILE_FILE_URL_TEMPLATE: ${SEAFILE_FILE_URL_TEMPLATE:-}
 
+  # -------------------------------------------------------------------
+  # Ziel: bestehender RAGFlow-Server
+  # -------------------------------------------------------------------
+  # Muss aus dem Connector-Container erreichbar sein. Auch hier prueft der
+  # Connector zuerst HTTPS und dokumentiert den effektiven Transport im
+  # Dashboard.
   RAGFLOW_BASE_URL: ${RAGFLOW_BASE_URL:?set RAGFLOW_BASE_URL}
   RAGFLOW_INTERNAL_URL: ${RAGFLOW_INTERNAL_URL:-}
   RAGFLOW_API_KEY: ${RAGFLOW_API_KEY:?set RAGFLOW_API_KEY}
@@ -49,11 +86,18 @@ x-connector-env: &connector-env
   RAGFLOW_PUBLIC_BASE_URL: ${RAGFLOW_PUBLIC_BASE_URL:-}
   RAGFLOW_DOCUMENT_URL_TEMPLATE: ${RAGFLOW_DOCUMENT_URL_TEMPLATE:-}
 
+  # -------------------------------------------------------------------
+  # Optionales Ziel: OpenWebUI
+  # -------------------------------------------------------------------
+  # Default bleibt aus. Dadurch funktioniert derselbe Stack auch, wenn keine
+  # OpenWebUI-Instanz vorhanden ist. Fuer echte Synchronisation setzen:
+  # OPENWEBUI_INTEGRATION_ENABLED=true, OPENWEBUI_SYNC_MODE=sync oder repair,
+  # OPENWEBUI_ADMIN_API_KEY und OPENWEBUI_PROXY_SHARED_SECRET.
   OPENWEBUI_INTEGRATION_ENABLED: ${OPENWEBUI_INTEGRATION_ENABLED:-false}
   OPENWEBUI_BASE_URL: ${OPENWEBUI_BASE_URL:-http://localhost:3000}
   OPENWEBUI_ADMIN_API_KEY: ${OPENWEBUI_ADMIN_API_KEY:-}
   OPENWEBUI_SYNC_ON_STARTUP: ${OPENWEBUI_SYNC_ON_STARTUP:-true}
-  OPENWEBUI_SYNC_MODE: ${OPENWEBUI_SYNC_MODE:-sync}
+  OPENWEBUI_SYNC_MODE: ${OPENWEBUI_SYNC_MODE:-disabled}
   OPENWEBUI_CREATE_TOOLS: ${OPENWEBUI_CREATE_TOOLS:-true}
   OPENWEBUI_CREATE_PIPES: ${OPENWEBUI_CREATE_PIPES:-true}
   OPENWEBUI_REQUEST_TIMEOUT_SECONDS: ${OPENWEBUI_REQUEST_TIMEOUT_SECONDS:-180}
@@ -73,6 +117,11 @@ x-connector-env: &connector-env
   OPENWEBUI_SYNC_INTERVAL_SECONDS: ${OPENWEBUI_SYNC_INTERVAL_SECONDS:-300}
   OPENWEBUI_DATASET_ALLOWLIST: ${OPENWEBUI_DATASET_ALLOWLIST:-}
 
+  # -------------------------------------------------------------------
+  # Connector-State: Datenbank und Queue innerhalb dieses Stacks
+  # -------------------------------------------------------------------
+  # DATABASE_URL/REDIS_URL koennen externe Dienste ueberschreiben; ohne diese
+  # Werte werden die unten definierten lokalen Postgres-/Redis-Services genutzt.
   POSTGRES_HOST: connector-postgres
   POSTGRES_PORT: 5432
   POSTGRES_DB: ${POSTGRES_DB:-seafile_ragflow_sync}
@@ -84,6 +133,9 @@ x-connector-env: &connector-env
   REDIS_DB: ${REDIS_DB:-0}
   REDIS_URL: ${REDIS_URL:-}
 
+  # -------------------------------------------------------------------
+  # Datei-Policy
+  # -------------------------------------------------------------------
   ALLOW_UNKNOWN_TEXT_FILES: ${ALLOW_UNKNOWN_TEXT_FILES:-true}
   ALLOW_EXTENSIONS: ${ALLOW_EXTENSIONS:-}
   DENY_EXTENSIONS: ${DENY_EXTENSIONS:-.exe,.dll,.so,.zip,.tar,.gz,.7z,.tmp,.part}
@@ -94,18 +146,30 @@ x-connector-env: &connector-env
   MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-1024}
   EXCLUDE_REGEX: ${EXCLUDE_REGEX:-}
 
+  # -------------------------------------------------------------------
+  # RAGFlow-Dataset-Einstellungen
+  # -------------------------------------------------------------------
   DATASET_SETTINGS_SOURCE: ${DATASET_SETTINGS_SOURCE:-ragflow_current}
   REPARSE_ON_DATASET_SETTINGS_CHANGE: ${REPARSE_ON_DATASET_SETTINGS_CHANGE:-false}
 
+  # -------------------------------------------------------------------
+  # Scheduling
+  # -------------------------------------------------------------------
   DISCOVERY_INTERVAL_SECONDS: ${DISCOVERY_INTERVAL_SECONDS:-300}
   DELTA_SYNC_INTERVAL_SECONDS: ${DELTA_SYNC_INTERVAL_SECONDS:-300}
   RECONCILE_INTERVAL_SECONDS: ${RECONCILE_INTERVAL_SECONDS:-21600}
   FULL_SYNC_ON_MISSING_COMMIT: ${FULL_SYNC_ON_MISSING_COMMIT:-true}
 
+  # -------------------------------------------------------------------
+  # Delete-/Repair-Policy
+  # -------------------------------------------------------------------
   DELETE_RAGFLOW_DOCS_ON_SEAFILE_DELETE: ${DELETE_RAGFLOW_DOCS_ON_SEAFILE_DELETE:-true}
   DELETE_DATASET_WHEN_LIBRARY_DELETED: ${DELETE_DATASET_WHEN_LIBRARY_DELETED:-true}
   ARCHIVE_DATASET_WHEN_LIBRARY_DELETED: ${ARCHIVE_DATASET_WHEN_LIBRARY_DELETED:-false}
 
+  # -------------------------------------------------------------------
+  # Durchsatz und Backpressure
+  # -------------------------------------------------------------------
   MAX_CONCURRENT_LIBRARIES: ${MAX_CONCURRENT_LIBRARIES:-2}
   UPLOAD_WORKERS: ${UPLOAD_WORKERS:-2}
   PARSE_WORKERS: ${PARSE_WORKERS:-1}
@@ -113,15 +177,24 @@ x-connector-env: &connector-env
   RAGFLOW_PARSE_BATCH_SIZE: ${RAGFLOW_PARSE_BATCH_SIZE:-16}
   RAGFLOW_MAX_INFLIGHT_DOCUMENTS: ${RAGFLOW_MAX_INFLIGHT_DOCUMENTS:-64}
 
+  # -------------------------------------------------------------------
+  # Retry-Policy
+  # -------------------------------------------------------------------
   JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-5}
   JOB_RETRY_BASE_SECONDS: ${JOB_RETRY_BASE_SECONDS:-30}
   JOB_RETRY_MAX_SECONDS: ${JOB_RETRY_MAX_SECONDS:-3600}
 
+  # -------------------------------------------------------------------
+  # Lokale Runtime-Pfade und Offline-Verhalten
+  # -------------------------------------------------------------------
   CACHE_DIR: ${CACHE_DIR:-/cache}
   TEMP_DIR: ${TEMP_DIR:-/cache/tmp}
   ALLOW_OUTBOUND_INTERNET: ${ALLOW_OUTBOUND_INTERNET:-false}
   DISABLE_TELEMETRY: ${DISABLE_TELEMETRY:-true}
 
+  # -------------------------------------------------------------------
+  # Startup / Bootstrap
+  # -------------------------------------------------------------------
   CONNECTOR_AUTO_INIT_DB: ${CONNECTOR_AUTO_INIT_DB:-true}
   CONNECTOR_STARTUP_CHECK: ${CONNECTOR_STARTUP_CHECK:-live}
   CONNECTOR_STARTUP_MAX_WAIT_SECONDS: ${CONNECTOR_STARTUP_MAX_WAIT_SECONDS:-300}
@@ -130,6 +203,7 @@ x-connector-env: &connector-env
   CONNECTOR_FALLBACK_CACHE_DIR: ${CONNECTOR_FALLBACK_CACHE_DIR:-/tmp/seafile-ragflow-connector/cache}
   CONNECTOR_FALLBACK_TEMP_DIR: ${CONNECTOR_FALLBACK_TEMP_DIR:-/tmp/seafile-ragflow-connector/cache/tmp}
 
+# Gemeinsamer Container-Block fuer alle Connector-Rollen.
 x-connector-common: &connector-common
   image: ${CONNECTOR_IMAGE:-ghcr.io/adrianweidig/seafile-ragflow-connector:latest}
   pull_policy: ${CONNECTOR_IMAGE_PULL_POLICY:-missing}
@@ -150,6 +224,9 @@ x-connector-common: &connector-common
     start_period: 30s
 
 services:
+  # Persistenter Connector-State. Diese Dienste koennen durch DATABASE_URL und
+  # REDIS_URL ersetzt werden, bleiben aber als robuste Standardeinstellung im
+  # Stack enthalten.
   connector-postgres:
     image: ${POSTGRES_IMAGE:-postgres:16}
     pull_policy: ${POSTGRES_IMAGE_PULL_POLICY:-missing}
@@ -189,6 +266,8 @@ services:
     <<: *connector-common
     command: ["controller"]
     ports:
+      # Default ist nur lokal erreichbar. Fuer LAN/Reverse-Proxy-Exposition
+      # CONNECTOR_DASHBOARD_AUTH_USERNAME/PASSWORD setzen.
       - "${CONNECTOR_DASHBOARD_PUBLISHED_PORT:-127.0.0.1:18080}:${CONNECTOR_DASHBOARD_PORT:-8080}"
     depends_on:
       connector-postgres:
@@ -215,11 +294,15 @@ services:
         condition: service_healthy
 
 volumes:
+  # Benannte Volumes schuetzen State/Caches vor Container-Recreates.
   connector-postgres-data:
   connector-redis-data:
   connector-cache:
 
 networks:
   connector-net:
+    # false erzeugt ein eigenes Netz. true haengt alle Services an ein bereits
+    # vorhandenes Docker-Netz, dessen Name per CONNECTOR_DOCKER_NETWORK_NAME
+    # gesetzt wird.
     name: ${CONNECTOR_DOCKER_NETWORK_NAME:-seafile-ragflow-connector-net}
     external: ${CONNECTOR_DOCKER_NETWORK_EXTERNAL:-false}

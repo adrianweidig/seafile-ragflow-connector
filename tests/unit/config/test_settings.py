@@ -66,6 +66,8 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.connector_dashboard_max_log_entries, 5000)
         self.assertEqual(settings.connector_dashboard_max_event_entries, 10000)
         self.assertEqual(settings.connector_dashboard_log_page_size, 100)
+        self.assertIsNone(settings.connector_dashboard_auth_username)
+        self.assertIsNone(settings.connector_dashboard_auth_password)
 
     def test_rejects_invalid_dashboard_port_and_limits(self) -> None:
         values = self.base_values()
@@ -78,6 +80,24 @@ class SettingsTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             Settings(**values)
+
+    def test_dashboard_auth_requires_username_and_password_together(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "connector_dashboard_auth_username": "admin",
+            }
+        )
+
+        with self.assertRaises(ValueError):
+            Settings(**values)
+
+        values["connector_dashboard_auth_password"] = "secret"
+        settings = Settings(**values)
+
+        self.assertEqual(settings.connector_dashboard_auth_username, "admin")
+        self.assertEqual(settings.connector_dashboard_auth_password, "secret")
 
     def test_openwebui_defaults_to_disabled_without_required_secrets(self) -> None:
         values = self.base_values()

@@ -51,6 +51,15 @@ OPENWEBUI_CA_BUNDLE=
   `OPENWEBUI_VERIFY_SSL=false`: nur als kurzfristiger Diagnose-Notfall,
   weil damit Zertifikatsprüfung für den jeweiligen Dienst abgeschaltet wird.
 
+Der Connector bevorzugt verschlüsselte Service-Kommunikation automatisch:
+Beim Runtime-Start wird für Seafile, RAGFlow und eine aktivierte OpenWebUI-
+Integration zuerst `https://` mit derselben Host-/Port-Basis geprüft. Wenn
+dabei kein HTTP-Response zustande kommt, wird `http://` als Fallback genutzt.
+HTTP-Statuscodes wie 401 oder 500 beweisen dabei bereits den Transport und
+lösen keinen HTTP-Fallback aus; Auth- oder API-Fehler bleiben danach im Health-
+Status sichtbar. Der gewählte Transport steht im Dashboard-Health-Bereich und
+in den Diagnosewerten unter `connector_transport_status`.
+
 Für die von OpenWebUI ausgeführten Tools und Pipes gibt es zusätzlich:
 
 ```env
@@ -122,6 +131,8 @@ CONNECTOR_DASHBOARD_MAX_EVENT_ENTRIES=10000
 CONNECTOR_DASHBOARD_MAX_SYNC_RUNS=1000
 CONNECTOR_DASHBOARD_LOG_PAGE_SIZE=100
 CONNECTOR_DASHBOARD_MAX_FIELD_LENGTH=4000
+CONNECTOR_DASHBOARD_AUTH_USERNAME=admin
+CONNECTOR_DASHBOARD_AUTH_PASSWORD=change-me-dashboard-password
 ```
 
 - `CONNECTOR_DASHBOARD_ENABLED`: aktiviert den HTTP-Server im Controller oder
@@ -139,6 +150,11 @@ CONNECTOR_DASHBOARD_MAX_FIELD_LENGTH=4000
   begrenzt.
 - `CONNECTOR_DASHBOARD_MAX_FIELD_LENGTH`: maximale Länge für gespeicherte
   Meldungen, Pfade und Debug-Felder.
+- `CONNECTOR_DASHBOARD_AUTH_USERNAME` und
+  `CONNECTOR_DASHBOARD_AUTH_PASSWORD`: aktivieren HTTP Basic Auth für
+  Dashboard-Oberfläche und lesende Dashboard-API. Beide Werte müssen zusammen
+  gesetzt werden. Die OpenWebUI-Proxy-POST-Endpunkte nutzen weiterhin das
+  separate `OPENWEBUI_PROXY_SHARED_SECRET`.
 
 Sensible Felder wie Tokens, API-Keys, Passwörter und Secrets werden maskiert.
 Das Dashboard bietet keine Downloads von synchronisierten Dateien, keine
@@ -151,9 +167,9 @@ enthält keine Seafile-/RAGFlow-Dateiinhalte.
 Der Health-Endpunkt `/api/health` liefert begrenzte Statusdaten für Dashboard,
 Datenbank, Redis, Seafile-Admin-API, RAGFlow-API und Sync-Job-Zustand. Externe
 Checks nutzen kurze Timeouts, damit ein nicht erreichbarer Dienst die
-Weboberfläche nicht blockiert. Da keine Authentifizierung eingebaut ist, muss
-der Zugriff über Netzwerkregeln, Reverse Proxy, Portainer-Portmapping oder nicht
-veröffentlichte Ports kontrolliert werden.
+Weboberfläche nicht blockiert. Für lokal gebundene Testumgebungen können die
+Auth-Werte leer bleiben; bei LAN- oder Reverse-Proxy-Zugriff sollten
+Benutzername und Passwort gesetzt sein.
 
 ## OpenWebUI
 

@@ -679,6 +679,33 @@ DASHBOARD_HTML = r"""<!doctype html>
       margin-top: 2px;
       overflow-wrap: anywhere;
     }
+    .health-transport {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 6px;
+      overflow-wrap: anywhere;
+    }
+    .transport-badge {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      display: inline-flex;
+      font-size: 11px;
+      font-weight: 800;
+      margin-right: 6px;
+      padding: 2px 7px;
+      text-transform: uppercase;
+    }
+    .transport-badge.https {
+      background: color-mix(in srgb, var(--ok) 12%, transparent);
+      border-color: color-mix(in srgb, var(--ok) 38%, var(--border));
+      color: var(--ok);
+    }
+    .transport-badge.http {
+      background: color-mix(in srgb, var(--warn) 12%, transparent);
+      border-color: color-mix(in srgb, var(--warn) 38%, var(--border));
+      color: var(--warn);
+    }
     .health-latency {
       color: var(--muted);
       font-size: 12px;
@@ -1226,6 +1253,22 @@ DASHBOARD_HTML = r"""<!doctype html>
         message.className = 'health-message';
         message.textContent = check.message || '-';
         copy.append(name, message);
+        if (check.transport || check.scheme || check.endpoint) {
+          const transport = check.transport || {};
+          const scheme = String(transport.scheme || check.scheme || 'unknown').toLowerCase();
+          const transportNode = document.createElement('div');
+          transportNode.className = 'health-transport';
+          const badge = document.createElement('span');
+          badge.className = 'transport-badge ' + statusClass(scheme);
+          badge.textContent = scheme || 'unknown';
+          const detail = document.createElement('span');
+          const encrypted = (transport.encrypted ?? check.encrypted) ? 'verschlüsselt' : 'unverschlüsselt';
+          const endpoint = transport.selected_url || check.endpoint || '-';
+          const fallback = transport.fallback_used ? ' · Fallback nach HTTPS-Fehler' : '';
+          detail.textContent = encrypted + ' · ' + endpoint + fallback;
+          transportNode.append(badge, detail);
+          copy.appendChild(transportNode);
+        }
         const latency = document.createElement('div');
         latency.className = 'health-latency';
         latency.textContent = check.latency_ms == null ? '-' : check.latency_ms + ' ms';

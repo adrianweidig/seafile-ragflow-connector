@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import json
 import unittest
-from urllib.request import urlopen
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 try:
     from sqlalchemy import create_engine
@@ -150,6 +152,31 @@ class DashboardServerTests(unittest.TestCase):
         )
         self.assertIn("connector-audit-", disposition)
         self.assertIn(".xlsx", disposition)
+
+    def test_dashboard_basic_auth_challenges_and_accepts_configured_credentials(self) -> None:
+        store = _store()
+        settings = _settings(0)
+        settings.connector_dashboard_auth_username = "admin"
+        settings.connector_dashboard_auth_password = "secret"
+        handle = start_dashboard_server(
+            DashboardContext(store=store, settings=settings, started_at=utcnow())
+        )
+        port = handle.server.server_address[1]
+        try:
+            with self.assertRaises(HTTPError) as missing:
+                _get_json(port, "/api/status")
+            self.assertEqual(missing.exception.code, 401)
+            self.assertIn("Basic", missing.exception.headers.get("WWW-Authenticate", ""))
+
+            with self.assertRaises(HTTPError) as wrong:
+                _get_json(port, "/api/status", username="admin", password="wrong")
+            self.assertEqual(wrong.exception.code, 401)
+
+            status = _get_json(port, "/api/status", username="admin", password="secret")
+        finally:
+            handle.stop()
+
+        self.assertIn("state", status)
 
     def test_openwebui_mapping_requires_assigned_tool_and_pipe(self) -> None:
         store = _store()
@@ -496,8 +523,19 @@ class _FakeRAGFlowClient:
         pass
 
 
-def _get_json(port: int, path: str) -> dict[str, object]:
-    with urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as response:
+def _get_json(
+    port: int,
+    path: str,
+    *,
+    username: str | None = None,
+    password: str | None = None,
+) -> dict[str, object]:
+    request = Request(f"http://127.0.0.1:{port}{path}")
+    if username is not None and password is not None:
+        raw_credentials = f"{username}:{password}".encode()
+        token = base64.b64encode(raw_credentials).decode("ascii")
+        request.add_header("Authorization", f"Basic {token}")
+    with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
