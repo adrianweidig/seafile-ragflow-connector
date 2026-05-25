@@ -85,6 +85,30 @@ class TransportResolutionTests(unittest.TestCase):
             calls.index("http://seafile.local"),
         )
 
+    def test_marks_http_fallback_when_http_probe_is_initially_unreachable(self) -> None:
+        def probe(
+            base_url: str,
+            path: str,
+            headers: dict[str, str],
+            params: dict[str, str | int | float | bool | None],
+            verify: bool | str,
+            timeout_seconds: float,
+        ) -> TransportProbeResult:
+            _ = (base_url, path, headers, params, verify, timeout_seconds)
+            return TransportProbeResult(ok=False, error_type="CONNECT_ERROR")
+
+        settings = _settings(openwebui_integration_enabled=False)
+
+        resolve_service_transports(settings, probe=probe)
+
+        seafile_status = settings.connector_transport_status["seafile"]
+        self.assertEqual(seafile_status["scheme"], "http")
+        self.assertTrue(seafile_status["fallback_used"])
+        self.assertEqual(
+            seafile_status["fallback_reason"],
+            "https_failed:CONNECT_ERROR;http_unreachable",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

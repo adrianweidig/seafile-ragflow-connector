@@ -178,13 +178,16 @@ def _select_transport(
                     else "https_not_configurable"
                 ),
             )
+    selected_url = configured_url.rstrip("/")
+    selected_scheme = urlparse(selected_url).scheme
+    fallback_used = bool(https_result and selected_scheme == "http")
     return _selection(
         service=service,
         configured_url=configured_url,
-        selected_url=configured_url.rstrip("/"),
+        selected_url=selected_url,
         verify=verify,
         https_result=https_result,
-        fallback_used=False,
+        fallback_used=fallback_used,
         fallback_reason=(
             f"https_failed:{https_result.error_type or 'unknown'};http_unreachable"
             if https_result
