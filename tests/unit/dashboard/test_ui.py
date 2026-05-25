@@ -31,6 +31,17 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("transport-badge", DASHBOARD_HTML)
         self.assertIn("Fallback nach HTTPS-Fehler", DASHBOARD_HTML)
 
+    def test_dashboard_has_busy_and_empty_states(self) -> None:
+        self.assertIn('aria-busy="false"', DASHBOARD_HTML)
+        self.assertIn("empty-state", DASHBOARD_HTML)
+        self.assertIn("Die Ansicht ist geladen", DASHBOARD_HTML)
+        self.assertIn("setAttribute('aria-busy', 'true')", DASHBOARD_HTML)
+        self.assertIn("pendingLoad", DASHBOARD_HTML)
+
+    def test_dashboard_controls_keep_touch_target_size(self) -> None:
+        self.assertIn("min-height: 40px", DASHBOARD_HTML)
+        self.assertIn("min-height: 44px", DASHBOARD_HTML)
+
 
 if __name__ == "__main__":
     unittest.main()

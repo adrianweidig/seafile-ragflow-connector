@@ -279,7 +279,9 @@ class OpenWebUISourceTests(unittest.TestCase):
 
         markdown = render_sources_markdown(sources)
 
+        self.assertIn("**Quellenbasis:** 1 Dokument, 2 Treffer", markdown)
         self.assertIn("### 1. aehnlicher\\_inhalt\\_b.txt", markdown)
+        self.assertIn("**Nachweis:** Seite 2", markdown)
         self.assertIn("Relevanz mittel (68%)", markdown)
         self.assertIn("2 Treffer", markdown)
         self.assertIn("Preview öffnen", markdown)

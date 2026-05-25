@@ -7,7 +7,7 @@ from textwrap import dedent
 from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "8"
+ARTIFACT_VERSION = "9"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 
 
@@ -155,7 +155,7 @@ def _tool_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.3.0
         owner: seafile-ragflow-connector
-        artifact_version: 8
+        artifact_version: 9
         """
 
         import httpx
@@ -377,7 +377,7 @@ def _pipe_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.3.0
         owner: seafile-ragflow-connector
-        artifact_version: 8
+        artifact_version: 9
         """
 
         import httpx
@@ -846,7 +846,12 @@ def _artifact_source_helpers() -> str:
             if not sources:
                 return "Keine passenden Quellen gefunden."
             groups = _group_sources(sources)
-            lines = ["## Gefundene Quellen", ""]
+            lines = [
+                "## Gefundene Quellen",
+                "",
+                _source_basis_line(groups, sources),
+                "",
+            ]
             for display_rank, group in enumerate(groups[:6], start=1):
                 source = group[0]
                 metadata = _metadata(source)
@@ -861,7 +866,7 @@ def _artifact_source_helpers() -> str:
                 lines.append(f"### {display_rank}. {title}")
                 summary = " · ".join(part for part in (location, relevance) if part)
                 if summary or hit_count:
-                    lines.append(f"**{summary}{hit_count}**")
+                    lines.append(f"**Nachweis:** {summary}{hit_count}")
                 actions = _actions(source, metadata)
                 if actions:
                     lines.append(f"**Aktionen:** {actions}")
@@ -876,6 +881,17 @@ def _artifact_source_helpers() -> str:
                         lines.append(f"Debug: {' · '.join(debug)}")
                 lines.append("")
             return "\\n".join(lines).rstrip()
+
+
+        def _source_basis_line(groups, sources):
+            documents = len(groups)
+            hits = len(sources)
+            document_word = "Dokument" if documents == 1 else "Dokumente"
+            hit_word = "Treffer" if hits == 1 else "Treffer"
+            return (
+                f"**Quellenbasis:** {documents} {document_word}, {hits} {hit_word}, "
+                "nach Relevanz sortiert."
+            )
 
 
         def _group_sources(sources):
