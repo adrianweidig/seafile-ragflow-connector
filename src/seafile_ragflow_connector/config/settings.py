@@ -12,6 +12,7 @@ from seafile_ragflow_connector.clients.tls import (
     build_service_httpx_verify,
     validate_tls_file,
 )
+from seafile_ragflow_connector.i18n import normalize_language
 
 
 def _split_csv(value: str | list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
@@ -30,6 +31,10 @@ class Settings(BaseSettings):
     )
 
     app_env: str = "production"
+    connector_language: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("CONNECTOR_LANGUAGE", "LANGUAGE"),
+    )
     log_level: str = "INFO"
     log_format: Literal["json", "console"] = "json"
     dry_run: bool = False
@@ -212,6 +217,12 @@ class Settings(BaseSettings):
             stripped = value.strip()
             return stripped or None
         return value
+
+    @field_validator("connector_language")
+    @classmethod
+    def validate_connector_language(cls, value: str | None) -> str | None:
+        language = normalize_language(value)
+        return language
 
     @field_validator("max_file_size_mb")
     @classmethod

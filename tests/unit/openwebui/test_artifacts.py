@@ -34,10 +34,11 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertTrue(tool.valves["CONNECTOR_PROXY_VERIFY_SSL"])
         self.assertEqual(tool.valves["CONNECTOR_PROXY_CA_BUNDLE"], "")
         self.assertIn("owner: seafile-ragflow-connector", tool.content)
-        self.assertIn("artifact_version: 9", tool.content)
-        self.assertIn("artifact_version: 9", pipe.content)
+        self.assertIn("artifact_version: 10", tool.content)
+        self.assertIn("artifact_version: 10", pipe.content)
         self.assertFalse(tool.valves["TLS_DEBUG"])
         self.assertEqual(tool.valves["SHOW_SOURCE_SCORES"], True)
+        self.assertEqual(tool.valves["LANGUAGE"], "de")
         self.assertEqual(pipe.valves["SOURCE_MARKDOWN_MODE"], "compact")
         self.assertIn("verify = _httpx_verify(", tool.content)
         self.assertIn("class SourceHit(BaseModel):", pipe.content)
@@ -70,6 +71,25 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("except httpx.TimeoutException as exc:", pipe.content)
         self.assertIn('"title" in task', pipe.content)
         self.assertIn('return "[]"', pipe.content)
+
+    def test_artifact_metadata_can_be_generated_in_english(self) -> None:
+        inputs = DatasetArtifactInputs(
+            namespace="ragflow",
+            repo_id="repo-1",
+            dataset_id="dataset-1234567890",
+            dataset_name="Demo Library",
+            ragflow_chat_id="chat-1",
+            proxy_base_url="http://connector:8080",
+            language="en",
+        )
+
+        tool = build_tool_spec(inputs)
+        pipe = build_pipe_spec(inputs)
+
+        self.assertIn("RAGFlow search", tool.name)
+        self.assertIn("Dataset-specific RAGFlow search", str(tool.payload))
+        self.assertIn("RAGFlow model", str(pipe.payload))
+        self.assertEqual(pipe.valves["LANGUAGE"], "en")
 
 
 if __name__ == "__main__":

@@ -31,6 +31,13 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("transport-badge", DASHBOARD_HTML)
         self.assertIn("Fallback nach HTTPS-Fehler", DASHBOARD_HTML)
 
+    def test_dashboard_has_client_side_language_switch(self) -> None:
+        self.assertIn("connector-dashboard-language", DASHBOARD_HTML)
+        self.assertIn("navigator.language", DASHBOARD_HTML)
+        self.assertIn("Deutsch", DASHBOARD_HTML)
+        self.assertIn("English", DASHBOARD_HTML)
+        self.assertIn("'nav.overview': 'Overview'", DASHBOARD_HTML)
+
     def test_dashboard_has_busy_and_empty_states(self) -> None:
         self.assertIn('aria-busy="false"', DASHBOARD_HTML)
         self.assertIn("empty-state", DASHBOARD_HTML)

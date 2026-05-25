@@ -290,6 +290,11 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertIn("Alpha \\| Beta", markdown)
         self.assertNotIn("chunk-a", markdown)
 
+        english = render_sources_markdown(sources, language="en")
+        self.assertIn("## Found sources", english)
+        self.assertIn("**Source basis:** 1 document, 2 hits", english)
+        self.assertIn("**Evidence:**", english)
+
     def test_normalize_sources_removes_text_projection_wrappers(self) -> None:
         sources = normalize_sources(
             {

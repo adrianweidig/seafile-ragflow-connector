@@ -1,0 +1,117 @@
+{
+  "cli": {
+    "app_help": "Offline-fähiger Seafile-zu-RAGFlow-Connector",
+    "init_db": {
+      "help": "Connector-State-Tabellen anlegen oder aktualisieren.",
+      "done": "Datenbank initialisiert"
+    },
+    "check_live": {
+      "help": "Live-Abhängigkeiten prüfen, ohne Seafile oder RAGFlow zu verändern.",
+      "not_ready": "{label} wurde innerhalb von {seconds}s nicht bereit"
+    },
+    "sync_once": {
+      "help": "Einen vollständigen Discovery- und Sync-Lauf ausführen.",
+      "wait_parse": "Parse-Status nach Upload-Arbeiten so viele Sekunden abfragen."
+    },
+    "cleanup_orphans": {
+      "help": "Verwaiste connector-eigene RAGFlow-/OpenWebUI-Zielartefakte planen oder löschen.",
+      "execute": "Geplante connector-eigene verwaiste Zielartefakte löschen.",
+      "run_sync": "Nach Cleanup sync-once ausführen, damit aktuelle Seafile-Libraries neu aufgebaut werden."
+    },
+    "openwebui": {
+      "help": "Einen OpenWebUI-Synchronisationslauf ausführen.",
+      "mode": "OpenWebUI-Sync-Modus überschreiben: disabled, dry-run, sync oder repair.",
+      "mode_error": "mode muss disabled, dry-run, sync oder repair sein"
+    },
+    "demo": {
+      "fixtures_help": "Reproduzierbare lokale Demo-Dateien erzeugen, ohne Dienste zu kontaktieren.",
+      "cleanup_help": "Nur klar benannte lokale Demo-Artefakte in Seafile, RAGFlow und OpenWebUI löschen.",
+      "bootstrap_help": "Kanonische Demo-Libraries erstellen und optional den Connector-Sync-Pfad ausführen.",
+      "output_dir": "Verzeichnis, in dem die reproduzierbaren Demo-Dateien erzeugt werden.",
+      "execute_cleanup": "Sichere Demo-Objekte wirklich löschen. Ohne Flag wird nur der Plan ausgegeben.",
+      "execute_bootstrap": "Libraries wirklich erstellen und Dateien hochladen. Ohne Flag werden nur Fixtures geschrieben.",
+      "run_sync": "Nach dem Upload der Demo-Dateien connector sync-once ausführen."
+    },
+    "process": {
+      "controller": "Discovery- und Delta-Scheduling-Loop ausführen.",
+      "worker": "Connector-Worker-Prozess ausführen.",
+      "reconciler": "Low-Priority-Reconciliation-Loop ausführen."
+    },
+    "check_config": {
+      "help": "Konfiguration laden und validieren, ohne externe Dienste zu kontaktieren."
+    },
+    "dashboard": {
+      "help": "Lesendes HTTP-Dashboard als Vordergrundprozess starten.",
+      "disabled": "Dashboard deaktiviert; setze CONNECTOR_DASHBOARD_ENABLED=true, um es zu starten"
+    },
+    "jobs": {
+      "requires_repo_id": "{job_type} benötigt repo_id",
+      "upload_requires_file": "UPLOAD_FILE benötigt file_path",
+      "delete_requires_file": "DELETE_FILE benötigt file_path",
+      "sync_mode_error": "SYNC_OPENWEBUI mode muss disabled, dry-run, sync oder repair sein"
+    }
+  },
+  "settings": {
+    "language_description": "Sprache für menschenlesbare Connector-Ausgaben. Unterstützt: de, en. Leere oder unbekannte Werte fallen auf Deutsch zurück."
+  },
+  "sources": {
+    "unknown": "unbekannt",
+    "high": "hoch",
+    "medium": "mittel",
+    "low": "niedrig",
+    "page": "Seite {value}",
+    "section": "Abschnitt {value}",
+    "line": "Zeile {value}",
+    "missing_location": "Fundstelle nicht angegeben",
+    "source": "Quelle",
+    "no_sources": "Keine passenden Quellen gefunden.",
+    "heading": "Gefundene Quellen",
+    "basis": "**Quellenbasis:** {documents} {document_word}, {hits} {hit_word}, nach Relevanz sortiert.",
+    "document_one": "Dokument",
+    "document_other": "Dokumente",
+    "hit_one": "Treffer",
+    "hit_other": "Treffer",
+    "evidence": "Nachweis",
+    "actions": "Aktionen",
+    "other_locations": "Weitere Fundstellen: {locations}",
+    "more_documents": "_Weitere {count} Dokumente wurden ausgeblendet._",
+    "relevance": "Relevanz {value}",
+    "relevance_score": "Relevanz {value} ({score})",
+    "open_preview": "Preview öffnen",
+    "open_original": "Original öffnen"
+  },
+  "preview": {
+    "invalid_token": "Die Vorschau ist nicht verfügbar oder der Link ist ungültig.",
+    "title": "Quellenvorschau",
+    "source": "Quelle",
+    "snippet": "Auszug",
+    "metadata": "Nutzbare Metadaten",
+    "debug": "Debug",
+    "context": "Kontext",
+    "hit": "Treffer",
+    "no_context": "RAGFlow hat für diese Quelle keinen zusätzlichen Vorher-/Nachher-Kontext geliefert. Der Treffer selbst wird unverändert im Tab Treffer angezeigt.",
+    "original": "Original öffnen",
+    "theme": "Theme wechseln",
+    "copy_snippet": "Auszug kopieren",
+    "copy_link": "Link kopieren",
+    "document_id": "Dokument-ID"
+  },
+  "openwebui_artifact": {
+    "searching": "Suche im RAGFlow-Dataset...",
+    "answer_preparing": "RAGFlow-Antwort wird vorbereitet...",
+    "query_done": "RAGFlow-Abfrage abgeschlossen.",
+    "answer_done": "RAGFlow-Antwort abgeschlossen.",
+    "tls_invalid": "TLS-Konfiguration ungültig.",
+    "tls_invalid_return": "Die TLS-Konfiguration der RAGFlow-Pipe ist ungültig.",
+    "proxy_timeout": "RAGFlow-Proxy-Timeout.",
+    "proxy_timeout_return": "Der RAGFlow-Proxy hat nicht rechtzeitig geantwortet.",
+    "proxy_http": "RAGFlow-Proxy antwortete mit HTTP {status}.",
+    "proxy_unreachable": "RAGFlow-Proxy war nicht erreichbar.",
+    "proxy_unreachable_return": "Der RAGFlow-Proxy war nicht erreichbar.",
+    "query_failed": "RAGFlow-Abfrage fehlgeschlagen.",
+    "query_failed_return": "Die RAGFlow-Abfrage konnte nicht ausgeführt werden.",
+    "answer_failed": "RAGFlow-Antwort fehlgeschlagen.",
+    "answer_failed_return": "Die RAGFlow-Antwort konnte wegen eines unerwarteten Fehlers nicht erzeugt werden.",
+    "no_answer": "RAGFlow hat keine Antwort geliefert."
+  }
+}

@@ -26,6 +26,7 @@ from seafile_ragflow_connector.dashboard.export import audit_export_filename, bu
 from seafile_ragflow_connector.dashboard.health import collect_dashboard_health, collect_tls_health
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore
 from seafile_ragflow_connector.dashboard.ui import DASHBOARD_HTML
+from seafile_ragflow_connector.i18n import localizer_for
 from seafile_ragflow_connector.openwebui.sources import (
     annotate_answer_citations,
     extract_answer,
@@ -865,19 +866,20 @@ def _blockquote(text: str) -> str:
 
 
 def _preview_html(settings: Settings, token: str | None) -> str:
+    l10n = localizer_for(settings)
     if not token or not settings.openwebui_proxy_shared_secret:
-        return _preview_unavailable_html()
+        return _preview_unavailable_html(l10n.language)
     try:
         payload = verify_preview_token(token, settings.openwebui_proxy_shared_secret)
     except ValueError:
-        return _preview_unavailable_html()
-    title = escape(str(payload.get("document_name") or "Quelle"))
+        return _preview_unavailable_html(l10n.language)
+    title = escape(str(payload.get("document_name") or l10n.text("sources.source")))
     snippet_text = _clean_source_snippet(payload.get("snippet") or "")
     snippet = escape(snippet_text)
     dataset = escape(str(payload.get("dataset_name") or payload.get("dataset_id") or ""))
     document_id = escape(str(payload.get("document_id") or ""))
     chunk = escape(str(payload.get("chunk_id") or ""))
-    citation = escape(str(payload.get("citation_label") or "Quelle"))
+    citation = escape(str(payload.get("citation_label") or l10n.text("sources.source")))
     page = escape(str(payload.get("page") or ""))
     section = escape(str(payload.get("section") or ""))
     line = escape(str(payload.get("line") or ""))
@@ -886,10 +888,10 @@ def _preview_html(settings: Settings, token: str | None) -> str:
     file_type = escape(str(payload.get("file_type") or ""))
     mime_type = escape(str(payload.get("mime_type") or ""))
     score = _format_score(payload.get("score"))
-    score_text = escape(score or "nicht angegeben")
+    score_text = escape(score or l10n.text("sources.unknown"))
     original_url = str(payload.get("original_url") or "")
     original_link = (
-        f'<a class="button primary" href="{escape(original_url, quote=True)}" target="_blank" rel="noreferrer">Original öffnen</a>'
+        f'<a class="button primary" href="{escape(original_url, quote=True)}" target="_blank" rel="noreferrer">{l10n.text("preview.original")}</a>'
         if original_url
         else ""
     )
@@ -901,21 +903,32 @@ def _preview_html(settings: Settings, token: str | None) -> str:
     copy_snippet = escape(snippet_text, quote=True)
     chips = [f"<span>{citation}</span>"]
     if page:
-        chips.append(f"<span>Seite {page}</span>")
+        chips.append(f"<span>{l10n.text('sources.page', value=page)}</span>")
     if score:
-        chips.append(f"<span>Relevanz {score_text}</span>")
+        chips.append(f"<span>{l10n.text('sources.relevance', value=score_text)}</span>")
     if file_type:
         chips.append(f"<span>{file_type.upper()}</span>")
     details = [
         ("Quellpfad", source_path),
         ("Dateityp", file_type),
         ("MIME-Type", mime_type),
-        ("Fundstelle", " · ".join(part for part in (f"Seite {page}" if page else "", f"Abschnitt {section}" if section else "", f"Zeile {line}" if line else "") if part)),
-        ("Relevanz", score_text),
+        (
+            "Fundstelle",
+            " · ".join(
+                part
+                for part in (
+                    l10n.text("sources.page", value=page) if page else "",
+                    l10n.text("sources.section", value=section) if section else "",
+                    l10n.text("sources.line", value=line) if line else "",
+                )
+                if part
+            ),
+        ),
+        (l10n.text("sources.relevance", value="").strip(), score_text),
     ]
     debug_details = [
         ("Dataset", dataset),
-        ("Dokument-ID", document_id),
+        (l10n.text("preview.document_id"), document_id),
         ("Seafile-Repo", repo_id),
         ("Chunk-ID", chunk),
         ("Abschnitt", section),
@@ -929,9 +942,9 @@ def _preview_html(settings: Settings, token: str | None) -> str:
         f"<div><dt>{label}</dt><dd>{value}</dd></div>" for label, value in debug_details if value
     )
     if not snippet:
-        snippet = "Kein Textauszug in der RAGFlow-Referenz vorhanden."
+        snippet = l10n.text("sources.no_sources")
     return (
-        "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
+        f"<!doctype html><html lang=\"{l10n.language}\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{title}</title>"
         "<style>"
@@ -950,37 +963,38 @@ def _preview_html(settings: Settings, token: str | None) -> str:
         ".muted{padding:20px 22px;color:var(--muted)}@media(max-width:760px){main{padding:14px 10px 30px}.hero{padding:18px}.topbar{display:grid}.actions .button{flex:1 1 auto;justify-content:center}.button,.tab{min-height:44px}dl div{grid-template-columns:1fr;gap:2px}}"
         "</style></head><body><main>"
         "<section class=\"hero\">"
-        "<div class=\"topbar\"><p class=\"eyebrow\">RAGFlow Quellenvorschau</p><button class=\"button\" id=\"theme-toggle\" type=\"button\">Theme wechseln</button></div>"
+        f"<div class=\"topbar\"><p class=\"eyebrow\">RAGFlow {l10n.text('preview.title')}</p><button class=\"button\" id=\"theme-toggle\" type=\"button\">{l10n.text('preview.theme')}</button></div>"
         f"<h1>{title}</h1><p class=\"path\">{source_path or citation}</p><div class=\"chips\">{''.join(chips)}</div>"
-        f"<div class=\"actions\">{original_link}<button class=\"button\" type=\"button\" data-copy=\"{copy_snippet}\">Auszug kopieren</button><button class=\"button\" type=\"button\" data-copy-url>Link kopieren</button></div>"
+        f"<div class=\"actions\">{original_link}<button class=\"button\" type=\"button\" data-copy=\"{copy_snippet}\">{l10n.text('preview.copy_snippet')}</button><button class=\"button\" type=\"button\" data-copy-url>{l10n.text('preview.copy_link')}</button></div>"
         "</section>"
         "<nav class=\"tabs\" aria-label=\"Quellenansicht\">"
-        "<button class=\"tab\" type=\"button\" data-tab=\"hit\" aria-selected=\"true\">Treffer</button>"
-        "<button class=\"tab\" type=\"button\" data-tab=\"context\" aria-selected=\"false\">Kontext</button>"
-        "<button class=\"tab\" type=\"button\" data-tab=\"meta\" aria-selected=\"false\">Metadaten</button>"
-        "<button class=\"tab\" type=\"button\" data-tab=\"debug\" aria-selected=\"false\">Debug</button>"
+        f"<button class=\"tab\" type=\"button\" data-tab=\"hit\" aria-selected=\"true\">{l10n.text('preview.hit')}</button>"
+        f"<button class=\"tab\" type=\"button\" data-tab=\"context\" aria-selected=\"false\">{l10n.text('preview.context')}</button>"
+        f"<button class=\"tab\" type=\"button\" data-tab=\"meta\" aria-selected=\"false\">{l10n.text('preview.metadata')}</button>"
+        f"<button class=\"tab\" type=\"button\" data-tab=\"debug\" aria-selected=\"false\">{l10n.text('preview.debug')}</button>"
         "</nav>"
-        f"<section class=\"panel active\" data-panel=\"hit\"><h2 class=\"section-title\">Gefundener Auszug</h2><pre class=\"hit\"><mark>{snippet}</mark></pre></section>"
-        "<section class=\"panel\" data-panel=\"context\"><h2 class=\"section-title\">Kontext</h2><p class=\"muted\">RAGFlow hat für diese Quelle keinen zusätzlichen Vorher-/Nachher-Kontext geliefert. Der Treffer selbst wird unverändert im Tab Treffer angezeigt.</p></section>"
-        f"<section class=\"panel\" data-panel=\"meta\"><h2 class=\"section-title\">Nutzbare Metadaten</h2><dl>{details_html}</dl></section>"
+        f"<section class=\"panel active\" data-panel=\"hit\"><h2 class=\"section-title\">{l10n.text('preview.snippet')}</h2><pre class=\"hit\"><mark>{snippet}</mark></pre></section>"
+        f"<section class=\"panel\" data-panel=\"context\"><h2 class=\"section-title\">{l10n.text('preview.context')}</h2><p class=\"muted\">{l10n.text('preview.no_context')}</p></section>"
+        f"<section class=\"panel\" data-panel=\"meta\"><h2 class=\"section-title\">{l10n.text('preview.metadata')}</h2><dl>{details_html}</dl></section>"
         f"<section class=\"panel\" data-panel=\"debug\"><h2 class=\"section-title\">Technische Details</h2><dl>{debug_html}</dl><pre class=\"raw\">{raw_json}</pre></section>"
         "<script>"
         "const root=document.documentElement;const saved=localStorage.getItem('source-preview-theme');if(saved){root.dataset.theme=saved;}"
         "document.getElementById('theme-toggle').addEventListener('click',()=>{const next=root.dataset.theme==='dark'?'light':'dark';root.dataset.theme=next;localStorage.setItem('source-preview-theme',next);});"
         "document.querySelectorAll('.tab').forEach(tab=>tab.addEventListener('click',()=>{const id=tab.dataset.tab;document.querySelectorAll('.tab').forEach(item=>item.setAttribute('aria-selected',String(item===tab)));document.querySelectorAll('.panel').forEach(panel=>panel.classList.toggle('active',panel.dataset.panel===id));}));"
-        "async function copyText(btn,text,reset){try{await navigator.clipboard.writeText(text);btn.textContent='Kopiert';}catch(err){btn.textContent='Nicht kopiert';}setTimeout(()=>btn.textContent=reset,1400);}"
-        "document.querySelectorAll('[data-copy]').forEach(btn=>btn.addEventListener('click',()=>copyText(btn,btn.dataset.copy||'','Auszug kopieren')));"
-        "document.querySelectorAll('[data-copy-url]').forEach(btn=>btn.addEventListener('click',()=>copyText(btn,location.href,'Link kopieren')));"
+        "async function copyText(btn,text,reset){try{await navigator.clipboard.writeText(text);btn.textContent='OK';}catch(err){btn.textContent='Error';}setTimeout(()=>btn.textContent=reset,1400);}"
+        f"document.querySelectorAll('[data-copy]').forEach(btn=>btn.addEventListener('click',()=>copyText(btn,btn.dataset.copy||'',{json.dumps(l10n.text('preview.copy_snippet'))})));"
+        f"document.querySelectorAll('[data-copy-url]').forEach(btn=>btn.addEventListener('click',()=>copyText(btn,location.href,{json.dumps(l10n.text('preview.copy_link'))})));"
         "</script></main></body></html>"
     )
 
 
-def _preview_unavailable_html() -> str:
+def _preview_unavailable_html(language: str = "de") -> str:
+    l10n = localizer_for(type("_Settings", (), {"connector_language": language})())
     return (
-        "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
+        f"<!doctype html><html lang=\"{l10n.language}\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        "<title>Quelle nicht verfügbar</title>"
+        f"<title>{l10n.text('preview.title')}</title>"
         "<style>body{font-family:Segoe UI,system-ui,sans-serif;margin:0;display:grid;min-height:100vh;place-items:center;background:#f7f8fb;color:#172033}"
         "main{max-width:560px;padding:28px;border:1px solid #d9e0ea;border-radius:8px;background:white}h1{margin-top:0}</style>"
-        "</head><body><main><h1>Quelle nicht verfügbar</h1><p>Der Quellenlink ist ungültig oder der Connector-Proxy ist nicht für Vorschauen konfiguriert.</p></main></body></html>"
+        f"</head><body><main><h1>{l10n.text('preview.title')}</h1><p>{l10n.text('preview.invalid_token')}</p></main></body></html>"
     )

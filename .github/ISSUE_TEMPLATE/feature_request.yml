@@ -1,5 +1,5 @@
-name: Feature-Vorschlag
-description: Verbesserung oder Erweiterung vorschlagen
+name: Feature-Vorschlag / Feature request
+description: Verbesserung oder Erweiterung vorschlagen / Suggest an improvement or extension
 title: "[Feature]: "
 labels:
   - enhancement
@@ -7,21 +7,21 @@ body:
   - type: textarea
     id: problem
     attributes:
-      label: Problem oder Bedarf
-      description: Welches konkrete Betriebs-, Entwicklungs- oder Integrationsproblem soll gelöst werden?
+      label: Problem oder Bedarf / Problem or need
+      description: Welches konkrete Betriebs-, Entwicklungs- oder Integrationsproblem soll gelöst werden? / Which concrete operations, development, or integration problem should be solved?
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
-      label: Vorschlag
-      description: Beschreibe die gewünschte Änderung möglichst konkret.
+      label: Vorschlag / Proposal
+      description: Beschreibe die gewünschte Änderung möglichst konkret. / Describe the requested change as concretely as possible.
     validations:
       required: true
   - type: dropdown
     id: area
     attributes:
-      label: Bereich
+      label: Bereich / Area
       options:
         - Sync-Kern
         - Deployment oder Portainer
@@ -36,14 +36,14 @@ body:
   - type: textarea
     id: constraints
     attributes:
-      label: Randbedingungen
-      description: Welche Kompatibilitäts-, Offline-, Security- oder Betriebsgrenzen sind wichtig?
+      label: Randbedingungen / Constraints
+      description: Welche Kompatibilitäts-, Offline-, Security- oder Betriebsgrenzen sind wichtig? / Which compatibility, offline, security, or operations constraints matter?
   - type: checkboxes
     id: scope
     attributes:
-      label: Scope-Bewusstsein
+      label: Scope-Bewusstsein / Scope awareness
       options:
-        - label: Der Vorschlag ändert Seafile nicht als Quelle der Wahrheit.
+        - label: Der Vorschlag ändert Seafile nicht als Quelle der Wahrheit. / The proposal does not change Seafile as the source of truth.
           required: true
-        - label: Der Vorschlag benötigt keine Secrets im Repository.
+        - label: Der Vorschlag benötigt keine Secrets im Repository. / The proposal does not require secrets in the repository.
           required: true

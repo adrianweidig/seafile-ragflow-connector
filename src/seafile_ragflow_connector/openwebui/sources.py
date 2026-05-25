@@ -13,6 +13,8 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
+from seafile_ragflow_connector.i18n import Localizer, localizer_for
+
 if TYPE_CHECKING:
     from seafile_ragflow_connector.config.settings import Settings
 
@@ -47,29 +49,34 @@ class SourceHit:
     mime_type: str | None = None
     position: Any = None
     citation_label: str | None = None
+    language: str = "de"
     raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def l10n(self) -> Localizer:
+        return Localizer(self.language)
 
     @property
     def relevance(self) -> str:
         value = _score_float(self.score)
         if value is None:
-            return "unbekannt"
+            return self.l10n.text("sources.unknown")
         if value >= 0.8:
-            return "hoch"
+            return self.l10n.text("sources.high")
         if value >= 0.55:
-            return "mittel"
-        return "niedrig"
+            return self.l10n.text("sources.medium")
+        return self.l10n.text("sources.low")
 
     @property
     def display_location(self) -> str:
         parts = []
         if self.page not in (None, ""):
-            parts.append(f"Seite {self.page}")
+            parts.append(self.l10n.text("sources.page", value=self.page))
         if self.section not in (None, ""):
-            parts.append(f"Abschnitt {self.section}")
+            parts.append(self.l10n.text("sources.section", value=self.section))
         if self.line not in (None, ""):
-            parts.append(f"Zeile {self.line}")
-        return " · ".join(parts) or "Fundstelle nicht angegeben"
+            parts.append(self.l10n.text("sources.line", value=self.line))
+        return " · ".join(parts) or self.l10n.text("sources.missing_location")
 
     def metadata(self) -> dict[str, Any]:
         values = {
@@ -99,7 +106,11 @@ class SourceHit:
 
     def to_openwebui_source(self) -> dict[str, Any]:
         metadata = self.metadata()
-        title = self.title or self.document_name or f"Quelle {self.rank}"
+        title = (
+            self.title
+            or self.document_name
+            or f"{self.l10n.text('sources.source')} {self.rank}"
+        )
         return {
             "name": title,
             "document": [self.snippet or title],
@@ -156,6 +167,7 @@ def normalize_sources(
     dataset_name: str,
     files_by_document_id: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    l10n = localizer_for(settings)
     sources = []
     for index, raw in enumerate(extract_references(payload), start=1):
         source = _normalize_reference(
@@ -165,6 +177,7 @@ def normalize_sources(
             dataset_id=dataset_id,
             dataset_name=dataset_name,
             files_by_document_id=files_by_document_id or {},
+            l10n=l10n,
         )
         sources.append(source.to_openwebui_source())
     return sources
@@ -194,42 +207,46 @@ def render_sources_markdown(
     show_scores: bool = True,
     show_debug: bool = False,
     max_documents: int = 6,
+    language: str = "de",
 ) -> str:
+    l10n = Localizer(language)
     if not sources:
-        return "Keine passenden Quellen gefunden."
+        return l10n.text("sources.no_sources")
     groups = _group_sources_by_document(sources)
     lines = [
-        "## Gefundene Quellen",
+        f"## {l10n.text('sources.heading')}",
         "",
-        _source_basis_line(groups, sources),
+        _source_basis_line(groups, sources, l10n),
         "",
     ]
     for display_index, group in enumerate(groups[:max_documents], start=1):
         best = group[0]
         metadata = _source_metadata(best)
-        name = _markdown_plain(str(best.get("name") or "Quelle"))
-        location = _source_location(metadata)
-        relevance = _relevance_label(metadata, best) if show_scores else ""
-        hit_count = "" if len(group) == 1 else f" · {len(group)} Treffer"
+        name = _markdown_plain(str(best.get("name") or l10n.text("sources.source")))
+        location = _source_location(metadata, l10n)
+        relevance = _relevance_label(metadata, best, l10n) if show_scores else ""
+        hit_word = l10n.text("sources.hit_one" if len(group) == 1 else "sources.hit_other")
+        hit_count = "" if len(group) == 1 else f" · {len(group)} {hit_word}"
         summary_parts = [part for part in (location, relevance) if part]
         lines.append(f"### {display_index}. {name}")
         if summary_parts or hit_count:
-            lines.append(f"**Nachweis:** {' · '.join(summary_parts)}{hit_count}")
-        actions = _source_actions(best)
+            evidence = l10n.text("sources.evidence")
+            lines.append(f"**{evidence}:** {' · '.join(summary_parts)}{hit_count}")
+        actions = _source_actions(best, l10n)
         if actions:
-            lines.append(f"**Aktionen:** {actions}")
+            lines.append(f"**{l10n.text('sources.actions')}:** {actions}")
         snippet = _clean_reference_text(str(best.get("snippet") or best.get("text") or "")) or ""
         if snippet:
             lines.append("")
             lines.extend(_blockquote(_compact_markdown_text(snippet, _SOURCE_SNIPPET_MAX_CHARS)))
         other_locations = [
-            _source_location(_source_metadata(item))
+            _source_location(_source_metadata(item), l10n)
             for item in group[1:4]
-            if _source_location(_source_metadata(item)) != location
+            if _source_location(_source_metadata(item), l10n) != location
         ]
         if other_locations:
             lines.append("")
-            lines.append(f"Weitere Fundstellen: {', '.join(other_locations)}")
+            lines.append(l10n.text("sources.other_locations", locations=", ".join(other_locations)))
         if show_debug:
             debug_parts = _debug_parts(metadata)
             if debug_parts:
@@ -237,18 +254,27 @@ def render_sources_markdown(
                 lines.append(f"Debug: {' · '.join(debug_parts)}")
         lines.append("")
     if len(groups) > max_documents:
-        lines.append(f"_Weitere {len(groups) - max_documents} Dokumente wurden ausgeblendet._")
+        lines.append(l10n.text("sources.more_documents", count=len(groups) - max_documents))
     return "\n".join(lines).rstrip()
 
 
-def _source_basis_line(groups: list[list[dict[str, Any]]], sources: list[dict[str, Any]]) -> str:
+def _source_basis_line(
+    groups: list[list[dict[str, Any]]],
+    sources: list[dict[str, Any]],
+    l10n: Localizer,
+) -> str:
     documents = len(groups)
     hits = len(sources)
-    document_word = "Dokument" if documents == 1 else "Dokumente"
-    hit_word = "Treffer" if hits == 1 else "Treffer"
-    return (
-        f"**Quellenbasis:** {documents} {document_word}, {hits} {hit_word}, "
-        "nach Relevanz sortiert."
+    document_word = l10n.text(
+        "sources.document_one" if documents == 1 else "sources.document_other"
+    )
+    hit_word = l10n.text("sources.hit_one" if hits == 1 else "sources.hit_other")
+    return l10n.text(
+        "sources.basis",
+        documents=documents,
+        document_word=document_word,
+        hits=hits,
+        hit_word=hit_word,
     )
 
 
@@ -291,6 +317,7 @@ def _normalize_reference(
     dataset_id: str,
     dataset_name: str,
     files_by_document_id: dict[str, dict[str, Any]],
+    l10n: Localizer,
 ) -> SourceHit:
     chunk_id = _first_text(raw, "id", "chunk_id", "chunkId")
     document_id = _first_text(raw, "document_id", "doc_id", "docid", "docId")
@@ -324,7 +351,7 @@ def _normalize_reference(
         chunk_id=chunk_id,
         page=page,
     )
-    citation_label = _citation_label(index=index, page=page, chunk_id=chunk_id)
+    citation_label = _citation_label(index=index, page=page, chunk_id=chunk_id, l10n=l10n)
     preview_url = _preview_url(
         raw,
         settings=settings,
@@ -368,6 +395,7 @@ def _normalize_reference(
         mime_type=mime_type,
         position=position,
         citation_label=citation_label,
+        language=l10n.language,
         raw=raw,
     )
 
@@ -554,10 +582,10 @@ def _original_source_url(
         return None
 
 
-def _citation_label(*, index: int, page: Any, chunk_id: str | None) -> str:
-    parts = [f"Quelle {index}"]
+def _citation_label(*, index: int, page: Any, chunk_id: str | None, l10n: Localizer) -> str:
+    parts = [f"{l10n.text('sources.source')} {index}"]
     if page not in (None, ""):
-        parts.append(f"Seite {page}")
+        parts.append(l10n.text("sources.page", value=page))
     if chunk_id:
         parts.append(f"Chunk {chunk_id}")
     return ", ".join(parts)
@@ -708,34 +736,46 @@ def _source_metadata(source: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _source_location(metadata: dict[str, Any]) -> str:
+def _source_location(metadata: dict[str, Any], l10n: Localizer | None = None) -> str:
+    l10n = l10n or Localizer()
     parts = []
     if metadata.get("page") not in (None, ""):
-        parts.append(f"Seite {metadata.get('page')}")
+        parts.append(l10n.text("sources.page", value=metadata.get("page")))
     if metadata.get("section") not in (None, ""):
-        parts.append(f"Abschnitt {metadata.get('section')}")
+        parts.append(l10n.text("sources.section", value=metadata.get("section")))
     if metadata.get("line") not in (None, ""):
-        parts.append(f"Zeile {metadata.get('line')}")
-    return " · ".join(parts) or "Fundstelle nicht angegeben"
+        parts.append(l10n.text("sources.line", value=metadata.get("line")))
+    return " · ".join(parts) or l10n.text("sources.missing_location")
 
 
-def _relevance_label(metadata: dict[str, Any], source: dict[str, Any]) -> str:
+def _relevance_label(metadata: dict[str, Any], source: dict[str, Any], l10n: Localizer) -> str:
     score = source.get("score") or metadata.get("score")
     formatted = _format_score(score)
-    relevance = metadata.get("relevance") or SourceHit(rank=1, title="", score=score).relevance
+    relevance = metadata.get("relevance")
+    if not relevance:
+        value = _score_float(score)
+        if value is None:
+            relevance = l10n.text("sources.unknown")
+        elif value >= 0.8:
+            relevance = l10n.text("sources.high")
+        elif value >= 0.55:
+            relevance = l10n.text("sources.medium")
+        else:
+            relevance = l10n.text("sources.low")
     if formatted:
-        return f"Relevanz {relevance} ({formatted})"
-    return f"Relevanz {relevance}"
+        return l10n.text("sources.relevance_score", value=relevance, score=formatted)
+    return l10n.text("sources.relevance", value=relevance)
 
 
-def _source_actions(source: dict[str, Any]) -> str:
+def _source_actions(source: dict[str, Any], l10n: Localizer | None = None) -> str:
+    l10n = l10n or Localizer()
     preview_url = source.get("preview_url") or source.get("url")
     original_url = source.get("original_url") or _source_metadata(source).get("original_url")
     links = []
     if preview_url:
-        links.append(f"[Preview öffnen]({preview_url})")
+        links.append(f"[{l10n.text('sources.open_preview')}]({preview_url})")
     if original_url:
-        links.append(f"[Original öffnen]({original_url})")
+        links.append(f"[{l10n.text('sources.open_original')}]({original_url})")
     return " · ".join(links)
 
 

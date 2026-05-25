@@ -23,6 +23,23 @@ Dashboard, TLS-CA-Bundles, URL-Rewrites und Tuning sind optionale Erweiterungen.
 Secrets müssen über Portainer-Environment-Management, Docker Secrets oder eine
 lokale nicht committete Env-Datei bereitgestellt werden.
 
+## Sprache und Locale
+
+Deutsch ist die Standardsprache für menschenlesbare CLI-, Dashboard-,
+OpenWebUI- und Dokumentationstexte. Englisch ist als Alternativsprache
+vorbereitet:
+
+```env
+CONNECTOR_LANGUAGE=de
+```
+
+Zulässig sind `de` und `en`, auch in Locale-Formen wie `de_DE.UTF-8` oder
+`en_US.UTF-8`. Wenn `CONNECTOR_LANGUAGE` leer oder unbekannt ist, versucht der
+Connector eine System-/Umgebungs-Locale zu erkennen und fällt bei unsicherer
+Erkennung stabil auf Deutsch zurück. API-Feldnamen, Env-Namen, Statuscodes,
+IDs, Protokollwerte und Dateipfade werden nicht übersetzt. Details stehen in
+[`i18n.md`](i18n.md).
+
 ## TLS und interne Zertifizierungsstellen
 
 Wenn ein Zielsystem mit `unable to get local issuer certificate` fehlschlägt,
@@ -120,7 +137,8 @@ vollständig aus dem Connector ausgeliefert und lädt keine CDN- oder
 Internet-Assets nach. Der Theme-Wechsel zwischen Dark und Light wird lokal im
 Browser gespeichert. Der Auto-Refresh ist im Dashboard zwischen aus, 5
 Sekunden, 10 Sekunden und 1 Minute wählbar und wird ebenfalls lokal im Browser
-gespeichert.
+gespeichert. Die Sprachwahl ist sichtbar im Dashboard, nutzt Deutsch als
+Fallback und kann für englische Bedienung auf `English` gestellt werden.
 
 ```env
 CONNECTOR_DASHBOARD_ENABLED=false

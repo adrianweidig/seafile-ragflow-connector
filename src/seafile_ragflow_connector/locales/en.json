@@ -1,0 +1,117 @@
+{
+  "cli": {
+    "app_help": "Offline-ready Seafile to RAGFlow connector",
+    "init_db": {
+      "help": "Create or update connector state tables.",
+      "done": "Database initialized"
+    },
+    "check_live": {
+      "help": "Check live dependencies without mutating Seafile or RAGFlow.",
+      "not_ready": "{label} did not become ready within {seconds}s"
+    },
+    "sync_once": {
+      "help": "Run one full discovery and synchronization pass.",
+      "wait_parse": "Poll parse status for this many seconds after upload work."
+    },
+    "cleanup_orphans": {
+      "help": "Plan or delete connector-owned orphan RAGFlow/OpenWebUI target artifacts.",
+      "execute": "Delete the planned connector-owned orphan target artifacts.",
+      "run_sync": "Run sync-once after cleanup so current Seafile libraries are rebuilt."
+    },
+    "openwebui": {
+      "help": "Run one OpenWebUI synchronization pass.",
+      "mode": "Override OpenWebUI sync mode: disabled, dry-run, sync or repair.",
+      "mode_error": "mode must be disabled, dry-run, sync or repair"
+    },
+    "demo": {
+      "fixtures_help": "Generate the reproducible local demo file set without contacting services.",
+      "cleanup_help": "Delete only clearly named local demo artifacts across Seafile, RAGFlow and OpenWebUI.",
+      "bootstrap_help": "Create the canonical demo libraries and optionally run the connector sync path.",
+      "output_dir": "Directory where the reproducible demo files are generated.",
+      "execute_cleanup": "Actually delete safe demo objects. Without this flag only prints the plan.",
+      "execute_bootstrap": "Actually create libraries and upload files. Without this flag only writes fixtures.",
+      "run_sync": "Run connector sync-once after uploading demo files."
+    },
+    "process": {
+      "controller": "Run the discovery and delta scheduling loop.",
+      "worker": "Run a connector worker process.",
+      "reconciler": "Run the low-priority reconciliation loop."
+    },
+    "check_config": {
+      "help": "Load and validate configuration without contacting external services."
+    },
+    "dashboard": {
+      "help": "Run the read-only HTTP dashboard as a foreground process.",
+      "disabled": "Dashboard disabled; set CONNECTOR_DASHBOARD_ENABLED=true to start it"
+    },
+    "jobs": {
+      "requires_repo_id": "{job_type} requires repo_id",
+      "upload_requires_file": "UPLOAD_FILE requires file_path",
+      "delete_requires_file": "DELETE_FILE requires file_path",
+      "sync_mode_error": "SYNC_OPENWEBUI mode must be disabled, dry-run, sync or repair"
+    }
+  },
+  "settings": {
+    "language_description": "Language for human-readable connector output. Supported: de, en. Empty or unknown values fall back to German."
+  },
+  "sources": {
+    "unknown": "unknown",
+    "high": "high",
+    "medium": "medium",
+    "low": "low",
+    "page": "page {value}",
+    "section": "section {value}",
+    "line": "line {value}",
+    "missing_location": "location not specified",
+    "source": "source",
+    "no_sources": "No matching sources found.",
+    "heading": "Found sources",
+    "basis": "**Source basis:** {documents} {document_word}, {hits} {hit_word}, sorted by relevance.",
+    "document_one": "document",
+    "document_other": "documents",
+    "hit_one": "hit",
+    "hit_other": "hits",
+    "evidence": "Evidence",
+    "actions": "Actions",
+    "other_locations": "Additional locations: {locations}",
+    "more_documents": "_{count} additional documents were hidden._",
+    "relevance": "Relevance {value}",
+    "relevance_score": "Relevance {value} ({score})",
+    "open_preview": "Open preview",
+    "open_original": "Open original"
+  },
+  "preview": {
+    "invalid_token": "The preview is unavailable or the link is invalid.",
+    "title": "Source preview",
+    "source": "Source",
+    "snippet": "Excerpt",
+    "metadata": "Usable metadata",
+    "debug": "Debug",
+    "context": "Context",
+    "hit": "Hit",
+    "no_context": "RAGFlow did not provide additional before/after context for this source. The hit itself is shown unchanged in the hit tab.",
+    "original": "Open original",
+    "theme": "Change theme",
+    "copy_snippet": "Copy excerpt",
+    "copy_link": "Copy link",
+    "document_id": "Document ID"
+  },
+  "openwebui_artifact": {
+    "searching": "Searching the RAGFlow dataset...",
+    "answer_preparing": "Preparing the RAGFlow answer...",
+    "query_done": "RAGFlow query completed.",
+    "answer_done": "RAGFlow answer completed.",
+    "tls_invalid": "TLS configuration is invalid.",
+    "tls_invalid_return": "The TLS configuration of the RAGFlow pipe is invalid.",
+    "proxy_timeout": "RAGFlow proxy timeout.",
+    "proxy_timeout_return": "The RAGFlow proxy did not respond in time.",
+    "proxy_http": "RAGFlow proxy responded with HTTP {status}.",
+    "proxy_unreachable": "RAGFlow proxy was unreachable.",
+    "proxy_unreachable_return": "The RAGFlow proxy was unreachable.",
+    "query_failed": "RAGFlow query failed.",
+    "query_failed_return": "The RAGFlow query could not be executed.",
+    "answer_failed": "RAGFlow answer failed.",
+    "answer_failed_return": "The RAGFlow answer could not be created because of an unexpected error.",
+    "no_answer": "RAGFlow did not return an answer."
+  }
+}

@@ -68,6 +68,21 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.connector_dashboard_log_page_size, 100)
         self.assertIsNone(settings.connector_dashboard_auth_username)
         self.assertIsNone(settings.connector_dashboard_auth_password)
+        self.assertIsNone(settings.connector_language)
+
+    def test_connector_language_accepts_supported_locales_and_drops_unknown_values(self) -> None:
+        values = self.base_values()
+        values["database_url"] = "postgresql+psycopg://custom/db"
+        values["connector_language"] = "en_US.UTF-8"
+
+        settings = Settings(**values)
+
+        self.assertEqual(settings.connector_language, "en")
+
+        values["connector_language"] = "fr_FR.UTF-8"
+        settings = Settings(**values)
+
+        self.assertIsNone(settings.connector_language)
 
     def test_rejects_invalid_dashboard_port_and_limits(self) -> None:
         values = self.base_values()

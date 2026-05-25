@@ -1,5 +1,7 @@
 # Mitwirken
 
+🌐 Sprachen: **Deutsch** | [English](CONTRIBUTING.en.md)
+
 Danke, dass du zum Seafile RAGFlow Connector beitragen möchtest. Dieses Projekt
 ist auf vorsichtige Betriebsautomatisierung ausgelegt: Seafile bleibt Quelle der
 Wahrheit, Zielsysteme werden daraus aufgebaut und produktive Daten werden nicht
