@@ -1,8 +1,8 @@
-# Docker Compose Overlay: lokale HTTPS-Mocks fuer Seafile und RAGFlow.
+# Docker Compose Overlay: lokale HTTPS-Mocks für Seafile und RAGFlow.
 #
-# Dieses Overlay ist fuer reproduzierbare WSL-/Docker-Smoke-Tests gedacht,
-# wenn kein echter lokaler Seafile-/RAGFlow-Stack verfuegbar ist. Es stellt nur
-# die API-Pfade bereit, die `connector check-live` und Dashboard-Health pruefen.
+# Dieses Overlay ist für reproduzierbare WSL-/Docker-Smoke-Tests gedacht,
+# wenn kein echter lokaler Seafile-/RAGFlow-Stack verfügbar ist. Es stellt nur
+# die API-Pfade bereit, die `connector check-live` und Dashboard-Health prüfen.
 #
 # Beispiel:
 #   docker compose --env-file connector.env \

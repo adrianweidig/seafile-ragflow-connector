@@ -198,7 +198,12 @@ def render_sources_markdown(
     if not sources:
         return "Keine passenden Quellen gefunden."
     groups = _group_sources_by_document(sources)
-    lines = ["## Gefundene Quellen", ""]
+    lines = [
+        "## Gefundene Quellen",
+        "",
+        _source_basis_line(groups, sources),
+        "",
+    ]
     for display_index, group in enumerate(groups[:max_documents], start=1):
         best = group[0]
         metadata = _source_metadata(best)
@@ -209,7 +214,7 @@ def render_sources_markdown(
         summary_parts = [part for part in (location, relevance) if part]
         lines.append(f"### {display_index}. {name}")
         if summary_parts or hit_count:
-            lines.append(f"**{' · '.join(summary_parts)}{hit_count}**")
+            lines.append(f"**Nachweis:** {' · '.join(summary_parts)}{hit_count}")
         actions = _source_actions(best)
         if actions:
             lines.append(f"**Aktionen:** {actions}")
@@ -234,6 +239,17 @@ def render_sources_markdown(
     if len(groups) > max_documents:
         lines.append(f"_Weitere {len(groups) - max_documents} Dokumente wurden ausgeblendet._")
     return "\n".join(lines).rstrip()
+
+
+def _source_basis_line(groups: list[list[dict[str, Any]]], sources: list[dict[str, Any]]) -> str:
+    documents = len(groups)
+    hits = len(sources)
+    document_word = "Dokument" if documents == 1 else "Dokumente"
+    hit_word = "Treffer" if hits == 1 else "Treffer"
+    return (
+        f"**Quellenbasis:** {documents} {document_word}, {hits} {hit_word}, "
+        "nach Relevanz sortiert."
+    )
 
 
 def sign_preview_payload(payload: dict[str, Any], secret: str, *, now: int | None = None) -> str:

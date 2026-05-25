@@ -72,7 +72,7 @@ def main() -> None:
             "https://wronghost.top.secret:8443/api/v1/datasets",
             ROOT_CA,
             False,
-            "Server-Zertifikat enthaelt absichtlich SAN other.top.secret.",
+            "Server-Zertifikat enthält absichtlich SAN other.top.secret.",
         ),
         Probe(
             "expired_ragflow_root_ca",

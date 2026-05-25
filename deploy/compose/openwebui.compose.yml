@@ -6,8 +6,8 @@
 # RAGFlow-Secrets, sondern ruft diesen Proxy auf.
 #
 # Die Datei ist trotzdem fehlertolerant: Ohne OpenWebUI-Env-Werte startet der
-# Connector weiter im Minimalmodus Seafile -> RAGFlow. Fuer echte OpenWebUI-
-# Synchronisation muessen die im OpenWebUI-Block genannten Werte gesetzt
+# Connector weiter im Minimalmodus Seafile -> RAGFlow. Für echte OpenWebUI-
+# Synchronisation müssen die im OpenWebUI-Block genannten Werte gesetzt
 # werden.
 #
 # Start:
@@ -42,8 +42,8 @@ x-connector-env: &connector-env
   # -------------------------------------------------------------------
   # Quelle: Seafile
   # -------------------------------------------------------------------
-  # Der Connector probiert zur Laufzeit zuerst HTTPS und faellt nur bei
-  # technischem HTTPS-Fehler auf HTTP zurueck. Der effektive Transport steht
+  # Der Connector probiert zur Laufzeit zuerst HTTPS und fällt nur bei
+  # technischem HTTPS-Fehler auf HTTP zurück. Der effektive Transport steht
   # danach im Dashboard.
   SEAFILE_BASE_URL: ${SEAFILE_BASE_URL:?set SEAFILE_BASE_URL}
   SEAFILE_INTERNAL_URL: ${SEAFILE_INTERNAL_URL:-}
@@ -78,7 +78,7 @@ x-connector-env: &connector-env
   # Optionales Ziel: OpenWebUI
   # -------------------------------------------------------------------
   # Default ist disabled, damit der Stack auch ohne OpenWebUI-Anteil startet.
-  # Fuer echten Sync setzen:
+  # Für echten Sync setzen:
   #   OPENWEBUI_INTEGRATION_ENABLED=true
   #   OPENWEBUI_SYNC_MODE=sync oder repair
   #   OPENWEBUI_ADMIN_API_KEY=<Admin-Key>
@@ -133,7 +133,7 @@ x-connector-env: &connector-env
   CONNECTOR_STARTUP_CHECK: ${CONNECTOR_STARTUP_CHECK:-live}
   CONNECTOR_BOOTSTRAP_CHECK_LIVE: ${CONNECTOR_BOOTSTRAP_CHECK_LIVE:-true}
 
-# Gemeinsamer Container-Block fuer Controller, Worker und Reconciler.
+# Gemeinsamer Container-Block für Controller, Worker und Reconciler.
 x-connector-common: &connector-common
   image: ${CONNECTOR_IMAGE:-ghcr.io/adrianweidig/seafile-ragflow-connector:latest}
   pull_policy: ${CONNECTOR_IMAGE_PULL_POLICY:-missing}
@@ -230,7 +230,7 @@ networks:
   connector-net:
     # Muss bereits existieren, wenn Seafile/RAGFlow/OpenWebUI in einem
     # gemeinsamen Docker-Netz laufen.
-    # Default fuer lokale Demos; in bestehenden Umgebungen auf das vorhandene
+    # Default für lokale Demos; in bestehenden Umgebungen auf das vorhandene
     # gemeinsame Netz setzen.
     name: ${CONNECTOR_DOCKER_NETWORK_NAME:-seafile-ragflow-connector-net}
     external: true

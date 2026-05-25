@@ -20,6 +20,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       --surface: #141b29;
       --surface-2: #192235;
       --surface-3: #202b40;
+      --surface-glass: rgba(20, 27, 41, 0.82);
       --text: #f4f7fb;
       --muted: #96a3b7;
       --soft: #cbd5e1;
@@ -28,14 +29,16 @@ DASHBOARD_HTML = r"""<!doctype html>
       --accent: #2dd4bf;
       --accent-2: #60a5fa;
       --accent-3: #f59e0b;
+      --accent-soft: rgba(45, 212, 191, 0.16);
       --ok: #34d399;
       --warn: #fbbf24;
       --bad: #fb7185;
       --info: #38bdf8;
       --unknown: #94a3b8;
       --shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+      --shadow-soft: 0 14px 38px rgba(0, 0, 0, 0.22);
       --radius: 8px;
-      --focus: 0 0 0 3px rgba(45, 212, 191, 0.28);
+      --focus: 0 0 0 3px rgba(45, 212, 191, 0.36);
       --primary-bg: linear-gradient(135deg, var(--accent), var(--accent-2));
       --primary-text: #041116;
       --primary-border: transparent;
@@ -49,6 +52,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       --surface: #ffffff;
       --surface-2: #f5f8fc;
       --surface-3: #eaf0f8;
+      --surface-glass: rgba(255, 255, 255, 0.86);
       --text: #142033;
       --muted: #5b677a;
       --soft: #334155;
@@ -57,13 +61,15 @@ DASHBOARD_HTML = r"""<!doctype html>
       --accent: #0f766e;
       --accent-2: #2563eb;
       --accent-3: #b45309;
+      --accent-soft: rgba(15, 118, 110, 0.12);
       --ok: #047857;
       --warn: #b45309;
       --bad: #be123c;
       --info: #0369a1;
       --unknown: #64748b;
       --shadow: 0 20px 60px rgba(15, 23, 42, 0.12);
-      --focus: 0 0 0 3px rgba(15, 118, 110, 0.22);
+      --shadow-soft: 0 12px 30px rgba(15, 23, 42, 0.10);
+      --focus: 0 0 0 3px rgba(15, 118, 110, 0.30);
       --primary-bg: linear-gradient(135deg, #ccfbf1, #dbeafe);
       --primary-text: #0f172a;
       --primary-border: rgba(15, 118, 110, 0.28);
@@ -75,6 +81,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       min-height: 100%;
       background:
         linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 88%, #000 12%), var(--bg) 38%),
+        linear-gradient(120deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 32%, color-mix(in srgb, var(--accent-2) 10%, transparent) 72%, transparent),
         repeating-linear-gradient(90deg, transparent 0 38px, rgba(148, 163, 184, 0.05) 38px 39px);
       color: var(--text);
       font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -117,7 +124,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       display: inline-flex;
       gap: 8px;
       justify-content: center;
-      min-height: 36px;
+      min-height: 40px;
       padding: 8px 12px;
       text-decoration: none;
       transition: border-color var(--motion-fast) ease, background var(--motion-fast) ease, color var(--motion-fast) ease, transform var(--motion-fast) ease;
@@ -133,7 +140,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       border: 1px solid var(--border);
       border-radius: var(--radius);
       color: var(--text);
-      min-height: 36px;
+      min-height: 40px;
       padding: 8px 10px;
       width: 100%;
     }
@@ -150,7 +157,8 @@ DASHBOARD_HTML = r"""<!doctype html>
       min-height: 100vh;
     }
     .sidebar {
-      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      backdrop-filter: blur(18px);
+      background: var(--surface-glass);
       border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
@@ -176,6 +184,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       margin-bottom: 12px;
       width: 34px;
       animation: softPulse 4.8s ease-in-out infinite;
+      box-shadow: 0 10px 28px color-mix(in srgb, var(--accent) 22%, transparent);
     }
     .brand h1 {
       font-size: 18px;
@@ -197,6 +206,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       color: var(--muted);
       justify-content: flex-start;
       min-height: 42px;
+      position: relative;
       width: 100%;
     }
     .tab .tab-dot {
@@ -206,9 +216,17 @@ DASHBOARD_HTML = r"""<!doctype html>
       width: 8px;
     }
     .tab[aria-selected="true"] {
-      background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+      background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 18%, var(--surface)), color-mix(in srgb, var(--accent-2) 7%, var(--surface)));
       border-color: color-mix(in srgb, var(--accent) 56%, var(--border));
       color: var(--text);
+    }
+    .tab[aria-selected="true"]::after {
+      background: linear-gradient(180deg, var(--accent), var(--accent-2));
+      border-radius: 999px;
+      content: "";
+      inset: 9px 8px 9px auto;
+      position: absolute;
+      width: 3px;
     }
     .tab[aria-selected="true"] .tab-dot { background: var(--accent); }
     .sidebar-footer {
@@ -222,10 +240,16 @@ DASHBOARD_HTML = r"""<!doctype html>
     }
     .topbar {
       align-items: center;
+      backdrop-filter: blur(12px);
+      background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 78%, transparent), transparent);
       display: flex;
       gap: 14px;
       justify-content: space-between;
       margin-bottom: 18px;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      padding-bottom: 12px;
     }
     .topbar-title h2 {
       font-size: 24px;
@@ -291,6 +315,9 @@ DASHBOARD_HTML = r"""<!doctype html>
     .action, .ghost {
       background: var(--surface);
       color: var(--text);
+    }
+    .ghost:hover, .action:hover {
+      background: color-mix(in srgb, var(--accent) 8%, var(--surface));
     }
     .primary {
       background: var(--primary-bg);
@@ -360,6 +387,13 @@ DASHBOARD_HTML = r"""<!doctype html>
       padding: 20px;
       position: relative;
     }
+    .status-stage::before {
+      background: linear-gradient(90deg, var(--accent), var(--accent-2), var(--accent-3));
+      content: "";
+      height: 3px;
+      inset: 0 0 auto;
+      position: absolute;
+    }
     .status-stage::after {
       background: repeating-linear-gradient(90deg, transparent 0 18px, rgba(148, 163, 184, 0.08) 18px 19px);
       bottom: 0;
@@ -397,6 +431,15 @@ DASHBOARD_HTML = r"""<!doctype html>
       gap: 8px;
       margin-top: 24px;
     }
+    .status-meta div {
+      align-items: center;
+      background: color-mix(in srgb, var(--surface-3) 62%, transparent);
+      border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+      border-radius: var(--radius);
+      display: flex;
+      gap: 8px;
+      padding: 7px 9px;
+    }
     .health-rail {
       align-items: end;
       display: grid;
@@ -419,7 +462,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       background: color-mix(in srgb, var(--surface) 94%, transparent);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      box-shadow: var(--shadow);
+      box-shadow: var(--shadow-soft);
       overflow: hidden;
       animation: surfaceIn 420ms ease both;
     }
@@ -431,6 +474,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     .panel-header {
       align-items: center;
       border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 78%, transparent), transparent);
       display: flex;
       gap: 12px;
       justify-content: space-between;
@@ -457,6 +501,15 @@ DASHBOARD_HTML = r"""<!doctype html>
       padding: 14px;
       position: relative;
     }
+    .metric::after {
+      background: radial-gradient(circle at 85% 15%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 46%);
+      content: "";
+      inset: 0;
+      opacity: 0.75;
+      pointer-events: none;
+      position: absolute;
+    }
+    .metric > * { position: relative; z-index: 1; }
     .metric::before {
       background: var(--accent);
       content: "";
@@ -498,8 +551,12 @@ DASHBOARD_HTML = r"""<!doctype html>
       gap: 8px;
     }
     .table-wrap {
+      border-radius: 0 0 var(--radius) var(--radius);
       overflow: auto;
       width: 100%;
+    }
+    .table-wrap[aria-busy="true"] {
+      opacity: 0.72;
     }
     table {
       border-collapse: collapse;
@@ -541,6 +598,8 @@ DASHBOARD_HTML = r"""<!doctype html>
       top: 0;
       z-index: 1;
     }
+    th:first-child, td:first-child { padding-left: 16px; }
+    th:last-child, td:last-child { padding-right: 16px; }
     tbody tr {
       transition: background 120ms ease;
     }
@@ -554,6 +613,10 @@ DASHBOARD_HTML = r"""<!doctype html>
       word-break: break-word;
     }
     tr.clickable { cursor: pointer; }
+    tr.clickable:focus-visible {
+      outline: 0;
+      box-shadow: inset var(--focus);
+    }
     .compact-table table { min-width: 680px; }
     .status {
       align-items: center;
@@ -616,11 +679,28 @@ DASHBOARD_HTML = r"""<!doctype html>
       color: var(--muted);
       padding: 14px 0;
     }
+    .empty-state {
+      align-items: center;
+      display: grid;
+      gap: 5px;
+      justify-items: center;
+      min-height: 112px;
+      text-align: center;
+    }
+    .empty-state strong {
+      color: var(--text);
+      font-size: 14px;
+    }
+    .empty-state span {
+      color: var(--muted);
+      font-size: 12px;
+    }
     .problem-list {
       display: grid;
       gap: 10px;
     }
     .problem-item {
+      background: color-mix(in srgb, var(--surface-2) 66%, transparent);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 10px 12px;
@@ -642,6 +722,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     }
     .health-item {
       align-items: flex-start;
+      background: color-mix(in srgb, var(--surface-2) 58%, transparent);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       display: grid;
@@ -809,12 +890,13 @@ DASHBOARD_HTML = r"""<!doctype html>
     }
     @media (max-width: 720px) {
       .workspace, .sidebar { padding: 12px; }
-      .topbar { align-items: stretch; flex-direction: column; }
+      .topbar { align-items: stretch; flex-direction: column; position: static; }
       .actions { justify-content: stretch; }
       .actions > * { flex: 1; }
       .nav { grid-template-columns: 1fr; }
       .metric-grid { grid-template-columns: 1fr; }
       .state-value { font-size: 28px; }
+      button, a.action, input, select { min-height: 44px; }
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
@@ -848,7 +930,7 @@ DASHBOARD_HTML = r"""<!doctype html>
         <div id="sidebar-updated">Noch nicht aktualisiert</div>
       </div>
     </aside>
-    <main class="workspace">
+    <main class="workspace" aria-busy="false">
       <div class="topbar">
         <div class="topbar-title">
           <h2 id="view-title">Übersicht</h2>
@@ -1022,6 +1104,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     const state = {
       activeTab: 'overview',
       loading: false,
+      pendingLoad: false,
       refreshTimer: null,
       refreshMs: Number(localStorage.getItem('connector-dashboard-refresh-ms') || '10000'),
       pages: { syncs: 0, changes: 0, logs: 0, openwebui: 0 },
@@ -1118,6 +1201,8 @@ DASHBOARD_HTML = r"""<!doctype html>
     }
     function table(id, headers, rows, onClick) {
       const target = $(id);
+      const tableWrap = target.closest('.table-wrap');
+      if (tableWrap) tableWrap.setAttribute('aria-busy', 'false');
       clear(target);
       const thead = document.createElement('thead');
       const headerRow = document.createElement('tr');
@@ -1134,7 +1219,14 @@ DASHBOARD_HTML = r"""<!doctype html>
         const td = document.createElement('td');
         td.colSpan = headers.length;
         td.className = 'empty';
-        td.textContent = 'Keine Einträge vorhanden.';
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        const title = document.createElement('strong');
+        title.textContent = 'Keine Einträge vorhanden';
+        const hint = document.createElement('span');
+        hint.textContent = 'Die Ansicht ist geladen und enthält aktuell keine passenden Daten.';
+        empty.append(title, hint);
+        td.appendChild(empty);
         tr.appendChild(td);
         tbody.appendChild(tr);
       }
@@ -1477,10 +1569,16 @@ DASHBOARD_HTML = r"""<!doctype html>
       $('diagnostics-json').textContent = JSON.stringify(await api('/api/diagnostics'), null, 2);
     }
     async function loadActive() {
-      if (state.loading) return;
+      if (state.loading) {
+        state.pendingLoad = true;
+        return;
+      }
       state.loading = true;
       showError('');
-      document.querySelector('.workspace').classList.add('is-refreshing');
+      const workspace = document.querySelector('.workspace');
+      workspace.classList.add('is-refreshing');
+      workspace.setAttribute('aria-busy', 'true');
+      document.querySelectorAll('section:not([hidden]) .table-wrap').forEach((node) => node.setAttribute('aria-busy', 'true'));
       try {
         if (state.activeTab === 'overview') await loadOverview();
         if (state.activeTab === 'syncs') await loadSyncs();
@@ -1493,7 +1591,12 @@ DASHBOARD_HTML = r"""<!doctype html>
         showError(err.message || String(err));
       } finally {
         state.loading = false;
-        window.setTimeout(() => document.querySelector('.workspace').classList.remove('is-refreshing'), 240);
+        workspace.setAttribute('aria-busy', 'false');
+        window.setTimeout(() => workspace.classList.remove('is-refreshing'), 240);
+        if (state.pendingLoad) {
+          state.pendingLoad = false;
+          loadActive();
+        }
       }
     }
     function activateTab(name) {

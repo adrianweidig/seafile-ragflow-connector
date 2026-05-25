@@ -1,13 +1,13 @@
-# Portainer-/Compose-Stack fuer den Seafile-RAGFlow-Connector.
+# Portainer-/Compose-Stack für den Seafile-RAGFlow-Connector.
 #
 # Aufbau:
 # - x-connector-env sammelt alle Runtime-Werte, damit Controller, Worker und
 #   Reconciler exakt dieselbe Konfiguration sehen.
 # - x-connector-common sammelt Image, Volumes, Netzwerk und Healthcheck.
-# - services enthaelt nur noch die konkreten Rollen und die State-Dienste.
+# - services enthält nur noch die konkreten Rollen und die State-Dienste.
 #
-# Nutzer muessen normalerweise nur die Werte in stack.env/connector.env setzen.
-# OpenWebUI bleibt optional: Fehlen OpenWebUI-Werte, laeuft der Stack weiterhin
+# Nutzer müssen normalerweise nur die Werte in stack.env/connector.env setzen.
+# OpenWebUI bleibt optional: Fehlen OpenWebUI-Werte, läuft der Stack weiterhin
 # als Seafile -> RAGFlow Connector.
 
 name: ${COMPOSE_PROJECT_NAME:-seafile-ragflow-connector}
@@ -23,14 +23,14 @@ x-connector-env: &connector-env
   DRY_RUN: ${DRY_RUN:-false}
 
   # -------------------------------------------------------------------
-  # TLS-Vertrauen fuer interne oder private Zertifizierungsstellen
+  # TLS-Vertrauen für interne oder private Zertifizierungsstellen
   # -------------------------------------------------------------------
   CONNECTOR_CA_BUNDLE: ${CONNECTOR_CA_BUNDLE:-}
   SSL_CERT_FILE: ${SSL_CERT_FILE:-}
   REQUESTS_CA_BUNDLE: ${REQUESTS_CA_BUNDLE:-}
 
   # -------------------------------------------------------------------
-  # Lesendes Dashboard und geschuetzter OpenWebUI-Proxy
+  # Lesendes Dashboard und geschützter OpenWebUI-Proxy
   # -------------------------------------------------------------------
   CONNECTOR_DASHBOARD_ENABLED: ${CONNECTOR_DASHBOARD_ENABLED:-false}
   CONNECTOR_DASHBOARD_HOST: ${CONNECTOR_DASHBOARD_HOST:-0.0.0.0}
@@ -47,8 +47,8 @@ x-connector-env: &connector-env
   # Quelle: bestehender Seafile-Server
   # -------------------------------------------------------------------
   # Muss aus dem Connector-Container erreichbar sein. Der Connector versucht
-  # zur Laufzeit zuerst HTTPS auf derselben Host/Port-Kombination und faellt
-  # nur bei technischem HTTPS-Fehler auf HTTP zurueck.
+  # zur Laufzeit zuerst HTTPS auf derselben Host/Port-Kombination und fällt
+  # nur bei technischem HTTPS-Fehler auf HTTP zurück.
   SEAFILE_BASE_URL: ${SEAFILE_BASE_URL:?set SEAFILE_BASE_URL}
   SEAFILE_INTERNAL_URL: ${SEAFILE_INTERNAL_URL:-}
   SEAFILE_ADMIN_TOKEN: ${SEAFILE_ADMIN_TOKEN:?set SEAFILE_ADMIN_TOKEN}
@@ -68,7 +68,7 @@ x-connector-env: &connector-env
   # -------------------------------------------------------------------
   # Ziel: bestehender RAGFlow-Server
   # -------------------------------------------------------------------
-  # Muss aus dem Connector-Container erreichbar sein. Auch hier prueft der
+  # Muss aus dem Connector-Container erreichbar sein. Auch hier prüft der
   # Connector zuerst HTTPS und dokumentiert den effektiven Transport im
   # Dashboard.
   RAGFLOW_BASE_URL: ${RAGFLOW_BASE_URL:?set RAGFLOW_BASE_URL}
@@ -90,7 +90,7 @@ x-connector-env: &connector-env
   # Optionales Ziel: OpenWebUI
   # -------------------------------------------------------------------
   # Default bleibt aus. Dadurch funktioniert derselbe Stack auch, wenn keine
-  # OpenWebUI-Instanz vorhanden ist. Fuer echte Synchronisation setzen:
+  # OpenWebUI-Instanz vorhanden ist. Für echte Synchronisation setzen:
   # OPENWEBUI_INTEGRATION_ENABLED=true, OPENWEBUI_SYNC_MODE=sync oder repair,
   # OPENWEBUI_ADMIN_API_KEY und OPENWEBUI_PROXY_SHARED_SECRET.
   OPENWEBUI_INTEGRATION_ENABLED: ${OPENWEBUI_INTEGRATION_ENABLED:-false}
@@ -120,7 +120,7 @@ x-connector-env: &connector-env
   # -------------------------------------------------------------------
   # Connector-State: Datenbank und Queue innerhalb dieses Stacks
   # -------------------------------------------------------------------
-  # DATABASE_URL/REDIS_URL koennen externe Dienste ueberschreiben; ohne diese
+  # DATABASE_URL/REDIS_URL können externe Dienste überschreiben; ohne diese
   # Werte werden die unten definierten lokalen Postgres-/Redis-Services genutzt.
   POSTGRES_HOST: connector-postgres
   POSTGRES_PORT: 5432
@@ -203,7 +203,7 @@ x-connector-env: &connector-env
   CONNECTOR_FALLBACK_CACHE_DIR: ${CONNECTOR_FALLBACK_CACHE_DIR:-/tmp/seafile-ragflow-connector/cache}
   CONNECTOR_FALLBACK_TEMP_DIR: ${CONNECTOR_FALLBACK_TEMP_DIR:-/tmp/seafile-ragflow-connector/cache/tmp}
 
-# Gemeinsamer Container-Block fuer alle Connector-Rollen.
+# Gemeinsamer Container-Block für alle Connector-Rollen.
 x-connector-common: &connector-common
   image: ${CONNECTOR_IMAGE:-ghcr.io/adrianweidig/seafile-ragflow-connector:latest}
   pull_policy: ${CONNECTOR_IMAGE_PULL_POLICY:-missing}
@@ -224,7 +224,7 @@ x-connector-common: &connector-common
     start_period: 30s
 
 services:
-  # Persistenter Connector-State. Diese Dienste koennen durch DATABASE_URL und
+  # Persistenter Connector-State. Diese Dienste können durch DATABASE_URL und
   # REDIS_URL ersetzt werden, bleiben aber als robuste Standardeinstellung im
   # Stack enthalten.
   connector-postgres:
@@ -266,7 +266,7 @@ services:
     <<: *connector-common
     command: ["controller"]
     ports:
-      # Default ist nur lokal erreichbar. Fuer LAN/Reverse-Proxy-Exposition
+      # Default ist nur lokal erreichbar. Für LAN/Reverse-Proxy-Exposition
       # CONNECTOR_DASHBOARD_AUTH_USERNAME/PASSWORD setzen.
       - "${CONNECTOR_DASHBOARD_PUBLISHED_PORT:-127.0.0.1:18080}:${CONNECTOR_DASHBOARD_PORT:-8080}"
     depends_on:
@@ -301,7 +301,7 @@ volumes:
 
 networks:
   connector-net:
-    # false erzeugt ein eigenes Netz. true haengt alle Services an ein bereits
+    # false erzeugt ein eigenes Netz. true hängt alle Services an ein bereits
     # vorhandenes Docker-Netz, dessen Name per CONNECTOR_DOCKER_NETWORK_NAME
     # gesetzt wird.
     name: ${CONNECTOR_DOCKER_NETWORK_NAME:-seafile-ragflow-connector-net}

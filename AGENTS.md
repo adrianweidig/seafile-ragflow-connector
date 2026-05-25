@@ -96,8 +96,10 @@ erzwungen, wenn `--with-compose` gesetzt ist.
   verwenden.
 - README-Badges und GitHub-Links nur setzen, wenn Owner, Repository und
   Workflow-Dateien eindeutig vorhanden sind.
-- Deutsche Fließtexte verwenden echte UTF-8-Umlaute. Keine blinden globalen
-  Ersetzungen in Code, Pfaden, Env-Variablen, IDs oder technischen Strings.
+- Deutsche Fließtexte verwenden echte UTF-8-Umlaute, z. B. `für`, `über`,
+  `vollständig`, `prüfen` und `zurück`. ASCII-Umschreibungen deutscher Umlaute
+  bleiben unerwünscht. Keine blinden globalen Ersetzungen in Code, Pfaden,
+  Env-Variablen, IDs oder technischen Strings.
 - Beispielwerte bleiben offensichtliche Platzhalter wie `change-me` oder
   `YOUR_API_KEY`.
 
