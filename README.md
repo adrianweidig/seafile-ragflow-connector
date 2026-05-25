@@ -117,8 +117,10 @@ Mehr Details stehen in [docs/architecture.md](docs/architecture.md).
 
 Deutsch ist die Standardsprache für CLI-Hilfen, menschenlesbare Fehlermeldungen,
 Dashboard-Texte, OpenWebUI-Artefakte, README und Repository-Dokumentation.
-Englisch ist als Alternativsprache vorbereitet. Die Sprache kann explizit über
-`CONNECTOR_LANGUAGE=de` oder `CONNECTOR_LANGUAGE=en` gesetzt werden; ohne
+Englisch ist die wichtigste Alternativsprache; Produktkomponenten sind zusätzlich
+für `es`, `fr`, `it`, `pt`, `nl`, `pl`, `tr`, `uk`, `zh`, `ja` und `ar`
+integriert. Die Sprache kann explizit über `CONNECTOR_LANGUAGE=de`,
+`CONNECTOR_LANGUAGE=en` oder einen der weiteren Sprachcodes gesetzt werden; ohne
 zuverlässige Vorgabe fällt der Connector stabil auf Deutsch zurück. Dashboard
 und Quellenvorschau nutzen UTF-8, Browser-Locale und eine sichtbare manuelle
 Sprachwahl. GitHub selbst schaltet die normale Repository-Ansicht nicht

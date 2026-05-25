@@ -183,7 +183,12 @@ def normalize_sources(
     return sources
 
 
-def annotate_answer_citations(answer: str, sources: list[dict[str, Any]]) -> str:
+def annotate_answer_citations(
+    answer: str,
+    sources: list[dict[str, Any]],
+    *,
+    language: str = "de",
+) -> str:
     if not answer or not sources:
         return answer
 
@@ -192,7 +197,11 @@ def annotate_answer_citations(answer: str, sources: list[dict[str, Any]]) -> str
         if citation_id < 0 or citation_id >= len(sources):
             return match.group(0)
         source = sources[citation_id]
-        label = str(source.get("citation_label") or f"Quelle {citation_id + 1}")
+        l10n = Localizer(language)
+        label = str(
+            source.get("citation_label")
+            or f"{l10n.text('sources.source')} {citation_id + 1}"
+        )
         url = source.get("url") or source.get("preview_url")
         if url:
             return f"[{label}]({url})"
@@ -212,7 +221,7 @@ def render_sources_markdown(
     l10n = Localizer(language)
     if not sources:
         return l10n.text("sources.no_sources")
-    groups = _group_sources_by_document(sources)
+    groups = _group_sources_by_document(sources, language=l10n.language)
     lines = [
         f"## {l10n.text('sources.heading')}",
         "",
@@ -373,7 +382,7 @@ def _normalize_reference(
         file_type=file_type,
         mime_type=mime_type,
     )
-    title = document_name or f"Quelle {index}"
+    title = document_name or f"{l10n.text('sources.source')} {index}"
     return SourceHit(
         rank=index,
         title=title,
@@ -691,7 +700,11 @@ def _format_score(score: Any) -> str | None:
     return f"{value:.0%}"
 
 
-def _group_sources_by_document(sources: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+def _group_sources_by_document(
+    sources: list[dict[str, Any]],
+    *,
+    language: str = "de",
+) -> list[list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for source in sources:
         metadata = _source_metadata(source)
@@ -701,7 +714,7 @@ def _group_sources_by_document(sources: list[dict[str, Any]]) -> list[list[dict[
             or metadata.get("document_name")
             or source.get("name")
             or source.get("title")
-            or "Quelle"
+            or Localizer(language).text("sources.source")
         )
         grouped.setdefault(key, []).append(source)
     groups = list(grouped.values())

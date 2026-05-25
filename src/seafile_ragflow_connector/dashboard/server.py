@@ -447,7 +447,11 @@ def _handle_openwebui_query(
         dataset_name=mapping.ragflow_dataset_name,
         files_by_document_id=_files_by_document_id(context.store, mapping.repo_id),
     )
-    return {"answer": _sources_markdown(sources), "sources": sources, "citations_emitted": True}
+    return {
+        "answer": _sources_markdown(sources, context.settings),
+        "sources": sources,
+        "citations_emitted": True,
+    }
 
 
 def _handle_openwebui_chat(
@@ -504,7 +508,7 @@ def _handle_openwebui_chat(
                 files_by_document_id=files_by_document_id,
             )
             return {
-                "answer": _sources_markdown(sources),
+                "answer": _sources_markdown(sources, context.settings),
                 "sources": sources,
                 "citations_emitted": True,
             }
@@ -538,9 +542,17 @@ def _handle_openwebui_chat(
                 sources = _filter_sources_for_requested_document(sources, question)
     finally:
         ragflow.close()
-    answer = annotate_answer_citations(_clean_answer_text(extract_answer(result)), sources)
-    if sources and "## Gefundene Quellen" not in answer:
-        answer = (answer.strip() + "\n\n" if answer.strip() else "") + _sources_markdown(sources)
+    l10n = localizer_for(context.settings)
+    answer = annotate_answer_citations(
+        _clean_answer_text(extract_answer(result)),
+        sources,
+        language=l10n.language,
+    )
+    if sources and f"## {l10n.text('sources.heading')}" not in answer:
+        answer = (answer.strip() + "\n\n" if answer.strip() else "") + _sources_markdown(
+            sources,
+            context.settings,
+        )
     return {"answer": answer, "sources": sources, "citations_emitted": True}
 
 
@@ -553,14 +565,15 @@ def _proxy_error_response(
     target = safe_url_for_logs(settings.ragflow_internal_url or settings.ragflow_base_url)
     error_type = _proxy_error_type(exc)
     status = HTTPStatus.BAD_GATEWAY
-    message = "Die RAGFlow-Abfrage konnte nicht geladen werden."
+    l10n = localizer_for(settings)
+    message = l10n.text("openwebui_artifact.query_failed_return")
     if isinstance(exc, httpx.TimeoutException):
-        message = "RAGFlow hat nicht rechtzeitig geantwortet."
+        message = l10n.text("openwebui_artifact.ragflow_timeout_return")
         status = HTTPStatus.GATEWAY_TIMEOUT
     elif isinstance(exc, ApiError):
-        message = "RAGFlow antwortete mit einem Fehlerstatus."
+        message = l10n.text("openwebui_artifact.proxy_http", status=exc.status_code or "API")
     elif isinstance(exc, httpx.ConnectError | httpx.RequestError):
-        message = "RAGFlow war über den Connector-Proxy nicht erreichbar."
+        message = l10n.text("openwebui_artifact.proxy_unreachable_return")
 
     structlog.get_logger(__name__).warning(
         "openwebui.proxy_upstream_failed",
@@ -715,15 +728,23 @@ def _files_by_document_id(store: DashboardEventStore, repo_id: str) -> dict[str,
         }
 
 
-def _sources_markdown(sources: list[dict[str, Any]]) -> str:
-    return render_sources_markdown(sources, show_scores=True, show_debug=False)
+def _sources_markdown(sources: list[dict[str, Any]], settings: Settings) -> str:
+    return render_sources_markdown(
+        sources,
+        show_scores=True,
+        show_debug=False,
+        language=localizer_for(settings).language,
+    )
 
 
-def _source_document_markdown(name: str, url: Any, original_url: Any) -> str:
+def _source_document_markdown(name: str, url: Any, original_url: Any, settings: Settings) -> str:
     title = _markdown_plain(name)
     links = f"[{title}]({url})" if url else title
     if original_url and original_url != url:
-        links = f"{links} - [Original öffnen]({original_url})"
+        links = (
+            f"{links} - "
+            f"[{localizer_for(settings).text('sources.open_original')}]({original_url})"
+        )
     return links
 
 
@@ -739,31 +760,6 @@ def _filter_sources_for_requested_document(
         if str(source.get("name") or "").lower() in question_lower
     ]
     return requested or sources
-
-
-def _source_locator(source: dict[str, Any]) -> str:
-    metadata = source.get("source_metadata")
-    if not isinstance(metadata, dict):
-        metadata_items = source.get("metadata")
-        metadata = metadata_items[0] if isinstance(metadata_items, list) and metadata_items else {}
-    parts = []
-    page = metadata.get("page")
-    if page not in (None, ""):
-        parts.append(f"Seite {page}")
-    section = metadata.get("section")
-    if section not in (None, ""):
-        parts.append(f"Abschnitt {section}")
-    line = metadata.get("line")
-    if line not in (None, ""):
-        parts.append(f"Zeile {line}")
-    chunk_id = metadata.get("chunk_id")
-    if chunk_id not in (None, ""):
-        chunk = str(chunk_id)
-        parts.append(f"Chunk `{chunk[:12]}`")
-    score = metadata.get("score")
-    if score not in (None, ""):
-        parts.append(f"Score {_format_score(score)}")
-    return ", ".join(parts) or "-"
 
 
 def _format_score(score: Any) -> str:
@@ -890,6 +886,7 @@ def _preview_html(settings: Settings, token: str | None) -> str:
     score = _format_score(payload.get("score"))
     score_text = escape(score or l10n.text("sources.unknown"))
     original_url = str(payload.get("original_url") or "")
+    is_de = l10n.language == "de"
     original_link = (
         f'<a class="button primary" href="{escape(original_url, quote=True)}" target="_blank" rel="noreferrer">{l10n.text("preview.original")}</a>'
         if original_url
@@ -909,11 +906,11 @@ def _preview_html(settings: Settings, token: str | None) -> str:
     if file_type:
         chips.append(f"<span>{file_type.upper()}</span>")
     details = [
-        ("Quellpfad", source_path),
-        ("Dateityp", file_type),
+        ("Quellpfad" if is_de else "Source path", source_path),
+        ("Dateityp" if is_de else "File type", file_type),
         ("MIME-Type", mime_type),
         (
-            "Fundstelle",
+            "Fundstelle" if is_de else "Location",
             " · ".join(
                 part
                 for part in (
@@ -931,8 +928,8 @@ def _preview_html(settings: Settings, token: str | None) -> str:
         (l10n.text("preview.document_id"), document_id),
         ("Seafile-Repo", repo_id),
         ("Chunk-ID", chunk),
-        ("Abschnitt", section),
-        ("Zeile", line),
+        ("Abschnitt" if is_de else "Section", section),
+        ("Zeile" if is_de else "Line", line),
         ("Position", f"<code>{position}</code>" if position not in ("null", '""') else ""),
     ]
     details_html = "".join(
@@ -944,7 +941,7 @@ def _preview_html(settings: Settings, token: str | None) -> str:
     if not snippet:
         snippet = l10n.text("sources.no_sources")
     return (
-        f"<!doctype html><html lang=\"{l10n.language}\"><head><meta charset=\"utf-8\">"
+        f"<!doctype html><html lang=\"{l10n.language}\" dir=\"{'rtl' if l10n.language == 'ar' else 'ltr'}\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{title}</title>"
         "<style>"
@@ -967,7 +964,7 @@ def _preview_html(settings: Settings, token: str | None) -> str:
         f"<h1>{title}</h1><p class=\"path\">{source_path or citation}</p><div class=\"chips\">{''.join(chips)}</div>"
         f"<div class=\"actions\">{original_link}<button class=\"button\" type=\"button\" data-copy=\"{copy_snippet}\">{l10n.text('preview.copy_snippet')}</button><button class=\"button\" type=\"button\" data-copy-url>{l10n.text('preview.copy_link')}</button></div>"
         "</section>"
-        "<nav class=\"tabs\" aria-label=\"Quellenansicht\">"
+        f"<nav class=\"tabs\" aria-label=\"{'Quellenansicht' if is_de else 'Source view'}\">"
         f"<button class=\"tab\" type=\"button\" data-tab=\"hit\" aria-selected=\"true\">{l10n.text('preview.hit')}</button>"
         f"<button class=\"tab\" type=\"button\" data-tab=\"context\" aria-selected=\"false\">{l10n.text('preview.context')}</button>"
         f"<button class=\"tab\" type=\"button\" data-tab=\"meta\" aria-selected=\"false\">{l10n.text('preview.metadata')}</button>"
@@ -976,7 +973,7 @@ def _preview_html(settings: Settings, token: str | None) -> str:
         f"<section class=\"panel active\" data-panel=\"hit\"><h2 class=\"section-title\">{l10n.text('preview.snippet')}</h2><pre class=\"hit\"><mark>{snippet}</mark></pre></section>"
         f"<section class=\"panel\" data-panel=\"context\"><h2 class=\"section-title\">{l10n.text('preview.context')}</h2><p class=\"muted\">{l10n.text('preview.no_context')}</p></section>"
         f"<section class=\"panel\" data-panel=\"meta\"><h2 class=\"section-title\">{l10n.text('preview.metadata')}</h2><dl>{details_html}</dl></section>"
-        f"<section class=\"panel\" data-panel=\"debug\"><h2 class=\"section-title\">Technische Details</h2><dl>{debug_html}</dl><pre class=\"raw\">{raw_json}</pre></section>"
+        f"<section class=\"panel\" data-panel=\"debug\"><h2 class=\"section-title\">{'Technische Details' if is_de else 'Technical details'}</h2><dl>{debug_html}</dl><pre class=\"raw\">{raw_json}</pre></section>"
         "<script>"
         "const root=document.documentElement;const saved=localStorage.getItem('source-preview-theme');if(saved){root.dataset.theme=saved;}"
         "document.getElementById('theme-toggle').addEventListener('click',()=>{const next=root.dataset.theme==='dark'?'light':'dark';root.dataset.theme=next;localStorage.setItem('source-preview-theme',next);});"

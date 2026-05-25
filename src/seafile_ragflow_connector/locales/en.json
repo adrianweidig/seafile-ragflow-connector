@@ -52,7 +52,13 @@
     }
   },
   "settings": {
-    "language_description": "Language for human-readable connector output. Supported: de, en. Empty or unknown values fall back to German."
+    "language_description": "Language for human-readable connector output. Supported: de, en, es, fr, it, pt, nl, pl, tr, uk, zh, ja, ar. Empty or unknown values fall back to German."
+  },
+  "product": {
+    "tool_name": "RAGFlow search: {dataset}",
+    "pipe_name": "RAGFlow model: {dataset}",
+    "tool_description": "Dataset-specific RAGFlow search for {dataset}.",
+    "pipe_description": "OpenWebUI custom model for RAGFlow dataset {dataset}."
   },
   "sources": {
     "unknown": "unknown",
@@ -112,6 +118,8 @@
     "query_failed_return": "The RAGFlow query could not be executed.",
     "answer_failed": "RAGFlow answer failed.",
     "answer_failed_return": "The RAGFlow answer could not be created because of an unexpected error.",
+    "ragflow_timeout": "RAGFlow did not respond in time.",
+    "ragflow_timeout_return": "RAGFlow did not respond in time.",
     "no_answer": "RAGFlow did not return an answer."
   }
 }

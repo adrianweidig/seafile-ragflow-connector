@@ -36,6 +36,12 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("navigator.language", DASHBOARD_HTML)
         self.assertIn("Deutsch", DASHBOARD_HTML)
         self.assertIn("English", DASHBOARD_HTML)
+        self.assertIn("Español", DASHBOARD_HTML)
+        self.assertIn("Français", DASHBOARD_HTML)
+        self.assertIn("العربية", DASHBOARD_HTML)
+        self.assertIn("'ar']", DASHBOARD_HTML)
+        self.assertIn("dir = currentLanguage === 'ar' ? 'rtl' : 'ltr'", DASHBOARD_HTML)
+        self.assertIn("LOCALE_TAGS", DASHBOARD_HTML)
         self.assertIn("'nav.overview': 'Overview'", DASHBOARD_HTML)
 
     def test_dashboard_has_busy_and_empty_states(self) -> None:

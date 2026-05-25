@@ -26,19 +26,22 @@ lokale nicht committete Env-Datei bereitgestellt werden.
 ## Sprache und Locale
 
 Deutsch ist die Standardsprache für menschenlesbare CLI-, Dashboard-,
-OpenWebUI- und Dokumentationstexte. Englisch ist als Alternativsprache
-vorbereitet:
+OpenWebUI- und Dokumentationstexte. Englisch ist die wichtigste
+Alternativsprache. Produktoberflächen und OpenWebUI-Artefakte sind zusätzlich
+für `es`, `fr`, `it`, `pt`, `nl`, `pl`, `tr`, `uk`, `zh`, `ja` und `ar`
+integriert:
 
 ```env
 CONNECTOR_LANGUAGE=de
 ```
 
-Zulässig sind `de` und `en`, auch in Locale-Formen wie `de_DE.UTF-8` oder
-`en_US.UTF-8`. Wenn `CONNECTOR_LANGUAGE` leer oder unbekannt ist, versucht der
-Connector eine System-/Umgebungs-Locale zu erkennen und fällt bei unsicherer
-Erkennung stabil auf Deutsch zurück. API-Feldnamen, Env-Namen, Statuscodes,
-IDs, Protokollwerte und Dateipfade werden nicht übersetzt. Details stehen in
-[`i18n.md`](i18n.md).
+Zulässig sind `de`, `en`, `es`, `fr`, `it`, `pt`, `nl`, `pl`, `tr`, `uk`,
+`zh`, `ja` und `ar`, auch in Locale-Formen wie `de_DE.UTF-8`,
+`en_US.UTF-8` oder `pt_BR.UTF-8`. Wenn `CONNECTOR_LANGUAGE` leer oder
+unbekannt ist, versucht der Connector eine System-/Umgebungs-Locale zu
+erkennen und fällt bei unsicherer Erkennung stabil auf Deutsch zurück.
+API-Feldnamen, Env-Namen, Statuscodes, IDs, Protokollwerte und Dateipfade
+werden nicht übersetzt. Details stehen in [`i18n.md`](i18n.md).
 
 ## TLS und interne Zertifizierungsstellen
 
