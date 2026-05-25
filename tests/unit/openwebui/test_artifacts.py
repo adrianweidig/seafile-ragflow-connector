@@ -34,8 +34,8 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertTrue(tool.valves["CONNECTOR_PROXY_VERIFY_SSL"])
         self.assertEqual(tool.valves["CONNECTOR_PROXY_CA_BUNDLE"], "")
         self.assertIn("owner: seafile-ragflow-connector", tool.content)
-        self.assertIn("artifact_version: 10", tool.content)
-        self.assertIn("artifact_version: 10", pipe.content)
+        self.assertIn("artifact_version: 11", tool.content)
+        self.assertIn("artifact_version: 11", pipe.content)
         self.assertFalse(tool.valves["TLS_DEBUG"])
         self.assertEqual(tool.valves["SHOW_SOURCE_SCORES"], True)
         self.assertEqual(tool.valves["LANGUAGE"], "de")
@@ -43,8 +43,9 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("verify = _httpx_verify(", tool.content)
         self.assertIn("class SourceHit(BaseModel):", pipe.content)
         self.assertIn("_normalize_sources(", pipe.content)
-        self.assertIn("Quellenbasis", pipe.content)
-        self.assertIn("Nachweis", pipe.content)
+        self.assertIn("_TEXT = {", pipe.content)
+        self.assertIn("sources.basis", pipe.content)
+        self.assertIn("sources.evidence", pipe.content)
         self.assertNotIn("<br>", tool.content)
         self.assertNotIn("<br>", pipe.content)
         self.assertNotIn("proxy-secret", tool.content.lower())
@@ -90,6 +91,35 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("Dataset-specific RAGFlow search", str(tool.payload))
         self.assertIn("RAGFlow model", str(pipe.payload))
         self.assertEqual(pipe.valves["LANGUAGE"], "en")
+
+    def test_artifact_metadata_and_embedded_messages_support_product_languages(self) -> None:
+        examples = {
+            "es": "Búsqueda RAGFlow",
+            "fr": "Recherche RAGFlow",
+            "pl": "Wyszukiwanie RAGFlow",
+            "zh": "RAGFlow 搜索",
+            "ar": "بحث RAGFlow",
+        }
+        for language, expected_name in examples.items():
+            with self.subTest(language=language):
+                inputs = DatasetArtifactInputs(
+                    namespace="ragflow",
+                    repo_id="repo-1",
+                    dataset_id="dataset-1234567890",
+                    dataset_name="Demo Library",
+                    ragflow_chat_id="chat-1",
+                    proxy_base_url="http://connector:8080",
+                    language=language,
+                )
+
+                tool = build_tool_spec(inputs)
+                pipe = build_pipe_spec(inputs)
+
+                self.assertIn(expected_name, tool.name)
+                self.assertEqual(tool.valves["LANGUAGE"], language)
+                self.assertEqual(pipe.valves["LANGUAGE"], language)
+                self.assertEqual(tool.payload["meta"]["manifest"]["language"], language)
+                self.assertIn(language, tool.content)
 
 
 if __name__ == "__main__":

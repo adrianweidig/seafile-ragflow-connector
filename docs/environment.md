@@ -29,7 +29,7 @@ Compose-Dateien wird Redis standardmäßig als `connector-redis` bereitgestellt.
 | `COMPOSE_PROJECT_NAME` | optional | Compose-Projektname. |
 | `TZ` | optional | Zeitzone im Container. |
 | `APP_ENV` | optional | Laufzeitumgebung, Default `production`. |
-| `CONNECTOR_LANGUAGE` | optional | Sprache für menschenlesbare Ausgaben: `de` oder `en`; leer oder unbekannt fällt auf Deutsch zurück. |
+| `CONNECTOR_LANGUAGE` | optional | Sprache für menschenlesbare Ausgaben. Unterstützt: `de`, `en`, `es`, `fr`, `it`, `pt`, `nl`, `pl`, `tr`, `uk`, `zh`, `ja`, `ar`; leer oder unbekannt fällt auf Deutsch zurück. |
 | `LOG_LEVEL`, `LOG_FORMAT` | optional | Log-Level und JSON-/Console-Ausgabe. |
 | `DRY_RUN` | optional | Erzwingt für OpenWebUI den effektiven Modus `dry-run`. |
 | `CONNECTOR_IMAGE`, `POSTGRES_IMAGE`, `REDIS_IMAGE` | optional | Image-Tags überschreiben, z. B. Offline-Registry. |

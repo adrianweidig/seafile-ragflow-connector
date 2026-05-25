@@ -82,6 +82,11 @@ class SettingsTests(unittest.TestCase):
         values["connector_language"] = "fr_FR.UTF-8"
         settings = Settings(**values)
 
+        self.assertEqual(settings.connector_language, "fr")
+
+        values["connector_language"] = "xx_XX.UTF-8"
+        settings = Settings(**values)
+
         self.assertIsNone(settings.connector_language)
 
     def test_rejects_invalid_dashboard_port_and_limits(self) -> None:

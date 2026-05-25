@@ -51,7 +51,7 @@ The connector is an offline-ready sync control plane for environments where Seaf
 
 ## Internationalization
 
-German is the project default for CLI help, human-readable errors, dashboard text, OpenWebUI artifacts, the main README, and default documentation. English is the primary alternative language. Set `CONNECTOR_LANGUAGE=de` or `CONNECTOR_LANGUAGE=en` to choose explicitly. If no reliable language can be detected, the connector falls back to German. UTF-8 is preserved throughout, including umlauts, accents, non-Latin text, emoji, and bidirectional text stored or displayed as user content.
+German is the project default for CLI help, human-readable errors, dashboard text, OpenWebUI artifacts, the main README, and default documentation. English is the primary alternative language. Product components are also integrated for `es`, `fr`, `it`, `pt`, `nl`, `pl`, `tr`, `uk`, `zh`, `ja`, and `ar`. Set `CONNECTOR_LANGUAGE=de`, `CONNECTOR_LANGUAGE=en`, or one of the additional language codes to choose explicitly. If no reliable language can be detected, the connector falls back to German. UTF-8 is preserved throughout, including umlauts, accents, non-Latin text, emoji, and bidirectional text stored or displayed as user content.
 
 GitHub does not automatically switch the normal repository view by visitor language. This repository therefore uses explicit files and links: `README.md` is German, `README.en.md` is English, German docs start at `docs/de/index.md`, and English docs start at `docs/en/index.md`. More details are in [docs/en/i18n.md](docs/en/i18n.md).
 

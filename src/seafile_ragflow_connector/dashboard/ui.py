@@ -952,6 +952,17 @@ DASHBOARD_HTML = r"""<!doctype html>
             <select id="language-select" autocomplete="off">
               <option value="de">Deutsch</option>
               <option value="en">English</option>
+              <option value="es">Español</option>
+              <option value="fr">Français</option>
+              <option value="it">Italiano</option>
+              <option value="pt">Português</option>
+              <option value="nl">Nederlands</option>
+              <option value="pl">Polski</option>
+              <option value="tr">Türkçe</option>
+              <option value="uk">Українська</option>
+              <option value="zh">中文</option>
+              <option value="ja">日本語</option>
+              <option value="ar">العربية</option>
             </select>
             <b class="refresh-progress" aria-hidden="true"><i></i></b>
           </label>
@@ -1109,7 +1120,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 
   <script>
     const PAGE_SIZE = 100;
-    const SUPPORTED_LANGUAGES = ['de', 'en'];
+    const SUPPORTED_LANGUAGES = ['de', 'en', 'es', 'fr', 'it', 'pt', 'nl', 'pl', 'tr', 'uk', 'zh', 'ja', 'ar'];
     const I18N = {
       de: {
         'brand.subtitle': 'Seafile zu RAGFlow',
@@ -1256,6 +1267,20 @@ DASHBOARD_HTML = r"""<!doctype html>
         'api.error': 'API error'
       }
     };
+    Object.assign(I18N, {
+      es: {'brand.subtitle':'Seafile a RAGFlow','nav.label':'Secciones del panel','nav.overview':'Resumen','nav.syncs':'Sincronizaciones','nav.changes':'Cambios','nav.logs':'Logs','nav.systems':'Sistemas','nav.openwebui':'OpenWebUI','nav.diagnostics':'Diagnóstico','titles.overview':'Resumen','subtitles.overview':'Estado en vivo, rendimiento y anomalías','titles.syncs':'Sincronizaciones','subtitles.syncs':'Historial, tiempos y detalles','titles.changes':'Cambios','subtitles.changes':'Acciones con origen, destino, objeto y estado','titles.logs':'Logs','subtitles.logs':'Eventos de depuración y auditoría filtrables','titles.systems':'Sistemas','subtitles.systems':'Bibliotecas de Seafile y datasets de RAGFlow','titles.openwebui':'OpenWebUI','subtitles.openwebui':'Herramientas, pipes, modelos personalizados y errores','titles.diagnostics':'Diagnóstico','subtitles.diagnostics':'Valores técnicos sin secretos','action.refresh':'Actualizar','action.filter':'Filtrar','action.more':'Más','action.less':'Menos','status.unknown':'desconocido','table.source':'Origen','table.target':'Destino','table.status':'Estado','table.message':'Mensaje','table.error':'Error','openwebui.active':'activo','openwebui.off':'apagado','api.error':'Error de API'},
+      fr: {'brand.subtitle':'Seafile vers RAGFlow','nav.label':'Sections du tableau de bord','nav.overview':'Vue d’ensemble','nav.syncs':'Synchronisations','nav.changes':'Changements','nav.logs':'Logs','nav.systems':'Systèmes','nav.openwebui':'OpenWebUI','nav.diagnostics':'Diagnostic','titles.overview':'Vue d’ensemble','subtitles.overview':'État en direct, débit et anomalies','titles.syncs':'Synchronisations','subtitles.syncs':'Historique, durées et détails','titles.changes':'Changements','subtitles.changes':'Actions avec source, cible, objet et état','titles.logs':'Logs','subtitles.logs':'Événements de debug et d’audit filtrables','titles.systems':'Systèmes','subtitles.systems':'Bibliothèques Seafile et datasets RAGFlow','titles.openwebui':'OpenWebUI','subtitles.openwebui':'Outils, pipes, modèles personnalisés et erreurs','titles.diagnostics':'Diagnostic','subtitles.diagnostics':'Valeurs techniques sans secrets','action.refresh':'Actualiser','action.filter':'Filtrer','action.more':'Plus','action.less':'Moins','status.unknown':'inconnu','table.source':'Source','table.target':'Cible','table.status':'État','table.message':'Message','table.error':'Erreur','openwebui.active':'actif','openwebui.off':'désactivé','api.error':'Erreur API'},
+      it: {'brand.subtitle':'Da Seafile a RAGFlow','nav.label':'Sezioni dashboard','nav.overview':'Panoramica','nav.syncs':'Sincronizzazioni','nav.changes':'Modifiche','nav.logs':'Log','nav.systems':'Sistemi','nav.openwebui':'OpenWebUI','nav.diagnostics':'Diagnostica','titles.overview':'Panoramica','subtitles.overview':'Stato live, throughput e anomalie','titles.syncs':'Sincronizzazioni','subtitles.syncs':'Storico, tempi e dettagli','titles.changes':'Modifiche','subtitles.changes':'Azioni con origine, destinazione, oggetto e stato','titles.logs':'Log','subtitles.logs':'Eventi debug e audit filtrabili','titles.systems':'Sistemi','subtitles.systems':'Librerie Seafile e dataset RAGFlow','titles.openwebui':'OpenWebUI','subtitles.openwebui':'Tool, pipe, modelli personalizzati ed errori','titles.diagnostics':'Diagnostica','subtitles.diagnostics':'Valori tecnici senza segreti','action.refresh':'Aggiorna','action.filter':'Filtra','action.more':'Altro','action.less':'Meno','status.unknown':'sconosciuto','table.source':'Origine','table.target':'Destinazione','table.status':'Stato','table.message':'Messaggio','table.error':'Errore','openwebui.active':'attivo','openwebui.off':'spento','api.error':'Errore API'},
+      pt: {'brand.subtitle':'Seafile para RAGFlow','nav.label':'Seções do painel','nav.overview':'Visão geral','nav.syncs':'Sincronizações','nav.changes':'Alterações','nav.logs':'Logs','nav.systems':'Sistemas','nav.openwebui':'OpenWebUI','nav.diagnostics':'Diagnóstico','titles.overview':'Visão geral','subtitles.overview':'Estado ao vivo, vazão e anomalias','titles.syncs':'Sincronizações','subtitles.syncs':'Histórico, tempos e detalhes','titles.changes':'Alterações','subtitles.changes':'Ações com origem, destino, objeto e estado','titles.logs':'Logs','subtitles.logs':'Eventos de depuração e auditoria filtráveis','titles.systems':'Sistemas','subtitles.systems':'Bibliotecas Seafile e datasets RAGFlow','titles.openwebui':'OpenWebUI','subtitles.openwebui':'Ferramentas, pipes, modelos personalizados e erros','titles.diagnostics':'Diagnóstico','subtitles.diagnostics':'Valores técnicos sem segredos','action.refresh':'Atualizar','action.filter':'Filtrar','action.more':'Mais','action.less':'Menos','status.unknown':'desconhecido','table.source':'Origem','table.target':'Destino','table.status':'Status','table.message':'Mensagem','table.error':'Erro','openwebui.active':'ativo','openwebui.off':'desligado','api.error':'Erro de API'},
+      nl: {'brand.subtitle':'Seafile naar RAGFlow','nav.label':'Dashboardsecties','nav.overview':'Overzicht','nav.syncs':'Syncs','nav.changes':'Wijzigingen','nav.logs':'Logs','nav.systems':'Systemen','nav.openwebui':'OpenWebUI','nav.diagnostics':'Diagnose','titles.overview':'Overzicht','subtitles.overview':'Live status, doorvoer en afwijkingen','titles.syncs':'Syncs','subtitles.syncs':'Historie, looptijden en details','titles.changes':'Wijzigingen','subtitles.changes':'Acties met bron, doel, object en status','titles.logs':'Logs','subtitles.logs':'Filterbare debug- en auditgebeurtenissen','titles.systems':'Systemen','subtitles.systems':'Seafile-bibliotheken en RAGFlow-datasets','titles.openwebui':'OpenWebUI','subtitles.openwebui':'Tools, pipes, custommodellen en fouten','titles.diagnostics':'Diagnose','subtitles.diagnostics':'Technische waarden zonder secrets','action.refresh':'Vernieuwen','action.filter':'Filteren','action.more':'Meer','action.less':'Minder','status.unknown':'onbekend','table.source':'Bron','table.target':'Doel','table.status':'Status','table.message':'Bericht','table.error':'Fout','openwebui.active':'actief','openwebui.off':'uit','api.error':'API-fout'},
+      pl: {'brand.subtitle':'Seafile do RAGFlow','nav.label':'Sekcje panelu','nav.overview':'Przegląd','nav.syncs':'Synchronizacje','nav.changes':'Zmiany','nav.logs':'Logi','nav.systems':'Systemy','nav.openwebui':'OpenWebUI','nav.diagnostics':'Diagnostyka','titles.overview':'Przegląd','subtitles.overview':'Stan na żywo, przepustowość i anomalie','titles.syncs':'Synchronizacje','subtitles.syncs':'Historia, czasy i szczegóły','titles.changes':'Zmiany','subtitles.changes':'Akcje ze źródłem, celem, obiektem i statusem','titles.logs':'Logi','subtitles.logs':'Filtrowalne zdarzenia debug i audytu','titles.systems':'Systemy','subtitles.systems':'Biblioteki Seafile i zbiory RAGFlow','titles.openwebui':'OpenWebUI','subtitles.openwebui':'Narzędzia, pipes, modele niestandardowe i błędy','titles.diagnostics':'Diagnostyka','subtitles.diagnostics':'Wartości techniczne bez sekretów','action.refresh':'Odśwież','action.filter':'Filtruj','action.more':'Więcej','action.less':'Mniej','status.unknown':'nieznany','table.source':'Źródło','table.target':'Cel','table.status':'Status','table.message':'Komunikat','table.error':'Błąd','openwebui.active':'aktywny','openwebui.off':'wyłączony','api.error':'Błąd API'},
+      tr: {'brand.subtitle':'Seafile’dan RAGFlow’a','nav.label':'Pano bölümleri','nav.overview':'Genel bakış','nav.syncs':'Senkronizasyonlar','nav.changes':'Değişiklikler','nav.logs':'Loglar','nav.systems':'Sistemler','nav.openwebui':'OpenWebUI','nav.diagnostics':'Tanılama','titles.overview':'Genel bakış','subtitles.overview':'Canlı durum, aktarım ve anomaliler','titles.syncs':'Senkronizasyonlar','subtitles.syncs':'Geçmiş, süreler ve ayrıntılar','titles.changes':'Değişiklikler','subtitles.changes':'Kaynak, hedef, nesne ve durumlu eylemler','titles.logs':'Loglar','subtitles.logs':'Filtrelenebilir debug ve denetim olayları','titles.systems':'Sistemler','subtitles.systems':'Seafile kitaplıkları ve RAGFlow veri kümeleri','titles.openwebui':'OpenWebUI','subtitles.openwebui':'Araçlar, pipe’lar, özel modeller ve hatalar','titles.diagnostics':'Tanılama','subtitles.diagnostics':'Secrets içermeyen teknik değerler','action.refresh':'Yenile','action.filter':'Filtrele','action.more':'Daha fazla','action.less':'Daha az','status.unknown':'bilinmiyor','table.source':'Kaynak','table.target':'Hedef','table.status':'Durum','table.message':'Mesaj','table.error':'Hata','openwebui.active':'aktif','openwebui.off':'kapalı','api.error':'API hatası'},
+      uk: {'brand.subtitle':'Seafile до RAGFlow','nav.label':'Розділи панелі','nav.overview':'Огляд','nav.syncs':'Синхронізації','nav.changes':'Зміни','nav.logs':'Логи','nav.systems':'Системи','nav.openwebui':'OpenWebUI','nav.diagnostics':'Діагностика','titles.overview':'Огляд','subtitles.overview':'Живий стан, пропускна здатність і відхилення','titles.syncs':'Синхронізації','subtitles.syncs':'Історія, тривалості та деталі','titles.changes':'Зміни','subtitles.changes':'Дії з джерелом, ціллю, об’єктом і статусом','titles.logs':'Логи','subtitles.logs':'Фільтровані події debug і аудиту','titles.systems':'Системи','subtitles.systems':'Бібліотеки Seafile та набори RAGFlow','titles.openwebui':'OpenWebUI','subtitles.openwebui':'Інструменти, pipes, користувацькі моделі та помилки','titles.diagnostics':'Діагностика','subtitles.diagnostics':'Технічні значення без секретів','action.refresh':'Оновити','action.filter':'Фільтрувати','action.more':'Більше','action.less':'Менше','status.unknown':'невідомо','table.source':'Джерело','table.target':'Ціль','table.status':'Статус','table.message':'Повідомлення','table.error':'Помилка','openwebui.active':'активно','openwebui.off':'вимкнено','api.error':'Помилка API'},
+      zh: {'brand.subtitle':'Seafile 到 RAGFlow','nav.label':'仪表板区域','nav.overview':'概览','nav.syncs':'同步','nav.changes':'变更','nav.logs':'日志','nav.systems':'系统','nav.openwebui':'OpenWebUI','nav.diagnostics':'诊断','titles.overview':'概览','subtitles.overview':'实时状态、吞吐量和异常','titles.syncs':'同步','subtitles.syncs':'历史、运行时间和结果详情','titles.changes':'变更','subtitles.changes':'包含来源、目标、对象和状态的操作','titles.logs':'日志','subtitles.logs':'可筛选的调试和审计事件','titles.systems':'系统','subtitles.systems':'Seafile 库和 RAGFlow 数据集','titles.openwebui':'OpenWebUI','subtitles.openwebui':'工具、pipes、自定义模型和错误状态','titles.diagnostics':'诊断','subtitles.diagnostics':'不含密钥的技术值','action.refresh':'刷新','action.filter':'筛选','action.more':'更多','action.less':'更少','status.unknown':'未知','table.source':'来源','table.target':'目标','table.status':'状态','table.message':'消息','table.error':'错误','openwebui.active':'启用','openwebui.off':'关闭','api.error':'API 错误'},
+      ja: {'brand.subtitle':'Seafile から RAGFlow','nav.label':'ダッシュボードセクション','nav.overview':'概要','nav.syncs':'同期','nav.changes':'変更','nav.logs':'ログ','nav.systems':'システム','nav.openwebui':'OpenWebUI','nav.diagnostics':'診断','titles.overview':'概要','subtitles.overview':'ライブ状態、処理量、異常','titles.syncs':'同期','subtitles.syncs':'履歴、実行時間、結果詳細','titles.changes':'変更','subtitles.changes':'ソース、ターゲット、オブジェクト、状態のアクション','titles.logs':'ログ','subtitles.logs':'フィルター可能なデバッグと監査イベント','titles.systems':'システム','subtitles.systems':'Seafile ライブラリと RAGFlow データセット','titles.openwebui':'OpenWebUI','subtitles.openwebui':'ツール、pipes、カスタムモデル、エラー状態','titles.diagnostics':'診断','subtitles.diagnostics':'シークレットを含まない技術値','action.refresh':'更新','action.filter':'フィルター','action.more':'さらに表示','action.less':'折りたたむ','status.unknown':'不明','table.source':'ソース','table.target':'ターゲット','table.status':'状態','table.message':'メッセージ','table.error':'エラー','openwebui.active':'有効','openwebui.off':'オフ','api.error':'API エラー'},
+      ar: {'brand.subtitle':'Seafile إلى RAGFlow','nav.label':'أقسام لوحة التحكم','nav.overview':'نظرة عامة','nav.syncs':'المزامنات','nav.changes':'التغييرات','nav.logs':'السجلات','nav.systems':'الأنظمة','nav.openwebui':'OpenWebUI','nav.diagnostics':'التشخيص','titles.overview':'نظرة عامة','subtitles.overview':'الحالة الحية ومعدل المعالجة والشذوذ','titles.syncs':'المزامنات','subtitles.syncs':'السجل والمدد وتفاصيل النتائج','titles.changes':'التغييرات','subtitles.changes':'إجراءات مع المصدر والهدف والكائن والحالة','titles.logs':'السجلات','subtitles.logs':'أحداث تصحيح وتدقيق قابلة للتصفية','titles.systems':'الأنظمة','subtitles.systems':'مكتبات Seafile ومجموعات RAGFlow','titles.openwebui':'OpenWebUI','subtitles.openwebui':'الأدوات و pipes والنماذج المخصصة وحالة الأخطاء','titles.diagnostics':'التشخيص','subtitles.diagnostics':'قيم تقنية دون أسرار','action.refresh':'تحديث','action.filter':'تصفية','action.more':'المزيد','action.less':'أقل','status.unknown':'غير معروف','table.source':'المصدر','table.target':'الهدف','table.status':'الحالة','table.message':'الرسالة','table.error':'خطأ','openwebui.active':'نشط','openwebui.off':'متوقف','api.error':'خطأ API'}
+    });
+    const LOCALE_TAGS = {de:'de-DE', en:'en-US', es:'es-ES', fr:'fr-FR', it:'it-IT', pt:'pt-PT', nl:'nl-NL', pl:'pl-PL', tr:'tr-TR', uk:'uk-UA', zh:'zh-CN', ja:'ja-JP', ar:'ar-SA'};
     function normalizeLanguage(value) {
       const code = String(value || '').replace('_', '-').toLowerCase().split('-')[0];
       return SUPPORTED_LANGUAGES.includes(code) ? code : '';
@@ -1270,8 +1295,12 @@ DASHBOARD_HTML = r"""<!doctype html>
     let currentLanguage = initialLanguage();
     function t(key) {
       return (I18N[currentLanguage] && I18N[currentLanguage][key])
+        || I18N.en[key]
         || I18N.de[key]
         || key;
+    }
+    function localeTag() {
+      return LOCALE_TAGS[currentLanguage] || 'de-DE';
     }
     const state = {
       activeTab: 'overview',
@@ -1287,6 +1316,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 
     function applyLanguage() {
       document.documentElement.lang = currentLanguage;
+      document.documentElement.dir = currentLanguage === 'ar' ? 'rtl' : 'ltr';
       document.title = currentLanguage === 'en'
         ? 'Seafile RAGFlow Connector Dashboard'
         : 'Seafile RAGFlow Connector Dashboard';
@@ -1341,13 +1371,13 @@ DASHBOARD_HTML = r"""<!doctype html>
     function fmtDate(value) {
       if (!value) return '-';
       const date = new Date(value);
-      return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString(currentLanguage === 'en' ? 'en-US' : 'de-DE');
+      return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString(localeTag());
     }
     function fmtDuration(ms) {
       return ms == null ? '-' : (ms / 1000).toFixed(1) + ' s';
     }
     function fmtNumber(value) {
-      return Number(value || 0).toLocaleString(currentLanguage === 'en' ? 'en-US' : 'de-DE');
+      return Number(value || 0).toLocaleString(localeTag());
     }
     function statusClass(value) {
       return String(value || 'unknown').toLowerCase().replace(/[^a-z0-9äöüß_-]+/g, '-');
@@ -1588,21 +1618,21 @@ DASHBOARD_HTML = r"""<!doctype html>
       clear($('state-pill'));
       $('state-pill').appendChild(status(statusData.state));
       setText('started-at', t('table.start') + ': ' + fmtDate(statusData.started_at));
-      setText('last-success', (currentLanguage === 'en' ? 'Last success' : 'Letzter Erfolg') + ': ' + fmtDate(statusData.last_successful_sync && statusData.last_successful_sync.ended_at));
-      setText('last-failure', (currentLanguage === 'en' ? 'Last error' : 'Letzter Fehler') + ': ' + fmtDate(statusData.last_failed_sync && statusData.last_failed_sync.ended_at));
+      setText('last-success', (currentLanguage === 'de' ? 'Letzter Erfolg' : 'Last success') + ': ' + fmtDate(statusData.last_successful_sync && statusData.last_successful_sync.ended_at));
+      setText('last-failure', (currentLanguage === 'de' ? 'Letzter Fehler' : 'Last error') + ': ' + fmtDate(statusData.last_failed_sync && statusData.last_failed_sync.ended_at));
       setText('sidebar-state', t('table.status') + ': ' + (statusData.state || t('status.unknown')));
-      setText('sidebar-updated', (currentLanguage === 'en' ? 'Updated' : 'Aktualisiert') + ': ' + new Date().toLocaleTimeString(currentLanguage === 'en' ? 'en-US' : 'de-DE'));
+      setText('sidebar-updated', (currentLanguage === 'de' ? 'Aktualisiert' : 'Updated') + ': ' + new Date().toLocaleTimeString(localeTag()));
       renderHealthRail(statusData);
       renderDependencyHealth(health);
       const grid = $('metrics');
       clear(grid);
       grid.append(
-        metric(t('metric.libraries'), fmtNumber(metricsData.libraries), currentLanguage === 'en' ? 'Seafile sources' : 'Seafile-Quellen', 'info'),
-        metric(t('metric.files'), fmtNumber(metricsData.files), currentLanguage === 'en' ? 'known state' : 'bekannter State'),
-        metric(t('metric.syncRuns'), fmtNumber(metricsData.sync_runs), currentLanguage === 'en' ? 'persisted history' : 'persistierte Historie'),
-        metric(t('metric.changes'), fmtNumber(statusData.changes_detected), currentLanguage === 'en' ? 'detected events' : 'erkannte Events', 'info'),
-        metric(t('metric.checked'), fmtNumber(statusData.objects_processed), currentLanguage === 'en' ? 'sum across all runs' : 'Summe aller Läufe'),
-        metric(t('metric.queue'), fmtNumber(statusData.queued_or_retrying_jobs), currentLanguage === 'en' ? 'waiting jobs' : 'wartende Jobs', 'warn'),
+        metric(t('metric.libraries'), fmtNumber(metricsData.libraries), currentLanguage === 'de' ? 'Seafile-Quellen' : 'Seafile sources', 'info'),
+        metric(t('metric.files'), fmtNumber(metricsData.files), currentLanguage === 'de' ? 'bekannter State' : 'known state'),
+        metric(t('metric.syncRuns'), fmtNumber(metricsData.sync_runs), currentLanguage === 'de' ? 'persistierte Historie' : 'persisted history'),
+        metric(t('metric.changes'), fmtNumber(statusData.changes_detected), currentLanguage === 'de' ? 'erkannte Events' : 'detected events', 'info'),
+        metric(t('metric.checked'), fmtNumber(statusData.objects_processed), currentLanguage === 'de' ? 'Summe aller Läufe' : 'sum across all runs'),
+        metric(t('metric.queue'), fmtNumber(statusData.queued_or_retrying_jobs), currentLanguage === 'de' ? 'wartende Jobs' : 'waiting jobs', 'warn'),
         metric(t('metric.warnings'), fmtNumber(statusData.warnings_count), 'Log-Level warning', 'warn'),
         metric(t('metric.errors'), fmtNumber(statusData.errors_count), 'Log-Level error', statusData.errors_count ? 'bad' : '')
       );
@@ -1625,7 +1655,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       if (statusValue) params.set('status', statusValue);
       const data = await api('/api/sync-runs?' + params.toString());
       setText('sync-total', fmtNumber(data.total) + ' ' + t('counts.runs'));
-      table('sync-table', ['Sync-ID', t('table.start'), t('table.duration'), t('table.status'), currentLanguage === 'en' ? 'Checked' : 'Geprüft', t('table.new'), t('table.updated'), t('table.deleted'), t('table.skipped')], data.items.map((run) => ({
+      table('sync-table', ['Sync-ID', t('table.start'), t('table.duration'), t('table.status'), currentLanguage === 'de' ? 'Geprüft' : 'Checked', t('table.new'), t('table.updated'), t('table.deleted'), t('table.skipped')], data.items.map((run) => ({
         ...run,
         __cells: [compactText(run.sync_id, { threshold: 34 }), fmtDate(run.started_at), fmtDuration(run.duration_ms), status(run.status), fmtNumber(run.objects_checked), fmtNumber(run.objects_created), fmtNumber(run.objects_updated), fmtNumber(run.objects_deleted), fmtNumber(run.objects_skipped)]
       })), (run) => openSyncDetail(run.sync_id, false));
@@ -1702,7 +1732,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       if ($('log-query').value) params.set('q', $('log-query').value);
       const data = await api('/api/logs?' + params.toString());
       setText('log-total', fmtNumber(data.total) + ' Logs');
-      table('log-table', [t('table.time'), 'Level', currentLanguage === 'en' ? 'Component' : 'Komponente', 'Sync-ID', t('table.message')], data.items.map((entry) => ({
+      table('log-table', [t('table.time'), 'Level', currentLanguage === 'de' ? 'Komponente' : 'Component', 'Sync-ID', t('table.message')], data.items.map((entry) => ({
         ...entry,
         __cells: [
           fmtDate(entry.occurred_at),
@@ -1720,7 +1750,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     }
     async function loadSystems() {
       const data = await api('/api/systems');
-      table('source-table', ['Repo-ID', 'Name', t('table.status'), 'Head Commit', currentLanguage === 'en' ? 'Last sync' : 'Letzter Sync', t('table.error')], (data.source.libraries || []).map((library) => ({
+      table('source-table', ['Repo-ID', 'Name', t('table.status'), 'Head Commit', currentLanguage === 'de' ? 'Letzter Sync' : 'Last sync', t('table.error')], (data.source.libraries || []).map((library) => ({
         ...library,
         __cells: [compactText(library.repo_id, { threshold: 34 }), compactText(library.name, { threshold: 38 }), status(library.status), compactText(library.head_commit_id, { threshold: 34 }), compactText(library.last_synced_commit_id, { threshold: 34 }), compactText(library.last_error, { threshold: 48 })]
       })));
@@ -1743,13 +1773,13 @@ DASHBOARD_HTML = r"""<!doctype html>
       clear(grid);
       grid.append(
         metric('Integration', statusData.enabled ? t('openwebui.active') : t('openwebui.off'), statusData.base_url || '-', statusData.enabled ? 'info' : ''),
-        metric('Datasets', fmtNumber(counts.datasets), currentLanguage === 'en' ? 'known mappings' : 'erkannte Mappings'),
-        metric(currentLanguage === 'en' ? 'Synchronized' : 'Synchronisiert', fmtNumber(counts.synced_or_planned), currentLanguage === 'en' ? 'including dry-run planned' : 'inkl. Dry-Run geplant', counts.failed ? '' : 'info'),
-        metric(t('table.deleted'), fmtNumber(counts.deleted), currentLanguage === 'en' ? 'Seafile library removed' : 'Seafile-Library entfernt', counts.deleted ? 'warn' : ''),
-        metric(currentLanguage === 'en' ? 'Manual' : 'Manuell', fmtNumber(counts.manual_required), 'API-Fallback', counts.manual_required ? 'warn' : ''),
-        metric(t('metric.errors'), fmtNumber(counts.failed), statusData.last_error || (currentLanguage === 'en' ? 'none' : 'keine'), counts.failed ? 'bad' : '')
+        metric('Datasets', fmtNumber(counts.datasets), currentLanguage === 'de' ? 'erkannte Mappings' : 'known mappings'),
+        metric(currentLanguage === 'de' ? 'Synchronisiert' : 'Synchronized', fmtNumber(counts.synced_or_planned), currentLanguage === 'de' ? 'inkl. Dry-Run geplant' : 'including dry-run planned', counts.failed ? '' : 'info'),
+        metric(t('table.deleted'), fmtNumber(counts.deleted), currentLanguage === 'de' ? 'Seafile-Library entfernt' : 'Seafile library removed', counts.deleted ? 'warn' : ''),
+        metric(currentLanguage === 'de' ? 'Manuell' : 'Manual', fmtNumber(counts.manual_required), 'API-Fallback', counts.manual_required ? 'warn' : ''),
+        metric(t('metric.errors'), fmtNumber(counts.failed), statusData.last_error || (currentLanguage === 'de' ? 'keine' : 'none'), counts.failed ? 'bad' : '')
       );
-      table('openwebui-table', ['Dataset', t('table.status'), 'Chat', 'Tool', 'Pipe', currentLanguage === 'en' ? 'Model' : 'Modell', currentLanguage === 'en' ? 'Last success' : 'Letzter Erfolg', t('table.error')], (mappings.items || []).map((item) => ({
+      table('openwebui-table', ['Dataset', t('table.status'), 'Chat', 'Tool', 'Pipe', currentLanguage === 'de' ? 'Modell' : 'Model', currentLanguage === 'de' ? 'Letzter Erfolg' : 'Last success', t('table.error')], (mappings.items || []).map((item) => ({
         ...item,
         __cells: [
           compactText(item.ragflow_dataset_name, { threshold: 42 }),

@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from seafile_ragflow_connector.i18n import Localizer, detect_language, normalize_language
+from seafile_ragflow_connector.i18n import (
+    LANGUAGE_LABELS,
+    SUPPORTED_LANGUAGES,
+    Localizer,
+    detect_language,
+    normalize_language,
+)
 
 
 class I18nTests(unittest.TestCase):
@@ -24,6 +30,8 @@ class I18nTests(unittest.TestCase):
             "en",
         )
         self.assertEqual(normalize_language("de_DE.UTF-8"), "de")
+        self.assertEqual(normalize_language("pt_BR.UTF-8"), "pt")
+        self.assertEqual(normalize_language("ar_SA.UTF-8"), "ar")
 
     def test_missing_translation_keys_fall_back_to_german_key_safely(self) -> None:
         self.assertEqual(Localizer("en").text("sources.no_sources"), "No matching sources found.")
@@ -33,6 +41,21 @@ class I18nTests(unittest.TestCase):
         text = Localizer("de").text("sources.page", value="äöü ÄÖÜ ß 日本語 😀")
 
         self.assertIn("äöü ÄÖÜ ß 日本語 😀", text)
+
+    def test_product_language_catalogs_cover_supported_languages(self) -> None:
+        self.assertGreaterEqual(len(SUPPORTED_LANGUAGES), 10)
+        for language in SUPPORTED_LANGUAGES:
+            l10n = Localizer(language)
+            self.assertIn(language, LANGUAGE_LABELS)
+            self.assertIn("Demo", l10n.text("product.tool_name", dataset="Demo"))
+            self.assertNotEqual(
+                l10n.text("openwebui_artifact.searching"),
+                "openwebui_artifact.searching",
+            )
+
+        self.assertIn("بحث", Localizer("ar").text("product.tool_name", dataset="Demo"))
+        self.assertIn("検索", Localizer("ja").text("product.tool_name", dataset="Demo"))
+        self.assertIn("Джерело", Localizer("uk").text("preview.source"))
 
 
 if __name__ == "__main__":

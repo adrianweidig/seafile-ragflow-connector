@@ -295,6 +295,15 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertIn("**Source basis:** 1 document, 2 hits", english)
         self.assertIn("**Evidence:**", english)
 
+        spanish = render_sources_markdown(sources, language="es")
+        self.assertIn("## Fuentes encontradas", spanish)
+        self.assertIn("**Base de fuentes:** 1 documento, 2 resultados", spanish)
+        self.assertIn("Abrir vista previa", spanish)
+
+        arabic = render_sources_markdown(sources, language="ar")
+        self.assertIn("## المصادر الموجودة", arabic)
+        self.assertIn("فتح المعاينة", arabic)
+
     def test_normalize_sources_removes_text_projection_wrappers(self) -> None:
         sources = normalize_sources(
             {

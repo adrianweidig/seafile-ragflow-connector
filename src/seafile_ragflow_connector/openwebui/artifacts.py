@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from textwrap import dedent
 
 from seafile_ragflow_connector.domain.naming import slugify
-from seafile_ragflow_connector.i18n import Localizer
+from seafile_ragflow_connector.i18n import SUPPORTED_LANGUAGES, Localizer
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "10"
+ARTIFACT_VERSION = "11"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 
 
@@ -39,11 +39,7 @@ class DatasetArtifactInputs:
 def build_tool_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
     l10n = Localizer(inputs.language)
     artifact_id = build_tool_id(inputs.namespace, inputs.dataset_name, inputs.dataset_id)
-    name = (
-        f"RAGFlow Suche: {inputs.dataset_name}"
-        if l10n.language == "de"
-        else f"RAGFlow search: {inputs.dataset_name}"
-    )
+    name = l10n.text("product.tool_name", dataset=inputs.dataset_name)
     content = _tool_content()
     valves: dict[str, object] = {
         "ARTIFACT_ID": artifact_id,
@@ -65,11 +61,7 @@ def build_tool_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "name": name,
         "content": content,
         "meta": {
-            "description": (
-                f"Dataset-spezifische RAGFlow-Suche für {inputs.dataset_name}."
-                if l10n.language == "de"
-                else f"Dataset-specific RAGFlow search for {inputs.dataset_name}."
-            ),
+            "description": l10n.text("product.tool_description", dataset=inputs.dataset_name),
             "manifest": _manifest("tool", inputs),
         },
         "access_grants": [],
@@ -103,18 +95,10 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
     }
     payload: dict[str, object] = {
         "id": artifact_id,
-        "name": (
-            f"RAGFlow Modell: {inputs.dataset_name}"
-            if l10n.language == "de"
-            else f"RAGFlow model: {inputs.dataset_name}"
-        ),
+        "name": l10n.text("product.pipe_name", dataset=inputs.dataset_name),
         "content": content,
         "meta": {
-            "description": (
-                f"OpenWebUI-Custom-Model für RAGFlow-Dataset {inputs.dataset_name}."
-                if l10n.language == "de"
-                else f"OpenWebUI custom model for RAGFlow dataset {inputs.dataset_name}."
-            ),
+            "description": l10n.text("product.pipe_description", dataset=inputs.dataset_name),
             "manifest": _manifest("pipe", inputs),
         },
     }
@@ -160,6 +144,7 @@ def _manifest(kind: str, inputs: DatasetArtifactInputs) -> dict[str, object]:
         "ragflow_dataset_id": inputs.dataset_id,
         "ragflow_dataset_name": inputs.dataset_name,
         "ragflow_chat_id": inputs.ragflow_chat_id,
+        "language": Localizer(inputs.language).language,
     }
 
 
@@ -177,7 +162,7 @@ def _tool_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.3.0
         owner: seafile-ragflow-connector
-        artifact_version: 10
+        artifact_version: 11
         """
 
         import httpx
@@ -213,7 +198,10 @@ def _tool_content() -> str:
                         {
                             "type": "status",
                             "data": {
-                                "description": "Suche im RAGFlow-Dataset...",
+                                    "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.searching",
+                                ),
                                 "done": False,
                             },
                         }
@@ -251,12 +239,15 @@ def _tool_content() -> str:
                             {
                                 "type": "status",
                                 "data": {
-                                    "description": "TLS-Konfiguration ungültig.",
+                                    "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.tls_invalid",
+                                ),
                                     "done": True,
                                 },
                             }
                         )
-                    return "Die TLS-Konfiguration der RAGFlow-Pipe ist ungültig."
+                    return _msg(self.valves.LANGUAGE, "openwebui_artifact.tls_invalid_return")
                 except httpx.TimeoutException as exc:
                     _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
                     if __event_emitter__:
@@ -264,12 +255,15 @@ def _tool_content() -> str:
                             {
                                 "type": "status",
                                 "data": {
-                                    "description": "RAGFlow-Proxy-Timeout.",
+                                    "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.proxy_timeout",
+                                ),
                                     "done": True,
                                 },
                             }
                         )
-                    return "Der RAGFlow-Proxy hat nicht rechtzeitig geantwortet."
+                    return _msg(self.valves.LANGUAGE, "openwebui_artifact.proxy_timeout_return")
                 except httpx.HTTPStatusError as exc:
                     _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
                     status = exc.response.status_code
@@ -278,12 +272,20 @@ def _tool_content() -> str:
                             {
                                 "type": "status",
                                 "data": {
-                                    "description": f"RAGFlow-Proxy antwortete mit HTTP {status}.",
+                                    "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.proxy_http",
+                                    status=status,
+                                ),
                                     "done": True,
                                 },
                             }
                         )
-                    return f"RAGFlow-Proxy antwortete mit HTTP {status}."
+                    return _msg(
+                        self.valves.LANGUAGE,
+                        "openwebui_artifact.proxy_http",
+                        status=status,
+                    )
                 except httpx.ConnectError as exc:
                     _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
                     if __event_emitter__:
@@ -291,12 +293,15 @@ def _tool_content() -> str:
                             {
                                 "type": "status",
                                 "data": {
-                                    "description": "RAGFlow-Proxy war nicht erreichbar.",
+                                    "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.proxy_unreachable",
+                                ),
                                     "done": True,
                                 },
                             }
                         )
-                    return "Der RAGFlow-Proxy war nicht erreichbar."
+                    return _msg(self.valves.LANGUAGE, "openwebui_artifact.proxy_unreachable_return")
                 except Exception as exc:
                     _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
                     if __event_emitter__:
@@ -304,17 +309,21 @@ def _tool_content() -> str:
                             {
                                 "type": "status",
                                 "data": {
-                                    "description": "RAGFlow-Abfrage fehlgeschlagen.",
+                                    "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.query_failed",
+                                ),
                                     "done": True,
                                 },
                             }
                         )
-                    return "Die RAGFlow-Abfrage konnte nicht ausgeführt werden."
+                    return _msg(self.valves.LANGUAGE, "openwebui_artifact.query_failed_return")
 
                 sources = _normalize_sources(
                     data.get("sources") or [],
                     show_scores=self.valves.SHOW_SOURCE_SCORES,
                     show_debug=self.valves.SHOW_SOURCE_DEBUG,
+                    language=self.valves.LANGUAGE,
                 )
                 if __event_emitter__:
                     for source in sources:
@@ -323,7 +332,10 @@ def _tool_content() -> str:
                         {
                             "type": "status",
                             "data": {
-                                "description": "RAGFlow-Abfrage abgeschlossen.",
+                                "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.query_done",
+                                ),
                                 "done": True,
                             },
                         }
@@ -332,57 +344,8 @@ def _tool_content() -> str:
                     sources,
                     show_scores=self.valves.SHOW_SOURCE_SCORES,
                     show_debug=self.valves.SHOW_SOURCE_DEBUG,
+                    language=self.valves.LANGUAGE,
                 )
-
-
-        def _source_markdown(sources):
-            if not sources:
-                return "Keine passenden Quellen gefunden."
-            lines = ["## Gefundene Quellen", ""]
-            for index, source in enumerate(sources, start=1):
-                title = source.get("name") or source.get("document_name") or "Quelle"
-                snippet = _clean_snippet(source.get("text") or source.get("snippet") or "")
-                locator = _source_locator(source)
-                line = f"{index}. **{_clean(title)}**"
-                if locator != "-":
-                    line += f" - {locator}"
-                lines.append(line)
-                if snippet:
-                    lines.append(f"   > {_compact(snippet, 360)}")
-            return "\\n".join(lines)
-
-
-        def _source_locator(source):
-            metadata = source.get("source_metadata") or {}
-            parts = []
-            if metadata.get("page") not in (None, ""):
-                parts.append(f"Seite {metadata.get('page')}")
-            if metadata.get("line") not in (None, ""):
-                parts.append(f"Zeile {metadata.get('line')}")
-            chunk = metadata.get("chunk_id")
-            if chunk not in (None, ""):
-                parts.append(f"Chunk `{str(chunk)[:12]}`")
-            return _clean(", ".join(parts) or "-")
-
-
-        def _compact(value, limit=220):
-            clean = _clean(value)
-            return clean if len(clean) <= limit else clean[: limit - 3].rstrip() + "..."
-
-
-        def _clean_snippet(value):
-            clean = str(value or "")
-            clean = re.sub(r"(?is)<(script|style).*?</\\1>", " ", clean)
-            clean = re.sub(r"(?i)</t[dh]>\\s*<t[dh][^>]*>", " | ", clean)
-            clean = re.sub(r"(?i)</tr>\\s*<tr[^>]*>", "\\n", clean)
-            clean = re.sub(r"(?i)<br\\s*/?>", "\\n", clean)
-            clean = re.sub(r"(?s)<[^>]+>", " ", clean)
-            clean = "\\n".join(" ".join(line.split()) for line in clean.splitlines())
-            return "\\n".join(line for line in clean.splitlines() if line).strip()
-
-
-        def _clean(value):
-            return " ".join(str(value or "").split())
 
             '''
         ).strip()
@@ -400,7 +363,7 @@ def _pipe_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.3.0
         owner: seafile-ragflow-connector
-        artifact_version: 10
+        artifact_version: 11
         """
 
         import httpx
@@ -458,7 +421,10 @@ def _pipe_content() -> str:
                         {
                             "type": "status",
                             "data": {
-                                "description": "RAGFlow-Antwort wird vorbereitet...",
+                                "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.answer_preparing",
+                                ),
                                 "done": False,
                             },
                         }
@@ -502,12 +468,15 @@ def _pipe_content() -> str:
                             {
                                 "type": "status",
                                 "data": {
-                                    "description": "TLS-Konfiguration ungültig.",
+                                    "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.tls_invalid",
+                                ),
                                     "done": True,
                                 },
                             }
                         )
-                    return "Die TLS-Konfiguration der RAGFlow-Pipe ist ungültig."
+                    return _msg(self.valves.LANGUAGE, "openwebui_artifact.tls_invalid_return")
                 except httpx.TimeoutException as exc:
                     _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
                     if __event_emitter__:
@@ -515,12 +484,15 @@ def _pipe_content() -> str:
                             {
                                 "type": "status",
                                 "data": {
-                                    "description": "RAGFlow hat nicht rechtzeitig geantwortet.",
+                                    "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.ragflow_timeout",
+                                ),
                                     "done": True,
                                 },
                             }
                         )
-                    return "RAGFlow hat nicht rechtzeitig geantwortet."
+                    return _msg(self.valves.LANGUAGE, "openwebui_artifact.ragflow_timeout_return")
                 except httpx.HTTPStatusError as exc:
                     _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
                     status = exc.response.status_code
@@ -529,12 +501,20 @@ def _pipe_content() -> str:
                             {
                                 "type": "status",
                                 "data": {
-                                    "description": f"RAGFlow-Proxy antwortete mit HTTP {status}.",
+                                    "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.proxy_http",
+                                    status=status,
+                                ),
                                     "done": True,
                                 },
                             }
                         )
-                    return f"RAGFlow-Proxy antwortete mit HTTP {status}."
+                    return _msg(
+                        self.valves.LANGUAGE,
+                        "openwebui_artifact.proxy_http",
+                        status=status,
+                    )
                 except httpx.ConnectError as exc:
                     _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
                     if __event_emitter__:
@@ -542,12 +522,15 @@ def _pipe_content() -> str:
                             {
                                 "type": "status",
                                 "data": {
-                                    "description": "RAGFlow-Proxy war nicht erreichbar.",
+                                    "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.proxy_unreachable",
+                                ),
                                     "done": True,
                                 },
                             }
                         )
-                    return "Der RAGFlow-Proxy war nicht erreichbar."
+                    return _msg(self.valves.LANGUAGE, "openwebui_artifact.proxy_unreachable_return")
                 except httpx.RequestError as exc:
                     _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
                     if __event_emitter__:
@@ -555,12 +538,15 @@ def _pipe_content() -> str:
                             {
                                 "type": "status",
                                 "data": {
-                                    "description": "RAGFlow-Proxy war nicht erreichbar.",
+                                    "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.proxy_unreachable",
+                                ),
                                     "done": True,
                                 },
                             }
                         )
-                    return "Der RAGFlow-Proxy war nicht erreichbar."
+                    return _msg(self.valves.LANGUAGE, "openwebui_artifact.proxy_unreachable_return")
                 except Exception as exc:
                     _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
                     if __event_emitter__:
@@ -568,20 +554,21 @@ def _pipe_content() -> str:
                             {
                                 "type": "status",
                                 "data": {
-                                    "description": "RAGFlow-Antwort fehlgeschlagen.",
+                                    "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.answer_failed",
+                                ),
                                     "done": True,
                                 },
                             }
                         )
-                    return (
-                        "Die RAGFlow-Antwort konnte wegen eines unerwarteten Fehlers "
-                        "nicht erzeugt werden."
-                    )
+                    return _msg(self.valves.LANGUAGE, "openwebui_artifact.answer_failed_return")
 
                 sources = _normalize_sources(
                     data.get("sources") or [],
                     show_scores=self.valves.SHOW_SOURCE_SCORES,
                     show_debug=self.valves.SHOW_SOURCE_DEBUG,
+                    language=self.valves.LANGUAGE,
                 )
                 if __event_emitter__:
                     for source in sources:
@@ -590,7 +577,10 @@ def _pipe_content() -> str:
                         {
                             "type": "status",
                             "data": {
-                                "description": "RAGFlow-Antwort abgeschlossen.",
+                                "description": _msg(
+                                    self.valves.LANGUAGE,
+                                    "openwebui_artifact.answer_done",
+                                ),
                                 "done": True,
                             },
                         }
@@ -601,12 +591,14 @@ def _pipe_content() -> str:
                         sources,
                         show_scores=self.valves.SHOW_SOURCE_SCORES,
                         show_debug=self.valves.SHOW_SOURCE_DEBUG,
+                        language=self.valves.LANGUAGE,
                     )
                 return answer or _source_markdown(
                     sources,
                     show_scores=self.valves.SHOW_SOURCE_SCORES,
                     show_debug=self.valves.SHOW_SOURCE_DEBUG,
-                ) or "RAGFlow hat keine Antwort geliefert."
+                    language=self.valves.LANGUAGE,
+                ) or _msg(self.valves.LANGUAGE, "openwebui_artifact.no_answer")
 
 
         def _normalize_task(task):
@@ -652,60 +644,59 @@ def _pipe_content() -> str:
             if len(clean) <= max_length:
                 return clean
             return clean[: max_length - 1].rstrip() + "..."
-
-        def _source_markdown(sources):
-            if not sources:
-                return ""
-            lines = ["## Gefundene Quellen", ""]
-            for index, source in enumerate(sources, start=1):
-                title = source.get("name") or source.get("document_name") or "Quelle"
-                snippet = _clean_snippet(source.get("text") or source.get("snippet") or "")
-                locator = _source_locator(source)
-                line = f"{index}. **{_clean(title)}**"
-                if locator != "-":
-                    line += f" - {locator}"
-                lines.append(line)
-                if snippet:
-                    lines.append(f"   > {_compact(snippet, 360)}")
-            return "\\n".join(lines)
-
-
-        def _source_locator(source):
-            metadata = source.get("source_metadata") or {}
-            parts = []
-            if metadata.get("page") not in (None, ""):
-                parts.append(f"Seite {metadata.get('page')}")
-            if metadata.get("line") not in (None, ""):
-                parts.append(f"Zeile {metadata.get('line')}")
-            chunk = metadata.get("chunk_id")
-            if chunk not in (None, ""):
-                parts.append(f"Chunk `{str(chunk)[:12]}`")
-            return _clean(", ".join(parts) or "-")
-
-
-        def _compact(value, limit=220):
-            clean = _clean(value)
-            return clean if len(clean) <= limit else clean[: limit - 3].rstrip() + "..."
-
-
-        def _clean_snippet(value):
-            clean = str(value or "")
-            clean = re.sub(r"(?is)<(script|style).*?</\\1>", " ", clean)
-            clean = re.sub(r"(?i)</t[dh]>\\s*<t[dh][^>]*>", " | ", clean)
-            clean = re.sub(r"(?i)</tr>\\s*<tr[^>]*>", "\\n", clean)
-            clean = re.sub(r"(?i)<br\\s*/?>", "\\n", clean)
-            clean = re.sub(r"(?s)<[^>]+>", " ", clean)
-            clean = "\\n".join(" ".join(line.split()) for line in clean.splitlines())
-            return "\\n".join(line for line in clean.splitlines() if line).strip()
-
-
-        def _clean(value):
-            return " ".join(str(value or "").split())
             '''
         ).strip()
         + "\n\n"
         + _artifact_source_helpers()
     )
+
+
+def _artifact_text_catalog() -> dict[str, dict[str, str]]:
+    keys = (
+        "openwebui_artifact.searching",
+        "openwebui_artifact.answer_preparing",
+        "openwebui_artifact.query_done",
+        "openwebui_artifact.answer_done",
+        "openwebui_artifact.tls_invalid",
+        "openwebui_artifact.tls_invalid_return",
+        "openwebui_artifact.proxy_timeout",
+        "openwebui_artifact.proxy_timeout_return",
+        "openwebui_artifact.proxy_http",
+        "openwebui_artifact.proxy_unreachable",
+        "openwebui_artifact.proxy_unreachable_return",
+        "openwebui_artifact.query_failed",
+        "openwebui_artifact.query_failed_return",
+        "openwebui_artifact.answer_failed",
+        "openwebui_artifact.answer_failed_return",
+        "openwebui_artifact.ragflow_timeout",
+        "openwebui_artifact.ragflow_timeout_return",
+        "openwebui_artifact.no_answer",
+        "sources.unknown",
+        "sources.high",
+        "sources.medium",
+        "sources.low",
+        "sources.page",
+        "sources.line",
+        "sources.missing_location",
+        "sources.source",
+        "sources.no_sources",
+        "sources.heading",
+        "sources.basis",
+        "sources.document_one",
+        "sources.document_other",
+        "sources.hit_one",
+        "sources.hit_other",
+        "sources.evidence",
+        "sources.actions",
+        "sources.relevance",
+        "sources.relevance_score",
+        "sources.open_preview",
+        "sources.open_original",
+    )
+    return {
+        language: {key: Localizer(language).text(key) for key in keys}
+        for language in SUPPORTED_LANGUAGES
+    }
 
 
 def _artifact_source_helpers() -> str:
@@ -714,6 +705,23 @@ def _artifact_source_helpers() -> str:
 
         from html import unescape
         from typing import Any
+
+
+        _TEXT = __TEXT_CATALOG__
+
+
+        def _language(language):
+            code = str(language or "de").replace("_", "-").lower().split("-", 1)[0]
+            return code if code in _TEXT else "de"
+
+
+        def _msg(language, key, **params):
+            catalog = _TEXT.get(_language(language), _TEXT["de"])
+            template = catalog.get(key) or _TEXT["de"].get(key) or key
+            try:
+                return str(template).format(**params)
+            except Exception:
+                return str(template)
 
 
         def _httpx_verify(verify_ssl, ca_bundle):
@@ -789,11 +797,11 @@ def _artifact_source_helpers() -> str:
             source_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-        def _normalize_sources(sources, *, show_scores=True, show_debug=False):
+        def _normalize_sources(sources, *, show_scores=True, show_debug=False, language="de"):
             normalized = []
             seen = set()
             for rank, source in enumerate(sources, start=1):
-                hit = _normalize_source(source, rank)
+                hit = _normalize_source(source, rank, language=language)
                 key = (
                     hit.path or hit.title,
                     hit.document_id or "",
@@ -803,17 +811,17 @@ def _artifact_source_helpers() -> str:
                 if key in seen:
                     continue
                 seen.add(key)
-                normalized.append(_source_event_data(hit))
+                normalized.append(_source_event_data(hit, language=language))
             return normalized
 
 
-        def _normalize_source(source, rank):
+        def _normalize_source(source, rank, language="de"):
             metadata = _metadata(source)
             title = (
                 source.get("name")
                 or source.get("document_name")
                 or metadata.get("document_name")
-                or "Quelle"
+                or _msg(language, "sources.source")
             )
             snippet = _clean_snippet(source.get("text") or source.get("snippet") or "")
             return SourceHit(
@@ -835,13 +843,13 @@ def _artifact_source_helpers() -> str:
             )
 
 
-        def _source_event_data(hit):
+        def _source_event_data(hit, language="de"):
             metadata = dict(hit.source_metadata)
             metadata.update(
                 {
                     "rank": hit.rank,
                     "score": hit.score,
-                    "relevance": _relevance(hit.score),
+                    "relevance": _relevance(hit.score, language=language),
                     "preview_url": hit.preview_url,
                     "original_url": hit.original_url,
                     "path": hit.path,
@@ -866,34 +874,38 @@ def _artifact_source_helpers() -> str:
             }
 
 
-        def _source_markdown(sources, *, show_scores=True, show_debug=False):
+        def _source_markdown(sources, *, show_scores=True, show_debug=False, language="de"):
             if not sources:
-                return "Keine passenden Quellen gefunden."
-            groups = _group_sources(sources)
+                return _msg(language, "sources.no_sources")
+            groups = _group_sources(sources, language=language)
             lines = [
-                "## Gefundene Quellen",
+                "## " + _msg(language, "sources.heading"),
                 "",
-                _source_basis_line(groups, sources),
+                _source_basis_line(groups, sources, language=language),
                 "",
             ]
             for display_rank, group in enumerate(groups[:6], start=1):
                 source = group[0]
                 metadata = _metadata(source)
-                title = _escape_markdown(source.get("name") or "Quelle")
-                location = _location(metadata)
+                title = _escape_markdown(source.get("name") or _msg(language, "sources.source"))
+                location = _location(metadata, language=language)
                 relevance = (
-                    _relevance_text(source.get("score") or metadata.get("score"))
+                    _relevance_text(source.get("score") or metadata.get("score"), language=language)
                     if show_scores
                     else ""
                 )
-                hit_count = "" if len(group) == 1 else f" · {len(group)} Treffer"
+                hit_count = (
+                    ""
+                    if len(group) == 1
+                    else f" · {len(group)} {_msg(language, 'sources.hit_other')}"
+                )
                 lines.append(f"### {display_rank}. {title}")
                 summary = " · ".join(part for part in (location, relevance) if part)
                 if summary or hit_count:
-                    lines.append(f"**Nachweis:** {summary}{hit_count}")
-                actions = _actions(source, metadata)
+                    lines.append(f"**{_msg(language, 'sources.evidence')}:** {summary}{hit_count}")
+                actions = _actions(source, metadata, language=language)
                 if actions:
-                    lines.append(f"**Aktionen:** {actions}")
+                    lines.append(f"**{_msg(language, 'sources.actions')}:** {actions}")
                 snippet = _clean_snippet(source.get("text") or source.get("snippet") or "")
                 if snippet:
                     lines.append("")
@@ -907,18 +919,25 @@ def _artifact_source_helpers() -> str:
             return "\\n".join(lines).rstrip()
 
 
-        def _source_basis_line(groups, sources):
+        def _source_basis_line(groups, sources, language="de"):
             documents = len(groups)
             hits = len(sources)
-            document_word = "Dokument" if documents == 1 else "Dokumente"
-            hit_word = "Treffer" if hits == 1 else "Treffer"
-            return (
-                f"**Quellenbasis:** {documents} {document_word}, {hits} {hit_word}, "
-                "nach Relevanz sortiert."
+            document_word = _msg(
+                language,
+                "sources.document_one" if documents == 1 else "sources.document_other",
+            )
+            hit_word = _msg(language, "sources.hit_one" if hits == 1 else "sources.hit_other")
+            return _msg(
+                language,
+                "sources.basis",
+                documents=documents,
+                document_word=document_word,
+                hits=hits,
+                hit_word=hit_word,
             )
 
 
-        def _group_sources(sources):
+        def _group_sources(sources, language="de"):
             grouped = {}
             for source in sources:
                 metadata = _metadata(source)
@@ -927,7 +946,7 @@ def _artifact_source_helpers() -> str:
                     or metadata.get("document_id")
                     or metadata.get("document_name")
                     or source.get("name")
-                    or "Quelle"
+                    or _msg(language, "sources.source")
                 )
                 grouped.setdefault(str(key), []).append(source)
             groups = list(grouped.values())
@@ -959,22 +978,24 @@ def _artifact_source_helpers() -> str:
             return {}
 
 
-        def _location(metadata):
+        def _location(metadata, language="de"):
             parts = []
             if metadata.get("page") not in (None, ""):
-                parts.append(f"Seite {metadata.get('page')}")
+                parts.append(_msg(language, "sources.page", value=metadata.get("page")))
             if metadata.get("line") not in (None, ""):
-                parts.append(f"Zeile {metadata.get('line')}")
-            return " · ".join(parts) or "Fundstelle nicht angegeben"
+                parts.append(_msg(language, "sources.line", value=metadata.get("line")))
+            return " · ".join(parts) or _msg(language, "sources.missing_location")
 
 
-        def _actions(source, metadata):
+        def _actions(source, metadata, language="de"):
             links = []
             if source.get("preview_url") or source.get("url"):
-                links.append(f"[Preview öffnen]({source.get('preview_url') or source.get('url')})")
+                label = _msg(language, "sources.open_preview")
+                links.append(f"[{label}]({source.get('preview_url') or source.get('url')})")
             if source.get("original_url") or metadata.get("original_url"):
                 original = source.get("original_url") or metadata.get("original_url")
-                links.append(f"[Original öffnen]({original})")
+                label = _msg(language, "sources.open_original")
+                links.append(f"[{label}]({original})")
             return " · ".join(links)
 
 
@@ -991,22 +1012,27 @@ def _artifact_source_helpers() -> str:
             return parts
 
 
-        def _relevance_text(score):
+        def _relevance_text(score, language="de"):
             formatted = _format_score(score)
             if formatted:
-                return f"Relevanz {_relevance(score)} ({formatted})"
-            return "Relevanz unbekannt"
+                return _msg(
+                    language,
+                    "sources.relevance_score",
+                    value=_relevance(score, language=language),
+                    score=formatted,
+                )
+            return _msg(language, "sources.relevance", value=_msg(language, "sources.unknown"))
 
 
-        def _relevance(score):
+        def _relevance(score, language="de"):
             value = _score_float(score)
             if value is None:
-                return "unbekannt"
+                return _msg(language, "sources.unknown")
             if value >= 0.8:
-                return "hoch"
+                return _msg(language, "sources.high")
             if value >= 0.55:
-                return "mittel"
-            return "niedrig"
+                return _msg(language, "sources.medium")
+            return _msg(language, "sources.low")
 
 
         def _format_score(score):
@@ -1079,4 +1105,4 @@ def _artifact_source_helpers() -> str:
                 return None
             return str(value)
         '''
-    ).strip()
+    ).replace("__TEXT_CATALOG__", repr(_artifact_text_catalog())).strip()

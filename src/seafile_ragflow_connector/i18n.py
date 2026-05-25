@@ -12,7 +12,36 @@ from typing import Any
 
 DEFAULT_LANGUAGE = "de"
 FALLBACK_LANGUAGE = "de"
-SUPPORTED_LANGUAGES = ("de", "en")
+SUPPORTED_LANGUAGES = (
+    "de",
+    "en",
+    "es",
+    "fr",
+    "it",
+    "pt",
+    "nl",
+    "pl",
+    "tr",
+    "uk",
+    "zh",
+    "ja",
+    "ar",
+)
+LANGUAGE_LABELS = {
+    "de": "Deutsch",
+    "en": "English",
+    "es": "Español",
+    "fr": "Français",
+    "it": "Italiano",
+    "pt": "Português",
+    "nl": "Nederlands",
+    "pl": "Polski",
+    "tr": "Türkçe",
+    "uk": "Українська",
+    "zh": "中文",
+    "ja": "日本語",
+    "ar": "العربية",
+}
 
 
 def normalize_language(value: str | None) -> str | None:
