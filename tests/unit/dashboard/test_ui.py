@@ -26,6 +26,11 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("/api/openwebui/status", DASHBOARD_HTML)
         self.assertIn("OpenWebUI Integration", DASHBOARD_HTML)
 
+    def test_health_cards_show_transport_scheme(self) -> None:
+        self.assertIn("health-transport", DASHBOARD_HTML)
+        self.assertIn("transport-badge", DASHBOARD_HTML)
+        self.assertIn("Fallback nach HTTPS-Fehler", DASHBOARD_HTML)
+
 
 if __name__ == "__main__":
     unittest.main()

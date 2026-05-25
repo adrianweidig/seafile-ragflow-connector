@@ -10,6 +10,7 @@ from redis import Redis
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
+from seafile_ragflow_connector.app.transport import resolve_service_transports
 from seafile_ragflow_connector.clients import (
     OpenWebUIClient,
     RAGFlowClient,
@@ -61,6 +62,7 @@ def build_file_policy(settings: Settings) -> FilePolicy:
 
 
 def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Runtime:
+    resolve_service_transports(settings)
     _warn_insecure_tls(settings)
     if initialize_database:
         _retry(lambda: init_database(settings.database_url), "database")

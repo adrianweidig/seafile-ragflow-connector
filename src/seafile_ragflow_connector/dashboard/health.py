@@ -4,6 +4,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from redis import Redis
@@ -37,6 +38,7 @@ def collect_dashboard_health(
         _check_openwebui(settings),
         _check_sync_jobs(status),
     ]
+    _ensure_transport_fields(settings, checks)
     summary = {
         "ok": sum(1 for item in checks if item["status"] == "ok"),
         "warning": sum(1 for item in checks if item["status"] == "warning"),
@@ -151,6 +153,7 @@ def _check_seafile(settings: Settings) -> Callable[[], dict[str, Any]]:
             "status": "ok",
             "message": f"Admin-API erreichbar, {visible} Library-Eintrag geprüft.",
             "endpoint": base_url,
+            **_transport_fields(settings, "seafile", base_url),
         }
 
     return run
@@ -177,6 +180,7 @@ def _check_ragflow(settings: Settings) -> Callable[[], dict[str, Any]]:
                 "status": "warning",
                 "message": f"API erreichbar, meldet Code {code}.",
                 "endpoint": base_url,
+                **_transport_fields(settings, "ragflow", base_url),
             }
         datasets = _extract_ragflow_datasets(payload)
         if not datasets and settings.ragflow_template_required:
@@ -184,11 +188,13 @@ def _check_ragflow(settings: Settings) -> Callable[[], dict[str, Any]]:
                 "status": "warning",
                 "message": f"Template '{settings.ragflow_template_dataset_name}' nicht gefunden.",
                 "endpoint": base_url,
+                **_transport_fields(settings, "ragflow", base_url),
             }
         return {
             "status": "ok",
             "message": f"API erreichbar, {len(datasets)} Template-Treffer.",
             "endpoint": base_url,
+            **_transport_fields(settings, "ragflow", base_url),
         }
 
     return run
@@ -229,6 +235,7 @@ def _check_openwebui_api(settings: Settings) -> Callable[[], dict[str, Any]]:
             "status": "ok",
             "message": "Functions-API erreichbar.",
             "endpoint": settings.openwebui_base_url,
+            **_transport_fields(settings, "openwebui", settings.openwebui_base_url),
         }
 
     return run
@@ -281,6 +288,8 @@ def _tls_probe(
             "url": safe_url,
             "route": route,
             "tls": "ok",
+            "scheme": urlparse(url).scheme,
+            "encrypted": urlparse(url).scheme == "https",
             "status": response.status_code,
         }
     except Exception as exc:
@@ -288,10 +297,48 @@ def _tls_probe(
             "url": safe_url,
             "route": route,
             "tls": "failed",
+            "scheme": urlparse(url).scheme,
+            "encrypted": urlparse(url).scheme == "https",
             "error_type": classify_httpx_error(exc),
             "hint": ca_hint,
             "name": name,
         }
+
+
+def _transport_fields(settings: Settings, service: str, endpoint: str) -> dict[str, Any]:
+    status = settings.connector_transport_status.get(service)
+    if not isinstance(status, dict):
+        scheme = urlparse(endpoint).scheme or "unknown"
+        return {
+            "scheme": scheme,
+            "encrypted": scheme == "https",
+            "transport": {
+                "service": service,
+                "scheme": scheme,
+                "encrypted": scheme == "https",
+                "selected_url": safe_url_for_logs(endpoint),
+                "configured_url": safe_url_for_logs(endpoint),
+            },
+        }
+    scheme = str(status.get("scheme") or urlparse(endpoint).scheme or "unknown")
+    return {
+        "scheme": scheme,
+        "encrypted": bool(status.get("encrypted")),
+        "transport": status,
+    }
+
+
+def _ensure_transport_fields(settings: Settings, checks: list[dict[str, Any]]) -> None:
+    endpoints = {
+        "seafile": settings.seafile_internal_url or settings.seafile_base_url,
+        "ragflow": settings.ragflow_internal_url or settings.ragflow_base_url,
+        "openwebui": settings.openwebui_base_url,
+    }
+    for check in checks:
+        name = str(check.get("name") or "")
+        endpoint = endpoints.get(name)
+        if endpoint and "transport" not in check:
+            check.update(_transport_fields(settings, name, endpoint))
 
 
 def _safe_json(response: httpx.Response) -> Any:

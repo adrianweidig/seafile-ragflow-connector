@@ -53,10 +53,11 @@ Es gibt zwei unterstützte Netzwerkvarianten:
   Docker-Netz. Seafile/RAGFlow müssen über LAN, Reverse Proxy oder
   `host.docker.internal:<port>` erreichbar sein.
 - `CONNECTOR_DOCKER_NETWORK_EXTERNAL=true`: Der Connector wird an ein bereits
-  existierendes Docker-Netz gehängt. Dann kann `CONNECTOR_DOCKER_NETWORK_NAME`
-  z. B. auf das bestehende Seafile/RAGFlow-Netz gesetzt werden und
-  `SEAFILE_BASE_URL=http://seafile`, `RAGFLOW_BASE_URL=http://ragflow:9380`
-  nutzen.
+  existierendes Docker-Netz gehängt. `CONNECTOR_DOCKER_NETWORK_NAME` hat einen
+  lesbaren Default (`seafile-ragflow-connector-net`), muss in bestehenden
+  Stacks aber auf das reale Seafile/RAGFlow-Netz zeigen. Dann können z. B.
+  `SEAFILE_BASE_URL=http://seafile` und
+  `RAGFLOW_BASE_URL=http://ragflow:9380` genutzt werden.
 
 ## Direkter Docker-Compose-Start
 
@@ -103,11 +104,15 @@ docker compose \
   up -d
 ```
 
-Für das Shared-Network- und OpenWebUI-Szenario muss
-`CONNECTOR_DOCKER_NETWORK_NAME` auf ein bereits existierendes Docker-Netz
-zeigen. Die OpenWebUI-Variante aktiviert das Dashboard, weil die generierten
-Tools/Pipes den Connector-Proxy unter `/api/openwebui/proxy/*` erreichen
-müssen.
+Für das Shared-Network- und OpenWebUI-Szenario muss das konfigurierte
+`CONNECTOR_DOCKER_NETWORK_NAME` bei `docker compose up` bereits existieren.
+Ohne gesetzten Wert verwenden die Compose-Dateien den Default
+`seafile-ragflow-connector-net`; in Bestandsumgebungen ist meist der reale
+Netzname des vorhandenen Seafile/RAGFlow/OpenWebUI-Stacks einzutragen. Die
+OpenWebUI-Variante bleibt standardmäßig im Minimalmodus, solange
+`OPENWEBUI_INTEGRATION_ENABLED=false` oder `OPENWEBUI_SYNC_MODE=disabled`
+gesetzt ist. Für echte Tool-/Pipe-Synchronisation müssen die OpenWebUI-Keys
+und Proxy-Werte ergänzt werden.
 
 Für den lokalen Windows-/WSL-Zugriff über `https://connector.top.secret` kann
 das Overlay `deploy/compose/connector-top-secret.compose.yml` ergänzt werden.
@@ -150,6 +155,8 @@ CONNECTOR_DASHBOARD_ENABLED=true
 CONNECTOR_DASHBOARD_HOST=0.0.0.0
 CONNECTOR_DASHBOARD_PORT=8080
 CONNECTOR_DASHBOARD_PUBLISHED_PORT=127.0.0.1:18080
+CONNECTOR_DASHBOARD_AUTH_USERNAME=admin
+CONNECTOR_DASHBOARD_AUTH_PASSWORD=change-me-dashboard-password
 ```
 
 Damit ist die Oberfläche auf dem Docker-Host unter `http://127.0.0.1:18080`
@@ -158,12 +165,17 @@ gesetzt werden. Soll die Oberfläche nicht erreichbar sein, bleibt
 `CONNECTOR_DASHBOARD_ENABLED=false` gesetzt oder das Portmapping wird in
 Portainer entfernt.
 
-Die Oberfläche ist absichtlich unauthentifiziert und ausschließlich lesend. Sie
-zeigt keine Secrets, lädt keine CDN-Assets nach und führt keine
-Sync-Schreibaktionen aus. Der Dark-/Light-Modus und die Auto-Refresh-Auswahl
-laufen rein im Browser. Wählbar sind aus, 5 Sekunden, 10 Sekunden und 1 Minute.
+Die Oberfläche ist ausschließlich lesend und schützt UI sowie lesende API per
+HTTP Basic Auth, sobald `CONNECTOR_DASHBOARD_AUTH_USERNAME` und
+`CONNECTOR_DASHBOARD_AUTH_PASSWORD` gesetzt sind. Sie zeigt keine Secrets, lädt
+keine CDN-Assets nach und führt keine Sync-Schreibaktionen aus. Der
+Dark-/Light-Modus und die Auto-Refresh-Auswahl laufen rein im Browser. Wählbar
+sind aus, 5 Sekunden, 10 Sekunden und 1 Minute.
 Der Health-Bereich prüft Dashboard, Datenbank, Redis, Seafile-Admin-API,
-RAGFlow-API und Sync-Job-Zustand. Der Button `Audit Excel` exportiert eine
+RAGFlow-API und Sync-Job-Zustand. Für Seafile, RAGFlow und OpenWebUI zeigt er
+zusätzlich den aktuell gewählten Transport (`https` oder `http`), die effektive
+Endpoint-URL und ob HTTP nur als Fallback nach einem HTTPS-Fehler genutzt wird.
+Der Button `Audit Excel` exportiert eine
 `.xlsx`-Datei mit mehreren Tabellenblättern für Übersicht, Sync-Läufe,
 Änderungen, Logs, Quellen, Ziele und Diagnose. Dieser Export enthält nur
 Dashboard- und Auditmetadaten, keine synchronisierten Dateiinhalte. Logs,

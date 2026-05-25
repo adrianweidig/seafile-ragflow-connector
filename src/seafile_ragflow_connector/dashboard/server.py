@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 # ruff: noqa: E501
+import base64
+import binascii
 import hmac
 import json
 import threading
@@ -97,6 +99,9 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             try:
+                if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
+                    self._send_auth_required()
+                    return
                 if parsed.path in {"/", "/dashboard"}:
                     self._send_html(DASHBOARD_HTML)
                     return
@@ -119,7 +124,9 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                     self._send_json(context.store.metrics())
                     return
                 if parsed.path == "/api/systems":
-                    self._send_json(context.store.systems())
+                    systems = context.store.systems()
+                    systems["transport"] = context.settings.connector_transport_status
+                    self._send_json(systems)
                     return
                 if parsed.path == "/api/sync-runs":
                     params = parse_qs(parsed.query)
@@ -255,6 +262,22 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_auth_required(self) -> None:
+            body = json.dumps(
+                {"error": "unauthorized", "message": "Dashboard-Anmeldung erforderlich."},
+                ensure_ascii=False,
+            ).encode("utf-8")
+            self.send_response(HTTPStatus.UNAUTHORIZED.value)
+            self.send_header(
+                "WWW-Authenticate",
+                'Basic realm="Seafile RAGFlow Connector Dashboard", charset="UTF-8"',
+            )
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def _json_body(self) -> dict[str, Any]:
             raw_length = self.headers.get("Content-Length")
             length = int(raw_length or "0")
@@ -269,6 +292,43 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
             return payload
 
     return DashboardRequestHandler
+
+
+def _dashboard_auth_ok(settings: Settings, authorization: str | None) -> bool:
+    expected_username = settings.connector_dashboard_auth_username
+    expected_password = settings.connector_dashboard_auth_password
+    if not expected_username and not expected_password:
+        return True
+    if not expected_username or not expected_password:
+        return False
+    username, password = _parse_basic_auth(authorization)
+    if username is None or password is None:
+        return False
+    username_matches = hmac.compare_digest(
+        username.encode("utf-8"),
+        expected_username.encode("utf-8"),
+    )
+    password_matches = hmac.compare_digest(
+        password.encode("utf-8"),
+        expected_password.encode("utf-8"),
+    )
+    return username_matches and password_matches
+
+
+def _parse_basic_auth(authorization: str | None) -> tuple[str | None, str | None]:
+    if not authorization:
+        return None, None
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "basic" or not token.strip():
+        return None, None
+    try:
+        decoded = base64.b64decode(token.strip(), validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return None, None
+    username, separator, password = decoded.partition(":")
+    if not separator:
+        return None, None
+    return username, password
 
 
 def _one(params: dict[str, list[str]], key: str) -> str | None:
@@ -323,6 +383,11 @@ def _safe_config(settings: Settings) -> dict[str, Any]:
         "connector_dashboard_max_event_entries": settings.connector_dashboard_max_event_entries,
         "connector_dashboard_max_sync_runs": settings.connector_dashboard_max_sync_runs,
         "connector_dashboard_log_page_size": settings.connector_dashboard_log_page_size,
+        "connector_dashboard_auth_enabled": bool(
+            settings.connector_dashboard_auth_username
+            and settings.connector_dashboard_auth_password
+        ),
+        "connector_transport_status": settings.connector_transport_status,
         "openwebui_integration_enabled": settings.openwebui_integration_enabled,
         "openwebui_base_url": settings.openwebui_base_url,
         "openwebui_sync_on_startup": settings.openwebui_sync_on_startup,

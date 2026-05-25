@@ -195,12 +195,15 @@ Bestehendes gemeinsames Docker-Netz:
 
 ```env
 CONNECTOR_DOCKER_NETWORK_EXTERNAL=true
-CONNECTOR_DOCKER_NETWORK_NAME=<bestehendes-docker-netz>
+CONNECTOR_DOCKER_NETWORK_NAME=seafile-ragflow-connector-net
 SEAFILE_BASE_URL=http://seafile
 RAGFLOW_BASE_URL=http://ragflow:9380
 OPENWEBUI_BASE_URL=http://openwebui:8080
 OPENWEBUI_PROXY_INTERNAL_BASE_URL=http://connector-controller:8080
 ```
+
+`CONNECTOR_DOCKER_NETWORK_NAME` ist nur ein Default. In bestehenden Stacks muss
+der Name auf das bereits vorhandene gemeinsame Docker-Netz zeigen.
 
 ## Offline-Installation
 
@@ -251,9 +254,9 @@ die Werte über `--env-file connector.env`; Portainer bekommt dieselben Werte
 Der Connector enthält ein lesendes HTTP-Dashboard für Administratoren,
 Auditoren und Entwickler. Es zeigt Connector-Zustand, Sync-Historie,
 Änderungen, Quellen/Ziele, gefilterte Logs und technische Diagnosewerte. Es
-erzwingt bewusst keine Authentifizierung; der Zugriff wird über
-Netzwerkexposition gesteuert. Wer die Oberfläche nicht erreichbar machen will,
-aktiviert sie nicht oder veröffentlicht den Port nicht.
+unterstützt einfache HTTP-Basic-Authentifizierung per Environment. Wer die
+Oberfläche nicht erreichbar machen will, aktiviert sie nicht oder veröffentlicht
+den Port nicht.
 
 Die Oberfläche nutzt keine CDN- oder Internet-Assets, bietet einen Dark-/Light-
 Modus und enthält Auto-Refresh für 5 Sekunden, 10 Sekunden oder 1 Minute. Der
@@ -266,6 +269,8 @@ CONNECTOR_DASHBOARD_ENABLED=true
 CONNECTOR_DASHBOARD_HOST=0.0.0.0
 CONNECTOR_DASHBOARD_PORT=8080
 CONNECTOR_DASHBOARD_PUBLISHED_PORT=127.0.0.1:18080
+CONNECTOR_DASHBOARD_AUTH_USERNAME=admin
+CONNECTOR_DASHBOARD_AUTH_PASSWORD=change-me-dashboard-password
 ```
 
 ## Optionale OpenWebUI-Anbindung
@@ -313,6 +318,12 @@ OPENWEBUI_VERIFY_SSL=true
 Dienst betroffen ist, kann stattdessen `SEAFILE_CA_BUNDLE`,
 `RAGFLOW_CA_BUNDLE` oder `OPENWEBUI_CA_BUNDLE` gesetzt werden.
 `*_VERIFY_SSL=false` ist nur als kurzfristige Diagnose gedacht.
+
+Beim Start prüft der Connector für Seafile, RAGFlow und, falls aktiviert,
+OpenWebUI zuerst dieselbe Host-/Port-Basis über `https://`. Nur wenn darüber
+kein HTTP-Response zustande kommt, fällt er auf `http://` zurück. Der
+Dashboard-Health-Bereich zeigt je Komponente, ob aktuell HTTPS oder HTTP
+genutzt wird und ob ein Fallback nach einem HTTPS-Fehler aktiv ist.
 
 Für lokale Root-CA-, Leaf-Zertifikat-, Hostname- und Ablaufdatumstests gibt es
 ein HTTPS-Lab unter [deploy/tls-lab](deploy/tls-lab/README.md) sowie den lokalen

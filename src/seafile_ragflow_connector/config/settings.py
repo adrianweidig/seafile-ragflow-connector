@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     connector_dashboard_max_sync_runs: int = 1000
     connector_dashboard_log_page_size: int = 100
     connector_dashboard_max_field_length: int = 4000
+    connector_dashboard_auth_username: str | None = None
+    connector_dashboard_auth_password: str | None = None
+    connector_transport_status: dict[str, object] = Field(default_factory=dict)
 
     seafile_base_url: str
     seafile_internal_url: str | None = None
@@ -257,8 +260,24 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return value
 
+    @field_validator("connector_dashboard_auth_username", "connector_dashboard_auth_password")
+    @classmethod
+    def strip_optional_secret(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
     @model_validator(mode="after")
     def build_service_urls(self) -> Settings:
+        if bool(self.connector_dashboard_auth_username) != bool(
+            self.connector_dashboard_auth_password
+        ):
+            msg = (
+                "CONNECTOR_DASHBOARD_AUTH_USERNAME and "
+                "CONNECTOR_DASHBOARD_AUTH_PASSWORD must be set together"
+            )
+            raise ValueError(msg)
         if not self.database_url:
             if not self.postgres_password:
                 msg = "DATABASE_URL or POSTGRES_PASSWORD must be set"

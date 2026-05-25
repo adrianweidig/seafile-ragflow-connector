@@ -100,7 +100,8 @@ und eine Datei sein. Ein leerer Pfad ist gültig und nutzt den Standard-Trust.
 | `CONNECTOR_DASHBOARD_HOST`, `CONNECTOR_DASHBOARD_PORT` | optional | Bind-Adresse und Port im Container. |
 | `CONNECTOR_DASHBOARD_PUBLISHED_PORT` | optional | Host-Portbindung in Compose. |
 | `CONNECTOR_DASHBOARD_MAX_LOG_ENTRIES`, `CONNECTOR_DASHBOARD_MAX_EVENT_ENTRIES`, `CONNECTOR_DASHBOARD_MAX_SYNC_RUNS`, `CONNECTOR_DASHBOARD_LOG_PAGE_SIZE`, `CONNECTOR_DASHBOARD_MAX_FIELD_LENGTH` | optional | Speicher- und Anzeigegrenzen des Dashboards. |
-| `CONNECTOR_DOCKER_NETWORK_EXTERNAL`, `CONNECTOR_DOCKER_NETWORK_NAME` | optional | nur bei vorhandenem externem Docker-Netz. |
+| `CONNECTOR_DASHBOARD_AUTH_USERNAME`, `CONNECTOR_DASHBOARD_AUTH_PASSWORD` | optional | HTTP Basic Auth für Dashboard-UI und lesende Dashboard-API; beide Werte zusammen setzen. |
+| `CONNECTOR_DOCKER_NETWORK_EXTERNAL`, `CONNECTOR_DOCKER_NETWORK_NAME` | optional | eigenes Netz per Default; bei vorhandenem externem Netz den realen Netzwerknamen setzen. |
 | `CONNECTOR_SWARM_NETWORK_NAME` | optional | Overlay-Netzname für Swarm. |
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_HOST`, `POSTGRES_PORT` | optional | Defaults reichen im Stack. |
 | `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB` | optional | Defaults reichen im Stack. |
