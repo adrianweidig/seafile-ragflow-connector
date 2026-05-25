@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from textwrap import dedent
 
 from seafile_ragflow_connector.domain.naming import slugify
+from seafile_ragflow_connector.i18n import Localizer
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "9"
+ARTIFACT_VERSION = "10"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 
 
@@ -32,11 +33,17 @@ class DatasetArtifactInputs:
     proxy_verify_ssl: bool = True
     proxy_ca_bundle: str | None = None
     model_name_prefix: str = "ragflow"
+    language: str = "de"
 
 
 def build_tool_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
+    l10n = Localizer(inputs.language)
     artifact_id = build_tool_id(inputs.namespace, inputs.dataset_name, inputs.dataset_id)
-    name = f"RAGFlow Suche: {inputs.dataset_name}"
+    name = (
+        f"RAGFlow Suche: {inputs.dataset_name}"
+        if l10n.language == "de"
+        else f"RAGFlow search: {inputs.dataset_name}"
+    )
     content = _tool_content()
     valves: dict[str, object] = {
         "ARTIFACT_ID": artifact_id,
@@ -47,6 +54,7 @@ def build_tool_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "CONNECTOR_PROXY_CA_BUNDLE": inputs.proxy_ca_bundle or "",
         "TLS_DEBUG": False,
         "DATASET_ID": inputs.dataset_id,
+        "LANGUAGE": l10n.language,
         "TOP_K": 8,
         "SHOW_SOURCE_SCORES": True,
         "SHOW_SOURCE_DEBUG": False,
@@ -57,7 +65,11 @@ def build_tool_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "name": name,
         "content": content,
         "meta": {
-            "description": f"Dataset-spezifische RAGFlow-Suche für {inputs.dataset_name}.",
+            "description": (
+                f"Dataset-spezifische RAGFlow-Suche für {inputs.dataset_name}."
+                if l10n.language == "de"
+                else f"Dataset-specific RAGFlow search for {inputs.dataset_name}."
+            ),
             "manifest": _manifest("tool", inputs),
         },
         "access_grants": [],
@@ -67,6 +79,7 @@ def build_tool_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
 
 
 def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
+    l10n = Localizer(inputs.language)
     artifact_id = build_pipe_id(inputs.namespace, inputs.dataset_name, inputs.dataset_id)
     model_name = build_model_name(inputs.namespace, inputs.dataset_name, inputs.dataset_id)
     content = _pipe_content()
@@ -79,6 +92,7 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "CONNECTOR_PROXY_CA_BUNDLE": inputs.proxy_ca_bundle or "",
         "TLS_DEBUG": False,
         "DATASET_ID": inputs.dataset_id,
+        "LANGUAGE": l10n.language,
         "RAGFLOW_CHAT_ID": inputs.ragflow_chat_id or "",
         "MODEL_ID": model_name,
         "MODEL_NAME": model_name,
@@ -89,10 +103,18 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
     }
     payload: dict[str, object] = {
         "id": artifact_id,
-        "name": f"RAGFlow Modell: {inputs.dataset_name}",
+        "name": (
+            f"RAGFlow Modell: {inputs.dataset_name}"
+            if l10n.language == "de"
+            else f"RAGFlow model: {inputs.dataset_name}"
+        ),
         "content": content,
         "meta": {
-            "description": f"OpenWebUI-Custom-Model für RAGFlow-Dataset {inputs.dataset_name}.",
+            "description": (
+                f"OpenWebUI-Custom-Model für RAGFlow-Dataset {inputs.dataset_name}."
+                if l10n.language == "de"
+                else f"OpenWebUI custom model for RAGFlow dataset {inputs.dataset_name}."
+            ),
             "manifest": _manifest("pipe", inputs),
         },
     }
@@ -155,7 +177,7 @@ def _tool_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.3.0
         owner: seafile-ragflow-connector
-        artifact_version: 9
+        artifact_version: 10
         """
 
         import httpx
@@ -175,6 +197,7 @@ def _tool_content() -> str:
                 CONNECTOR_PROXY_CA_BUNDLE: str = Field(default="")
                 TLS_DEBUG: bool = Field(default=False)
                 DATASET_ID: str = Field(default="")
+                LANGUAGE: str = Field(default="de")
                 TOP_K: int = Field(default=8, ge=1, le=20)
                 SHOW_SOURCE_SCORES: bool = Field(default=True)
                 SHOW_SOURCE_DEBUG: bool = Field(default=False)
@@ -377,7 +400,7 @@ def _pipe_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.3.0
         owner: seafile-ragflow-connector
-        artifact_version: 9
+        artifact_version: 10
         """
 
         import httpx
@@ -397,6 +420,7 @@ def _pipe_content() -> str:
                 CONNECTOR_PROXY_CA_BUNDLE: str = Field(default="")
                 TLS_DEBUG: bool = Field(default=False)
                 DATASET_ID: str = Field(default="")
+                LANGUAGE: str = Field(default="de")
                 RAGFLOW_CHAT_ID: str = Field(default="")
                 MODEL_ID: str = Field(default="")
                 MODEL_NAME: str = Field(default="")

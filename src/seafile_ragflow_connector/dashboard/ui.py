@@ -947,6 +947,14 @@ DASHBOARD_HTML = r"""<!doctype html>
             </select>
             <b class="refresh-progress" aria-hidden="true"><i></i></b>
           </label>
+          <label class="refresh-control" for="language-select">
+            <span>Sprache</span>
+            <select id="language-select" autocomplete="off">
+              <option value="de">Deutsch</option>
+              <option value="en">English</option>
+            </select>
+            <b class="refresh-progress" aria-hidden="true"><i></i></b>
+          </label>
           <button class="ghost" id="refresh-active" type="button"><span class="icon refresh"></span>Aktualisieren</button>
           <button class="ghost" id="theme-toggle" type="button" aria-pressed="true"><span class="icon theme"></span>Dark</button>
           <a class="action primary" id="audit-export" href="/api/audit.xlsx" download><span class="icon export"></span>Audit Excel</a>
@@ -1101,6 +1109,170 @@ DASHBOARD_HTML = r"""<!doctype html>
 
   <script>
     const PAGE_SIZE = 100;
+    const SUPPORTED_LANGUAGES = ['de', 'en'];
+    const I18N = {
+      de: {
+        'brand.subtitle': 'Seafile zu RAGFlow',
+        'nav.label': 'Dashboard Bereiche',
+        'nav.overview': 'Übersicht',
+        'nav.syncs': 'Sync-Läufe',
+        'nav.changes': 'Änderungen',
+        'nav.logs': 'Logs',
+        'nav.systems': 'Systeme',
+        'nav.openwebui': 'OpenWebUI',
+        'nav.diagnostics': 'Diagnose',
+        'sidebar.loading': 'Lade Status...',
+        'sidebar.notUpdated': 'Noch nicht aktualisiert',
+        'action.refresh': 'Aktualisieren',
+        'action.audit': 'Audit Excel',
+        'action.filter': 'Filtern',
+        'action.more': 'Mehr',
+        'action.less': 'Weniger',
+        'pager.of': 'von',
+        'pager.previous': 'Zurück',
+        'pager.next': 'Weiter',
+        'empty.title': 'Keine Einträge vorhanden',
+        'empty.hint': 'Die Ansicht ist geladen und enthält aktuell keine passenden Daten.',
+        'status.unknown': 'unbekannt',
+        'health.encrypted': 'verschlüsselt',
+        'health.unencrypted': 'unverschlüsselt',
+        'health.fallback': 'Fallback nach HTTPS-Fehler',
+        'health.none': 'Keine Health-Daten vorhanden.',
+        'problems.none': 'Keine aktuellen Fehler oder Warnungen.',
+        'counts.entries': 'Einträge',
+        'counts.runs': 'Läufe',
+        'counts.events': 'Ereignisse',
+        'titles.overview': 'Übersicht',
+        'subtitles.overview': 'Live-Zustand, Durchsatz und Auffälligkeiten',
+        'titles.syncs': 'Sync-Läufe',
+        'subtitles.syncs': 'Historie, Laufzeiten und Ergebnisdetails',
+        'titles.changes': 'Änderungen',
+        'subtitles.changes': 'Aktionen mit Quelle, Ziel, Objekt und Status',
+        'titles.logs': 'Logs',
+        'subtitles.logs': 'Filterbare Debug- und Audit-Ereignisse',
+        'titles.systems': 'Systeme',
+        'subtitles.systems': 'Seafile-Libraries und RAGFlow-Datasets',
+        'titles.openwebui': 'OpenWebUI',
+        'subtitles.openwebui': 'Tools, Pipes, Custom-Modelle und Fehlerstatus',
+        'titles.diagnostics': 'Diagnose',
+        'subtitles.diagnostics': 'Technische Werte ohne Secrets',
+        'metric.libraries': 'Libraries',
+        'metric.files': 'Dateien',
+        'metric.syncRuns': 'Sync-Läufe',
+        'metric.changes': 'Änderungen',
+        'metric.checked': 'Objekte geprüft',
+        'metric.queue': 'Queue/Retry',
+        'metric.warnings': 'Warnungen',
+        'metric.errors': 'Fehler',
+        'table.time': 'Zeit',
+        'table.start': 'Start',
+        'table.status': 'Status',
+        'table.source': 'Quelle',
+        'table.target': 'Ziel',
+        'table.objects': 'Objekte',
+        'table.duration': 'Dauer',
+        'table.new': 'Neu',
+        'table.updated': 'Aktualisiert',
+        'table.deleted': 'Gelöscht',
+        'table.skipped': 'Übersprungen',
+        'table.action': 'Aktion',
+        'table.type': 'Typ',
+        'table.error': 'Fehler',
+        'table.message': 'Nachricht',
+        'openwebui.active': 'aktiv',
+        'openwebui.off': 'aus',
+        'api.error': 'API-Fehler'
+      },
+      en: {
+        'brand.subtitle': 'Seafile to RAGFlow',
+        'nav.label': 'Dashboard sections',
+        'nav.overview': 'Overview',
+        'nav.syncs': 'Sync runs',
+        'nav.changes': 'Changes',
+        'nav.logs': 'Logs',
+        'nav.systems': 'Systems',
+        'nav.openwebui': 'OpenWebUI',
+        'nav.diagnostics': 'Diagnostics',
+        'sidebar.loading': 'Loading status...',
+        'sidebar.notUpdated': 'Not updated yet',
+        'action.refresh': 'Refresh',
+        'action.audit': 'Audit Excel',
+        'action.filter': 'Filter',
+        'action.more': 'More',
+        'action.less': 'Less',
+        'pager.of': 'of',
+        'pager.previous': 'Previous',
+        'pager.next': 'Next',
+        'empty.title': 'No entries available',
+        'empty.hint': 'The view is loaded and currently has no matching data.',
+        'status.unknown': 'unknown',
+        'health.encrypted': 'encrypted',
+        'health.unencrypted': 'unencrypted',
+        'health.fallback': 'fallback after HTTPS error',
+        'health.none': 'No health data available.',
+        'problems.none': 'No current errors or warnings.',
+        'counts.entries': 'entries',
+        'counts.runs': 'runs',
+        'counts.events': 'events',
+        'titles.overview': 'Overview',
+        'subtitles.overview': 'Live state, throughput, and anomalies',
+        'titles.syncs': 'Sync runs',
+        'subtitles.syncs': 'History, runtimes, and result details',
+        'titles.changes': 'Changes',
+        'subtitles.changes': 'Actions with source, target, object, and status',
+        'titles.logs': 'Logs',
+        'subtitles.logs': 'Filterable debug and audit events',
+        'titles.systems': 'Systems',
+        'subtitles.systems': 'Seafile libraries and RAGFlow datasets',
+        'titles.openwebui': 'OpenWebUI',
+        'subtitles.openwebui': 'Tools, pipes, custom models, and error state',
+        'titles.diagnostics': 'Diagnostics',
+        'subtitles.diagnostics': 'Technical values without secrets',
+        'metric.libraries': 'Libraries',
+        'metric.files': 'Files',
+        'metric.syncRuns': 'Sync runs',
+        'metric.changes': 'Changes',
+        'metric.checked': 'Objects checked',
+        'metric.queue': 'Queue/retry',
+        'metric.warnings': 'Warnings',
+        'metric.errors': 'Errors',
+        'table.time': 'Time',
+        'table.start': 'Start',
+        'table.status': 'Status',
+        'table.source': 'Source',
+        'table.target': 'Target',
+        'table.objects': 'Objects',
+        'table.duration': 'Duration',
+        'table.new': 'New',
+        'table.updated': 'Updated',
+        'table.deleted': 'Deleted',
+        'table.skipped': 'Skipped',
+        'table.action': 'Action',
+        'table.type': 'Type',
+        'table.error': 'Error',
+        'table.message': 'Message',
+        'openwebui.active': 'active',
+        'openwebui.off': 'off',
+        'api.error': 'API error'
+      }
+    };
+    function normalizeLanguage(value) {
+      const code = String(value || '').replace('_', '-').toLowerCase().split('-')[0];
+      return SUPPORTED_LANGUAGES.includes(code) ? code : '';
+    }
+    function initialLanguage() {
+      const params = new URLSearchParams(window.location.search);
+      return normalizeLanguage(params.get('lang'))
+        || normalizeLanguage(localStorage.getItem('connector-dashboard-language'))
+        || normalizeLanguage(navigator.language)
+        || 'de';
+    }
+    let currentLanguage = initialLanguage();
+    function t(key) {
+      return (I18N[currentLanguage] && I18N[currentLanguage][key])
+        || I18N.de[key]
+        || key;
+    }
     const state = {
       activeTab: 'overview',
       loading: false,
@@ -1108,18 +1280,46 @@ DASHBOARD_HTML = r"""<!doctype html>
       refreshTimer: null,
       refreshMs: Number(localStorage.getItem('connector-dashboard-refresh-ms') || '10000'),
       pages: { syncs: 0, changes: 0, logs: 0, openwebui: 0 },
-      titles: {
-        overview: ['Übersicht', 'Live-Zustand, Durchsatz und Auffälligkeiten'],
-        syncs: ['Sync-Läufe', 'Historie, Laufzeiten und Ergebnisdetails'],
-        changes: ['Änderungen', 'Aktionen mit Quelle, Ziel, Objekt und Status'],
-        logs: ['Logs', 'Filterbare Debug- und Audit-Ereignisse'],
-        systems: ['Systeme', 'Seafile-Libraries und RAGFlow-Datasets'],
-        openwebui: ['OpenWebUI', 'Tools, Pipes, Custom-Modelle und Fehlerstatus'],
-        diagnostics: ['Diagnose', 'Technische Werte ohne Secrets']
-      }
+      titles: {}
     };
     const $ = (id) => document.getElementById(id);
     let disclosureId = 0;
+
+    function applyLanguage() {
+      document.documentElement.lang = currentLanguage;
+      document.title = currentLanguage === 'en'
+        ? 'Seafile RAGFlow Connector Dashboard'
+        : 'Seafile RAGFlow Connector Dashboard';
+      const languageSelect = $('language-select');
+      if (languageSelect) languageSelect.value = currentLanguage;
+      document.querySelector('.brand span').textContent = t('brand.subtitle');
+      document.querySelector('.nav').setAttribute('aria-label', t('nav.label'));
+      document.querySelector('[data-tab="overview"]').lastChild.textContent = t('nav.overview');
+      document.querySelector('[data-tab="syncs"]').lastChild.textContent = t('nav.syncs');
+      document.querySelector('[data-tab="changes"]').lastChild.textContent = t('nav.changes');
+      document.querySelector('[data-tab="logs"]').lastChild.textContent = t('nav.logs');
+      document.querySelector('[data-tab="systems"]').lastChild.textContent = t('nav.systems');
+      document.querySelector('[data-tab="diagnostics"]').lastChild.textContent = t('nav.diagnostics');
+      $('sidebar-state').textContent = t('sidebar.loading');
+      $('sidebar-updated').textContent = t('sidebar.notUpdated');
+      $('refresh-active').lastChild.textContent = t('action.refresh');
+      $('audit-export').lastChild.textContent = t('action.audit');
+      document.querySelectorAll('.filter-actions button').forEach((button) => {
+        button.textContent = t('action.filter');
+      });
+      state.titles = {
+        overview: [t('titles.overview'), t('subtitles.overview')],
+        syncs: [t('titles.syncs'), t('subtitles.syncs')],
+        changes: [t('titles.changes'), t('subtitles.changes')],
+        logs: [t('titles.logs'), t('subtitles.logs')],
+        systems: [t('titles.systems'), t('subtitles.systems')],
+        openwebui: [t('titles.openwebui'), t('subtitles.openwebui')],
+        diagnostics: [t('titles.diagnostics'), t('subtitles.diagnostics')]
+      };
+      const title = state.titles[state.activeTab] || state.titles.overview;
+      setText('view-title', title[0]);
+      setText('view-subtitle', title[1]);
+    }
 
     function showError(message) {
       const node = $('error');
@@ -1129,7 +1329,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     async function api(path) {
       const res = await fetch(path, { headers: { 'Accept': 'application/json' } });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || data.error || 'API-Fehler');
+      if (!res.ok) throw new Error(data.message || data.error || t('api.error'));
       return data;
     }
     function clear(node) {
@@ -1141,13 +1341,13 @@ DASHBOARD_HTML = r"""<!doctype html>
     function fmtDate(value) {
       if (!value) return '-';
       const date = new Date(value);
-      return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+      return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString(currentLanguage === 'en' ? 'en-US' : 'de-DE');
     }
     function fmtDuration(ms) {
       return ms == null ? '-' : (ms / 1000).toFixed(1) + ' s';
     }
     function fmtNumber(value) {
-      return Number(value || 0).toLocaleString('de-DE');
+      return Number(value || 0).toLocaleString(currentLanguage === 'en' ? 'en-US' : 'de-DE');
     }
     function statusClass(value) {
       return String(value || 'unknown').toLowerCase().replace(/[^a-z0-9äöüß_-]+/g, '-');
@@ -1155,7 +1355,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     function status(value) {
       const span = document.createElement('span');
       span.className = 'status ' + statusClass(value);
-      span.textContent = value || 'unbekannt';
+      span.textContent = value || t('status.unknown');
       return span;
     }
     function longText(value, options = {}) {
@@ -1178,13 +1378,13 @@ DASHBOARD_HTML = r"""<!doctype html>
         button.className = 'cell-toggle';
         button.setAttribute('aria-expanded', 'false');
         button.setAttribute('aria-controls', id);
-        button.textContent = options.moreLabel || 'Mehr';
+        button.textContent = options.moreLabel || t('action.more');
         button.addEventListener('click', (event) => {
           event.stopPropagation();
           const expanded = !wrapper.classList.contains('is-expanded');
           wrapper.classList.toggle('is-expanded', expanded);
           button.setAttribute('aria-expanded', String(expanded));
-          button.textContent = expanded ? (options.lessLabel || 'Weniger') : (options.moreLabel || 'Mehr');
+          button.textContent = expanded ? (options.lessLabel || t('action.less')) : (options.moreLabel || t('action.more'));
         });
         wrapper.appendChild(button);
       }
@@ -1222,9 +1422,9 @@ DASHBOARD_HTML = r"""<!doctype html>
         const empty = document.createElement('div');
         empty.className = 'empty-state';
         const title = document.createElement('strong');
-        title.textContent = 'Keine Einträge vorhanden';
+        title.textContent = t('empty.title');
         const hint = document.createElement('span');
-        hint.textContent = 'Die Ansicht ist geladen und enthält aktuell keine passenden Daten.';
+        hint.textContent = t('empty.hint');
         empty.append(title, hint);
         td.appendChild(empty);
         tr.appendChild(td);
@@ -1268,15 +1468,15 @@ DASHBOARD_HTML = r"""<!doctype html>
       const start = page.total ? page.offset + 1 : 0;
       const end = Math.min(page.offset + page.items.length, page.total);
       const label = document.createElement('span');
-      label.textContent = start + '-' + end + ' von ' + page.total;
+      label.textContent = start + '-' + end + ' ' + t('pager.of') + ' ' + page.total;
       const previous = document.createElement('button');
       previous.type = 'button';
-      previous.textContent = 'Zurück';
+      previous.textContent = t('pager.previous');
       previous.disabled = page.offset <= 0;
       previous.addEventListener('click', () => setPage(-1));
       const next = document.createElement('button');
       next.type = 'button';
-      next.textContent = 'Weiter';
+      next.textContent = t('pager.next');
       next.disabled = !page.has_next;
       next.addEventListener('click', () => setPage(1));
       node.append(label, previous, next);
@@ -1306,11 +1506,11 @@ DASHBOARD_HTML = r"""<!doctype html>
       const node = $('problems');
       clear(node);
       const items = [...errors.items, ...warnings.items].slice(0, 8);
-      setText('problem-count', items.length + ' Einträge');
+      setText('problem-count', items.length + ' ' + t('counts.entries'));
       if (!items.length) {
         const empty = document.createElement('div');
         empty.className = 'empty';
-        empty.textContent = 'Keine aktuellen Fehler oder Warnungen.';
+        empty.textContent = t('problems.none');
         node.appendChild(empty);
         return;
       }
@@ -1331,7 +1531,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       const node = $('dependency-health');
       clear(node);
       const summary = health.summary || { ok: 0, warning: 0, error: 0 };
-      setText('health-summary', (health.status || 'unbekannt') + ' · ' + summary.ok + ' ok / ' + summary.warning + ' warn / ' + summary.error + ' error');
+      setText('health-summary', (health.status || t('status.unknown')) + ' · ' + summary.ok + ' ok / ' + summary.warning + ' warn / ' + summary.error + ' error');
       (health.checks || []).forEach((check) => {
         const item = document.createElement('div');
         item.className = 'health-item ' + statusClass(check.status);
@@ -1354,9 +1554,9 @@ DASHBOARD_HTML = r"""<!doctype html>
           badge.className = 'transport-badge ' + statusClass(scheme);
           badge.textContent = scheme || 'unknown';
           const detail = document.createElement('span');
-          const encrypted = (transport.encrypted ?? check.encrypted) ? 'verschlüsselt' : 'unverschlüsselt';
+          const encrypted = (transport.encrypted ?? check.encrypted) ? t('health.encrypted') : t('health.unencrypted');
           const endpoint = transport.selected_url || check.endpoint || '-';
-          const fallback = transport.fallback_used ? ' · Fallback nach HTTPS-Fehler' : '';
+          const fallback = transport.fallback_used ? ' · ' + t('health.fallback') : '';
           detail.textContent = encrypted + ' · ' + endpoint + fallback;
           transportNode.append(badge, detail);
           copy.appendChild(transportNode);
@@ -1370,7 +1570,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       if (!node.childNodes.length) {
         const empty = document.createElement('div');
         empty.className = 'empty';
-        empty.textContent = 'Keine Health-Daten vorhanden.';
+        empty.textContent = t('health.none');
         node.appendChild(empty);
       }
     }
@@ -1387,33 +1587,33 @@ DASHBOARD_HTML = r"""<!doctype html>
       setText('state-value', statusData.state);
       clear($('state-pill'));
       $('state-pill').appendChild(status(statusData.state));
-      setText('started-at', 'Start: ' + fmtDate(statusData.started_at));
-      setText('last-success', 'Letzter Erfolg: ' + fmtDate(statusData.last_successful_sync && statusData.last_successful_sync.ended_at));
-      setText('last-failure', 'Letzter Fehler: ' + fmtDate(statusData.last_failed_sync && statusData.last_failed_sync.ended_at));
-      setText('sidebar-state', 'Status: ' + (statusData.state || 'unbekannt'));
-      setText('sidebar-updated', 'Aktualisiert: ' + new Date().toLocaleTimeString());
+      setText('started-at', t('table.start') + ': ' + fmtDate(statusData.started_at));
+      setText('last-success', (currentLanguage === 'en' ? 'Last success' : 'Letzter Erfolg') + ': ' + fmtDate(statusData.last_successful_sync && statusData.last_successful_sync.ended_at));
+      setText('last-failure', (currentLanguage === 'en' ? 'Last error' : 'Letzter Fehler') + ': ' + fmtDate(statusData.last_failed_sync && statusData.last_failed_sync.ended_at));
+      setText('sidebar-state', t('table.status') + ': ' + (statusData.state || t('status.unknown')));
+      setText('sidebar-updated', (currentLanguage === 'en' ? 'Updated' : 'Aktualisiert') + ': ' + new Date().toLocaleTimeString(currentLanguage === 'en' ? 'en-US' : 'de-DE'));
       renderHealthRail(statusData);
       renderDependencyHealth(health);
       const grid = $('metrics');
       clear(grid);
       grid.append(
-        metric('Libraries', fmtNumber(metricsData.libraries), 'Seafile-Quellen', 'info'),
-        metric('Dateien', fmtNumber(metricsData.files), 'bekannter State'),
-        metric('Sync-Läufe', fmtNumber(metricsData.sync_runs), 'persistierte Historie'),
-        metric('Änderungen', fmtNumber(statusData.changes_detected), 'erkannte Events', 'info'),
-        metric('Objekte geprüft', fmtNumber(statusData.objects_processed), 'Summe aller Läufe'),
-        metric('Queue/Retry', fmtNumber(statusData.queued_or_retrying_jobs), 'wartende Jobs', 'warn'),
-        metric('Warnungen', fmtNumber(statusData.warnings_count), 'Log-Level warning', 'warn'),
-        metric('Fehler', fmtNumber(statusData.errors_count), 'Log-Level error', statusData.errors_count ? 'bad' : '')
+        metric(t('metric.libraries'), fmtNumber(metricsData.libraries), currentLanguage === 'en' ? 'Seafile sources' : 'Seafile-Quellen', 'info'),
+        metric(t('metric.files'), fmtNumber(metricsData.files), currentLanguage === 'en' ? 'known state' : 'bekannter State'),
+        metric(t('metric.syncRuns'), fmtNumber(metricsData.sync_runs), currentLanguage === 'en' ? 'persisted history' : 'persistierte Historie'),
+        metric(t('metric.changes'), fmtNumber(statusData.changes_detected), currentLanguage === 'en' ? 'detected events' : 'erkannte Events', 'info'),
+        metric(t('metric.checked'), fmtNumber(statusData.objects_processed), currentLanguage === 'en' ? 'sum across all runs' : 'Summe aller Läufe'),
+        metric(t('metric.queue'), fmtNumber(statusData.queued_or_retrying_jobs), currentLanguage === 'en' ? 'waiting jobs' : 'wartende Jobs', 'warn'),
+        metric(t('metric.warnings'), fmtNumber(statusData.warnings_count), 'Log-Level warning', 'warn'),
+        metric(t('metric.errors'), fmtNumber(statusData.errors_count), 'Log-Level error', statusData.errors_count ? 'bad' : '')
       );
       renderProblems(errors, warnings);
       setText('recent-sync-count', syncs.items.length);
-      table('recent-syncs', ['Start', 'Status', 'Quelle', 'Ziel', 'Objekte'], syncs.items.map((run) => ({
+      table('recent-syncs', [t('table.start'), t('table.status'), t('table.source'), t('table.target'), t('table.objects')], syncs.items.map((run) => ({
         ...run,
         __cells: [fmtDate(run.started_at), status(run.status), compactText(run.source, { threshold: 40 }), compactText(run.target, { threshold: 40 }), fmtNumber(run.objects_checked)]
       })), (run) => openSyncDetail(run.sync_id));
       setText('recent-change-count', changes.items.length);
-      table('recent-changes', ['Zeit', 'Typ', 'Status', 'Objekt', 'Ziel'], changes.items.map((change) => ({
+      table('recent-changes', [t('table.time'), t('table.type'), t('table.status'), 'Objekt', t('table.target')], changes.items.map((change) => ({
         ...change,
         __cells: [fmtDate(change.occurred_at), change.change_type, status(change.status), compactText(change.object_name, { threshold: 36 }), compactText(change.target_path, { threshold: 44 })]
       })));
@@ -1424,8 +1624,8 @@ DASHBOARD_HTML = r"""<!doctype html>
       const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
       if (statusValue) params.set('status', statusValue);
       const data = await api('/api/sync-runs?' + params.toString());
-      setText('sync-total', fmtNumber(data.total) + ' Läufe');
-      table('sync-table', ['Sync-ID', 'Start', 'Dauer', 'Status', 'Geprüft', 'Neu', 'Aktualisiert', 'Gelöscht', 'Übersprungen'], data.items.map((run) => ({
+      setText('sync-total', fmtNumber(data.total) + ' ' + t('counts.runs'));
+      table('sync-table', ['Sync-ID', t('table.start'), t('table.duration'), t('table.status'), currentLanguage === 'en' ? 'Checked' : 'Geprüft', t('table.new'), t('table.updated'), t('table.deleted'), t('table.skipped')], data.items.map((run) => ({
         ...run,
         __cells: [compactText(run.sync_id, { threshold: 34 }), fmtDate(run.started_at), fmtDuration(run.duration_ms), status(run.status), fmtNumber(run.objects_checked), fmtNumber(run.objects_created), fmtNumber(run.objects_updated), fmtNumber(run.objects_deleted), fmtNumber(run.objects_skipped)]
       })), (run) => openSyncDetail(run.sync_id, false));
@@ -1443,7 +1643,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       const header = document.createElement('div');
       header.className = 'panel-header';
       const title = document.createElement('h3');
-      title.textContent = 'Detail ' + syncId;
+      title.textContent = (currentLanguage === 'en' ? 'Detail ' : 'Detail ') + syncId;
       const small = document.createElement('small');
       small.appendChild(status(data.status));
       header.append(title, small);
@@ -1452,10 +1652,10 @@ DASHBOARD_HTML = r"""<!doctype html>
       const pills = document.createElement('div');
       pills.className = 'pill-row';
       [
-        'Quelle: ' + (data.source || '-'),
-        'Ziel: ' + (data.target || '-'),
-        'Dauer: ' + fmtDuration(data.duration_ms),
-        'Änderungen: ' + (data.changes || []).length,
+        t('table.source') + ': ' + (data.source || '-'),
+        t('table.target') + ': ' + (data.target || '-'),
+        t('table.duration') + ': ' + fmtDuration(data.duration_ms),
+        t('metric.changes') + ': ' + (data.changes || []).length,
         'Logs: ' + (data.logs || []).length
       ].forEach((item) => {
         const pill = document.createElement('span');
@@ -1477,8 +1677,8 @@ DASHBOARD_HTML = r"""<!doctype html>
         if ($(id).value) params.set(key, $(id).value);
       });
       const data = await api('/api/changes?' + params.toString());
-      setText('change-total', fmtNumber(data.total) + ' Ereignisse');
-      table('change-table', ['Zeit', 'Sync-ID', 'Aktion', 'Typ', 'Status', 'Objekt', 'Quelle', 'Ziel', 'Fehler'], data.items.map((change) => ({
+      setText('change-total', fmtNumber(data.total) + ' ' + t('counts.events'));
+      table('change-table', [t('table.time'), 'Sync-ID', t('table.action'), t('table.type'), t('table.status'), 'Objekt', t('table.source'), t('table.target'), t('table.error')], data.items.map((change) => ({
         ...change,
         __cells: [
           fmtDate(change.occurred_at),
@@ -1502,7 +1702,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       if ($('log-query').value) params.set('q', $('log-query').value);
       const data = await api('/api/logs?' + params.toString());
       setText('log-total', fmtNumber(data.total) + ' Logs');
-      table('log-table', ['Zeit', 'Level', 'Komponente', 'Sync-ID', 'Nachricht'], data.items.map((entry) => ({
+      table('log-table', [t('table.time'), 'Level', currentLanguage === 'en' ? 'Component' : 'Komponente', 'Sync-ID', t('table.message')], data.items.map((entry) => ({
         ...entry,
         __cells: [
           fmtDate(entry.occurred_at),
@@ -1520,7 +1720,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     }
     async function loadSystems() {
       const data = await api('/api/systems');
-      table('source-table', ['Repo-ID', 'Name', 'Status', 'Head Commit', 'Letzter Sync', 'Fehler'], (data.source.libraries || []).map((library) => ({
+      table('source-table', ['Repo-ID', 'Name', t('table.status'), 'Head Commit', currentLanguage === 'en' ? 'Last sync' : 'Letzter Sync', t('table.error')], (data.source.libraries || []).map((library) => ({
         ...library,
         __cells: [compactText(library.repo_id, { threshold: 34 }), compactText(library.name, { threshold: 38 }), status(library.status), compactText(library.head_commit_id, { threshold: 34 }), compactText(library.last_synced_commit_id, { threshold: 34 }), compactText(library.last_error, { threshold: 48 })]
       })));
@@ -1542,14 +1742,14 @@ DASHBOARD_HTML = r"""<!doctype html>
       const grid = $('openwebui-metrics');
       clear(grid);
       grid.append(
-        metric('Integration', statusData.enabled ? 'aktiv' : 'aus', statusData.base_url || '-', statusData.enabled ? 'info' : ''),
-        metric('Datasets', fmtNumber(counts.datasets), 'erkannte Mappings'),
-        metric('Synchronisiert', fmtNumber(counts.synced_or_planned), 'inkl. Dry-Run geplant', counts.failed ? '' : 'info'),
-        metric('Gelöscht', fmtNumber(counts.deleted), 'Seafile-Library entfernt', counts.deleted ? 'warn' : ''),
-        metric('Manuell', fmtNumber(counts.manual_required), 'API-Fallback', counts.manual_required ? 'warn' : ''),
-        metric('Fehler', fmtNumber(counts.failed), statusData.last_error || 'keine', counts.failed ? 'bad' : '')
+        metric('Integration', statusData.enabled ? t('openwebui.active') : t('openwebui.off'), statusData.base_url || '-', statusData.enabled ? 'info' : ''),
+        metric('Datasets', fmtNumber(counts.datasets), currentLanguage === 'en' ? 'known mappings' : 'erkannte Mappings'),
+        metric(currentLanguage === 'en' ? 'Synchronized' : 'Synchronisiert', fmtNumber(counts.synced_or_planned), currentLanguage === 'en' ? 'including dry-run planned' : 'inkl. Dry-Run geplant', counts.failed ? '' : 'info'),
+        metric(t('table.deleted'), fmtNumber(counts.deleted), currentLanguage === 'en' ? 'Seafile library removed' : 'Seafile-Library entfernt', counts.deleted ? 'warn' : ''),
+        metric(currentLanguage === 'en' ? 'Manual' : 'Manuell', fmtNumber(counts.manual_required), 'API-Fallback', counts.manual_required ? 'warn' : ''),
+        metric(t('metric.errors'), fmtNumber(counts.failed), statusData.last_error || (currentLanguage === 'en' ? 'none' : 'keine'), counts.failed ? 'bad' : '')
       );
-      table('openwebui-table', ['Dataset', 'Status', 'Chat', 'Tool', 'Pipe', 'Modell', 'Letzter Erfolg', 'Fehler'], (mappings.items || []).map((item) => ({
+      table('openwebui-table', ['Dataset', t('table.status'), 'Chat', 'Tool', 'Pipe', currentLanguage === 'en' ? 'Model' : 'Modell', currentLanguage === 'en' ? 'Last success' : 'Letzter Erfolg', t('table.error')], (mappings.items || []).map((item) => ({
         ...item,
         __cells: [
           compactText(item.ragflow_dataset_name, { threshold: 42 }),
@@ -1626,6 +1826,16 @@ DASHBOARD_HTML = r"""<!doctype html>
       });
       update();
     }
+    function initLanguageSelect() {
+      const select = $('language-select');
+      select.value = currentLanguage;
+      select.addEventListener('change', () => {
+        currentLanguage = normalizeLanguage(select.value) || 'de';
+        localStorage.setItem('connector-dashboard-language', currentLanguage);
+        applyLanguage();
+        loadActive();
+      });
+    }
     function initAutoRefresh() {
       const select = $('refresh-interval');
       const wrapper = select.closest('.refresh-control');
@@ -1656,6 +1866,8 @@ DASHBOARD_HTML = r"""<!doctype html>
     $('sync-refresh').addEventListener('click', () => { state.pages.syncs = 0; loadSyncs(); });
     $('change-refresh').addEventListener('click', () => { state.pages.changes = 0; loadChanges(); });
     $('log-refresh').addEventListener('click', () => { state.pages.logs = 0; loadLogs(); });
+    initLanguageSelect();
+    applyLanguage();
     initThemeToggle();
     initAutoRefresh();
     loadActive();

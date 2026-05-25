@@ -219,6 +219,7 @@ class OpenWebUISyncService:
             proxy_base_url=self.settings.openwebui_proxy_base_url_for_functions,
             proxy_verify_ssl=self.settings.openwebui_proxy_verify_ssl,
             proxy_ca_bundle=self.settings.openwebui_proxy_ca_bundle,
+            language=self.settings.connector_language or "de",
         )
         tool_spec = build_tool_spec(inputs)
         pipe_spec = build_pipe_spec(inputs)

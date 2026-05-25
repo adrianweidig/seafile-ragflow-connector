@@ -1,5 +1,5 @@
-name: Fehlerbericht
-description: Reproduzierbares Problem im Connector melden
+name: Fehlerbericht / Bug report
+description: Reproduzierbares Problem im Connector melden / Report a reproducible connector problem
 title: "[Bug]: "
 labels:
   - bug
@@ -8,17 +8,19 @@ body:
     attributes:
       value: |
         Danke für den Bericht. Bitte keine Tokens, Passwörter, privaten Schlüssel, produktiven Zertifikate oder vollständigen Env-Dateien einfügen.
+
+        English: Thank you for the report. Do not include tokens, passwords, private keys, productive certificates, or complete environment files.
   - type: textarea
     id: summary
     attributes:
-      label: Kurzbeschreibung
-      description: Was ist passiert?
+      label: Kurzbeschreibung / Summary
+      description: Was ist passiert? / What happened?
     validations:
       required: true
   - type: dropdown
     id: area
     attributes:
-      label: Betroffener Bereich
+      label: Betroffener Bereich / Affected area
       options:
         - Seafile Discovery oder Download
         - RAGFlow Dataset, Upload oder Parse
@@ -35,8 +37,8 @@ body:
   - type: textarea
     id: steps
     attributes:
-      label: Reproduktionsschritte
-      description: Welche Schritte führen zum Problem?
+      label: Reproduktionsschritte / Reproduction steps
+      description: Welche Schritte führen zum Problem? / Which steps reproduce the problem?
       placeholder: |
         1. ...
         2. ...
@@ -46,40 +48,40 @@ body:
   - type: textarea
     id: expected
     attributes:
-      label: Erwartetes Verhalten
+      label: Erwartetes Verhalten / Expected behavior
     validations:
       required: true
   - type: textarea
     id: actual
     attributes:
-      label: Tatsächliches Verhalten
+      label: Tatsächliches Verhalten / Actual behavior
     validations:
       required: true
   - type: textarea
     id: environment
     attributes:
-      label: Umgebung
-      description: Bitte nur nicht-sensitive Informationen eintragen.
+      label: Umgebung / Environment
+      description: Bitte nur nicht-sensitive Informationen eintragen. / Provide non-sensitive information only.
       placeholder: |
-        Connector-Version oder Commit:
-        Betrieb: Docker Compose / Portainer / Swarm / lokal:
-        Python-Version:
-        Docker-/Compose-Version:
-        Seafile-/RAGFlow-/OpenWebUI-Anbindung:
+        Connector-Version oder Commit / connector version or commit:
+        Betrieb / runtime: Docker Compose / Portainer / Swarm / local:
+        Python-Version / Python version:
+        Docker-/Compose-Version / Docker/Compose version:
+        Seafile-/RAGFlow-/OpenWebUI-Anbindung / integration:
   - type: textarea
     id: logs
     attributes:
-      label: Relevante Logs oder Ausgabe
-      description: Secrets vorher redigieren.
+      label: Relevante Logs oder Ausgabe / Relevant logs or output
+      description: Secrets vorher redigieren. / Redact secrets first.
       render: text
   - type: checkboxes
     id: checks
     attributes:
-      label: Vorab geprüft
+      label: Vorab geprüft / Pre-checks
       options:
-        - label: Ich habe Secrets aus Logs und Beispielen entfernt.
+        - label: Ich habe Secrets aus Logs und Beispielen entfernt. / I removed secrets from logs and examples.
           required: true
-        - label: Ich habe README, docs/README.md oder SUPPORT.md geprüft.
+        - label: Ich habe README, docs/README.md oder SUPPORT.md geprüft. / I checked README, docs/README.md, or SUPPORT.md.
           required: false
-        - label: Ich habe, falls möglich, `python scripts/verify.py --skip-compose` ausgeführt.
+        - label: Ich habe, falls möglich, `python scripts/verify.py --skip-compose` ausgeführt. / I ran `python scripts/verify.py --skip-compose` when possible.
           required: false

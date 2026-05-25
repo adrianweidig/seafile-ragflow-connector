@@ -1,5 +1,7 @@
 # Dokumentation
 
+🌐 Sprachen: **Deutsch** | [English](en/index.md)
+
 Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
 
 - `architecture.md` erklärt Komponenten, Datenflüsse, Delete-/Repair-Regeln und
@@ -28,6 +30,10 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
 - `RELEASE_PROCESS.md` beschreibt den vorsichtigen manuellen Release-Ablauf.
 - `MAINTAINER_CHECKLIST.md` bündelt GitHub-Einstellungen, Security-Optionen und
   Release-Aufgaben, die Maintainer außerhalb des Arbeitsbaums prüfen müssen.
+- `i18n.md` beschreibt Sprachwahl, Locale-Erkennung, UTF-8-/Unicode-Regeln und
+  das Ergänzen weiterer Sprachen.
+- `de/index.md` und `en/index.md` sind die expliziten Sprach-Einstiege für
+  GitHub und spätere statische Dokumentation.
 - `../deploy/tls-lab/README.md` beschreibt das lokale HTTPS-Lab mit eigener
   Test-Root-CA und `.top.secret`-Domains.
 

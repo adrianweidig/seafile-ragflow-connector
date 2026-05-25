@@ -1,5 +1,7 @@
 # Code of Conduct
 
+🌐 Sprachen: **Deutsch** | [English](CODE_OF_CONDUCT.en.md)
+
 Dieses Projekt soll eine sachliche und respektvolle Zusammenarbeit ermöglichen.
 Alle Beteiligten sind eingeladen, Probleme klar zu benennen, technische
 Entscheidungen kritisch zu prüfen und Verbesserungen vorzuschlagen.

@@ -1,5 +1,5 @@
-name: Dokumentation
-description: Fehler oder Lücke in README, docs oder Beispielen melden
+name: Dokumentation / Documentation
+description: Fehler oder Lücke in README, docs oder Beispielen melden / Report an issue or gap in README, docs, or examples
 title: "[Docs]: "
 labels:
   - documentation
@@ -7,26 +7,26 @@ body:
   - type: textarea
     id: location
     attributes:
-      label: Betroffene Stelle
-      description: Link, Datei oder Abschnitt.
+      label: Betroffene Stelle / Affected location
+      description: Link, Datei oder Abschnitt. / Link, file, or section.
     validations:
       required: true
   - type: textarea
     id: issue
     attributes:
       label: Problem
-      description: Was ist unklar, veraltet, widersprüchlich oder fehlt?
+      description: Was ist unklar, veraltet, widersprüchlich oder fehlt? / What is unclear, outdated, contradictory, or missing?
     validations:
       required: true
   - type: textarea
     id: suggested
     attributes:
-      label: Vorschlag
-      description: Falls du eine konkrete Korrektur hast, beschreibe sie hier.
+      label: Vorschlag / Suggestion
+      description: Falls du eine konkrete Korrektur hast, beschreibe sie hier. / If you have a concrete correction, describe it here.
   - type: checkboxes
     id: checks
     attributes:
-      label: Prüfung
+      label: Prüfung / Check
       options:
-        - label: Der Vorschlag enthält keine echten Zugangsdaten oder privaten Pfade.
+        - label: Der Vorschlag enthält keine echten Zugangsdaten oder privaten Pfade. / The suggestion contains no real credentials or private paths.
           required: true

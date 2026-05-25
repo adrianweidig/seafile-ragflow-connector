@@ -1,5 +1,7 @@
 # Security Policy
 
+🌐 Sprachen: **Deutsch** | [English](SECURITY.en.md)
+
 ## Unterstützte Versionen
 
 Das Repository enthält derzeit die Paketversion `0.1.0` in `pyproject.toml` und

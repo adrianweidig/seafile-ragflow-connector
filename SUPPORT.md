@@ -1,5 +1,7 @@
 # Support
 
+🌐 Sprachen: **Deutsch** | [English](SUPPORT.en.md)
+
 Dieses Repository bietet Community-Support über GitHub Issues und Pull
 Requests. Es gibt keinen veröffentlichten kommerziellen Supportkanal und keinen
 SLA.

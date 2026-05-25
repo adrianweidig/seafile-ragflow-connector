@@ -2,6 +2,10 @@
   <img src="docs/assets/hero.png" alt="Seafile RAGFlow Connector: offline-fähige Sync-Control-Plane zwischen Seafile, RAGFlow und optional OpenWebUI">
 </p>
 
+<p align="center">
+  🌐 Sprachen: <strong>Deutsch</strong> | <a href="README.en.md">English</a>
+</p>
+
 <h1 align="center">Seafile RAGFlow Connector</h1>
 
 <p align="center">
@@ -41,6 +45,7 @@ RAGFlow-Secrets in OpenWebUI-Funktionen abzulegen.
 | Konfiguration | [`connector.env.example`](connector.env.example), [Environment-Referenz](docs/environment.md) |
 | Betrieb | [Operations-Handbuch](docs/operations.md) |
 | Architektur | [Architektur](docs/architecture.md) |
+| Internationalisierung | [Sprach- und Unicode-Modell](docs/i18n.md), [English docs](docs/en/index.md) |
 | TLS | [TLS-Topologie](docs/tls-topology.md), [TLS-Zertifikate](docs/tls-certificates.md), [Troubleshooting](docs/troubleshooting-ssl.md) |
 | Entwicklung | [Entwicklungschecks](#entwicklung) und [Tests](docs/testing.md) |
 | Mitarbeit | [CONTRIBUTING.md](CONTRIBUTING.md), [Security Policy](SECURITY.md), [Support](SUPPORT.md) |
@@ -107,6 +112,22 @@ Mehr Details stehen in [docs/architecture.md](docs/architecture.md).
 - OpenWebUI-Funktionen bekommen keine RAGFlow-Admin-Secrets, sondern sprechen mit dem Connector-Proxy.
 - Der Runtime-Betrieb ist offline-fähig: keine Telemetrie und keine externen Service-Abhängigkeiten außerhalb der konfigurierten Zielsysteme.
 - Das Dashboard ist lesend; Schreib- und Löschaktionen laufen über explizite CLI-/Runtime-Pfade.
+
+## Internationalisierung
+
+Deutsch ist die Standardsprache für CLI-Hilfen, menschenlesbare Fehlermeldungen,
+Dashboard-Texte, OpenWebUI-Artefakte, README und Repository-Dokumentation.
+Englisch ist als Alternativsprache vorbereitet. Die Sprache kann explizit über
+`CONNECTOR_LANGUAGE=de` oder `CONNECTOR_LANGUAGE=en` gesetzt werden; ohne
+zuverlässige Vorgabe fällt der Connector stabil auf Deutsch zurück. Dashboard
+und Quellenvorschau nutzen UTF-8, Browser-Locale und eine sichtbare manuelle
+Sprachwahl. GitHub selbst schaltet die normale Repository-Ansicht nicht
+automatisch nach Nutzersprache um, deshalb sind Sprachversionen über konkrete
+Dateien und Links organisiert.
+
+Neue Sprachen werden über Ressourcen in
+[`src/seafile_ragflow_connector/locales/`](src/seafile_ragflow_connector/locales/)
+ergänzt. Details stehen im [Sprach- und Unicode-Modell](docs/i18n.md).
 
 ## Voraussetzungen
 
@@ -396,6 +417,9 @@ python scripts/verify.py --with-compose
 ## Dokumentation
 
 - [Dokumentationsindex](docs/README.md)
+- [Deutscher Dokumentationseinstieg](docs/de/index.md)
+- [English documentation entry](docs/en/index.md)
+- [Internationalisierung und Unicode](docs/i18n.md)
 - [Architektur](docs/architecture.md)
 - [Konfiguration](docs/configuration.md)
 - [Environment-Variablen](docs/environment.md)

@@ -102,6 +102,11 @@ erzwungen, wenn `--with-compose` gesetzt ist.
   Env-Variablen, IDs oder technischen Strings.
 - Beispielwerte bleiben offensichtliche Platzhalter wie `change-me` oder
   `YOUR_API_KEY`.
+- Deutsch ist die Standardsprache. Neue menschenlesbare Laufzeittexte müssen
+  über `src/seafile_ragflow_connector/locales/de.json` und `en.json` oder über
+  die dokumentierte Dashboard-Sprachstruktur pflegbar sein. GitHub-Dateien
+  brauchen sichtbare Sprachlinks oder deutsch/englische Beschriftungen, weil
+  GitHub die Repository-Ansicht nicht automatisch übersetzt.
 
 ## Git- und Datei-Hygiene
 

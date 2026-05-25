@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Sicherheitsproblem melden
+  - name: Sicherheitsproblem melden / Report a security issue
     url: https://github.com/adrianweidig/seafile-ragflow-connector/security/advisories
-    about: Bitte keine sensiblen Schwachstellendetails als öffentliches Issue posten.
-  - name: Support-Hinweise lesen
+    about: Bitte keine sensiblen Schwachstellendetails als öffentliches Issue posten. / Do not post sensitive vulnerability details as a public issue.
+  - name: Support-Hinweise lesen / Read support guidance
     url: https://github.com/adrianweidig/seafile-ragflow-connector/blob/master/SUPPORT.md
-    about: Vor einem Issue bitte Support-Grenzen und benötigte Informationen prüfen.
+    about: Vor einem Issue bitte Support-Grenzen und benötigte Informationen prüfen. / Check support boundaries and required information before opening an issue.

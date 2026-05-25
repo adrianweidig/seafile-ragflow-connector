@@ -33,6 +33,7 @@ from seafile_ragflow_connector.demo.lifecycle import (
     dumps_summary,
     write_demo_testset,
 )
+from seafile_ragflow_connector.i18n import localizer_for, t
 from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
 from seafile_ragflow_connector.jobs.scheduler import PeriodicTask, SimpleScheduler
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
@@ -40,7 +41,7 @@ from seafile_ragflow_connector.jobs.worker import WorkerRunner
 from seafile_ragflow_connector.persistence.db import init_database
 from seafile_ragflow_connector.sync.target_cleanup import LibrarySourceLike, TargetCleanupService
 
-app = typer.Typer(help="Offline-first Seafile to RAGFlow connector")
+app = typer.Typer(help=t("cli.app_help"))
 PROCESS_STARTED_AT = datetime.now(UTC)
 OpenWebUIMode = Literal["disabled", "dry-run", "sync", "repair"]
 
@@ -57,15 +58,15 @@ def _bootstrap() -> Settings:
 
 @app.command()
 def init_db() -> None:
-    """Create or update connector state tables."""
+    """Connector-State-Tabellen anlegen oder aktualisieren."""
     settings = _bootstrap()
     init_database(settings.database_url)
-    typer.echo("database initialized")
+    typer.echo(localizer_for(settings).text("cli.init_db.done"))
 
 
 @app.command("check-live")
 def check_live() -> None:
-    """Check live dependencies without mutating Seafile or RAGFlow."""
+    """Live-Abhängigkeiten prüfen, ohne Seafile oder RAGFlow zu verändern."""
     settings = _bootstrap()
     check_database(settings.database_url)
     check_redis(settings.redis_url)
@@ -100,11 +101,11 @@ def sync_once(
         int,
         typer.Option(
             "--wait-parse-seconds",
-            help="Poll parse status for this many seconds after upload work.",
+            help=t("cli.sync_once.wait_parse"),
         ),
     ] = 0,
 ) -> None:
-    """Run one full discovery and reconciliation pass."""
+    """Einen vollständigen Discovery- und Sync-Lauf ausführen."""
     settings = _bootstrap()
     runtime = build_runtime(settings)
     try:
@@ -126,25 +127,25 @@ def cleanup_orphans(
         bool,
         typer.Option(
             "--execute",
-            help="Delete the planned connector-owned orphan target artifacts.",
+            help=t("cli.cleanup_orphans.execute"),
         ),
     ] = False,
     run_sync: Annotated[
         bool,
         typer.Option(
             "--run-sync",
-            help="Run sync-once after cleanup so current Seafile libraries are rebuilt.",
+            help=t("cli.cleanup_orphans.run_sync"),
         ),
     ] = False,
     wait_parse_seconds: Annotated[
         int,
         typer.Option(
             "--wait-parse-seconds",
-            help="Poll parse status for this many seconds after the optional sync.",
+            help=t("cli.sync_once.wait_parse"),
         ),
     ] = 0,
 ) -> None:
-    """Plan or delete connector-owned orphan RAGFlow/OpenWebUI artifacts."""
+    """Verwaiste connector-eigene RAGFlow-/OpenWebUI-Artefakte planen oder löschen."""
     settings = _bootstrap()
     runtime = build_runtime(settings)
     extra_openwebui_client: OpenWebUIClient | None = None
@@ -191,11 +192,11 @@ def openwebui_sync_once(
         str | None,
         typer.Option(
             "--mode",
-            help="Override OpenWebUI sync mode: disabled, dry-run, sync or repair.",
+            help=t("cli.openwebui.mode"),
         ),
     ] = None,
 ) -> None:
-    """Run one OpenWebUI synchronization pass."""
+    """Einen OpenWebUI-Synchronisationslauf ausführen."""
     settings = _bootstrap()
     runtime = build_runtime(settings)
     try:
@@ -204,7 +205,7 @@ def openwebui_sync_once(
             return
         selected_mode = mode or settings.openwebui_effective_sync_mode
         if selected_mode not in {"disabled", "dry-run", "sync", "repair"}:
-            raise typer.BadParameter("mode must be disabled, dry-run, sync or repair")
+            raise typer.BadParameter(localizer_for(settings).text("cli.openwebui.mode_error"))
         summary = runtime.openwebui_sync_service.sync_once(
             mode_override=cast(OpenWebUIMode, selected_mode)
         )
@@ -219,11 +220,11 @@ def demo_fixtures(
         Path,
         typer.Option(
             "--output-dir",
-            help="Directory where the reproducible demo files are generated.",
+            help=t("cli.demo.output_dir"),
         ),
     ] = Path("/cache/demo-fixtures"),
 ) -> None:
-    """Generate the reproducible local demo file set without contacting services."""
+    """Reproduzierbare lokale Demo-Dateien erzeugen, ohne Dienste zu kontaktieren."""
     summary = {"fixtures": write_demo_testset(output_dir)}
     typer.echo(dumps_summary(summary))
 
@@ -234,11 +235,11 @@ def demo_cleanup(
         bool,
         typer.Option(
             "--execute",
-            help="Actually delete safe demo objects. Without this flag only prints the plan.",
+            help=t("cli.demo.execute_cleanup"),
         ),
     ] = False,
 ) -> None:
-    """Delete only clearly named local demo artifacts across Seafile, RAGFlow and OpenWebUI."""
+    """Nur klar benannte lokale Demo-Artefakte in Seafile, RAGFlow und OpenWebUI löschen."""
     settings = _bootstrap()
     typer.echo(dumps_summary(cleanup_demo_environment(settings, execute=execute)))
 
@@ -250,8 +251,7 @@ def demo_bootstrap(
         typer.Option(
             "--execute",
             help=(
-                "Actually create libraries and upload files. "
-                "Without this flag only writes fixtures."
+                t("cli.demo.execute_bootstrap")
             ),
         ),
     ] = False,
@@ -259,22 +259,22 @@ def demo_bootstrap(
         Path,
         typer.Option(
             "--output-dir",
-            help="Directory where the reproducible demo files are generated.",
+            help=t("cli.demo.output_dir"),
         ),
     ] = Path("/cache/demo-fixtures"),
     run_sync: Annotated[
         bool,
-        typer.Option("--run-sync", help="Run connector sync-once after uploading demo files."),
+        typer.Option("--run-sync", help=t("cli.demo.run_sync")),
     ] = False,
     wait_parse_seconds: Annotated[
         int,
         typer.Option(
             "--wait-parse-seconds",
-            help="Poll parse status for this many seconds after sync.",
+            help=t("cli.sync_once.wait_parse"),
         ),
     ] = 0,
 ) -> None:
-    """Create the canonical demo libraries and optionally run the connector sync path."""
+    """Kanonische Demo-Libraries erstellen und optional den Connector-Sync-Pfad ausführen."""
     settings = _bootstrap()
     summary = bootstrap_demo_environment(settings, output_dir=output_dir, execute=execute)
     if execute and run_sync:
@@ -294,7 +294,7 @@ def demo_bootstrap(
 
 @app.command()
 def controller() -> None:
-    """Run the discovery and delta scheduling loop."""
+    """Discovery- und Delta-Scheduling-Loop ausführen."""
     settings = _bootstrap()
     runtime = build_runtime(settings)
     log = structlog.get_logger(__name__)
@@ -366,7 +366,7 @@ def controller() -> None:
 
 @app.command()
 def worker() -> None:
-    """Run a connector worker process."""
+    """Connector-Worker-Prozess ausführen."""
     settings = _bootstrap()
     runtime = build_runtime(settings)
     log = structlog.get_logger(__name__)
@@ -381,7 +381,7 @@ def worker() -> None:
 
 @app.command()
 def reconciler() -> None:
-    """Run the low-priority reconciliation loop."""
+    """Low-Priority-Reconciliation-Loop ausführen."""
     settings = _bootstrap()
     runtime = build_runtime(settings)
     log = structlog.get_logger(__name__)
@@ -399,11 +399,12 @@ def reconciler() -> None:
 
 @app.command("check-config")
 def check_config() -> None:
-    """Load and validate configuration without contacting external services."""
+    """Konfiguration laden und validieren, ohne externe Dienste zu kontaktieren."""
     settings = _bootstrap()
     typer.echo(
         {
             "app_env": settings.app_env,
+            "connector_language": localizer_for(settings).language,
             "seafile_base_url": settings.seafile_base_url,
             "ragflow_base_url": settings.ragflow_base_url,
             "allow_unknown_text_files": settings.allow_unknown_text_files,
@@ -422,17 +423,18 @@ def check_config() -> None:
 
 @app.command()
 def dashboard() -> None:
-    """Run the read-only HTTP dashboard as a foreground process."""
+    """Lesendes HTTP-Dashboard als Vordergrundprozess starten."""
     settings = _bootstrap()
+    l10n = localizer_for(settings)
     log = structlog.get_logger(__name__)
     if not settings.connector_dashboard_enabled:
         log.info("dashboard.disabled")
-        typer.echo("dashboard disabled; set CONNECTOR_DASHBOARD_ENABLED=true to start it")
+        typer.echo(l10n.text("cli.dashboard.disabled"))
         return
     init_database(settings.database_url)
     store = build_dashboard_store(settings)
     if store is None:
-        typer.echo("dashboard disabled; set CONNECTOR_DASHBOARD_ENABLED=true to start it")
+        typer.echo(l10n.text("cli.dashboard.disabled"))
         return
     try:
         serve_dashboard_forever(DashboardContext(store, settings, PROCESS_STARTED_AT))
@@ -466,9 +468,9 @@ def _retry_until(action: Callable[[], Any], label: str, timeout_seconds: int = 1
             time.sleep(5)
     if last_error:
         raise RuntimeError(
-            f"{label} did not become ready within {timeout_seconds}s"
+            t("cli.check_live.not_ready", label=label, seconds=timeout_seconds)
         ) from last_error
-    raise RuntimeError(f"{label} did not become ready within {timeout_seconds}s")
+    raise RuntimeError(t("cli.check_live.not_ready", label=label, seconds=timeout_seconds))
 
 
 def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], None]]:
@@ -484,14 +486,14 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
     def upload_file(spec: JobSpec) -> None:
         repo_id = _require_repo_id(spec)
         if not spec.file_path:
-            raise ValueError("UPLOAD_FILE requires file_path")
+            raise ValueError(t("cli.jobs.upload_requires_file"))
         dataset_id = runtime.orchestrator.ensure_dataset_for_repo(repo_id)
         runtime.orchestrator.sync_file(repo_id, dataset_id, spec.file_path, force=True)
 
     def delete_file(spec: JobSpec) -> None:
         repo_id = _require_repo_id(spec)
         if not spec.file_path:
-            raise ValueError("DELETE_FILE requires file_path")
+            raise ValueError(t("cli.jobs.delete_requires_file"))
         dataset_id = runtime.orchestrator.ensure_dataset_for_repo(repo_id)
         if bool(spec.payload.get("recursive")):
             runtime.orchestrator.delete_missing_files(
@@ -521,7 +523,7 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
             return
         mode = spec.payload.get("mode")
         if mode is not None and str(mode) not in {"disabled", "dry-run", "sync", "repair"}:
-            raise ValueError("SYNC_OPENWEBUI mode must be disabled, dry-run, sync or repair")
+            raise ValueError(t("cli.jobs.sync_mode_error"))
         mode_override = cast(OpenWebUIMode, str(mode)) if mode else None
         runtime.openwebui_sync_service.sync_once(mode_override=mode_override)
 
@@ -566,7 +568,7 @@ def _openwebui_sync_enabled(runtime: Runtime) -> bool:
 
 def _require_repo_id(spec: JobSpec) -> str:
     if not spec.repo_id:
-        msg = f"{spec.job_type} requires repo_id"
+        msg = t("cli.jobs.requires_repo_id", job_type=spec.job_type)
         raise ValueError(msg)
     return spec.repo_id
 
