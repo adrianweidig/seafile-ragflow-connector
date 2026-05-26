@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import Any
 
 from seafile_ragflow_connector.domain.file_classification import FileClassification
 from seafile_ragflow_connector.utils.hashing import sha256_bytes, sha256_text
@@ -66,3 +68,39 @@ def prepare_ingestion_artifact(
             "ingestion_strategy": classification.ingestion_strategy,
         },
     )
+
+
+def build_ragflow_document_metadata(
+    artifact: IngestionArtifact,
+    *,
+    repo_id: str,
+    path: str,
+    item: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    metadata: dict[str, Any] = dict(artifact.metadata)
+    source_path = metadata.get("source_path") or path
+    source_extension = metadata.get("source_extension") or ""
+    metadata.update(
+        {
+            "repo_id": repo_id,
+            "path": source_path,
+            "source_path": source_path,
+            "source_sha256": artifact.source_content_sha256,
+            "document_name": artifact.document_name,
+            "file_type": source_extension.lstrip(".") or artifact.mime_type,
+        }
+    )
+    if item:
+        _set_metadata(metadata, "seafile_obj_id", item.get("id") or item.get("obj_id"))
+        _set_metadata(metadata, "seafile_mtime", item.get("mtime"))
+        _set_metadata(metadata, "seafile_size", item.get("size"))
+    return {
+        key: str(value)
+        for key, value in metadata.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _set_metadata(metadata: dict[str, Any], key: str, value: Any) -> None:
+    if value not in (None, "", [], {}):
+        metadata[key] = value

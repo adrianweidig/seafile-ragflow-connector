@@ -15,7 +15,10 @@ from seafile_ragflow_connector.clients import RAGFlowClient, SeafileAdminClient,
 from seafile_ragflow_connector.clients.http import ApiError
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore, new_sync_id
 from seafile_ragflow_connector.domain.file_classification import FilePolicy, classify_file
-from seafile_ragflow_connector.domain.ingestion_artifacts import prepare_ingestion_artifact
+from seafile_ragflow_connector.domain.ingestion_artifacts import (
+    build_ragflow_document_metadata,
+    prepare_ingestion_artifact,
+)
 from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 from seafile_ragflow_connector.persistence.models.file import File
@@ -60,6 +63,8 @@ class SyncOrchestrator:
         ragflow_client: RAGFlowClient,
         file_policy: FilePolicy,
         template_dataset_name: str,
+        template_auto_create: bool = True,
+        template_required: bool = True,
         skip_encrypted_libraries: bool = True,
         skip_virtual_repos: bool = True,
         delete_ragflow_docs_on_seafile_delete: bool = True,
@@ -81,6 +86,8 @@ class SyncOrchestrator:
         self.dataset_provisioner = DatasetProvisioner(
             ragflow_client,
             template_dataset_name=template_dataset_name,
+            template_auto_create=template_auto_create,
+            template_required=template_required,
         )
         self.dataset_settings_service = DatasetSettingsService(ragflow_client)
         self.log = structlog.get_logger(__name__)
@@ -505,6 +512,26 @@ class SyncOrchestrator:
         if not document_id:
             msg = f"RAGFlow upload response did not contain a document id for {path}"
             raise RuntimeError(msg)
+        metadata = build_ragflow_document_metadata(
+            artifact,
+            repo_id=repo_id,
+            path=path,
+            item=item,
+        )
+        try:
+            self.ragflow_client.update_document_metadata(dataset_id, document_id, metadata)
+        except ApiError as exc:
+            if exc.status_code not in {404, 405}:
+                raise
+            self.log.warning(
+                "ragflow.document_metadata_update_unsupported",
+                sync_id=sync_id,
+                repo_id=repo_id,
+                dataset_id=dataset_id,
+                path=path,
+                document_id=document_id,
+                status_code=exc.status_code,
+            )
         self.ragflow_client.parse_documents(dataset_id, [document_id])
 
         with self.session_factory() as session:

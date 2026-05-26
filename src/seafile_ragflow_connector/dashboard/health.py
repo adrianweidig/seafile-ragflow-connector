@@ -184,6 +184,16 @@ def _check_ragflow(settings: Settings) -> Callable[[], dict[str, Any]]:
             }
         datasets = _extract_ragflow_datasets(payload)
         if not datasets and settings.ragflow_template_required:
+            if settings.ragflow_template_auto_create:
+                return {
+                    "status": "ok",
+                    "message": (
+                        f"Template '{settings.ragflow_template_dataset_name}' fehlt noch "
+                        "und wird beim Provisioning automatisch angelegt."
+                    ),
+                    "endpoint": base_url,
+                    **_transport_fields(settings, "ragflow", base_url),
+                }
             return {
                 "status": "warning",
                 "message": f"Template '{settings.ragflow_template_dataset_name}' nicht gefunden.",

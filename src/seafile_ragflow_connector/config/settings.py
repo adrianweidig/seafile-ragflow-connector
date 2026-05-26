@@ -72,7 +72,9 @@ class Settings(BaseSettings):
     ragflow_internal_url: str | None = None
     ragflow_api_key: str
     ragflow_template_dataset_name: str = "connector_template"
+    ragflow_template_auto_create: bool = True
     ragflow_template_required: bool = True
+    ragflow_template_chat_name: str = "connector_template_chat"
     ragflow_verify_ssl: bool = True
     ragflow_ca_bundle: str | None = None
     ragflow_template_refresh_seconds: int = 300
@@ -109,6 +111,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("OPENWEBUI_PROXY_CA_BUNDLE", "CONNECTOR_PROXY_CA_BUNDLE"),
     )
+    openwebui_pipe_answer_synthesis_enabled: bool = False
+    openwebui_pipe_answer_llm_base_url: str | None = None
+    openwebui_pipe_answer_llm_model: str | None = None
+    openwebui_pipe_answer_llm_api_key: str | None = None
     ragflow_client_cert_file: str | None = None
     ragflow_client_key_file: str | None = None
     seafile_client_cert_file: str | None = None
@@ -190,6 +196,7 @@ class Settings(BaseSettings):
         "openwebui_base_url",
         "openwebui_proxy_public_base_url",
         "openwebui_proxy_internal_base_url",
+        "openwebui_pipe_answer_llm_base_url",
     )
     @classmethod
     def strip_url(cls, value: str | None) -> str | None:
@@ -308,6 +315,7 @@ class Settings(BaseSettings):
             "ragflow_public_base_url",
             "openwebui_proxy_public_base_url",
             "openwebui_proxy_internal_base_url",
+            "openwebui_pipe_answer_llm_base_url",
         ):
             value = getattr(self, name)
             if value and not _is_http_url(value):

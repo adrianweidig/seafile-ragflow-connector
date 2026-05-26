@@ -63,6 +63,10 @@ Proxy-Secret und keine Preview-URL.
 | `OPENWEBUI_VERIFY_SSL`, `OPENWEBUI_CA_BUNDLE` | optional | TLS für Connector -> OpenWebUI Admin API. |
 | `OPENWEBUI_FUNCTION_NAMESPACE` | optional | Präfix für erzeugte Tool-/Pipe-IDs. |
 | `OPENWEBUI_SOURCE_PREVIEW_MODE` | optional | `ragflow_link`, `connector_viewer`, `citation_only` oder `disabled`. |
+| `OPENWEBUI_PIPE_ANSWER_SYNTHESIS_ENABLED` | optional | Aktiviert einen OpenAI-kompatiblen Modell-Fallback, falls RAGFlow nur Retrieval-Treffer zurückgibt. |
+| `OPENWEBUI_PIPE_ANSWER_LLM_BASE_URL` | optional | Base-URL des Fallback-Modells, z. B. `http://litellm:4000/v1`. |
+| `OPENWEBUI_PIPE_ANSWER_LLM_MODEL` | optional | Modellname für die Antwortsynthese. |
+| `OPENWEBUI_PIPE_ANSWER_LLM_API_KEY` | optional | Runtime-Secret für den Fallback; nicht in Repository-Dateien speichern. |
 | `OPENWEBUI_SYNC_INTERVAL_SECONDS` | optional | Periodischer OpenWebUI-Sync im Controller. |
 | `OPENWEBUI_DATASET_ALLOWLIST` | optional | CSV aus Repo-IDs oder Dataset-IDs für stufenweisen Rollout. |
 
@@ -94,7 +98,9 @@ und eine Datei sein. Ein leerer Pfad ist gültig und nutzt den Standard-Trust.
 | `SEAFILE_FILE_URL_TEMPLATE` | optional | Browser-Link zum Originaldokument in OpenWebUI-Quellen. |
 | `SEAFILE_REWRITE_DOWNLOAD_URLS`, `SEAFILE_DOWNLOAD_REWRITE_FROM`, `SEAFILE_DOWNLOAD_REWRITE_TO` | optional | Rewrite von Seafile-Download-URLs, z. B. von `127.0.0.1` auf Docker-DNS. |
 | `RAGFLOW_TEMPLATE_DATASET_NAME` | optional | Default ist `connector_template`. |
-| `RAGFLOW_TEMPLATE_REQUIRED` | optional | Default `true`; Healthcheck warnt, wenn Template fehlt. |
+| `RAGFLOW_TEMPLATE_AUTO_CREATE` | optional | Default `true`; fehlende Dataset-Templates werden beim Provisioning automatisch angelegt. |
+| `RAGFLOW_TEMPLATE_REQUIRED` | optional | Default `true`; Healthcheck warnt nur noch, wenn Auto-Create deaktiviert ist und das Template fehlt. |
+| `RAGFLOW_TEMPLATE_CHAT_NAME` | optional | Default `connector_template_chat`; Template-Chat für die OpenWebUI/RAGFlow-Chat-Defaults. |
 | `RAGFLOW_TEMPLATE_REFRESH_SECONDS` | optional | Intervall für Aktualisierung der Dataset-Einstellungen. |
 | `RAGFLOW_PUBLIC_BASE_URL`, `RAGFLOW_DOCUMENT_URL_TEMPLATE` | optional | öffentliche RAGFlow-Links in Quellen. |
 | `CONNECTOR_DASHBOARD_ENABLED` | optional | Dashboard starten; für OpenWebUI-Proxy nötig. |

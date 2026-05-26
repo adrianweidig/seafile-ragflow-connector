@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from importlib import resources
 from textwrap import dedent
 
 from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.i18n import SUPPORTED_LANGUAGES, Localizer
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "11"
+ARTIFACT_VERSION = "15"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
+_PIPE_TEMPLATE = "ragflow_dataset_pipe_chat_rag_polished.py.txt"
+_TEMPLATE_PACKAGE = "seafile_ragflow_connector.openwebui.templates"
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,9 @@ class DatasetArtifactInputs:
     proxy_base_url: str | None
     proxy_verify_ssl: bool = True
     proxy_ca_bundle: str | None = None
+    answer_synthesis_enabled: bool = False
+    answer_llm_base_url: str | None = None
+    answer_llm_model: str | None = None
     model_name_prefix: str = "ragflow"
     language: str = "de"
 
@@ -84,14 +90,35 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "CONNECTOR_PROXY_CA_BUNDLE": inputs.proxy_ca_bundle or "",
         "TLS_DEBUG": False,
         "DATASET_ID": inputs.dataset_id,
-        "LANGUAGE": l10n.language,
         "RAGFLOW_CHAT_ID": inputs.ragflow_chat_id or "",
         "MODEL_ID": model_name,
         "MODEL_NAME": model_name,
         "TOP_K": 8,
+        "INJECT_RAG_SYSTEM_PROMPT": True,
+        "SEND_GENERATIVE_RAG_HINTS": True,
+        "RETRIEVAL_ONLY_FALLBACK": "diagnostic",
+        "ENABLE_ANSWER_SYNTHESIS_FALLBACK": inputs.answer_synthesis_enabled,
+        "ANSWER_LLM_BASE_URL": inputs.answer_llm_base_url or "",
+        # OpenWebUI valve placeholder, not a committed secret.
+        "ANSWER_LLM_API_KEY": "",  # nosec B105
+        "ANSWER_LLM_MODEL": inputs.answer_llm_model or "",
+        "ANSWER_CONTEXT_MAX_CHARS": 12000,
+        "ANSWER_SYNTHESIS_TEMPERATURE": 0.2,
+        "ANSWER_SYNTHESIS_MAX_TOKENS": 700,
+        "REQUEST_TIMEOUT_SECONDS": 180.0,
+        "STATUS_UPDATES": True,
+        "STATUS_MODE": "minimal",
+        "HIDE_FINAL_STATUS": False,
+        "EMIT_CITATION_EVENTS": True,
+        "EMIT_LEGACY_SOURCE_EVENTS": False,
+        "MAX_SOURCE_EVENTS": 20,
         "SHOW_SOURCE_SCORES": True,
         "SHOW_SOURCE_DEBUG": False,
-        "SOURCE_MARKDOWN_MODE": "compact",
+        "SOURCE_MARKDOWN_MODE": "none",
+        "APPEND_SOURCE_OVERVIEW": False,
+        "ALLOW_CONNECTOR_SOURCE_LINKS": False,
+        "CLEAN_RAGFLOW_MARKERS": True,
+        "ERROR_VERBOSITY": "safe",
     }
     payload: dict[str, object] = {
         "id": artifact_id,
@@ -149,7 +176,11 @@ def _manifest(kind: str, inputs: DatasetArtifactInputs) -> dict[str, object]:
 
 
 def _definition_hash(payload: dict[str, object], valves: dict[str, object]) -> str:
-    hash_valves = {key: value for key, value in valves.items() if "SECRET" not in key}
+    hash_valves = {
+        key: value
+        for key, value in valves.items()
+        if "SECRET" not in key and "API_KEY" not in key
+    }
     return sha256_json({"payload": payload, "valves": hash_valves, "version": ARTIFACT_VERSION})
 
 
@@ -160,9 +191,9 @@ def _tool_content() -> str:
         """
         title: RAGFlow Dataset Search
         author: Seafile RAGFlow Connector
-        version: 1.3.0
+        version: 1.4.0
         owner: seafile-ragflow-connector
-        artifact_version: 11
+        artifact_version: 15
         """
 
         import httpx
@@ -355,300 +386,7 @@ def _tool_content() -> str:
 
 
 def _pipe_content() -> str:
-    return (
-        dedent(
-            '''
-        """
-        title: RAGFlow Dataset Pipe
-        author: Seafile RAGFlow Connector
-        version: 1.3.0
-        owner: seafile-ragflow-connector
-        artifact_version: 11
-        """
-
-        import httpx
-        import logging
-        import re
-        from pathlib import Path
-        from urllib.parse import urlsplit, urlunsplit
-        from pydantic import BaseModel, Field
-
-
-        class Pipe:
-            class Valves(BaseModel):
-                ARTIFACT_ID: str = Field(default="")
-                CONNECTOR_PROXY_BASE_URL: str = Field(default="")
-                CONNECTOR_PROXY_SHARED_SECRET: str = Field(default="")
-                CONNECTOR_PROXY_VERIFY_SSL: bool = Field(default=True)
-                CONNECTOR_PROXY_CA_BUNDLE: str = Field(default="")
-                TLS_DEBUG: bool = Field(default=False)
-                DATASET_ID: str = Field(default="")
-                LANGUAGE: str = Field(default="de")
-                RAGFLOW_CHAT_ID: str = Field(default="")
-                MODEL_ID: str = Field(default="")
-                MODEL_NAME: str = Field(default="")
-                TOP_K: int = Field(default=8, ge=1, le=20)
-                SHOW_SOURCE_SCORES: bool = Field(default=True)
-                SHOW_SOURCE_DEBUG: bool = Field(default=False)
-                SOURCE_MARKDOWN_MODE: str = Field(default="compact")
-
-            def __init__(self):
-                self.valves = self.Valves()
-
-            def pipes(self):
-                return [
-                    {
-                        "id": self.valves.MODEL_ID,
-                        "name": self.valves.MODEL_NAME or self.valves.MODEL_ID,
-                    }
-                ]
-
-            async def pipe(
-                self,
-                body: dict,
-                __event_emitter__=None,
-                __user__: dict | None = None,
-                __task__: str | None = None,
-                __task_body__: dict | None = None,
-                __metadata__: dict | None = None,
-            ):
-                task = _normalize_task(__task__ or (__metadata__ or {}).get("task"))
-                if task:
-                    return _task_response(task, __task_body__ or body)
-
-                if __event_emitter__:
-                    await __event_emitter__(
-                        {
-                            "type": "status",
-                            "data": {
-                                "description": _msg(
-                                    self.valves.LANGUAGE,
-                                    "openwebui_artifact.answer_preparing",
-                                ),
-                                "done": False,
-                            },
-                        }
-                    )
-                payload = {
-                    "artifact_id": self.valves.ARTIFACT_ID,
-                    "dataset_id": self.valves.DATASET_ID,
-                    "chat_id": self.valves.RAGFLOW_CHAT_ID,
-                    "messages": body.get("messages") or [],
-                    "model": body.get("model") or self.valves.MODEL_ID or "model",
-                    "top_k": self.valves.TOP_K,
-                    "user": {
-                        "id": (__user__ or {}).get("id"),
-                        "email": (__user__ or {}).get("email"),
-                    },
-                }
-                headers = {
-                    "Authorization": f"Bearer {self.valves.CONNECTOR_PROXY_SHARED_SECRET}",
-                    "Content-Type": "application/json",
-                }
-                url = (
-                    self.valves.CONNECTOR_PROXY_BASE_URL.rstrip("/")
-                    + "/api/openwebui/proxy/chat"
-                )
-                try:
-                    verify = _httpx_verify(
-                        self.valves.CONNECTOR_PROXY_VERIFY_SSL,
-                        self.valves.CONNECTOR_PROXY_CA_BUNDLE,
-                    )
-                    async with httpx.AsyncClient(
-                        timeout=180,
-                        verify=verify,
-                    ) as client:
-                        response = await client.post(url, json=payload, headers=headers)
-                        response.raise_for_status()
-                        data = response.json()
-                except ValueError as exc:
-                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
-                    if __event_emitter__:
-                        await __event_emitter__(
-                            {
-                                "type": "status",
-                                "data": {
-                                    "description": _msg(
-                                    self.valves.LANGUAGE,
-                                    "openwebui_artifact.tls_invalid",
-                                ),
-                                    "done": True,
-                                },
-                            }
-                        )
-                    return _msg(self.valves.LANGUAGE, "openwebui_artifact.tls_invalid_return")
-                except httpx.TimeoutException as exc:
-                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
-                    if __event_emitter__:
-                        await __event_emitter__(
-                            {
-                                "type": "status",
-                                "data": {
-                                    "description": _msg(
-                                    self.valves.LANGUAGE,
-                                    "openwebui_artifact.ragflow_timeout",
-                                ),
-                                    "done": True,
-                                },
-                            }
-                        )
-                    return _msg(self.valves.LANGUAGE, "openwebui_artifact.ragflow_timeout_return")
-                except httpx.HTTPStatusError as exc:
-                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
-                    status = exc.response.status_code
-                    if __event_emitter__:
-                        await __event_emitter__(
-                            {
-                                "type": "status",
-                                "data": {
-                                    "description": _msg(
-                                    self.valves.LANGUAGE,
-                                    "openwebui_artifact.proxy_http",
-                                    status=status,
-                                ),
-                                    "done": True,
-                                },
-                            }
-                        )
-                    return _msg(
-                        self.valves.LANGUAGE,
-                        "openwebui_artifact.proxy_http",
-                        status=status,
-                    )
-                except httpx.ConnectError as exc:
-                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
-                    if __event_emitter__:
-                        await __event_emitter__(
-                            {
-                                "type": "status",
-                                "data": {
-                                    "description": _msg(
-                                    self.valves.LANGUAGE,
-                                    "openwebui_artifact.proxy_unreachable",
-                                ),
-                                    "done": True,
-                                },
-                            }
-                        )
-                    return _msg(self.valves.LANGUAGE, "openwebui_artifact.proxy_unreachable_return")
-                except httpx.RequestError as exc:
-                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
-                    if __event_emitter__:
-                        await __event_emitter__(
-                            {
-                                "type": "status",
-                                "data": {
-                                    "description": _msg(
-                                    self.valves.LANGUAGE,
-                                    "openwebui_artifact.proxy_unreachable",
-                                ),
-                                    "done": True,
-                                },
-                            }
-                        )
-                    return _msg(self.valves.LANGUAGE, "openwebui_artifact.proxy_unreachable_return")
-                except Exception as exc:
-                    _log_proxy_error(exc, url, self.valves.CONNECTOR_PROXY_CA_BUNDLE)
-                    if __event_emitter__:
-                        await __event_emitter__(
-                            {
-                                "type": "status",
-                                "data": {
-                                    "description": _msg(
-                                    self.valves.LANGUAGE,
-                                    "openwebui_artifact.answer_failed",
-                                ),
-                                    "done": True,
-                                },
-                            }
-                        )
-                    return _msg(self.valves.LANGUAGE, "openwebui_artifact.answer_failed_return")
-
-                sources = _normalize_sources(
-                    data.get("sources") or [],
-                    show_scores=self.valves.SHOW_SOURCE_SCORES,
-                    show_debug=self.valves.SHOW_SOURCE_DEBUG,
-                    language=self.valves.LANGUAGE,
-                )
-                if __event_emitter__:
-                    for source in sources:
-                        await __event_emitter__({"type": "source", "data": source})
-                    await __event_emitter__(
-                        {
-                            "type": "status",
-                            "data": {
-                                "description": _msg(
-                                    self.valves.LANGUAGE,
-                                    "openwebui_artifact.answer_done",
-                                ),
-                                "done": True,
-                            },
-                        }
-                    )
-                answer = data.get("answer") or ""
-                if sources and not data.get("citations_emitted", True):
-                    answer = answer + "\\n\\n" + _source_markdown(
-                        sources,
-                        show_scores=self.valves.SHOW_SOURCE_SCORES,
-                        show_debug=self.valves.SHOW_SOURCE_DEBUG,
-                        language=self.valves.LANGUAGE,
-                    )
-                return answer or _source_markdown(
-                    sources,
-                    show_scores=self.valves.SHOW_SOURCE_SCORES,
-                    show_debug=self.valves.SHOW_SOURCE_DEBUG,
-                    language=self.valves.LANGUAGE,
-                ) or _msg(self.valves.LANGUAGE, "openwebui_artifact.no_answer")
-
-
-        def _normalize_task(task):
-            if not task:
-                return ""
-            value = str(task).lower()
-            if "." in value:
-                value = value.rsplit(".", 1)[-1]
-            return value
-
-
-        def _task_response(task, task_body):
-            text = _last_user_text((task_body or {}).get("messages") or [])
-            if "title" in task:
-                return _compact_text(text, 80) or "RAGFlow"
-            if "tags" in task or "follow_up" in task:
-                return "[]"
-            if "emoji" in task:
-                return "RAG"
-            if "query" in task or "image_prompt" in task:
-                return _compact_text(text, 160)
-            return ""
-
-
-        def _last_user_text(messages):
-            for message in reversed(messages):
-                if not isinstance(message, dict) or message.get("role") != "user":
-                    continue
-                content = message.get("content")
-                if isinstance(content, str):
-                    return content
-                if isinstance(content, list):
-                    parts = []
-                    for item in content:
-                        if isinstance(item, dict):
-                            parts.append(str(item.get("text") or ""))
-                    return " ".join(part for part in parts if part)
-            return ""
-
-
-        def _compact_text(text, max_length):
-            clean = " ".join(str(text or "").split())
-            if len(clean) <= max_length:
-                return clean
-            return clean[: max_length - 1].rstrip() + "..."
-            '''
-        ).strip()
-        + "\n\n"
-        + _artifact_source_helpers()
-    )
+    return resources.files(_TEMPLATE_PACKAGE).joinpath(_PIPE_TEMPLATE).read_text(encoding="utf-8")
 
 
 def _artifact_text_catalog() -> dict[str, dict[str, str]]:

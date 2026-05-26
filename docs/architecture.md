@@ -38,9 +38,11 @@ angelegt.
 ## Dataset-Einstellungen
 
 `connector_template` wird nur beim Erzeugen eines RAGFlow-Datasets verwendet.
-Danach sind die aktuellen RAGFlow-Einstellungen des Ziel-Datasets maßgeblich.
-Dadurch kann ein Admin Chunking, Parser-Einstellungen oder Ingestion Pipeline
-direkt in RAGFlow ändern, ohne den Connector neu zu konfigurieren.
+Fehlt das Template, kann der Connector es automatisch mit konservativen
+DeepDOC-, Seiten- und Metadaten-Defaults anlegen. Danach sind die aktuellen
+RAGFlow-Einstellungen des Ziel-Datasets maßgeblich. Dadurch kann ein Admin
+Chunking, Parser-Einstellungen oder Ingestion Pipeline direkt in RAGFlow ändern,
+ohne den Connector neu zu konfigurieren.
 
 ## OpenWebUI
 

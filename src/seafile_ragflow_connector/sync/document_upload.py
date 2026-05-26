@@ -7,6 +7,7 @@ from seafile_ragflow_connector.clients.seafile_sync import SeafileSyncClient
 from seafile_ragflow_connector.domain.file_classification import FilePolicy, classify_file
 from seafile_ragflow_connector.domain.ingestion_artifacts import (
     IngestionArtifact,
+    build_ragflow_document_metadata,
     prepare_ingestion_artifact,
 )
 from seafile_ragflow_connector.sync.dataset_settings import DatasetSettingsService
@@ -53,6 +54,8 @@ class DocumentUploadService:
             mime_type=artifact.mime_type,
         )
         document_id = str(document.get("id") or document.get("document_id"))
+        metadata = build_ragflow_document_metadata(artifact, repo_id=repo_id, path=path)
+        self.ragflow_client.update_document_metadata(dataset_id, document_id, metadata)
         return UploadResult(
             document_id=document_id,
             artifact=artifact,

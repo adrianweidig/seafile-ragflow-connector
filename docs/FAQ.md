@@ -17,7 +17,9 @@ abweichen.
 
 Das RAGFlow-Dataset `connector_template` wird nur beim Erzeugen neuer
 Library-Datasets genutzt. Danach bleiben die live gesetzten Einstellungen des
-Ziel-Datasets maßgeblich.
+Ziel-Datasets maßgeblich. Fehlt es, legt der Connector es mit
+`RAGFLOW_TEMPLATE_AUTO_CREATE=true` automatisch mit DeepDOC-, Seiten- und
+Metadaten-Defaults an.
 
 ## Muss OpenWebUI aktiviert werden?
 

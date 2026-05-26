@@ -1,0 +1,1 @@
+"""Embedded OpenWebUI function templates."""

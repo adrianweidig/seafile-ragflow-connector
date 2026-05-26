@@ -129,6 +129,12 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.openwebui_effective_sync_mode, "disabled")
         self.assertEqual(settings.openwebui_base_url, "http://localhost:3000")
         self.assertEqual(settings.openwebui_function_namespace, "ragflow")
+        self.assertTrue(settings.ragflow_template_auto_create)
+        self.assertEqual(settings.ragflow_template_chat_name, "connector_template_chat")
+        self.assertFalse(settings.openwebui_pipe_answer_synthesis_enabled)
+        self.assertIsNone(settings.openwebui_pipe_answer_llm_base_url)
+        self.assertIsNone(settings.openwebui_pipe_answer_llm_model)
+        self.assertIsNone(settings.openwebui_pipe_answer_llm_api_key)
         self.assertTrue(settings.delete_dataset_when_library_deleted)
         self.assertFalse(settings.archive_dataset_when_library_deleted)
 
@@ -166,6 +172,18 @@ class SettingsTests(unittest.TestCase):
                 "openwebui_integration_enabled": True,
                 "openwebui_sync_mode": "dry-run",
                 "openwebui_proxy_public_base_url": "connector:8080",
+            }
+        )
+
+        with self.assertRaises(ValueError):
+            Settings(**values)
+
+    def test_rejects_invalid_pipe_answer_llm_base_url(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "openwebui_pipe_answer_llm_base_url": "litellm:4000/v1",
             }
         )
 

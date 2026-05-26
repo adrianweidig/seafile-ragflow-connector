@@ -49,9 +49,12 @@ class TemplatePayloadBuilderTests(unittest.TestCase):
                     "chunk_token_num": 512,
                     "delimiter": "\n",
                     "children_delimiter": "",
+                    "filename_embd_weight": 0.1,
                     "image_context_size": 0,
                     "llm_id": "",
+                    "pages": [[1, 1000000]],
                     "table_context_size": 0,
+                    "topn_tags": 3,
                     "parent_child": {"use_parent_child": False, "children_delimiter": "\n"},
                 },
             },
@@ -62,6 +65,9 @@ class TemplatePayloadBuilderTests(unittest.TestCase):
             {
                 "chunk_token_num": 512,
                 "delimiter": "\n",
+                "filename_embd_weight": 0.1,
+                "pages": [[1, 1000000]],
+                "topn_tags": 3,
                 "parent_child": {"use_parent_child": False, "children_delimiter": "\n"},
             },
         )
