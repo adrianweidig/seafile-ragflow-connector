@@ -178,6 +178,33 @@ class DashboardServerTests(unittest.TestCase):
 
         self.assertIn("state", status)
 
+    def test_openwebui_preview_route_uses_signed_token_without_dashboard_auth(self) -> None:
+        store = _store()
+        settings = _settings(0)
+        settings.connector_dashboard_auth_username = "admin"
+        settings.connector_dashboard_auth_password = "secret"
+        token = sign_preview_payload(
+            {
+                "document_name": "report.pdf",
+                "citation_label": "Quelle 1",
+                "source_path": "/report.pdf",
+                "original_url": "https://seafile.local/lib/repo-1/file/report.pdf#page=1",
+                "snippet": "Signierter Treffer",
+            },
+            "proxy-secret",
+        )
+        handle = start_dashboard_server(
+            DashboardContext(store=store, settings=settings, started_at=utcnow())
+        )
+        port = handle.server.server_address[1]
+        try:
+            html = _get_text(port, f"/api/openwebui/sources/preview?token={token}")
+        finally:
+            handle.stop()
+
+        self.assertIn("Signierter Treffer", html)
+        self.assertIn("Original öffnen", html)
+
     def test_openwebui_mapping_requires_assigned_tool_and_pipe(self) -> None:
         store = _store()
         with store.session_factory() as session:
@@ -454,12 +481,35 @@ class DashboardServerTests(unittest.TestCase):
         html = _preview_html(settings, token)
 
         self.assertIn("RAGFlow Quellenvorschau", html)
+        self.assertIn("class=\"hero source-card\"", html)
+        self.assertIn("class=\"button primary original-action\"", html)
         self.assertIn("Original öffnen", html)
         self.assertIn("Theme wechseln", html)
         self.assertIn("data-tab=\"debug\"", html)
         self.assertIn("Auszug kopieren", html)
         self.assertIn("Originaler PDF-Auszug", html)
         self.assertIn("#page=7", html)
+
+    def test_openwebui_preview_html_explains_missing_original_link(self) -> None:
+        settings = _settings(0)
+        token = sign_preview_payload(
+            {
+                "document_name": "report.pdf",
+                "dataset_name": "Dataset",
+                "document_id": "doc-1",
+                "chunk_id": "chunk-123456789",
+                "citation_label": "Quelle 1",
+                "source_path": "/report.pdf",
+                "snippet": "Originaler PDF-Auszug",
+            },
+            "proxy-secret",
+        )
+
+        html = _preview_html(settings, token)
+
+        self.assertIn("Original-Link nicht konfiguriert", html)
+        self.assertIn("SEAFILE_FILE_URL_TEMPLATE", html)
+        self.assertNotIn("class=\"button primary original-action\"", html)
 
     def test_openwebui_preview_html_sanitizes_source_snippet(self) -> None:
         settings = _settings(0)
@@ -546,6 +596,11 @@ def _get_bytes(port: int, path: str) -> tuple[bytes, str, str]:
             response.headers.get("Content-Type", ""),
             response.headers.get("Content-Disposition", ""),
         )
+
+
+def _get_text(port: int, path: str) -> str:
+    with urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as response:
+        return response.read().decode("utf-8")
 
 
 if __name__ == "__main__":

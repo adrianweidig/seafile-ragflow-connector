@@ -100,6 +100,10 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             try:
+                if parsed.path == "/api/openwebui/sources/preview":
+                    params = parse_qs(parsed.query)
+                    self._send_html(_preview_html(context.settings, _one(params, "token")))
+                    return
                 if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
                     self._send_auth_required()
                     return
@@ -192,10 +196,6 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                     return
                 if parsed.path == "/api/openwebui/dry-run":
                     self._send_json(context.store.openwebui_dry_run())
-                    return
-                if parsed.path == "/api/openwebui/sources/preview":
-                    params = parse_qs(parsed.query)
-                    self._send_html(_preview_html(context.settings, _one(params, "token")))
                     return
                 if parsed.path in {"/api/audit.xlsx", "/api/audit-export.xlsx"}:
                     snapshot = context.store.audit_snapshot(
@@ -888,9 +888,13 @@ def _preview_html(settings: Settings, token: str | None) -> str:
     original_url = str(payload.get("original_url") or "")
     is_de = l10n.language == "de"
     original_link = (
-        f'<a class="button primary" href="{escape(original_url, quote=True)}" target="_blank" rel="noreferrer">{l10n.text("preview.original")}</a>'
+        f'<a class="button primary original-action" href="{escape(original_url, quote=True)}" target="_blank" rel="noreferrer">{l10n.text("preview.original")}</a>'
         if original_url
         else ""
+    )
+    original_action = original_link or (
+        f'<span class="original-missing" role="status"><strong>{l10n.text("preview.original_missing")}</strong>'
+        f'<span>{l10n.text("preview.original_missing_hint")}</span></span>'
     )
     position_json = json.dumps(payload.get("position"), ensure_ascii=False, default=str)
     position = escape(position_json)
@@ -945,24 +949,27 @@ def _preview_html(settings: Settings, token: str | None) -> str:
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{title}</title>"
         "<style>"
-        ":root{color-scheme:light dark;--bg:#f6f8fb;--panel:#ffffff;--panel-2:#f1f5f9;--text:#0f172a;--muted:#64748b;--border:#dbe4ef;--accent:#0f766e;--accent-strong:#0d9488;--accent-2:#2563eb;--soft:#f8fafc;--code:#eef2f7;--mark:#fff2a8;--shadow:0 24px 70px rgba(15,23,42,.10)}"
-        "@media(prefers-color-scheme:dark){:root{--bg:#0a0f18;--panel:#121a28;--panel-2:#182335;--text:#f8fafc;--muted:#94a3b8;--border:#2c3a4e;--accent:#2dd4bf;--accent-strong:#14b8a6;--accent-2:#60a5fa;--soft:#101827;--code:#0b1220;--mark:#5b4b15;--shadow:0 28px 80px rgba(0,0,0,.32)}}"
-        "[data-theme=light]{color-scheme:light;--bg:#f6f8fb;--panel:#ffffff;--panel-2:#f1f5f9;--text:#0f172a;--muted:#64748b;--border:#dbe4ef;--accent:#0f766e;--accent-strong:#0d9488;--accent-2:#2563eb;--soft:#f8fafc;--code:#eef2f7;--mark:#fff2a8;--shadow:0 24px 70px rgba(15,23,42,.10)}"
-        "[data-theme=dark]{color-scheme:dark;--bg:#0a0f18;--panel:#121a28;--panel-2:#182335;--text:#f8fafc;--muted:#94a3b8;--border:#2c3a4e;--accent:#2dd4bf;--accent-strong:#14b8a6;--accent-2:#60a5fa;--soft:#101827;--code:#0b1220;--mark:#5b4b15;--shadow:0 28px 80px rgba(0,0,0,.32)}"
-        "*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,var(--panel-2),var(--bg) 36%),linear-gradient(120deg,color-mix(in srgb,var(--accent) 10%,transparent),transparent 35%,color-mix(in srgb,var(--accent-2) 10%,transparent));color:var(--text);font-family:Inter,Segoe UI,system-ui,-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.55;letter-spacing:0}"
-        "main{max-width:1120px;margin:0 auto;padding:26px 18px 44px}.hero{display:grid;gap:15px;padding:24px;border:1px solid var(--border);border-radius:8px;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 10%,var(--panel)),var(--panel) 56%);box-shadow:var(--shadow);position:relative;overflow:hidden}.hero:before{content:\"\";position:absolute;inset:0 0 auto;height:3px;background:linear-gradient(90deg,var(--accent),var(--accent-2))}.hero>*{position:relative}"
+        ":root{color-scheme:light dark;--bg:#f5f7fb;--panel:#ffffff;--panel-2:#eef3f8;--text:#111827;--muted:#5f6f86;--border:#d8e1ec;--accent:#0f766e;--accent-strong:#0d9488;--accent-2:#2563eb;--soft:#f8fafc;--code:#eef2f7;--mark:#fff2a8;--warn:#7c2d12;--warn-bg:#fff7ed;--shadow:0 18px 48px rgba(15,23,42,.09)}"
+        "@media(prefers-color-scheme:dark){:root{--bg:#0a0f18;--panel:#121a28;--panel-2:#182335;--text:#f8fafc;--muted:#94a3b8;--border:#2c3a4e;--accent:#2dd4bf;--accent-strong:#14b8a6;--accent-2:#60a5fa;--soft:#101827;--code:#0b1220;--mark:#5b4b15;--warn:#fdba74;--warn-bg:#2b1708;--shadow:0 28px 80px rgba(0,0,0,.32)}}"
+        "[data-theme=light]{color-scheme:light;--bg:#f5f7fb;--panel:#ffffff;--panel-2:#eef3f8;--text:#111827;--muted:#5f6f86;--border:#d8e1ec;--accent:#0f766e;--accent-strong:#0d9488;--accent-2:#2563eb;--soft:#f8fafc;--code:#eef2f7;--mark:#fff2a8;--warn:#7c2d12;--warn-bg:#fff7ed;--shadow:0 18px 48px rgba(15,23,42,.09)}"
+        "[data-theme=dark]{color-scheme:dark;--bg:#0a0f18;--panel:#121a28;--panel-2:#182335;--text:#f8fafc;--muted:#94a3b8;--border:#2c3a4e;--accent:#2dd4bf;--accent-strong:#14b8a6;--accent-2:#60a5fa;--soft:#101827;--code:#0b1220;--mark:#5b4b15;--warn:#fdba74;--warn-bg:#2b1708;--shadow:0 28px 80px rgba(0,0,0,.32)}"
+        "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,system-ui,-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.55;letter-spacing:0}body:before{content:\"\";position:fixed;inset:0 0 auto;height:5px;background:var(--accent);z-index:1}"
+        "main{max-width:1120px;margin:0 auto;padding:30px 18px 44px}.hero{display:grid;gap:18px;padding:24px;border:1px solid var(--border);border-radius:8px;background:var(--panel);box-shadow:var(--shadow);position:relative;overflow:hidden}.hero:before{content:\"\";position:absolute;inset:0 auto 0 0;width:5px;background:var(--accent)}.hero>*{position:relative}"
         ".topbar{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.eyebrow{margin:0;color:var(--accent);font-size:.78rem;font-weight:800;text-transform:uppercase}h1{margin:0;font-size:clamp(1.35rem,2.7vw,2.05rem);line-height:1.16;letter-spacing:0;overflow-wrap:anywhere}.path{margin:0;color:var(--muted);overflow-wrap:anywhere}"
+        ".hero-body{display:grid;grid-template-columns:minmax(0,1fr) 148px;gap:18px;align-items:start}.document-badge{border:1px solid var(--border);border-radius:8px;background:var(--soft);padding:14px;text-align:right}.document-badge span{display:block;color:var(--muted);font-size:.78rem}.document-badge strong{display:block;margin-top:3px;font-size:1.1rem;overflow-wrap:anywhere}"
         ".chips,.actions,.tabs{display:flex;flex-wrap:wrap;gap:8px}.chips span{border:1px solid var(--border);border-radius:999px;padding:5px 10px;color:var(--muted);font-size:.86rem;background:var(--soft)}.chips span:first-child{color:var(--text);border-color:color-mix(in srgb,var(--accent) 40%,var(--border));background:color-mix(in srgb,var(--accent) 10%,var(--soft))}"
-        ".button,.tab{display:inline-flex;align-items:center;min-height:40px;border:1px solid var(--border);border-radius:7px;padding:8px 12px;background:var(--panel);color:var(--text);text-decoration:none;font-weight:650;cursor:pointer}.button.primary{background:linear-gradient(135deg,var(--accent-strong),var(--accent-2));border-color:transparent;color:white}.button:hover,.tab:hover{border-color:var(--accent);transform:translateY(-1px)}.button:focus-visible,.tab:focus-visible{outline:0;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 30%,transparent)}"
+        ".button,.tab{display:inline-flex;align-items:center;justify-content:center;min-height:40px;border:1px solid var(--border);border-radius:7px;padding:8px 12px;background:var(--panel);color:var(--text);text-decoration:none;font-weight:650;cursor:pointer}.button.primary{background:var(--accent);border-color:var(--accent);color:white}.button:hover,.tab:hover{border-color:var(--accent);transform:translateY(-1px)}.button.primary:hover{background:var(--accent-strong)}.button:focus-visible,.tab:focus-visible{outline:0;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 30%,transparent)}"
+        ".source-actions{align-items:stretch}.original-action{min-width:190px}.original-missing{display:inline-flex;flex-direction:column;gap:2px;max-width:520px;border:1px solid color-mix(in srgb,var(--warn) 28%,var(--border));border-radius:7px;padding:8px 12px;background:var(--warn-bg);color:var(--warn);font-size:.88rem}.original-missing strong{font-size:.94rem}"
         ".tabs{margin-top:16px}.tab[aria-selected=true]{background:var(--accent);border-color:var(--accent);color:white}.panel{display:none;margin-top:12px;border:1px solid var(--border);border-radius:8px;background:var(--panel);overflow:hidden;box-shadow:0 14px 34px rgba(15,23,42,.08)}.panel.active{display:block}"
         ".section-title{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0;padding:14px 16px;border-bottom:1px solid var(--border);background:var(--panel-2);font-size:1rem}.hit{margin:0;padding:22px;white-space:pre-wrap;overflow:auto;background:var(--soft);font-size:1.02rem;line-height:1.76}.hit mark{background:var(--mark);color:var(--text);padding:2px 3px;border-radius:4px;box-decoration-break:clone;-webkit-box-decoration-break:clone}"
         "dl{margin:0;padding:12px 18px}dl div{display:grid;grid-template-columns:132px minmax(0,1fr);gap:14px;padding:9px 0;border-bottom:1px solid var(--border)}dl div:last-child{border-bottom:0}dt{color:var(--muted);font-size:.82rem}dd{margin:0;overflow-wrap:anywhere;font-weight:650}code,pre.raw{background:var(--code);border-radius:6px}code{padding:2px 5px}pre.raw{margin:0;padding:16px;white-space:pre-wrap;overflow:auto;font-size:.85rem}"
-        ".muted{padding:20px 22px;color:var(--muted)}@media(max-width:760px){main{padding:14px 10px 30px}.hero{padding:18px}.topbar{display:grid}.actions .button{flex:1 1 auto;justify-content:center}.button,.tab{min-height:44px}dl div{grid-template-columns:1fr;gap:2px}}"
+        ".muted{padding:20px 22px;color:var(--muted)}@media(max-width:760px){main{padding:14px 10px 30px}.hero{padding:18px}.topbar,.hero-body{display:grid;grid-template-columns:1fr}.document-badge{text-align:left}.actions .button{flex:1 1 auto;justify-content:center}.button,.tab{min-height:44px}dl div{grid-template-columns:1fr;gap:2px}}"
         "</style></head><body><main>"
-        "<section class=\"hero\">"
+        "<section class=\"hero source-card\">"
         f"<div class=\"topbar\"><p class=\"eyebrow\">RAGFlow {l10n.text('preview.title')}</p><button class=\"button\" id=\"theme-toggle\" type=\"button\">{l10n.text('preview.theme')}</button></div>"
-        f"<h1>{title}</h1><p class=\"path\">{source_path or citation}</p><div class=\"chips\">{''.join(chips)}</div>"
-        f"<div class=\"actions\">{original_link}<button class=\"button\" type=\"button\" data-copy=\"{copy_snippet}\">{l10n.text('preview.copy_snippet')}</button><button class=\"button\" type=\"button\" data-copy-url>{l10n.text('preview.copy_link')}</button></div>"
+        f"<div class=\"hero-body\"><div><h1>{title}</h1><p class=\"path\">{source_path or citation}</p></div><div class=\"document-badge\"><span>{'Dokument' if is_de else 'Document'}</span><strong>{file_type.upper() if file_type else l10n.text('preview.source')}</strong></div></div>"
+        f"<div class=\"chips\">{''.join(chips)}</div>"
+        f"<div class=\"actions source-actions\">{original_action}<button class=\"button\" type=\"button\" data-copy=\"{copy_snippet}\">{l10n.text('preview.copy_snippet')}</button><button class=\"button\" type=\"button\" data-copy-url>{l10n.text('preview.copy_link')}</button></div>"
         "</section>"
         f"<nav class=\"tabs\" aria-label=\"{'Quellenansicht' if is_de else 'Source view'}\">"
         f"<button class=\"tab\" type=\"button\" data-tab=\"hit\" aria-selected=\"true\">{l10n.text('preview.hit')}</button>"

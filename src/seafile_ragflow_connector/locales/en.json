@@ -97,6 +97,8 @@
     "hit": "Hit",
     "no_context": "RAGFlow did not provide additional before/after context for this source. The hit itself is shown unchanged in the hit tab.",
     "original": "Open original",
+    "original_missing": "Original link not configured",
+    "original_missing_hint": "Set SEAFILE_FILE_URL_TEMPLATE so this preview links directly to Seafile.",
     "theme": "Change theme",
     "copy_snippet": "Copy excerpt",
     "copy_link": "Copy link",

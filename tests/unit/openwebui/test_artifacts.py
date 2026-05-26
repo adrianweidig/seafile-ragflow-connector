@@ -239,6 +239,44 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertNotIn("Quellenüberblick", final_answer)
         self.assertNotIn("| Quelle |", final_answer)
 
+    def test_pipe_completion_status_counts_grouped_sources_and_hits(self) -> None:
+        namespace = _pipe_namespace()
+        sources = [
+            {
+                "name": "report.pdf",
+                "text": "Erster Treffer im Report.",
+                "score": 0.91,
+                "source_metadata": {"path": "/report.pdf", "page": 1},
+            },
+            {
+                "name": "report.pdf",
+                "text": "Zweiter Treffer im selben Report.",
+                "score": 0.86,
+                "source_metadata": {"path": "/report.pdf", "page": 2},
+            },
+            {
+                "name": "policy.pdf",
+                "text": "Treffer in einem anderen Dokument.",
+                "score": 0.78,
+                "source_metadata": {"path": "/policy.pdf", "page": 1},
+            },
+        ]
+
+        group_count = len(namespace["_group_sources"](sources))
+        status = namespace["_completion_status"](
+            group_count,
+            1.2,
+            generated=True,
+            hit_count=len(sources),
+        )
+
+        self.assertIn("2 Quellen", status)
+        self.assertIn("3 Treffer", status)
+
+        single_status = namespace["_completion_status"](1, 0.4, generated=True, hit_count=4)
+        self.assertIn("1 Quelle", single_status)
+        self.assertIn("4 Treffer", single_status)
+
     def test_artifact_metadata_can_be_generated_in_english(self) -> None:
         inputs = DatasetArtifactInputs(
             namespace="ragflow",

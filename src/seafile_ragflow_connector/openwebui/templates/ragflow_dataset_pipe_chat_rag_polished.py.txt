@@ -717,10 +717,16 @@ class Pipe:
                 await _emit_event(__event_emitter__, {"type": "source", "data": source})
 
         elapsed = max(0.0, time.perf_counter() - started_at)
+        source_group_count = len(_group_sources(sources)) if sources else 0
         await _emit_status(
             self.valves,
             __event_emitter__,
-            _completion_status(len(sources), elapsed, generated=bool(answer)),
+            _completion_status(
+                source_group_count,
+                elapsed,
+                generated=bool(answer),
+                hit_count=len(sources),
+            ),
             done=True,
             hidden=self.valves.HIDE_FINAL_STATUS,
         )
@@ -1436,8 +1442,21 @@ async def _emit_event(emitter, event: dict[str, Any]) -> None:
         LOGGER.warning("OpenWebUI event emission failed", exc_info=True)
 
 
-def _completion_status(source_count: int, elapsed_seconds: float, *, generated: bool = True) -> str:
-    source_text = "keine Quellen" if source_count == 0 else f"{source_count} Quellen"
+def _completion_status(
+    source_count: int,
+    elapsed_seconds: float,
+    *,
+    generated: bool = True,
+    hit_count: Optional[int] = None,
+) -> str:
+    if source_count == 0:
+        source_text = "keine Quellen"
+    elif source_count == 1:
+        source_text = "1 Quelle"
+    else:
+        source_text = f"{source_count} Quellen"
+    if hit_count is not None and hit_count > source_count:
+        source_text = f"{source_text} · {hit_count} Treffer"
     answer_text = "Antwort generiert" if generated else "nur Quellen erhalten"
     return f"{answer_text} · {source_text} · {elapsed_seconds:.1f}s"
 

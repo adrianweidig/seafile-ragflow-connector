@@ -97,6 +97,8 @@
     "hit": "Treffer",
     "no_context": "RAGFlow hat für diese Quelle keinen zusätzlichen Vorher-/Nachher-Kontext geliefert. Der Treffer selbst wird unverändert im Tab Treffer angezeigt.",
     "original": "Original öffnen",
+    "original_missing": "Original-Link nicht konfiguriert",
+    "original_missing_hint": "Setze SEAFILE_FILE_URL_TEMPLATE, damit diese Vorschau direkt nach Seafile verlinkt.",
     "theme": "Theme wechseln",
     "copy_snippet": "Auszug kopieren",
     "copy_link": "Link kopieren",
