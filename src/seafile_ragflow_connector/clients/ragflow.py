@@ -9,6 +9,7 @@ from seafile_ragflow_connector.clients.http import (
     make_client,
     unwrap_response,
 )
+from seafile_ragflow_connector.domain.ragflow_defaults import RAGFLOW_REFERENCE_METADATA_FIELDS
 
 
 class RAGFlowClient:
@@ -65,6 +66,13 @@ class RAGFlowClient:
         msg = "unexpected dataset create response"
         raise TypeError(msg)
 
+    def update_dataset(self, dataset_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        data = unwrap_response(self._client.put(f"/api/v1/datasets/{dataset_id}", json=payload))
+        if isinstance(data, dict):
+            return data
+        msg = f"unexpected dataset update response for {dataset_id}"
+        raise TypeError(msg)
+
     def upload_document(
         self,
         dataset_id: str,
@@ -83,6 +91,22 @@ class RAGFlowClient:
             return data[0]
         msg = "unexpected document upload response"
         raise TypeError(msg)
+
+    def update_document_metadata(
+        self,
+        dataset_id: str,
+        document_id: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        data = unwrap_response(
+            self._client.put(
+                f"/api/v1/datasets/{dataset_id}/documents/{document_id}/metadata/config",
+                json={"metadata": metadata},
+            )
+        )
+        if isinstance(data, dict):
+            return data
+        return {"data": data}
 
     def delete_documents(self, dataset_id: str, document_ids: list[str]) -> Any:
         try:
@@ -237,7 +261,13 @@ class RAGFlowClient:
             "model": model or "model",
             "messages": messages,
             "stream": stream,
-            "extra_body": {"reference": True},
+            "extra_body": {
+                "reference": True,
+                "reference_metadata": {
+                    "include": True,
+                    "fields": list(RAGFLOW_REFERENCE_METADATA_FIELDS),
+                },
+            },
         }
         try:
             path = f"/api/v1/openai/{chat_id}/chat/completions"
@@ -308,14 +338,18 @@ class RAGFlowClient:
                     payload_data = json.loads(event)
                 except ValueError:
                     continue
-                data = payload_data.get("data") if isinstance(payload_data, dict) else payload_data
+                data = (
+                    payload_data.get("data")
+                    if isinstance(payload_data, dict) and "data" in payload_data
+                    else payload_data
+                )
                 if data is True:
                     break
                 if not isinstance(data, dict):
                     continue
                 last_data.update(data)
-                if data.get("answer"):
-                    _merge_streamed_answer(answer_parts, str(data["answer"]))
+                if answer := _streaming_answer_fragment(data):
+                    _merge_streamed_answer(answer_parts, answer)
                 if isinstance(data.get("reference"), dict):
                     reference = data["reference"]
         if answer_parts:
@@ -333,6 +367,31 @@ def _merge_streamed_answer(answer_parts: list[str], answer: str) -> None:
         answer_parts[:] = [answer]
         return
     answer_parts.append(answer)
+
+
+def _streaming_answer_fragment(data: dict[str, Any]) -> str:
+    if data.get("answer"):
+        return str(data["answer"])
+    if data.get("content"):
+        return str(data["content"])
+    choices = data.get("choices")
+    if not isinstance(choices, list):
+        return ""
+    parts: list[str] = []
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta")
+        if isinstance(delta, dict) and delta.get("content"):
+            parts.append(str(delta["content"]))
+            continue
+        message = choice.get("message")
+        if isinstance(message, dict) and message.get("content"):
+            parts.append(str(message["content"]))
+            continue
+        if choice.get("text"):
+            parts.append(str(choice["text"]))
+    return "".join(parts)
 
 
 def _is_missing_dataset_name_response(payload: Any, name: str) -> bool:

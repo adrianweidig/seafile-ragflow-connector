@@ -66,6 +66,7 @@ class _ChatHttpClient:
         self.updated_payload: dict[str, object] | None = None
         self.deleted_payloads: list[tuple[str, dict[str, object]]] = []
         self.post_paths: list[str] = []
+        self.put_payloads: list[tuple[str, dict[str, object]]] = []
 
     def get(self, path: str, *, params: dict[str, str] | None = None) -> httpx.Response:
         request = httpx.Request("GET", f"http://ragflow.local{path}")
@@ -133,7 +134,8 @@ class _ChatHttpClient:
                 200,
                 content=(
                     b'data:{"code":0,"data":{"answer":"part 1 ","reference":{"chunks":[]}}}\n\n'
-                    b'data:{"code":0,"data":{"answer":"part 2"}}\n\n'
+                    b'data:{"choices":[{"delta":{"content":"part 2"}}]}\n\n'
+                    b'data:{"code":0,"data":{"choices":[{"delta":{"content":" part 3"}}]}}\n\n'
                     b'data:{"code":0,"data":true}\n\n'
                 ),
                 request=request,
@@ -148,6 +150,23 @@ class _ChatHttpClient:
             json={"code": 0, "data": {"id": "chat-1", **json}},
             request=request,
         )
+
+    def put(self, path: str, *, json: dict[str, object]) -> httpx.Response:
+        request = httpx.Request("PUT", f"http://ragflow.local{path}")
+        self.put_payloads.append((path, json))
+        if path == "/api/v1/datasets/ds-1":
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"id": "ds-1", **json}},
+                request=request,
+            )
+        if path == "/api/v1/datasets/ds-1/documents/doc-1/metadata/config":
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"metadata": json["metadata"]}},
+                request=request,
+            )
+        raise AssertionError(path)
 
     def request(self, method: str, path: str, *, json: dict[str, object]) -> httpx.Response:
         request = httpx.Request(method, f"http://ragflow.local{path}")
@@ -192,6 +211,11 @@ class RAGFlowClientTests(unittest.TestCase):
             client.create_chat({"name": "demo", "dataset_ids": ["ds-1"]})["id"],
             "chat-new",
         )
+        self.assertEqual(client.update_dataset("ds-1", {"parser_config": {}})["id"], "ds-1")
+        self.assertEqual(
+            client.update_document_metadata("ds-1", "doc-1", {"repo_id": "repo"})["metadata"],
+            {"repo_id": "repo"},
+        )
         self.assertEqual(
             client.update_chat("chat-1", {"dataset_ids": ["ds-1"]})["id"],
             "chat-1",
@@ -210,7 +234,7 @@ class RAGFlowClientTests(unittest.TestCase):
             messages=[{"role": "user", "content": "q"}],
             stream=True,
         )
-        self.assertEqual(streamed["data"]["answer"], "part 1 part 2")
+        self.assertEqual(streamed["data"]["answer"], "part 1 part 2 part 3")
         self.assertIn("/api/v1/openai/chat-1/chat/completions", http_client.post_paths)
         self.assertTrue(client.delete_chats(["chat-1"]))
         self.assertTrue(client.delete_datasets(["ds-1"]))

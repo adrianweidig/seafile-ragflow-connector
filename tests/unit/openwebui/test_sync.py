@@ -25,19 +25,34 @@ except ModuleNotFoundError as exc:
 class _FakeRAGFlowClient:
     def __init__(self) -> None:
         self.created_chats: list[dict[str, object]] = []
+        self.updated_chats: list[tuple[str, dict[str, object]]] = []
         self.chats: dict[str, dict[str, object]] = {}
         self.deleted_chats: list[list[str]] = []
+        self.next_chat_id = 1
 
     def get_chat(self, chat_id: str):
         return self.chats.get(chat_id)
 
     def list_chats(self, *, name: str | None = None, chat_id: str | None = None):
-        return []
+        chats = list(self.chats.values())
+        if chat_id:
+            chats = [chat for chat in chats if str(chat.get("id")) == chat_id]
+        if name:
+            chats = [chat for chat in chats if chat.get("name") == name]
+        return chats
 
     def create_chat(self, payload: dict[str, object]):
         self.created_chats.append(payload)
-        chat = {"id": "chat-new", **payload}
-        self.chats["chat-new"] = chat
+        chat_id = f"chat-{self.next_chat_id}"
+        self.next_chat_id += 1
+        chat = {"id": chat_id, **payload}
+        self.chats[chat_id] = chat
+        return chat
+
+    def update_chat(self, chat_id: str, payload: dict[str, object]):
+        self.updated_chats.append((chat_id, payload))
+        chat = {"id": chat_id, **payload}
+        self.chats[chat_id] = chat
         return chat
 
     def delete_chats(self, chat_ids: list[str]):
@@ -53,6 +68,8 @@ class _FakeOpenWebUIClient:
         self.deleted_functions: list[str] = []
         self.tool_valve_updates: list[str] = []
         self.function_valve_updates: list[str] = []
+        self.tool_valves: dict[str, dict[str, object]] = {}
+        self.function_valves: dict[str, dict[str, object]] = {}
 
     def probe_capabilities(self):
         return OpenWebUICapabilities(
@@ -78,6 +95,7 @@ class _FakeOpenWebUIClient:
 
     def update_tool_valves(self, tool_id: str, valves: dict[str, object]):
         self.tool_valve_updates.append(tool_id)
+        self.tool_valves[tool_id] = dict(valves)
         return valves
 
     def delete_tool(self, tool_id: str):
@@ -98,6 +116,7 @@ class _FakeOpenWebUIClient:
 
     def update_function_valves(self, function_id: str, valves: dict[str, object]):
         self.function_valve_updates.append(function_id)
+        self.function_valves[function_id] = dict(valves)
         return valves
 
     def ensure_function_active(self, function_id: str):
@@ -114,7 +133,7 @@ class _UnreachableOpenWebUIClient(_FakeOpenWebUIClient):
         return OpenWebUICapabilities(reachable=False, error="unauthorized")
 
 
-def _settings(*, mode: str = "sync") -> Settings:
+def _settings(*, mode: str = "sync", answer_synthesis: bool = False) -> Settings:
     return Settings(
         seafile_base_url="http://seafile.local",
         seafile_admin_token="admin-token",
@@ -128,6 +147,12 @@ def _settings(*, mode: str = "sync") -> Settings:
         openwebui_admin_api_key="admin-key" if mode != "dry-run" else None,
         openwebui_proxy_shared_secret="proxy-secret",
         openwebui_proxy_internal_base_url="http://connector:8080",
+        openwebui_pipe_answer_synthesis_enabled=answer_synthesis,
+        openwebui_pipe_answer_llm_base_url=(
+            "http://litellm:4000/v1" if answer_synthesis else None
+        ),
+        openwebui_pipe_answer_llm_model="groq-rag-quality" if answer_synthesis else None,
+        openwebui_pipe_answer_llm_api_key="litellm-key" if answer_synthesis else None,
     )
 
 
@@ -209,9 +234,63 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         self.assertEqual(second.pipes_reused, 1)
         self.assertEqual(openwebui.tool_valve_updates, ["ragflow_tool_demo_dataset_dataset1"])
         self.assertEqual(openwebui.function_valve_updates, ["ragflow_pipe_demo_dataset_dataset1"])
+        template_chat = next(
+            payload
+            for payload in ragflow.created_chats
+            if payload["name"] == "connector_template_chat"
+        )
+        dataset_chat = next(
+            payload
+            for payload in ragflow.created_chats
+            if str(payload["name"]).startswith("owui__ragflow__demo_dataset__")
+        )
+        self.assertNotIn("dataset_ids", template_chat)
+        self.assertEqual(dataset_chat["dataset_ids"], ["dataset-1"])
+        self.assertEqual(dataset_chat["top_n"], 10)
+        self.assertEqual(dataset_chat["vector_similarity_weight"], 0.35)
+        prompt_config = dataset_chat["prompt_config"]
+        self.assertIsInstance(prompt_config, dict)
+        self.assertTrue(prompt_config["quote"])
+        self.assertTrue(prompt_config["keyword"])
+        self.assertEqual(
+            prompt_config["reference_metadata"]["fields"][:3],
+            ["repo_id", "path", "source_path"],
+        )
+        self.assertEqual(ragflow.updated_chats, [])
         with session_factory() as session:
             mapping = session.query(OpenWebUIDatasetMapping).one()
-            self.assertEqual(mapping.artifact_version, "11")
+            self.assertEqual(mapping.artifact_version, "15")
+
+    def test_pipe_sync_can_inject_answer_synthesis_valves(self) -> None:
+        session_factory = _session_factory()
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Demo Dataset",
+                    status="active",
+                )
+            )
+            session.commit()
+        openwebui = _FakeOpenWebUIClient()
+        service = OpenWebUISyncService(
+            settings=_settings(answer_synthesis=True),
+            session_factory=session_factory,
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            openwebui_client=openwebui,  # type: ignore[arg-type]
+        )
+
+        service.sync_once()
+
+        valves = openwebui.function_valves["ragflow_pipe_demo_dataset_dataset1"]
+        self.assertTrue(valves["ENABLE_ANSWER_SYNTHESIS_FALLBACK"])
+        self.assertEqual(valves["ANSWER_LLM_BASE_URL"], "http://litellm:4000/v1")
+        self.assertEqual(valves["ANSWER_LLM_MODEL"], "groq-rag-quality")
+        self.assertEqual(valves["ANSWER_LLM_API_KEY"], "litellm-key")
+        self.assertEqual(valves["CONNECTOR_PROXY_SHARED_SECRET"], "proxy-secret")
 
     def test_foreign_openwebui_artifact_keeps_manual_required_status(self) -> None:
         session_factory = _session_factory()

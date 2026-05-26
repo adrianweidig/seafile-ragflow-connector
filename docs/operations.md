@@ -357,8 +357,8 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
 
 - Keine Libraries: `SEAFILE_BASE_URL`, `SEAFILE_ADMIN_TOKEN` und Admin-Rechte für
   `/api/v2.1/admin/libraries/` prüfen.
-- Template nicht gefunden: `RAGFLOW_TEMPLATE_DATASET_NAME`, `RAGFLOW_API_KEY` und
-  RAGFlow-User prüfen.
+- Template nicht gefunden: `RAGFLOW_TEMPLATE_AUTO_CREATE=true` nutzen oder
+  `RAGFLOW_TEMPLATE_DATASET_NAME`, `RAGFLOW_API_KEY` und RAGFlow-User prüfen.
 - `unable to get local issuer certificate`: Root- und Intermediate-CA als PEM
   in ein Host-Verzeichnis legen, dieses per `CONNECTOR_CERTS_HOST_DIR` nach
   `/certs` mounten und `CONNECTOR_CA_BUNDLE=/certs/<datei>.pem` setzen. Wenn

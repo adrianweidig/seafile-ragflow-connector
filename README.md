@@ -136,7 +136,8 @@ ergänzt. Details stehen im [Sprach- und Unicode-Modell](docs/i18n.md).
 - Docker mit Docker Compose Plugin oder Portainer für den regulären Betrieb.
 - Ein erreichbarer Seafile-Server mit Admin-API-Token.
 - Ein erreichbarer RAGFlow-Server mit API-Key.
-- In RAGFlow existiert ein Template-Dataset, standardmäßig `connector_template`.
+- Ein RAGFlow-Template-Dataset wird bei Bedarf automatisch angelegt,
+  standardmäßig `connector_template`.
 - Optional: eine erreichbare OpenWebUI-Instanz mit Admin-API-Key.
 - Für lokale Entwicklung: Python `>=3.12` und `uv`.
 
@@ -304,6 +305,9 @@ einen RAGFlow-Chat-Assistant sowie je ein OpenWebUI-Tool und eine Pipe. Die
 Pipe erscheint in OpenWebUI als auswählbares Custom-Model. Tool und Pipe
 enthalten keine RAGFlow- oder Admin-Secrets, sondern rufen den geschützten
 Connector-Proxy auf.
+Der Sync legt zusätzlich den Template-Chat `connector_template_chat` an, falls
+er fehlt, und hält eigene Dataset-Chats auf RAG-Defaults mit Zitaten,
+Multiturn-Kontext und Referenz-Metadaten.
 
 ```env
 OPENWEBUI_INTEGRATION_ENABLED=true
@@ -313,6 +317,7 @@ OPENWEBUI_SYNC_MODE=sync
 OPENWEBUI_PROXY_INTERNAL_BASE_URL=http://connector-controller:8080
 OPENWEBUI_PROXY_PUBLIC_BASE_URL=http://localhost:18080
 OPENWEBUI_PROXY_SHARED_SECRET=change-me
+OPENWEBUI_PIPE_ANSWER_SYNTHESIS_ENABLED=false
 ```
 
 `OPENWEBUI_SYNC_MODE` unterstützt `disabled`, `dry-run`, `sync` und `repair`.
@@ -322,6 +327,12 @@ oder Pipes erzeugt werden. Für eine reine Vorprüfung kann `dry-run` gesetzt
 werden. Quellen werden primär als OpenWebUI-Citations mit Preview-URL
 bereitgestellt; wenn RAGFlow keinen stabilen öffentlichen Deep Link hat, kann
 `OPENWEBUI_SOURCE_PREVIEW_MODE=connector_viewer` genutzt werden.
+Falls der RAGFlow-Chat in einer Umgebung nur Retrieval-Treffer zurückliefert,
+kann die Pipe optional einen OpenAI-kompatiblen Fallback wie LiteLLM nutzen:
+`OPENWEBUI_PIPE_ANSWER_SYNTHESIS_ENABLED=true`,
+`OPENWEBUI_PIPE_ANSWER_LLM_BASE_URL`, `OPENWEBUI_PIPE_ANSWER_LLM_MODEL` und
+`OPENWEBUI_PIPE_ANSWER_LLM_API_KEY` werden dann als Runtime-Werte in die Pipe
+synchronisiert.
 
 ## TLS und interne CAs
 

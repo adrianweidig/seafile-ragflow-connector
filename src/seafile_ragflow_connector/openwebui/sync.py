@@ -14,6 +14,7 @@ from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
 from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore, new_sync_id, safe_text
 from seafile_ragflow_connector.domain.naming import slugify
+from seafile_ragflow_connector.domain.ragflow_defaults import build_chat_payload
 from seafile_ragflow_connector.openwebui.artifacts import (
     ARTIFACT_VERSION,
     DatasetArtifactInputs,
@@ -35,6 +36,7 @@ from seafile_ragflow_connector.utils.redaction import redact_mapping
 class OpenWebUISyncSummary:
     datasets_seen: int = 0
     chats_created: int = 0
+    chats_updated: int = 0
     chats_reused: int = 0
     tools_created: int = 0
     tools_updated: int = 0
@@ -113,6 +115,7 @@ class OpenWebUISyncService:
             )
             return summary
         try:
+            self._ensure_template_chat(mode=mode, sync_id=sync_id)
             self._sync_deleted_library_mappings(
                 mode=mode,
                 capabilities=capabilities,
@@ -189,12 +192,21 @@ class OpenWebUISyncService:
         previous_pipe_id = mapping.openwebui_pipe_id
         previous_chat_id = mapping.ragflow_chat_id
         chat_name = _chat_name(self.settings.openwebui_function_namespace, dataset_name, dataset_id)
-        chat_id, created = self._ensure_chat(mapping, chat_name, dataset_id, mode)
+        chat_id, chat_action = self._ensure_chat(mapping, chat_name, dataset_id, mode)
         if chat_id:
-            if created:
+            if chat_action == "created":
                 summary.chats_created += 1
                 self.log.info(
                     "openwebui.sync.ragflow_chat.created",
+                    sync_id=sync_id,
+                    repo_id=library.repo_id,
+                    dataset_id=dataset_id,
+                    ragflow_chat_id=chat_id,
+                )
+            elif chat_action == "updated":
+                summary.chats_updated += 1
+                self.log.info(
+                    "openwebui.sync.ragflow_chat.updated",
                     sync_id=sync_id,
                     repo_id=library.repo_id,
                     dataset_id=dataset_id,
@@ -219,6 +231,9 @@ class OpenWebUISyncService:
             proxy_base_url=self.settings.openwebui_proxy_base_url_for_functions,
             proxy_verify_ssl=self.settings.openwebui_proxy_verify_ssl,
             proxy_ca_bundle=self.settings.openwebui_proxy_ca_bundle,
+            answer_synthesis_enabled=self.settings.openwebui_pipe_answer_synthesis_enabled,
+            answer_llm_base_url=self.settings.openwebui_pipe_answer_llm_base_url,
+            answer_llm_model=self.settings.openwebui_pipe_answer_llm_model,
             language=self.settings.connector_language or "de",
         )
         tool_spec = build_tool_spec(inputs)
@@ -378,26 +393,66 @@ class OpenWebUISyncService:
         chat_name: str,
         dataset_id: str,
         mode: str,
-    ) -> tuple[str | None, bool]:
+    ) -> tuple[str | None, str]:
+        payload = build_chat_payload(chat_name, dataset_id=dataset_id)
         if mapping.ragflow_chat_id:
             chat = self.ragflow_client.get_chat(mapping.ragflow_chat_id)
             if chat and _chat_has_dataset(chat, dataset_id):
-                return str(chat.get("id") or mapping.ragflow_chat_id), False
+                chat_id = str(chat.get("id") or mapping.ragflow_chat_id)
+                if mode != "dry-run" and _chat_needs_update(chat, payload):
+                    updated = self.ragflow_client.update_chat(chat_id, payload)
+                    return str(updated.get("id") or chat_id), "updated"
+                return chat_id, "reused"
         existing = self.ragflow_client.list_chats(name=chat_name)
         for chat in existing:
             if _chat_has_dataset(chat, dataset_id):
-                return str(chat.get("id")), False
+                chat_id = str(chat.get("id"))
+                if mode != "dry-run" and _chat_needs_update(chat, payload):
+                    updated = self.ragflow_client.update_chat(chat_id, payload)
+                    return str(updated.get("id") or chat_id), "updated"
+                return chat_id, "reused"
         if mode == "dry-run":
-            return f"dry-run-{sha256_text(chat_name)[:12]}", True
+            return f"dry-run-{sha256_text(chat_name)[:12]}", "created"
         if existing and mode == "repair":
             chat_id = str(existing[0].get("id"))
-            updated = self.ragflow_client.update_chat(
-                chat_id,
-                {"name": chat_name, "dataset_ids": [dataset_id]},
+            updated = self.ragflow_client.update_chat(chat_id, payload)
+            return str(updated.get("id") or chat_id), "updated"
+        created = self.ragflow_client.create_chat(payload)
+        return str(created.get("id")), "created"
+
+    def _ensure_template_chat(self, *, mode: str, sync_id: str) -> None:
+        chat_name = self.settings.ragflow_template_chat_name
+        payload = build_chat_payload(chat_name)
+        existing = self.ragflow_client.list_chats(name=chat_name)
+        if len(existing) > 1:
+            self.log.warning(
+                "openwebui.sync.template_chat_not_unique",
+                sync_id=sync_id,
+                ragflow_chat_name=chat_name,
+                count=len(existing),
             )
-            return str(updated.get("id") or chat_id), False
-        created = self.ragflow_client.create_chat({"name": chat_name, "dataset_ids": [dataset_id]})
-        return str(created.get("id")), True
+            return
+        if existing:
+            chat = existing[0]
+            chat_id = str(chat.get("id") or "")
+            if mode != "dry-run" and chat_id and _chat_needs_update(chat, payload):
+                self.ragflow_client.update_chat(chat_id, payload)
+                self.log.info(
+                    "openwebui.sync.template_chat.updated",
+                    sync_id=sync_id,
+                    ragflow_chat_id=chat_id,
+                    ragflow_chat_name=chat_name,
+                )
+            return
+        if mode == "dry-run":
+            return
+        created = self.ragflow_client.create_chat(payload)
+        self.log.info(
+            "openwebui.sync.template_chat.created",
+            sync_id=sync_id,
+            ragflow_chat_id=created.get("id"),
+            ragflow_chat_name=chat_name,
+        )
 
     def _sync_tool(
         self,
@@ -416,7 +471,11 @@ class OpenWebUISyncService:
                 "OpenWebUI tool API is not writable",
             )
             return "manual_required"
-        valves = _valves_with_secret(spec.valves, self.settings.openwebui_proxy_shared_secret)
+        valves = _valves_with_secret(
+            spec.valves,
+            proxy_secret=self.settings.openwebui_proxy_shared_secret,
+            answer_llm_api_key=self.settings.openwebui_pipe_answer_llm_api_key,
+        )
         existing = self.openwebui_client.get_tool(spec.artifact_id)
         if existing is None:
             self.openwebui_client.create_tool(spec.payload)
@@ -455,7 +514,11 @@ class OpenWebUISyncService:
                 "OpenWebUI function API is not writable",
             )
             return "manual_required"
-        valves = _valves_with_secret(spec.valves, self.settings.openwebui_proxy_shared_secret)
+        valves = _valves_with_secret(
+            spec.valves,
+            proxy_secret=self.settings.openwebui_proxy_shared_secret,
+            answer_llm_api_key=self.settings.openwebui_pipe_answer_llm_api_key,
+        )
         existing = self.openwebui_client.get_function(spec.artifact_id)
         if existing is None:
             self.openwebui_client.create_function(spec.payload)
@@ -614,7 +677,7 @@ class OpenWebUISyncService:
             status=status,
             objects_checked=summary.datasets_seen,
             objects_created=summary.chats_created + summary.tools_created + summary.pipes_created,
-            objects_updated=summary.tools_updated + summary.pipes_updated,
+            objects_updated=summary.chats_updated + summary.tools_updated + summary.pipes_updated,
             objects_deleted=summary.chats_deleted + summary.tools_deleted + summary.pipes_deleted,
             objects_skipped=summary.tools_reused + summary.pipes_reused + summary.manual_required,
             errors_count=summary.failed,
@@ -884,7 +947,7 @@ def _chat_name(namespace: str, dataset_name: str, dataset_id: str) -> str:
 
 
 def _chat_has_dataset(chat: dict[str, Any], dataset_id: str) -> bool:
-    dataset_ids = chat.get("dataset_ids") or chat.get("datasets") or []
+    dataset_ids = chat.get("dataset_ids") or chat.get("kb_ids") or chat.get("datasets") or []
     if isinstance(dataset_ids, list):
         for item in dataset_ids:
             if isinstance(item, dict) and str(item.get("id")) == dataset_id:
@@ -894,10 +957,48 @@ def _chat_has_dataset(chat: dict[str, Any], dataset_id: str) -> bool:
     return False
 
 
-def _valves_with_secret(valves: dict[str, object], secret: str | None) -> dict[str, object]:
+def _chat_needs_update(chat: dict[str, Any], desired: dict[str, Any]) -> bool:
+    for key, expected in desired.items():
+        if key == "dataset_ids":
+            if not all(_chat_has_dataset(chat, str(dataset_id)) for dataset_id in expected):
+                return True
+            continue
+        actual = chat.get(key)
+        if isinstance(expected, dict):
+            if not isinstance(actual, dict) or not _dict_contains(actual, expected):
+                return True
+            continue
+        if actual != expected:
+            return True
+    return False
+
+
+def _dict_contains(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
+    for key, expected_value in expected.items():
+        actual_value = actual.get(key)
+        if isinstance(expected_value, dict):
+            if not isinstance(actual_value, dict) or not _dict_contains(
+                actual_value,
+                expected_value,
+            ):
+                return False
+            continue
+        if actual_value != expected_value:
+            return False
+    return True
+
+
+def _valves_with_secret(
+    valves: dict[str, object],
+    *,
+    proxy_secret: str | None,
+    answer_llm_api_key: str | None,
+) -> dict[str, object]:
     data = dict(valves)
     if "CONNECTOR_PROXY_SHARED_SECRET" in data:
-        data["CONNECTOR_PROXY_SHARED_SECRET"] = secret or ""
+        data["CONNECTOR_PROXY_SHARED_SECRET"] = proxy_secret or ""
+    if "ANSWER_LLM_API_KEY" in data:
+        data["ANSWER_LLM_API_KEY"] = answer_llm_api_key or ""
     return data
 
 
