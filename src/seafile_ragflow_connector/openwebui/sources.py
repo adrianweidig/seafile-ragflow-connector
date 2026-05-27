@@ -32,10 +32,13 @@ class SourceHit:
     rank: int
     title: str
     snippet: str = ""
+    source_id: str | None = None
     document_name: str | None = None
     path: str | None = None
     page: Any = None
     line: Any = None
+    line_start: Any = None
+    line_end: Any = None
     section: Any = None
     chunk_id: str | None = None
     score: Any = None
@@ -45,9 +48,13 @@ class SourceHit:
     dataset_name: str | None = None
     document_id: str | None = None
     repo_id: str | None = None
+    file_id: str | None = None
+    seafile_library_id: str | None = None
+    seafile_library_name: str | None = None
     file_type: str | None = None
     mime_type: str | None = None
     position: Any = None
+    locator_quality: str = "unknown"
     citation_label: str | None = None
     language: str = "de"
     raw: dict[str, Any] = field(default_factory=dict)
@@ -74,13 +81,15 @@ class SourceHit:
             parts.append(self.l10n.text("sources.page", value=self.page))
         if self.section not in (None, ""):
             parts.append(self.l10n.text("sources.section", value=self.section))
-        if self.line not in (None, ""):
-            parts.append(self.l10n.text("sources.line", value=self.line))
+        line_range = _line_range(self.line_start or self.line, self.line_end)
+        if line_range:
+            parts.append(self.l10n.text("sources.line", value=line_range))
         return " · ".join(parts) or self.l10n.text("sources.missing_location")
 
     def metadata(self) -> dict[str, Any]:
         values = {
             "rank": self.rank,
+            "source_id": self.source_id or f"S{self.rank}",
             "dataset_id": self.dataset_id,
             "dataset_name": self.dataset_name,
             "document_id": self.document_id,
@@ -92,11 +101,18 @@ class SourceHit:
             "page": self.page,
             "section": self.section,
             "line": self.line,
+            "line_start": self.line_start,
+            "line_end": self.line_end,
             "position": self.position,
+            "locator_quality": self.locator_quality,
             "score": self.score,
             "relevance": self.relevance,
+            "relevance_label": self.relevance,
             "path": self.path,
             "repo_id": self.repo_id,
+            "file_id": self.file_id,
+            "seafile_library_id": self.seafile_library_id,
+            "seafile_library_name": self.seafile_library_name,
             "file_type": self.file_type,
             "mime_type": self.mime_type,
             "original_url": self.original_url,
@@ -111,12 +127,17 @@ class SourceHit:
             or self.document_name
             or f"{self.l10n.text('sources.source')} {self.rank}"
         )
+        location = self.display_location
+        citation_title = title
+        if location and location != self.l10n.text("sources.missing_location"):
+            citation_title = f"{title} · {location}"
         return {
             "name": title,
+            "source_id": self.source_id or f"S{self.rank}",
             "document": [self.snippet or title],
             "metadata": [metadata],
             "source_metadata": metadata,
-            "source": {"name": title, "url": self.preview_url},
+            "source": {"name": citation_title, "url": self.preview_url},
             "url": self.preview_url,
             "preview_url": self.preview_url,
             "original_url": self.original_url,
@@ -217,8 +238,17 @@ def render_sources_markdown(
     show_debug: bool = False,
     max_documents: int = 6,
     language: str = "de",
+    mode: str = "compact",
 ) -> str:
     l10n = Localizer(language)
+    if _source_markdown_mode(mode) == "audit":
+        return _render_sources_audit_markdown(
+            sources,
+            show_scores=show_scores,
+            show_debug=show_debug,
+            max_sources=max_documents,
+            l10n=l10n,
+        )
     if not sources:
         return l10n.text("sources.no_sources")
     groups = _group_sources_by_document(sources, language=l10n.language)
@@ -265,6 +295,170 @@ def render_sources_markdown(
     if len(groups) > max_documents:
         lines.append(l10n.text("sources.more_documents", count=len(groups) - max_documents))
     return "\n".join(lines).rstrip()
+
+
+def _source_markdown_mode(value: str) -> str:
+    mode = str(value or "compact").strip().lower()
+    if mode in {"off", "disabled"}:
+        return "none"
+    if mode in {"none", "compact", "detailed", "audit"}:
+        return mode
+    return "compact"
+
+
+def _render_sources_audit_markdown(
+    sources: list[dict[str, Any]],
+    *,
+    show_scores: bool,
+    show_debug: bool,
+    max_sources: int,
+    l10n: Localizer,
+) -> str:
+    lines = [f"## {l10n.text('sources.audit_heading')}", ""]
+    if not sources:
+        lines.extend(
+            [
+                l10n.text("sources.audit_no_sources"),
+                "",
+                f"**{l10n.text('sources.audit_quality_label')}:** "
+                f"{l10n.text('sources.audit_quality_none')}",
+            ]
+        )
+        return "\n".join(lines).rstrip()
+
+    lines.append(_audit_quality_sentence(sources, l10n))
+    lines.append("")
+    lines.append("| ID | Gestützte Aussage | Dokument | Fundstelle | Relevanz | Öffnen |")
+    lines.append("|---|---|---|---|---|---|")
+
+    for source in sources[:max_sources]:
+        metadata = _source_metadata(source)
+        source_id = _source_id(source, metadata)
+        claim = _audit_claim(source, metadata, l10n)
+        document = _audit_document(source, metadata)
+        location = _source_location(metadata, l10n)
+        if metadata.get("locator_quality") in {"unknown", "snippet_only", "document", "chunk"}:
+            location = f"{location} ({l10n.text('sources.locator_coarse')})"
+        relevance = _audit_relevance(source, metadata, show_scores, l10n)
+        actions = _source_actions(source, l10n) or l10n.text("sources.no_direct_link")
+        lines.append(
+            "| "
+            + " | ".join(
+                _escape_table_cell(value)
+                for value in (source_id, claim, document, location, relevance, actions)
+            )
+            + " |"
+        )
+
+    if len(sources) > max_sources:
+        remaining_text = l10n.text("sources.more_documents", count=len(sources) - max_sources)
+        lines.append(
+            "|  | "
+            + _escape_table_cell(remaining_text)
+            + " |  |  |  |  |"
+        )
+
+    if show_debug:
+        debug_lines = []
+        for source in sources[:max_sources]:
+            metadata = _source_metadata(source)
+            debug_parts = _debug_parts(metadata)
+            if debug_parts:
+                debug_lines.append(f"- {_source_id(source, metadata)}: {' · '.join(debug_parts)}")
+        if debug_lines:
+            lines.extend(["", "**Debug:**", *debug_lines])
+
+    return "\n".join(lines).rstrip()
+
+
+def _audit_quality_sentence(sources: list[dict[str, Any]], l10n: Localizer) -> str:
+    quality = _audit_quality(sources)
+    precise = 0
+    linked = 0
+    for source in sources:
+        metadata = _source_metadata(source)
+        if metadata.get("locator_quality") in {"line", "page", "section", "position"}:
+            precise += 1
+        if source.get("preview_url") or source.get("url") or source.get("original_url"):
+            linked += 1
+    return l10n.text(
+        f"sources.audit_quality_{quality}",
+        sources=len(sources),
+        precise=precise,
+        linked=linked,
+    )
+
+
+def _audit_quality(sources: list[dict[str, Any]]) -> str:
+    if not sources:
+        return "none"
+    precise = 0
+    linked = 0
+    for source in sources:
+        metadata = _source_metadata(source)
+        if metadata.get("locator_quality") in {"line", "page", "section", "position"}:
+            precise += 1
+        if source.get("preview_url") or source.get("url") or source.get("original_url"):
+            linked += 1
+    if len(sources) >= 2 and precise >= 2 and linked >= 1:
+        return "strong"
+    if precise >= 1 or linked >= 1:
+        return "medium"
+    return "weak"
+
+
+def _audit_claim(source: dict[str, Any], metadata: dict[str, Any], l10n: Localizer) -> str:
+    claim = (
+        metadata.get("claim")
+        or metadata.get("supported_claim")
+        or source.get("claim")
+        or source.get("supported_claim")
+    )
+    if claim not in (None, ""):
+        return _compact_markdown_text(str(claim), 120)
+    snippet = _clean_reference_text(str(source.get("snippet") or source.get("text") or "")) or ""
+    if snippet:
+        return _compact_markdown_text(snippet, 120)
+    return l10n.text("sources.audit_claim_unknown")
+
+
+def _audit_document(source: dict[str, Any], metadata: dict[str, Any]) -> str:
+    name = str(
+        source.get("name")
+        or metadata.get("document_name")
+        or metadata.get("doc_name")
+        or "Quelle"
+    )
+    path = metadata.get("path")
+    dataset = metadata.get("dataset_name")
+    parts = [name]
+    if path and str(path) != name:
+        parts.append(str(path))
+    if dataset:
+        parts.append(str(dataset))
+    return " · ".join(parts)
+
+
+def _audit_relevance(
+    source: dict[str, Any],
+    metadata: dict[str, Any],
+    show_scores: bool,
+    l10n: Localizer,
+) -> str:
+    relevance = str(metadata.get("relevance_label") or metadata.get("relevance") or "")
+    if not relevance:
+        value = _score_float(source.get("score") or metadata.get("score"))
+        if value is None:
+            relevance = l10n.text("sources.unknown")
+        elif value >= 0.8:
+            relevance = l10n.text("sources.high")
+        elif value >= 0.55:
+            relevance = l10n.text("sources.medium")
+        else:
+            relevance = l10n.text("sources.low")
+    if show_scores:
+        return _relevance_label(metadata, source, l10n)
+    return relevance or l10n.text("sources.unknown")
 
 
 def _source_basis_line(
@@ -344,14 +538,43 @@ def _normalize_reference(
     )
     score = raw.get("score") or raw.get("similarity") or raw.get("vector_similarity")
     position = raw.get("position") or raw.get("positions")
-    page = raw.get("page") or raw.get("page_num") or raw.get("page_number") or _first_page(position)
+    page = (
+        raw.get("page")
+        or raw.get("page_num")
+        or raw.get("page_number")
+        or raw.get("page_idx")
+        or _first_page(position)
+    )
+    line = raw.get("line") or raw.get("line_number")
+    line_start = raw.get("line_start") or raw.get("start_line") or line
+    line_end = raw.get("line_end") or raw.get("end_line")
+    section = raw.get("section") or raw.get("section_title") or raw.get("heading")
     file_row = files_by_document_id.get(document_id or "")
     if file_row:
         document_name = _safe_document_name_from_file_row(file_row) or document_name
     source_path = _source_path(raw, file_row)
     repo_id = _repo_id(raw, file_row)
+    file_id = _first_text(raw, "file_id", "seafile_file_id", "seafile_obj_id", "obj_id")
+    seafile_library_name = _first_text(raw, "seafile_library_name", "library_name")
     file_type = _file_type(document_name or source_path)
     mime_type = _first_text(raw, "mime_type", "mime", "content_type")
+    if not mime_type and file_row:
+        mime_type = (
+            str(file_row.get("ingested_mime") or file_row.get("detected_mime") or "")
+            or None
+        )
+    locator_quality = _locator_quality(
+        page=page,
+        section=section,
+        line_start=line_start,
+        line_end=line_end,
+        position=position,
+        chunk_id=chunk_id,
+        document_id=document_id,
+        document_name=document_name,
+        path=source_path,
+        snippet=snippet,
+    )
     original_url = _original_source_url(
         settings,
         repo_id=repo_id,
@@ -372,10 +595,16 @@ def _normalize_reference(
         snippet=snippet,
         citation_label=citation_label,
         page=page,
-        section=raw.get("section"),
-        line=raw.get("line") or raw.get("line_number"),
+        section=section,
+        line=line,
+        line_start=line_start,
+        line_end=line_end,
         position=position,
+        locator_quality=locator_quality,
         repo_id=repo_id,
+        file_id=file_id,
+        seafile_library_id=repo_id,
+        seafile_library_name=seafile_library_name,
         source_path=source_path,
         original_url=original_url,
         score=score,
@@ -389,8 +618,10 @@ def _normalize_reference(
         document_name=document_name,
         path=source_path,
         page=page,
-        line=raw.get("line") or raw.get("line_number"),
-        section=raw.get("section"),
+        line=line,
+        line_start=line_start,
+        line_end=line_end,
+        section=section,
         chunk_id=chunk_id,
         score=score,
         snippet=snippet or "",
@@ -400,9 +631,13 @@ def _normalize_reference(
         dataset_name=dataset_name,
         document_id=document_id,
         repo_id=repo_id,
+        file_id=file_id,
+        seafile_library_id=repo_id,
+        seafile_library_name=seafile_library_name,
         file_type=file_type,
         mime_type=mime_type,
         position=position,
+        locator_quality=locator_quality,
         citation_label=citation_label,
         language=l10n.language,
         raw=raw,
@@ -423,8 +658,14 @@ def _preview_url(
     page: Any,
     section: Any,
     line: Any,
+    line_start: Any,
+    line_end: Any,
     position: Any,
+    locator_quality: str,
     repo_id: str | None,
+    file_id: str | None,
+    seafile_library_id: str | None,
+    seafile_library_name: str | None,
     source_path: str | None,
     original_url: str | None,
     score: Any,
@@ -452,9 +693,15 @@ def _preview_url(
             "page": page,
             "section": section,
             "line": line,
+            "line_start": line_start,
+            "line_end": line_end,
             "position": position,
+            "locator_quality": locator_quality,
             "snippet": _preview_snippet(snippet),
             "repo_id": repo_id,
+            "file_id": file_id,
+            "seafile_library_id": seafile_library_id,
+            "seafile_library_name": seafile_library_name,
             "source_path": source_path,
             "original_url": original_url,
             "score": score,
@@ -592,12 +839,48 @@ def _original_source_url(
 
 
 def _citation_label(*, index: int, page: Any, chunk_id: str | None, l10n: Localizer) -> str:
-    parts = [f"{l10n.text('sources.source')} {index}"]
+    _ = (page, chunk_id, l10n)
+    return f"S{index}"
+
+
+def _line_range(start: Any, end: Any) -> str:
+    if start in (None, "") and end in (None, ""):
+        return ""
+    if end in (None, "") or str(end) == str(start):
+        return str(start)
+    if start in (None, ""):
+        return str(end)
+    return f"{start}-{end}"
+
+
+def _locator_quality(
+    *,
+    page: Any,
+    section: Any,
+    line_start: Any,
+    line_end: Any,
+    position: Any,
+    chunk_id: str | None,
+    document_id: str | None,
+    document_name: str | None,
+    path: str | None,
+    snippet: str | None,
+) -> str:
+    if line_start not in (None, "") or line_end not in (None, ""):
+        return "line"
     if page not in (None, ""):
-        parts.append(l10n.text("sources.page", value=page))
+        return "page"
+    if section not in (None, ""):
+        return "section"
+    if position not in (None, "", [], {}):
+        return "position"
     if chunk_id:
-        parts.append(f"Chunk {chunk_id}")
-    return ", ".join(parts)
+        return "chunk"
+    if document_id or document_name or path:
+        return "document"
+    if snippet:
+        return "snippet_only"
+    return "unknown"
 
 
 def _safe_document_name_from_file_row(file_row: dict[str, Any]) -> str:
@@ -747,6 +1030,17 @@ def _source_metadata(source: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _source_id(source: dict[str, Any], metadata: dict[str, Any]) -> str:
+    value = source.get("source_id") or metadata.get("source_id")
+    if value not in (None, ""):
+        return str(value)
+    rank = source.get("rank") or metadata.get("rank") or 1
+    try:
+        return f"S{int(rank)}"
+    except (TypeError, ValueError):
+        return "S?"
+
+
 def _source_location(metadata: dict[str, Any], l10n: Localizer | None = None) -> str:
     l10n = l10n or Localizer()
     parts = []
@@ -754,15 +1048,23 @@ def _source_location(metadata: dict[str, Any], l10n: Localizer | None = None) ->
         parts.append(l10n.text("sources.page", value=metadata.get("page")))
     if metadata.get("section") not in (None, ""):
         parts.append(l10n.text("sources.section", value=metadata.get("section")))
-    if metadata.get("line") not in (None, ""):
-        parts.append(l10n.text("sources.line", value=metadata.get("line")))
+    line_range = _line_range(
+        metadata.get("line_start") or metadata.get("line"),
+        metadata.get("line_end"),
+    )
+    if line_range:
+        parts.append(l10n.text("sources.line", value=line_range))
+    if not parts and metadata.get("locator_quality") == "position":
+        parts.append(l10n.text("sources.position_available"))
+    if not parts and metadata.get("locator_quality") == "chunk":
+        parts.append(l10n.text("sources.chunk_available"))
     return " · ".join(parts) or l10n.text("sources.missing_location")
 
 
 def _relevance_label(metadata: dict[str, Any], source: dict[str, Any], l10n: Localizer) -> str:
     score = source.get("score") or metadata.get("score")
     formatted = _format_score(score)
-    relevance = metadata.get("relevance")
+    relevance = metadata.get("relevance_label") or metadata.get("relevance")
     if not relevance:
         value = _score_float(score)
         if value is None:
@@ -833,6 +1135,20 @@ def _markdown_plain(text: str) -> str:
         ">": "&gt;",
     }
     return "".join(replacements.get(char, char) for char in str(text or ""))
+
+
+def _escape_table_cell(text: Any) -> str:
+    replacements = {
+        "\\": "\\\\",
+        "`": "\\`",
+        "|": "\\|",
+        "<": "&lt;",
+        ">": "&gt;",
+    }
+    return "".join(replacements.get(char, char) for char in str(text or "")).replace(
+        "\n",
+        " ",
+    )
 
 
 def _b64encode(value: bytes) -> str:

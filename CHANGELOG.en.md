@@ -6,6 +6,27 @@ All notable changes to this repository should be documented here. The format is
 based on a simple `Unreleased` section; historical releases are not invented
 retroactively.
 
+## 0.1.3 - 2026-05-27
+
+### Added
+
+- Auditable OpenWebUI source mode `audit` with `[S1]` source markers, a
+  Markdown evidence table, evidence quality, and transparent locator quality.
+- Normalized `locator_quality` values for line, page, section, position, chunk,
+  document, snippet-only fallback, and unknown locations.
+- Tests for audit Markdown, citation event payloads, missing locations, debug
+  metadata, connector preview links, and conflicting or missing sources.
+
+### Changed
+
+- OpenWebUI pipes now appear in the model picker as `Seafile · <Dataset>` and
+  describe themselves as verifiable knowledge models for synchronized Seafile
+  libraries.
+- OpenWebUI answers append a visible evidence table by default, while numeric
+  scores and internal IDs stay hidden during normal operation.
+- Connector preview links are the preferred jump target for citations; internal
+  proxy backend URLs continue to be filtered from OpenWebUI output.
+
 ## 0.1.2 - 2026-05-27
 
 ### Changed

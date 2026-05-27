@@ -722,6 +722,8 @@ def _files_by_document_id(store: DashboardEventStore, repo_id: str) -> dict[str,
                 "repo_id": row.repo_id,
                 "path": row.path,
                 "ragflow_document_name": row.ragflow_document_name,
+                "detected_mime": row.detected_mime,
+                "ingested_mime": row.ingested_mime,
             }
             for row in rows
             if row.ragflow_document_id
@@ -731,8 +733,9 @@ def _files_by_document_id(store: DashboardEventStore, repo_id: str) -> dict[str,
 def _sources_markdown(sources: list[dict[str, Any]], settings: Settings) -> str:
     return render_sources_markdown(
         sources,
-        show_scores=True,
+        show_scores=False,
         show_debug=False,
+        mode="audit",
         language=localizer_for(settings).language,
     )
 
@@ -872,6 +875,16 @@ def _preview_join(parts: list[str], *, separator: str = " · ") -> str:
     return separator.join(part for part in parts if part)
 
 
+def _preview_line_range(start: str, end: str) -> str:
+    if not start and not end:
+        return ""
+    if not end or end == start:
+        return start
+    if not start:
+        return end
+    return f"{start}-{end}"
+
+
 def _preview_definition_list(rows: list[tuple[str, str]]) -> str:
     """Render rows whose values are already escaped or intentionally safe HTML."""
     return "".join(
@@ -940,9 +953,13 @@ def _preview_html(settings: Settings, token: str | None) -> str:
     page_raw = _preview_payload_text(payload, "page")
     section_raw = _preview_payload_text(payload, "section")
     line_raw = _preview_payload_text(payload, "line")
+    line_start_raw = _preview_payload_text(payload, "line_start")
+    line_end_raw = _preview_payload_text(payload, "line_end")
+    locator_quality_raw = _preview_payload_text(payload, "locator_quality")
+    line_display = _preview_line_range(line_start_raw or line_raw, line_end_raw)
     page_label = escape(l10n.text("sources.page", value=page_raw)) if page_raw else ""
     section_label = escape(l10n.text("sources.section", value=section_raw)) if section_raw else ""
-    line_label = escape(l10n.text("sources.line", value=line_raw)) if line_raw else ""
+    line_label = escape(l10n.text("sources.line", value=line_display)) if line_display else ""
     repo_id = escape(_preview_payload_text(payload, "repo_id"))
     source_path = escape(_preview_payload_text(payload, "source_path"))
     file_type_raw = _preview_payload_text(payload, "file_type")
@@ -1039,7 +1056,14 @@ def _preview_html(settings: Settings, token: str | None) -> str:
                 l10n.text("sources.section", value="").strip(),
                 escape(section_raw) if section_raw else unknown,
             ),
-            (l10n.text("sources.line", value="").strip(), escape(line_raw) if line_raw else unknown),
+            (
+                l10n.text("sources.line", value="").strip(),
+                escape(line_display) if line_display else unknown,
+            ),
+            (
+                l10n.text("preview.locator_quality"),
+                escape(locator_quality_raw) if locator_quality_raw else unknown,
+            ),
             (l10n.text("preview.position_bbox"), position_state),
             (l10n.text("preview.chunk_id"), chunk or unknown),
         ]

@@ -211,7 +211,7 @@ OPENWEBUI_REQUEST_TIMEOUT_SECONDS=180
 OPENWEBUI_VERIFY_SSL=true
 OPENWEBUI_CA_BUNDLE=
 OPENWEBUI_FUNCTION_NAMESPACE=ragflow
-OPENWEBUI_SOURCE_PREVIEW_MODE=ragflow_link
+OPENWEBUI_SOURCE_PREVIEW_MODE=connector_viewer
 OPENWEBUI_PROXY_PUBLIC_BASE_URL=
 OPENWEBUI_PROXY_INTERNAL_BASE_URL=
 OPENWEBUI_PROXY_SHARED_SECRET=
@@ -242,7 +242,9 @@ RAGFLOW_DOCUMENT_URL_TEMPLATE=
   nur, wenn Tools oder Pipes in `sync` oder `repair` synchronisiert werden.
   Wenn leer, wird `OPENWEBUI_PROXY_PUBLIC_BASE_URL` verwendet.
 - `OPENWEBUI_SOURCE_PREVIEW_MODE`: `ragflow_link`, `connector_viewer`,
-  `citation_only` oder `disabled`.
+  `citation_only` oder `disabled`. Für auditierbare OpenWebUI-Antworten ist
+  `connector_viewer` empfohlen, weil Citation-Chips und Markdown-Nachweistabelle
+  dann auf denselben signierten Preview-Link zeigen.
 - `OPENWEBUI_DATASET_ALLOWLIST`: optionale CSV aus Repo-IDs oder
   RAGFlow-Dataset-IDs für stufenweisen Rollout.
 - `SEAFILE_FILE_URL_TEMPLATE`: optionales Template für einen Browser-Link zum
@@ -256,15 +258,25 @@ RAGFLOW_DOCUMENT_URL_TEMPLATE=
 
 Im Modus `connector_viewer` erzeugt der Connector signierte Quellenlinks auf
 `/api/openwebui/sources/preview`. Diese Links enthalten die von RAGFlow
-gelieferte Chunk-Referenz inklusive Seite, Position und Textauszug und bleiben
-für gespeicherte OpenWebUI-Chatverläufe dauerhaft gültig, solange
+gelieferte Chunk-Referenz inklusive bester bekannter Fundstelle wie Seite,
+Abschnitt, Zeile, Position, `locator_quality` und Textauszug und bleiben für
+gespeicherte OpenWebUI-Chatverläufe dauerhaft gültig, solange
 `OPENWEBUI_PROXY_SHARED_SECRET` unverändert bleibt. Die Preview nutzt nur
-  lokales HTML/CSS und keine CDN-Assets. Wenn `SEAFILE_FILE_URL_TEMPLATE` gesetzt
-  ist, zeigt die Preview zusätzlich einen priorisierten Button zum
-  Originaldokument und trennt diesen sichtbar von der Connector-Preview. Wenn
-  RAGFlow selbst stabile öffentliche Dokument-/Chunk-Links liefert oder
-  `RAGFLOW_DOCUMENT_URL_TEMPLATE` gesetzt ist, kann `ragflow_link` stattdessen
-  direkt auf RAGFlow zeigen.
+lokales HTML/CSS und keine CDN-Assets. Wenn `SEAFILE_FILE_URL_TEMPLATE` gesetzt
+ist, zeigt die Preview zusätzlich einen priorisierten Button zum
+Originaldokument und trennt diesen sichtbar von der Connector-Preview. Wenn
+RAGFlow selbst stabile öffentliche Dokument-/Chunk-Links liefert oder
+`RAGFLOW_DOCUMENT_URL_TEMPLATE` gesetzt ist, kann `ragflow_link` stattdessen
+direkt auf RAGFlow zeigen.
+
+Die generierte Pipe nutzt standardmäßig `SOURCE_MARKDOWN_MODE=audit`,
+`APPEND_SOURCE_OVERVIEW=true` und eigene OpenWebUI-Citation-Events. Im
+Modellpicker erscheint sie mit dem Anzeigenamen `Seafile · <Dataset>`, während
+die technische Modell-ID stabil bleibt. In der Antwort markiert die Pipe
+Quellen als `[S1]`, `[S2]` usw. und ergänzt eine Nachweistabelle mit Dokument,
+Fundstelle, Relevanzlabel und Direktlink. Numerische Scores und technische IDs
+bleiben im Normalbetrieb ausgeblendet; `SHOW_SOURCE_DEBUG=true` ist nur für
+Admin-Debugging gedacht.
 
 Wenn OpenWebUI aktiviert ist, benötigt der Connector-Controller einen
 erreichbaren HTTP-Port für Proxy-Routen wie `/api/openwebui/proxy/chat` und

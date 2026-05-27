@@ -6,6 +6,29 @@ Alle nennenswerten Änderungen an diesem Repository sollten hier dokumentiert
 werden. Das Format orientiert sich an einer einfachen `Unreleased`-Sektion; es
 werden keine historischen Releases nachträglich erfunden.
 
+## 0.1.3 - 2026-05-27
+
+### Added
+
+- Auditierbarer OpenWebUI-Quellenmodus `audit` mit `[S1]`-Quellenmarken,
+  Markdown-Nachweistabelle, Nachweisqualität und transparenter
+  Fundstellenqualität.
+- Normalisierte `locator_quality` für Zeile, Seite, Abschnitt, Position, Chunk,
+  Dokument, Snippet-Fallback und unbekannte Fundstellen.
+- Tests für Audit-Markdown, Citation-Event-Payloads, fehlende Fundstellen,
+  Debug-Metadaten, Connector-Preview-Links und widersprüchliche oder fehlende
+  Quellen.
+
+### Changed
+
+- OpenWebUI-Pipes erscheinen im Modellpicker als `Seafile · <Dataset>` und
+  beschreiben sich als prüfbare Wissensmodelle für synchronisierte
+  Seafile-Bibliotheken.
+- OpenWebUI-Antworten hängen im Standard eine sichtbare Nachweistabelle an,
+  während numerische Scores und interne IDs im Normalbetrieb verborgen bleiben.
+- Connector-Preview-Links sind der bevorzugte Direktsprungpfad für Citations;
+  interne Proxy-Backend-URLs werden weiterhin aus OpenWebUI-Ausgaben gefiltert.
+
 ## 0.1.2 - 2026-05-27
 
 ### Changed
