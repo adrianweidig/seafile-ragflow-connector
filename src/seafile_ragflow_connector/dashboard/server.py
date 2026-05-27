@@ -861,6 +861,63 @@ def _blockquote(text: str) -> str:
     return "\n".join(f"> {line}" if line else ">" for line in lines)
 
 
+def _preview_payload_text(payload: dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if value in (None, ""):
+        return ""
+    return str(value).strip()
+
+
+def _preview_join(parts: list[str], *, separator: str = " · ") -> str:
+    return separator.join(part for part in parts if part)
+
+
+def _preview_definition_list(rows: list[tuple[str, str]]) -> str:
+    """Render rows whose values are already escaped or intentionally safe HTML."""
+    return "".join(
+        f"<div><dt>{escape(label)}</dt><dd>{value}</dd></div>" for label, value in rows if value
+    )
+
+
+def _preview_metric_card(label: str, value_html: str, hint_html: str = "") -> str:
+    hint = f"<small>{hint_html}</small>" if hint_html else ""
+    return f'<article class="metric"><span>{escape(label)}</span><strong>{value_html}</strong>{hint}</article>'
+
+
+def _preview_is_http_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _preview_is_connector_link(url: str) -> bool:
+    parsed = urlparse(url)
+    path = parsed.path or ""
+    return (
+        path.startswith("/api/openwebui/sources/preview")
+        or path == "/api/openwebui/proxy"
+        or path.startswith("/api/openwebui/proxy/")
+    )
+
+
+def _preview_relevance_hint(score: Any, settings: Settings) -> str:
+    l10n = localizer_for(settings)
+    if score in (None, ""):
+        return l10n.text("preview.no_score")
+    try:
+        value = float(score)
+    except (TypeError, ValueError):
+        return l10n.text("preview.score_non_numeric")
+    if 0 <= value <= 1:
+        if value >= 0.8:
+            level = l10n.text("sources.high")
+        elif value >= 0.5:
+            level = l10n.text("sources.medium")
+        else:
+            level = l10n.text("sources.low")
+        return f"{l10n.text('preview.score_relative')} · {level}"
+    return l10n.text("preview.score_non_normalized")
+
+
 def _preview_html(settings: Settings, token: str | None) -> str:
     l10n = localizer_for(settings)
     if not token or not settings.openwebui_proxy_shared_secret:
@@ -869,136 +926,214 @@ def _preview_html(settings: Settings, token: str | None) -> str:
         payload = verify_preview_token(token, settings.openwebui_proxy_shared_secret)
     except ValueError:
         return _preview_unavailable_html(l10n.language)
-    title = escape(str(payload.get("document_name") or l10n.text("sources.source")))
-    snippet_text = _clean_source_snippet(payload.get("snippet") or "")
-    snippet = escape(snippet_text)
-    dataset = escape(str(payload.get("dataset_name") or payload.get("dataset_id") or ""))
-    document_id = escape(str(payload.get("document_id") or ""))
-    chunk = escape(str(payload.get("chunk_id") or ""))
-    citation = escape(str(payload.get("citation_label") or l10n.text("sources.source")))
-    page = escape(str(payload.get("page") or ""))
-    section = escape(str(payload.get("section") or ""))
-    line = escape(str(payload.get("line") or ""))
-    repo_id = escape(str(payload.get("repo_id") or ""))
-    source_path = escape(str(payload.get("source_path") or ""))
-    file_type = escape(str(payload.get("file_type") or ""))
-    mime_type = escape(str(payload.get("mime_type") or ""))
+
+    unknown = escape(l10n.text("sources.unknown"))
+    title = escape(_preview_payload_text(payload, "document_name") or l10n.text("sources.source"))
+    dataset_raw = _preview_payload_text(payload, "dataset_name") or _preview_payload_text(
+        payload, "dataset_id"
+    )
+    dataset = escape(dataset_raw) if dataset_raw else unknown
+    dataset_id = escape(_preview_payload_text(payload, "dataset_id"))
+    document_id = escape(_preview_payload_text(payload, "document_id"))
+    chunk = escape(_preview_payload_text(payload, "chunk_id"))
+    citation = escape(_preview_payload_text(payload, "citation_label") or l10n.text("sources.source"))
+    page_raw = _preview_payload_text(payload, "page")
+    section_raw = _preview_payload_text(payload, "section")
+    line_raw = _preview_payload_text(payload, "line")
+    page_label = escape(l10n.text("sources.page", value=page_raw)) if page_raw else ""
+    section_label = escape(l10n.text("sources.section", value=section_raw)) if section_raw else ""
+    line_label = escape(l10n.text("sources.line", value=line_raw)) if line_raw else ""
+    repo_id = escape(_preview_payload_text(payload, "repo_id"))
+    source_path = escape(_preview_payload_text(payload, "source_path"))
+    file_type_raw = _preview_payload_text(payload, "file_type")
+    file_type = escape(file_type_raw.upper()) if file_type_raw else ""
+    mime_type = escape(_preview_payload_text(payload, "mime_type"))
     score = _format_score(payload.get("score"))
     score_text = escape(score or l10n.text("sources.unknown"))
-    original_url = str(payload.get("original_url") or "")
-    is_de = l10n.language == "de"
-    original_link = (
-        f'<a class="button primary original-action" href="{escape(original_url, quote=True)}" target="_blank" rel="noreferrer">{l10n.text("preview.original")}</a>'
-        if original_url
-        else ""
-    )
-    original_action = original_link or (
-        f'<span class="original-missing" role="status"><strong>{l10n.text("preview.original_missing")}</strong>'
-        f'<span>{l10n.text("preview.original_missing_hint")}</span></span>'
-    )
-    position_json = json.dumps(payload.get("position"), ensure_ascii=False, default=str)
+    score_hint = escape(_preview_relevance_hint(payload.get("score"), settings))
+    snippet_text = _clean_source_snippet(payload.get("snippet") or "")
+    snippet = escape(snippet_text)
+    empty_snippet = escape(l10n.text("preview.no_snippet"))
+    snippet_html = f"<mark>{snippet}</mark>" if snippet else f'<span class="empty-state">{empty_snippet}</span>'
+
+    original_url = _preview_payload_text(payload, "original_url")
+    original_is_connector = _preview_is_connector_link(original_url) if original_url else False
+    original_is_safe_http = _preview_is_http_url(original_url) if original_url else False
+    has_original_url = bool(original_url and original_is_safe_http and not original_is_connector)
+    original_href = escape(original_url, quote=True)
+    original_visible = escape(original_url)
+    original_label = escape(l10n.text("preview.original"))
+    if has_original_url:
+        original_action = (
+            f'<a class="button primary original-action" href="{original_href}" target="_blank" '
+            f'rel="noreferrer noopener" data-original-link="true">{original_label}</a>'
+        )
+        original_row = (
+            f'<a class="text-link" href="{original_href}" target="_blank" '
+            f'rel="noreferrer noopener">{original_visible}</a>'
+        )
+        original_status = escape(l10n.text("preview.original_external_hint"))
+    else:
+        if original_url and original_is_connector:
+            missing_reason = l10n.text("preview.original_connector_link_error")
+        elif original_url and not original_is_safe_http:
+            missing_reason = l10n.text("preview.original_invalid_url_error")
+        else:
+            missing_reason = l10n.text("preview.original_missing_hint")
+        original_action = (
+            f'<span class="original-missing" role="status"><strong>{escape(l10n.text("preview.original_missing"))}</strong>'
+            f"<span>{escape(missing_reason)}</span></span>"
+        )
+        original_row = (
+            escape(original_url) if original_url else escape(l10n.text("preview.original_missing_hint"))
+        )
+        original_status = escape(l10n.text("preview.original_link_config_hint"))
+
+    position_raw = payload.get("position")
+    position_json = json.dumps(position_raw, ensure_ascii=False, default=str)
     position = escape(position_json)
+    has_position = position_raw not in (None, "", [], {}) and position_json not in ("null", '""')
+    position_state = escape(
+        l10n.text("preview.coordinates_available")
+        if has_position
+        else l10n.text("preview.coordinates_missing")
+    )
+    location_summary = _preview_join([page_label, section_label, line_label]) or unknown
+    path_or_citation = source_path or citation
+    file_summary = file_type or escape(l10n.text("preview.source"))
+    mime_summary = mime_type or escape(l10n.text("preview.mime_unknown"))
     debug_payload = dict(payload)
     debug_payload["snippet"] = snippet_text
     raw_json = escape(json.dumps(debug_payload, ensure_ascii=False, indent=2, default=str))
-    copy_snippet = escape(snippet_text, quote=True)
-    chips = [f"<span>{citation}</span>"]
-    if page:
-        chips.append(f"<span>{l10n.text('sources.page', value=page)}</span>")
-    if score:
-        chips.append(f"<span>{l10n.text('sources.relevance', value=score_text)}</span>")
-    if file_type:
-        chips.append(f"<span>{file_type.upper()}</span>")
-    details = [
-        ("Quellpfad" if is_de else "Source path", source_path),
-        ("Dateityp" if is_de else "File type", file_type),
-        ("MIME-Type", mime_type),
-        (
-            "Fundstelle" if is_de else "Location",
-            " · ".join(
-                part
-                for part in (
-                    l10n.text("sources.page", value=page) if page else "",
-                    l10n.text("sources.section", value=section) if section else "",
-                    l10n.text("sources.line", value=line) if line else "",
-                )
-                if part
+
+    metrics = "".join(
+        [
+            _preview_metric_card(
+                "Dataset",
+                dataset,
+                escape(l10n.text("preview.dataset_hint")),
             ),
-        ),
-        (l10n.text("sources.relevance", value="").strip(), score_text),
-    ]
-    debug_details = [
-        ("Dataset", dataset),
-        (l10n.text("preview.document_id"), document_id),
-        ("Seafile-Repo", repo_id),
-        ("Chunk-ID", chunk),
-        ("Abschnitt" if is_de else "Section", section),
-        ("Zeile" if is_de else "Line", line),
-        ("Position", f"<code>{position}</code>" if position not in ("null", '""') else ""),
-    ]
-    details_html = "".join(
-        f"<div><dt>{label}</dt><dd>{value}</dd></div>" for label, value in details if value
+            _preview_metric_card(
+                l10n.text("preview.location"),
+                location_summary,
+                escape(l10n.text("preview.location_summary_hint")),
+            ),
+            _preview_metric_card(
+                l10n.text("sources.relevance", value="").strip(),
+                score_text,
+                score_hint,
+            ),
+            _preview_metric_card(
+                l10n.text("preview.file"),
+                file_summary,
+                mime_summary,
+            ),
+        ]
     )
-    debug_html = "".join(
-        f"<div><dt>{label}</dt><dd>{value}</dd></div>" for label, value in debug_details if value
+
+    location_details = _preview_definition_list(
+        [
+            (l10n.text("preview.citation_label"), citation),
+            (l10n.text("sources.page", value="").strip(), escape(page_raw) if page_raw else unknown),
+            (
+                l10n.text("sources.section", value="").strip(),
+                escape(section_raw) if section_raw else unknown,
+            ),
+            (l10n.text("sources.line", value="").strip(), escape(line_raw) if line_raw else unknown),
+            (l10n.text("preview.position_bbox"), position_state),
+            (l10n.text("preview.chunk_id"), chunk or unknown),
+        ]
     )
-    if not snippet:
-        snippet = l10n.text("sources.no_sources")
+    origin_details = _preview_definition_list(
+        [
+            (l10n.text("preview.original_document"), original_row),
+            (l10n.text("preview.note"), original_status),
+            (l10n.text("preview.seafile_repo"), repo_id or unknown),
+            (l10n.text("preview.source_path"), source_path or unknown),
+            (l10n.text("preview.file_type"), file_type or unknown),
+            ("MIME-Type", mime_type or unknown),
+        ]
+    )
+    technical_details = _preview_definition_list(
+        [
+            ("Dataset-ID", dataset_id or unknown),
+            (l10n.text("preview.document_id"), document_id or unknown),
+            (l10n.text("preview.chunk_id"), chunk or unknown),
+            (
+                l10n.text("preview.raw_position"),
+                f"<code>{position}</code>" if has_position else unknown,
+            ),
+        ]
+    )
+
+    copy_snippet_label = escape(l10n.text("preview.copy_snippet"), quote=True)
+    copy_link_label = escape(l10n.text("preview.copy_link"), quote=True)
+    copy_metadata_label = escape(l10n.text("preview.copy_metadata"), quote=True)
+    copied_js = json.dumps(l10n.text("preview.copied"))
+    error_js = json.dumps(l10n.text("preview.copy_error"))
+
     return (
         f"<!doctype html><html lang=\"{l10n.language}\" dir=\"{'rtl' if l10n.language == 'ar' else 'ltr'}\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{title}</title>"
         "<style>"
-        ":root{color-scheme:light dark;--bg:#f5f7fb;--panel:#ffffff;--panel-2:#eef3f8;--text:#111827;--muted:#5f6f86;--border:#d8e1ec;--accent:#0f766e;--accent-strong:#0d9488;--accent-2:#2563eb;--soft:#f8fafc;--code:#eef2f7;--mark:#fff2a8;--warn:#7c2d12;--warn-bg:#fff7ed;--shadow:0 18px 48px rgba(15,23,42,.09)}"
-        "@media(prefers-color-scheme:dark){:root{--bg:#0a0f18;--panel:#121a28;--panel-2:#182335;--text:#f8fafc;--muted:#94a3b8;--border:#2c3a4e;--accent:#2dd4bf;--accent-strong:#14b8a6;--accent-2:#60a5fa;--soft:#101827;--code:#0b1220;--mark:#5b4b15;--warn:#fdba74;--warn-bg:#2b1708;--shadow:0 28px 80px rgba(0,0,0,.32)}}"
-        "[data-theme=light]{color-scheme:light;--bg:#f5f7fb;--panel:#ffffff;--panel-2:#eef3f8;--text:#111827;--muted:#5f6f86;--border:#d8e1ec;--accent:#0f766e;--accent-strong:#0d9488;--accent-2:#2563eb;--soft:#f8fafc;--code:#eef2f7;--mark:#fff2a8;--warn:#7c2d12;--warn-bg:#fff7ed;--shadow:0 18px 48px rgba(15,23,42,.09)}"
-        "[data-theme=dark]{color-scheme:dark;--bg:#0a0f18;--panel:#121a28;--panel-2:#182335;--text:#f8fafc;--muted:#94a3b8;--border:#2c3a4e;--accent:#2dd4bf;--accent-strong:#14b8a6;--accent-2:#60a5fa;--soft:#101827;--code:#0b1220;--mark:#5b4b15;--warn:#fdba74;--warn-bg:#2b1708;--shadow:0 28px 80px rgba(0,0,0,.32)}"
-        "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,system-ui,-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.55;letter-spacing:0}body:before{content:\"\";position:fixed;inset:0 0 auto;height:5px;background:var(--accent);z-index:1}"
-        "main{max-width:1120px;margin:0 auto;padding:30px 18px 44px}.hero{display:grid;gap:18px;padding:24px;border:1px solid var(--border);border-radius:8px;background:var(--panel);box-shadow:var(--shadow);position:relative;overflow:hidden}.hero:before{content:\"\";position:absolute;inset:0 auto 0 0;width:5px;background:var(--accent)}.hero>*{position:relative}"
-        ".topbar{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.eyebrow{margin:0;color:var(--accent);font-size:.78rem;font-weight:800;text-transform:uppercase}h1{margin:0;font-size:clamp(1.35rem,2.7vw,2.05rem);line-height:1.16;letter-spacing:0;overflow-wrap:anywhere}.path{margin:0;color:var(--muted);overflow-wrap:anywhere}"
-        ".hero-body{display:grid;grid-template-columns:minmax(0,1fr) 148px;gap:18px;align-items:start}.document-badge{border:1px solid var(--border);border-radius:8px;background:var(--soft);padding:14px;text-align:right}.document-badge span{display:block;color:var(--muted);font-size:.78rem}.document-badge strong{display:block;margin-top:3px;font-size:1.1rem;overflow-wrap:anywhere}"
-        ".chips,.actions,.tabs{display:flex;flex-wrap:wrap;gap:8px}.chips span{border:1px solid var(--border);border-radius:999px;padding:5px 10px;color:var(--muted);font-size:.86rem;background:var(--soft)}.chips span:first-child{color:var(--text);border-color:color-mix(in srgb,var(--accent) 40%,var(--border));background:color-mix(in srgb,var(--accent) 10%,var(--soft))}"
-        ".button,.tab{display:inline-flex;align-items:center;justify-content:center;min-height:40px;border:1px solid var(--border);border-radius:7px;padding:8px 12px;background:var(--panel);color:var(--text);text-decoration:none;font-weight:650;cursor:pointer}.button.primary{background:var(--accent);border-color:var(--accent);color:white}.button:hover,.tab:hover{border-color:var(--accent);transform:translateY(-1px)}.button.primary:hover{background:var(--accent-strong)}.button:focus-visible,.tab:focus-visible{outline:0;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 30%,transparent)}"
-        ".source-actions{align-items:stretch}.original-action{min-width:190px}.original-missing{display:inline-flex;flex-direction:column;gap:2px;max-width:520px;border:1px solid color-mix(in srgb,var(--warn) 28%,var(--border));border-radius:7px;padding:8px 12px;background:var(--warn-bg);color:var(--warn);font-size:.88rem}.original-missing strong{font-size:.94rem}"
-        ".tabs{margin-top:16px}.tab[aria-selected=true]{background:var(--accent);border-color:var(--accent);color:white}.panel{display:none;margin-top:12px;border:1px solid var(--border);border-radius:8px;background:var(--panel);overflow:hidden;box-shadow:0 14px 34px rgba(15,23,42,.08)}.panel.active{display:block}"
-        ".section-title{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0;padding:14px 16px;border-bottom:1px solid var(--border);background:var(--panel-2);font-size:1rem}.hit{margin:0;padding:22px;white-space:pre-wrap;overflow:auto;background:var(--soft);font-size:1.02rem;line-height:1.76}.hit mark{background:var(--mark);color:var(--text);padding:2px 3px;border-radius:4px;box-decoration-break:clone;-webkit-box-decoration-break:clone}"
-        "dl{margin:0;padding:12px 18px}dl div{display:grid;grid-template-columns:132px minmax(0,1fr);gap:14px;padding:9px 0;border-bottom:1px solid var(--border)}dl div:last-child{border-bottom:0}dt{color:var(--muted);font-size:.82rem}dd{margin:0;overflow-wrap:anywhere;font-weight:650}code,pre.raw{background:var(--code);border-radius:6px}code{padding:2px 5px}pre.raw{margin:0;padding:16px;white-space:pre-wrap;overflow:auto;font-size:.85rem}"
-        ".muted{padding:20px 22px;color:var(--muted)}@media(max-width:760px){main{padding:14px 10px 30px}.hero{padding:18px}.topbar,.hero-body{display:grid;grid-template-columns:1fr}.document-badge{text-align:left}.actions .button{flex:1 1 auto;justify-content:center}.button,.tab{min-height:44px}dl div{grid-template-columns:1fr;gap:2px}}"
-        "</style></head><body><main>"
+        ":root{color-scheme:light dark;--bg:#f5f7fb;--panel:#fff;--panel-2:#f8fafc;--panel-3:#eef3f8;--text:#111827;--muted:#64748b;--border:#d8e1ec;--accent:#0f766e;--accent-strong:#0d9488;--accent-soft:#e6fffb;--code:#eef2f7;--mark:#fff4b8;--warn:#8a3a12;--warn-bg:#fff7ed;--shadow:0 18px 50px rgba(15,23,42,.09)}"
+        "@media(prefers-color-scheme:dark){:root{--bg:#0a0f18;--panel:#121a28;--panel-2:#101827;--panel-3:#182335;--text:#f8fafc;--muted:#94a3b8;--border:#2c3a4e;--accent:#2dd4bf;--accent-strong:#14b8a6;--accent-soft:#123f3b;--code:#0b1220;--mark:#5b4b15;--warn:#fdba74;--warn-bg:#2b1708;--shadow:0 26px 76px rgba(0,0,0,.34)}}"
+        "[data-theme=light]{color-scheme:light;--bg:#f5f7fb;--panel:#fff;--panel-2:#f8fafc;--panel-3:#eef3f8;--text:#111827;--muted:#64748b;--border:#d8e1ec;--accent:#0f766e;--accent-strong:#0d9488;--accent-soft:#e6fffb;--code:#eef2f7;--mark:#fff4b8;--warn:#8a3a12;--warn-bg:#fff7ed;--shadow:0 18px 50px rgba(15,23,42,.09)}"
+        "[data-theme=dark]{color-scheme:dark;--bg:#0a0f18;--panel:#121a28;--panel-2:#101827;--panel-3:#182335;--text:#f8fafc;--muted:#94a3b8;--border:#2c3a4e;--accent:#2dd4bf;--accent-strong:#14b8a6;--accent-soft:#123f3b;--code:#0b1220;--mark:#5b4b15;--warn:#fdba74;--warn-bg:#2b1708;--shadow:0 26px 76px rgba(0,0,0,.34)}"
+        "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,system-ui,-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.55;letter-spacing:0}body:before{content:\"\";position:fixed;inset:0 0 auto;height:5px;background:var(--accent);z-index:2}"
+        "main{max-width:1160px;margin:0 auto;padding:30px 18px 46px}.viewer{display:grid;gap:16px}.hero,.panel,.metric{border:1px solid var(--border);background:var(--panel);box-shadow:var(--shadow)}"
+        ".hero{display:grid;gap:20px;padding:24px;border-radius:8px;position:relative;overflow:hidden}.hero:before{content:\"\";position:absolute;inset:0 auto 0 0;width:5px;background:var(--accent)}.hero>*{position:relative}.topbar{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.eyebrow{margin:0;color:var(--accent);font-size:.78rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em}.theme-note{margin:.2rem 0 0;color:var(--muted);font-size:.92rem}"
+        ".hero-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,340px);gap:18px;align-items:start}h1{margin:0;font-size:clamp(1.45rem,3vw,2.35rem);line-height:1.12;overflow-wrap:anywhere}.path{margin:.65rem 0 0;color:var(--muted);overflow-wrap:anywhere}.actions{display:flex;flex-wrap:wrap;gap:9px}.hero-actions{justify-content:flex-end}.button{display:inline-flex;align-items:center;justify-content:center;min-height:42px;border:1px solid var(--border);border-radius:8px;padding:9px 13px;background:var(--panel);color:var(--text);font:inherit;font-weight:700;text-decoration:none;cursor:pointer}.button.primary{background:var(--accent);border-color:var(--accent);color:#fff;min-width:190px}.button:hover{border-color:var(--accent);transform:translateY(-1px)}.button.primary:hover{background:var(--accent-strong)}.button:focus-visible,summary:focus-visible,a:focus-visible{outline:0;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 32%,transparent)}"
+        ".original-missing{display:flex;flex-direction:column;gap:3px;border:1px solid color-mix(in srgb,var(--warn) 34%,var(--border));border-radius:8px;padding:10px 12px;background:var(--warn-bg);color:var(--warn);overflow-wrap:anywhere}.original-missing strong{font-size:.96rem}.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric{border-radius:8px;padding:14px;box-shadow:none}.metric span{display:block;color:var(--muted);font-size:.78rem;font-weight:800;text-transform:uppercase;letter-spacing:.04em}.metric strong{display:block;margin-top:5px;font-size:1.05rem;overflow-wrap:anywhere}.metric small{display:block;margin-top:3px;color:var(--muted);font-size:.82rem;overflow-wrap:anywhere}"
+        ".panel{border-radius:8px;overflow:hidden}.panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:15px 18px;border-bottom:1px solid var(--border);background:var(--panel-3)}.panel-head h2{margin:0;font-size:1.02rem}.panel-head p{margin:.25rem 0 0;color:var(--muted);font-size:.9rem}.snippet{margin:0;padding:24px;background:var(--panel-2);white-space:pre-wrap;overflow:auto;overflow-wrap:anywhere;max-height:48vh;font-size:1.04rem;line-height:1.78}.snippet mark{background:var(--mark);color:var(--text);padding:2px 3px;border-radius:4px;box-decoration-break:clone;-webkit-box-decoration-break:clone}.empty-state{color:var(--muted);font-style:italic}"
+        ".info-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.card-body{padding:4px 18px 14px}dl{margin:0}dl div{display:grid;grid-template-columns:150px minmax(0,1fr);gap:14px;padding:10px 0;border-bottom:1px solid var(--border)}dl div:last-child{border-bottom:0}dt{color:var(--muted);font-size:.82rem}dd{margin:0;font-weight:650;overflow-wrap:anywhere}.text-link{color:var(--accent);font-weight:750;text-decoration-thickness:.08em;text-underline-offset:3px;overflow-wrap:anywhere}code,pre.raw{background:var(--code);border-radius:7px}code{padding:2px 5px}details.panel summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 18px;background:var(--panel-3);cursor:pointer;font-weight:800}details.panel summary::-webkit-details-marker{display:none}details.panel summary:after{content:\"+\";color:var(--muted)}details.panel[open] summary:after{content:\"−\"}.raw{margin:0;padding:16px;white-space:pre-wrap;overflow:auto;max-height:360px;font-size:.86rem}.debug-actions{padding:0 18px 18px}"
+        "@media(max-width:900px){.hero-grid,.info-grid{grid-template-columns:1fr}.hero-actions{justify-content:flex-start}.summary{grid-template-columns:repeat(2,minmax(0,1fr))}}"
+        "@media(max-width:620px){main{padding:14px 10px 30px}.hero{padding:18px}.topbar{display:grid;grid-template-columns:1fr}.summary{grid-template-columns:1fr}.actions .button,.button.primary{width:100%;min-width:0}.panel-head{display:grid}.snippet{padding:18px;font-size:1rem;max-height:54vh}dl div{grid-template-columns:1fr;gap:3px}.card-body{padding:2px 14px 12px}}"
+        "</style></head><body><main><div class=\"viewer\">"
         "<section class=\"hero source-card\">"
-        f"<div class=\"topbar\"><p class=\"eyebrow\">RAGFlow {l10n.text('preview.title')}</p><button class=\"button\" id=\"theme-toggle\" type=\"button\">{l10n.text('preview.theme')}</button></div>"
-        f"<div class=\"hero-body\"><div><h1>{title}</h1><p class=\"path\">{source_path or citation}</p></div><div class=\"document-badge\"><span>{'Dokument' if is_de else 'Document'}</span><strong>{file_type.upper() if file_type else l10n.text('preview.source')}</strong></div></div>"
-        f"<div class=\"chips\">{''.join(chips)}</div>"
-        f"<div class=\"actions source-actions\">{original_action}<button class=\"button\" type=\"button\" data-copy=\"{copy_snippet}\">{l10n.text('preview.copy_snippet')}</button><button class=\"button\" type=\"button\" data-copy-url>{l10n.text('preview.copy_link')}</button></div>"
+        f"<div class=\"topbar\"><div><p class=\"eyebrow\">{escape(l10n.text('preview.evidence_label'))}</p><p class=\"theme-note\">{escape(l10n.text('preview.evidence_subtitle'))}</p></div><button class=\"button\" id=\"theme-toggle\" type=\"button\">{escape(l10n.text('preview.theme'))}</button></div>"
+        f"<div class=\"hero-grid\"><div><h1>{title}</h1><p class=\"path\">{path_or_citation}</p></div><div class=\"actions hero-actions\">{original_action}<button class=\"button\" type=\"button\" data-copy-url data-reset=\"{copy_link_label}\">{escape(l10n.text('preview.copy_link'))}</button></div></div>"
         "</section>"
-        f"<nav class=\"tabs\" aria-label=\"{'Quellenansicht' if is_de else 'Source view'}\">"
-        f"<button class=\"tab\" type=\"button\" data-tab=\"hit\" aria-selected=\"true\">{l10n.text('preview.hit')}</button>"
-        f"<button class=\"tab\" type=\"button\" data-tab=\"context\" aria-selected=\"false\">{l10n.text('preview.context')}</button>"
-        f"<button class=\"tab\" type=\"button\" data-tab=\"meta\" aria-selected=\"false\">{l10n.text('preview.metadata')}</button>"
-        f"<button class=\"tab\" type=\"button\" data-tab=\"debug\" aria-selected=\"false\">{l10n.text('preview.debug')}</button>"
-        "</nav>"
-        f"<section class=\"panel active\" data-panel=\"hit\"><h2 class=\"section-title\">{l10n.text('preview.snippet')}</h2><pre class=\"hit\"><mark>{snippet}</mark></pre></section>"
-        f"<section class=\"panel\" data-panel=\"context\"><h2 class=\"section-title\">{l10n.text('preview.context')}</h2><p class=\"muted\">{l10n.text('preview.no_context')}</p></section>"
-        f"<section class=\"panel\" data-panel=\"meta\"><h2 class=\"section-title\">{l10n.text('preview.metadata')}</h2><dl>{details_html}</dl></section>"
-        f"<section class=\"panel\" data-panel=\"debug\"><h2 class=\"section-title\">{'Technische Details' if is_de else 'Technical details'}</h2><dl>{debug_html}</dl><pre class=\"raw\">{raw_json}</pre></section>"
-        "<script>"
+        f"<section class=\"summary\" aria-label=\"{escape(l10n.text('preview.evidence_summary'), quote=True)}\">{metrics}</section>"
+        "<section class=\"panel\">"
+        f"<div class=\"panel-head\"><div><h2>{escape(l10n.text('preview.used_context'))}</h2><p>{escape(l10n.text('preview.used_context_hint'))}</p></div><div class=\"actions\"><button class=\"button\" type=\"button\" data-copy-target=\"evidence-snippet\" data-reset=\"{copy_snippet_label}\">{escape(l10n.text('preview.copy_snippet'))}</button></div></div>"
+        f"<pre class=\"snippet\" id=\"evidence-snippet\">{snippet_html}</pre>"
+        "</section>"
+        "<section class=\"info-grid\">"
+        f"<article class=\"panel\"><div class=\"panel-head\"><div><h2>{escape(l10n.text('preview.location'))}</h2><p>{escape(l10n.text('preview.location_hint'))}</p></div></div><div class=\"card-body\"><dl>{location_details}</dl></div></article>"
+        f"<article class=\"panel\"><div class=\"panel-head\"><div><h2>{escape(l10n.text('preview.origin'))}</h2><p>{escape(l10n.text('preview.origin_hint'))}</p></div></div><div class=\"card-body\"><dl>{origin_details}</dl></div></article>"
+        "</section>"
+        "<details class=\"panel\">"
+        f"<summary>{escape(l10n.text('preview.technical_details'))}</summary>"
+        f"<div class=\"card-body\"><dl>{technical_details}</dl></div>"
+        f"<pre class=\"raw\" id=\"raw-payload\">{raw_json}</pre><div class=\"actions debug-actions\"><button class=\"button\" type=\"button\" data-copy-target=\"raw-payload\" data-reset=\"{copy_metadata_label}\">{escape(l10n.text('preview.copy_metadata'))}</button></div>"
+        "</details>"
+        "</div><script>"
         "const root=document.documentElement;const saved=localStorage.getItem('source-preview-theme');if(saved){root.dataset.theme=saved;}"
-        "document.getElementById('theme-toggle').addEventListener('click',()=>{const next=root.dataset.theme==='dark'?'light':'dark';root.dataset.theme=next;localStorage.setItem('source-preview-theme',next);});"
-        "document.querySelectorAll('.tab').forEach(tab=>tab.addEventListener('click',()=>{const id=tab.dataset.tab;document.querySelectorAll('.tab').forEach(item=>item.setAttribute('aria-selected',String(item===tab)));document.querySelectorAll('.panel').forEach(panel=>panel.classList.toggle('active',panel.dataset.panel===id));}));"
-        "async function copyText(btn,text,reset){try{await navigator.clipboard.writeText(text);btn.textContent='OK';}catch(err){btn.textContent='Error';}setTimeout(()=>btn.textContent=reset,1400);}"
-        f"document.querySelectorAll('[data-copy]').forEach(btn=>btn.addEventListener('click',()=>copyText(btn,btn.dataset.copy||'',{json.dumps(l10n.text('preview.copy_snippet'))})));"
-        f"document.querySelectorAll('[data-copy-url]').forEach(btn=>btn.addEventListener('click',()=>copyText(btn,location.href,{json.dumps(l10n.text('preview.copy_link'))})));"
+        "const themeToggle=document.getElementById('theme-toggle');if(themeToggle){themeToggle.addEventListener('click',()=>{const next=root.dataset.theme==='dark'?'light':'dark';root.dataset.theme=next;localStorage.setItem('source-preview-theme',next);});}"
+        f"async function copyText(btn,text){{const reset=btn.dataset.reset||btn.textContent;try{{await navigator.clipboard.writeText(text);btn.textContent={copied_js};}}catch(err){{btn.textContent={error_js};}}setTimeout(()=>{{btn.textContent=reset;}},1400);}}"
+        "document.querySelectorAll('[data-copy-target]').forEach(btn=>btn.addEventListener('click',()=>{const target=document.getElementById(btn.dataset.copyTarget||'');copyText(btn,target?target.textContent||'':'');}));"
+        "document.querySelectorAll('[data-copy-url]').forEach(btn=>btn.addEventListener('click',()=>copyText(btn,location.href)));"
         "</script></main></body></html>"
     )
 
 
 def _preview_unavailable_html(language: str = "de") -> str:
     l10n = localizer_for(type("_Settings", (), {"connector_language": language})())
+    title = escape(l10n.text("preview.title"))
+    message = escape(l10n.text("preview.invalid_token"))
+    detail = escape(l10n.text("preview.invalid_token_detail"))
     return (
-        f"<!doctype html><html lang=\"{l10n.language}\"><head><meta charset=\"utf-8\">"
+        f"<!doctype html><html lang=\"{l10n.language}\" dir=\"{'rtl' if l10n.language == 'ar' else 'ltr'}\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        f"<title>{l10n.text('preview.title')}</title>"
-        "<style>body{font-family:Segoe UI,system-ui,sans-serif;margin:0;display:grid;min-height:100vh;place-items:center;background:#f7f8fb;color:#172033}"
-        "main{max-width:560px;padding:28px;border:1px solid #d9e0ea;border-radius:8px;background:white}h1{margin-top:0}</style>"
-        f"</head><body><main><h1>{l10n.text('preview.title')}</h1><p>{l10n.text('preview.invalid_token')}</p></main></body></html>"
+        f"<title>{title}</title>"
+        "<style>"
+        ":root{color-scheme:light dark;--bg:#f5f7fb;--panel:#fff;--text:#111827;--muted:#64748b;--border:#d8e1ec;--accent:#0f766e;--shadow:0 18px 50px rgba(15,23,42,.09)}"
+        "@media(prefers-color-scheme:dark){:root{--bg:#0a0f18;--panel:#121a28;--text:#f8fafc;--muted:#94a3b8;--border:#2c3a4e;--accent:#2dd4bf;--shadow:0 26px 76px rgba(0,0,0,.34)}}"
+        "*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:18px;background:var(--bg);color:var(--text);font-family:Segoe UI,system-ui,-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.55;letter-spacing:0}"
+        "main{max-width:620px;border:1px solid var(--border);border-radius:8px;background:var(--panel);box-shadow:var(--shadow);padding:28px;position:relative;overflow:hidden}main:before{content:\"\";position:absolute;inset:0 auto 0 0;width:5px;background:var(--accent)}.eyebrow{margin:0;color:var(--accent);font-size:.78rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em}h1{margin:.35rem 0 .65rem;font-size:clamp(1.45rem,4vw,2rem);line-height:1.15}p{margin:.5rem 0;color:var(--muted);overflow-wrap:anywhere}"
+        "</style></head><body><main>"
+        f"<p class=\"eyebrow\">{escape(l10n.text('preview.evidence_label'))}</p><h1>{title}</h1><p>{message}</p><p>{detail}</p>"
+        "</main></body></html>"
     )

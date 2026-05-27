@@ -474,20 +474,29 @@ class DashboardServerTests(unittest.TestCase):
                 "source_path": "/report.pdf",
                 "original_url": "http://seafile.local/lib/repo-1/file/report.pdf#page=7",
                 "snippet": "Originaler PDF-Auszug",
+                "score": 0.8731,
+                "position": [[7, 10, 20, 30, 40]],
             },
             "proxy-secret",
         )
 
         html = _preview_html(settings, token)
 
-        self.assertIn("RAGFlow Quellenvorschau", html)
+        self.assertIn("RAGFlow-Evidenz", html)
         self.assertIn("class=\"hero source-card\"", html)
         self.assertIn("class=\"button primary original-action\"", html)
+        self.assertIn("data-original-link=\"true\"", html)
+        self.assertIn('href="http://seafile.local/lib/repo-1/file/report.pdf#page=7"', html)
         self.assertIn("Original öffnen", html)
         self.assertIn("Theme wechseln", html)
-        self.assertIn("data-tab=\"debug\"", html)
+        self.assertIn("Verwendeter Kontext", html)
+        self.assertIn("Technische Details", html)
         self.assertIn("Auszug kopieren", html)
         self.assertIn("Originaler PDF-Auszug", html)
+        self.assertIn("87%", html)
+        self.assertIn("relativer RAGFlow-Score", html)
+        self.assertIn("Koordinaten vorhanden", html)
+        self.assertIn("Position roh", html)
         self.assertIn("#page=7", html)
 
     def test_openwebui_preview_html_explains_missing_original_link(self) -> None:
@@ -511,16 +520,68 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("SEAFILE_FILE_URL_TEMPLATE", html)
         self.assertNotIn("class=\"button primary original-action\"", html)
 
+    def test_openwebui_preview_html_rejects_connector_original_links(self) -> None:
+        settings = _settings(0)
+
+        for original_url in (
+            "https://connector.example/api/openwebui/sources/preview?token=x",
+            "https://connector.example/api/openwebui/proxy",
+            "https://connector.example/api/openwebui/proxy/source/x",
+        ):
+            with self.subTest(original_url=original_url):
+                token = sign_preview_payload(
+                    {
+                        "document_name": "report.pdf",
+                        "dataset_name": "Dataset",
+                        "document_id": "doc-1",
+                        "citation_label": "Quelle 1",
+                        "source_path": "/report.pdf",
+                        "original_url": original_url,
+                        "snippet": "Originaler PDF-Auszug",
+                    },
+                    "proxy-secret",
+                )
+
+                html = _preview_html(settings, token)
+
+                self.assertNotIn("data-original-link=\"true\"", html)
+                self.assertNotIn("class=\"button primary original-action\"", html)
+                self.assertIn("Connector-/Preview-Link", html)
+
+    def test_openwebui_preview_html_rejects_non_http_original_links(self) -> None:
+        settings = _settings(0)
+        token = sign_preview_payload(
+            {
+                "document_name": "report.pdf",
+                "dataset_name": "Dataset",
+                "document_id": "doc-1",
+                "citation_label": "Quelle 1",
+                "source_path": "/report.pdf",
+                "original_url": "javascript:alert(1)",
+                "snippet": "Originaler PDF-Auszug",
+            },
+            "proxy-secret",
+        )
+
+        html = _preview_html(settings, token)
+
+        self.assertNotIn("data-original-link=\"true\"", html)
+        self.assertNotIn("class=\"button primary original-action\"", html)
+        self.assertIn("keinen nutzbaren http(s)-Original-Link", html)
+
     def test_openwebui_preview_html_sanitizes_source_snippet(self) -> None:
         settings = _settings(0)
         token = sign_preview_payload(
             {
-                "document_name": "html_fragmente.md",
+                "document_name": "html_fragmente</pre><script>alert(1)</script>.md",
                 "dataset_name": "Dataset",
                 "document_id": "doc-1",
                 "chunk_id": "chunk-1",
                 "citation_label": "Quelle 1",
-                "snippet": "<table><tr><td>Alpha</td><td>&uuml;</td></tr></table>",
+                "snippet": (
+                    "<script>alert(1)</script>"
+                    "<table><tr><td>Alpha</td><td>&uuml;</td></tr></table>"
+                ),
             },
             "proxy-secret",
         )
@@ -529,6 +590,20 @@ class DashboardServerTests(unittest.TestCase):
 
         self.assertIn("Alpha | ü", html)
         self.assertNotIn("&lt;td&gt;", html)
+        self.assertNotIn("</pre><script>", html)
+        self.assertNotIn("<script>alert(1)</script>", html)
+        self.assertIn("id=\"raw-payload\"", html)
+        self.assertIn("&lt;/pre&gt;&lt;script&gt;alert(1)&lt;/script&gt;", html)
+
+    def test_openwebui_preview_html_renders_invalid_token_fallback(self) -> None:
+        settings = _settings(0)
+
+        html = _preview_html(settings, "not-a-valid-token")
+
+        self.assertIn("RAGFlow-Evidenz", html)
+        self.assertIn("Die Vorschau ist nicht verfügbar", html)
+        self.assertIn("OPENWEBUI_PROXY_SHARED_SECRET", html)
+        self.assertNotIn("data-original-link=\"true\"", html)
 
     def test_source_snippet_cleaner_ignores_script_style_without_regex_backtracking(self) -> None:
         hostile_markup = "<style" * 4000 + "<table><tr><td>Alpha</td><td>&uuml;</td></tr></table>"
