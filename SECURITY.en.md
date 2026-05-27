@@ -4,7 +4,7 @@
 
 ## Supported Versions
 
-The repository currently declares package version `0.1.0` in `pyproject.toml`
+The repository currently declares package version `0.1.1` in `pyproject.toml`
 and has no documented release branches. Security checks therefore refer to the
 current default branch until maintainers publish a different release process.
 
