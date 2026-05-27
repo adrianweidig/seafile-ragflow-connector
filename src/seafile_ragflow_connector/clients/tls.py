@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import ssl
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-VerifyConfig = bool | str
+VerifyConfig = bool | str | ssl.SSLContext
 
 
 class TlsConfigurationError(ValueError):
@@ -28,7 +29,11 @@ def build_httpx_verify(verify_ssl: bool, ca_bundle: str | None) -> VerifyConfig:
         msg = f"CA bundle is not a file: {ca_path}"
         raise TlsConfigurationError(msg)
 
-    return ca_path
+    try:
+        return ssl.create_default_context(cafile=ca_path)
+    except OSError as exc:
+        msg = f"CA bundle is not usable: {ca_path}"
+        raise TlsConfigurationError(msg) from exc
 
 
 def build_service_httpx_verify(

@@ -87,6 +87,10 @@ def _top_secret_dns_patch():
     return patch("socket.getaddrinfo", side_effect=getaddrinfo)
 
 
+def _ca_bundle_context(filename: str) -> ssl.SSLContext:
+    return ssl.create_default_context(cafile=str(FIXTURES / filename))
+
+
 class TlsCertificateScenarioTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -113,7 +117,7 @@ class TlsCertificateScenarioTest(unittest.TestCase):
         with _HttpsServer(cert_name="rag.top.secret") as server, _top_secret_dns_patch():
             response = httpx.get(
                 f"https://rag.top.secret:{server.port}/health",
-                verify=str(FIXTURES / "top-secret-root-ca.pem"),
+                verify=_ca_bundle_context("top-secret-root-ca.pem"),
                 timeout=5,
                 trust_env=False,
             )
@@ -140,7 +144,7 @@ class TlsCertificateScenarioTest(unittest.TestCase):
             try:
                 response = httpx.get(
                     f"https://rag.top.secret:{server.port}/health",
-                    verify=str(FIXTURES / "rag.top.secret.cert.pem"),
+                    verify=_ca_bundle_context("rag.top.secret.cert.pem"),
                     timeout=5,
                     trust_env=False,
                 )
@@ -157,7 +161,7 @@ class TlsCertificateScenarioTest(unittest.TestCase):
         ):
             httpx.get(
                 f"https://rag.top.secret:{server.port}/health",
-                verify=str(FIXTURES / "seafile.top.secret.cert.pem"),
+                verify=_ca_bundle_context("seafile.top.secret.cert.pem"),
                 timeout=5,
                 trust_env=False,
             )
@@ -172,7 +176,7 @@ class TlsCertificateScenarioTest(unittest.TestCase):
         ) as server, _top_secret_dns_patch():
             response = httpx.get(
                 f"https://selfsigned-rag.top.secret:{server.port}/health",
-                verify=str(FIXTURES / "selfsigned-rag.top.secret.cert.pem"),
+                verify=_ca_bundle_context("selfsigned-rag.top.secret.cert.pem"),
                 timeout=5,
                 trust_env=False,
             )
@@ -187,7 +191,7 @@ class TlsCertificateScenarioTest(unittest.TestCase):
         ):
             httpx.get(
                 f"https://rag.top.secret:{server.port}/health",
-                verify=str(FIXTURES / "top-secret-root-ca.pem"),
+                verify=_ca_bundle_context("top-secret-root-ca.pem"),
                 timeout=5,
                 trust_env=False,
             )
@@ -202,7 +206,7 @@ class TlsCertificateScenarioTest(unittest.TestCase):
         ):
             httpx.get(
                 f"https://expired-rag.top.secret:{server.port}/health",
-                verify=str(FIXTURES / "top-secret-root-ca.pem"),
+                verify=_ca_bundle_context("top-secret-root-ca.pem"),
                 timeout=5,
                 trust_env=False,
             )

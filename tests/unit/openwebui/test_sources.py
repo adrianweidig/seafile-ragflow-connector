@@ -241,6 +241,31 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual(sources[0]["document"], ["Alpha | Über"])
         self.assertNotIn("<td>", sources[0]["text"])
 
+    def test_normalize_sources_handles_malformed_html_without_regex_fallback(self) -> None:
+        sources = normalize_sources(
+            {
+                "chunks": [
+                    {
+                        "id": "chunk-1",
+                        "document_id": "doc-1",
+                        "document_name": "html_fragmente.md",
+                        "content": (
+                            "<style" * 2000
+                            + "<table><tr><td>Alpha</td><td>&Uuml;ber</td></tr></table>"
+                            + "<script>hidden()</script>"
+                        ),
+                    }
+                ]
+            },
+            settings=self._settings(),
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+        )
+
+        self.assertEqual(sources[0]["snippet"], "Alpha | Über")
+        self.assertNotIn("hidden", sources[0]["text"])
+        self.assertNotIn("<td>", sources[0]["text"])
+
     def test_render_sources_markdown_groups_documents_and_hides_debug_ids(self) -> None:
         settings = self._settings()
         settings.seafile_file_url_template = (

@@ -4,7 +4,7 @@
 
 ## Unterstützte Versionen
 
-Das Repository enthält derzeit die Paketversion `0.1.1` in `pyproject.toml` und
+Das Repository enthält derzeit die Paketversion `0.1.2` in `pyproject.toml` und
 keine dokumentierten Release-Branches. Sicherheitsprüfungen beziehen sich daher
 auf den aktuellen Default-Branch, bis Maintainer einen abweichenden
 Release-Prozess veröffentlichen.

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import ssl
 import tempfile
 import unittest
 from pathlib import Path
+
+import certifi
 
 from seafile_ragflow_connector.clients.tls import (
     TlsConfigurationError,
@@ -10,6 +13,10 @@ from seafile_ragflow_connector.clients.tls import (
     classify_httpx_error,
     safe_url_for_logs,
 )
+
+
+def _valid_ca_bundle_text() -> str:
+    return Path(certifi.where()).read_text(encoding="utf-8")
 
 
 class TlsHelperTests(unittest.TestCase):
@@ -21,12 +28,29 @@ class TlsHelperTests(unittest.TestCase):
         self.assertTrue(build_httpx_verify(True, ""))
         self.assertTrue(build_httpx_verify(True, "   "))
 
-    def test_valid_ca_file_path_is_returned(self) -> None:
+    def test_valid_ca_file_path_returns_ssl_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             ca_bundle = Path(tmpdir) / "internal-ca.pem"
-            ca_bundle.write_text("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
+            ca_bundle.write_text(_valid_ca_bundle_text(), encoding="utf-8")
 
-            self.assertEqual(build_httpx_verify(True, str(ca_bundle)), str(ca_bundle))
+            verify = build_httpx_verify(True, str(ca_bundle))
+
+            self.assertIsInstance(verify, ssl.SSLContext)
+            self.assertEqual(verify.verify_mode, ssl.CERT_REQUIRED)
+            self.assertTrue(verify.check_hostname)
+
+    def test_invalid_ca_file_content_fails_without_leaking_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ca_bundle = Path(tmpdir) / "invalid-ca.pem"
+            ca_bundle.write_text(
+                "-----BEGIN CERTIFICATE-----\nnot-a-real-ca\n-----END CERTIFICATE-----\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(TlsConfigurationError, "CA bundle is not usable") as caught:
+                build_httpx_verify(True, str(ca_bundle))
+
+        self.assertNotIn("not-a-real-ca", str(caught.exception))
 
     def test_missing_ca_file_path_fails(self) -> None:
         with self.assertRaisesRegex(TlsConfigurationError, "CA bundle does not exist"):

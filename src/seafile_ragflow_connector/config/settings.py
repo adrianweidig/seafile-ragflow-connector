@@ -9,6 +9,7 @@ from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from seafile_ragflow_connector.clients.tls import (
+    VerifyConfig,
     build_service_httpx_verify,
     validate_tls_file,
 )
@@ -417,25 +418,25 @@ class Settings(BaseSettings):
         return self.openwebui_proxy_internal_base_url or self.openwebui_proxy_public_base_url
 
     @property
-    def seafile_httpx_verify(self) -> bool | str:
+    def seafile_httpx_verify(self) -> VerifyConfig:
         return self._httpx_verify(self.seafile_verify_ssl, self.seafile_ca_bundle)
 
     @property
-    def ragflow_httpx_verify(self) -> bool | str:
+    def ragflow_httpx_verify(self) -> VerifyConfig:
         return self._httpx_verify(self.ragflow_verify_ssl, self.ragflow_ca_bundle)
 
     @property
-    def openwebui_httpx_verify(self) -> bool | str:
+    def openwebui_httpx_verify(self) -> VerifyConfig:
         return self._httpx_verify(self.openwebui_verify_ssl, self.openwebui_ca_bundle)
 
     @property
-    def openwebui_proxy_httpx_verify(self) -> bool | str:
+    def openwebui_proxy_httpx_verify(self) -> VerifyConfig:
         return self._httpx_verify(
             self.openwebui_proxy_verify_ssl,
             self.openwebui_proxy_ca_bundle,
         )
 
-    def _httpx_verify(self, verify_ssl: bool, service_ca_bundle: str | None) -> bool | str:
+    def _httpx_verify(self, verify_ssl: bool, service_ca_bundle: str | None) -> VerifyConfig:
         return build_service_httpx_verify(
             verify_ssl,
             service_ca_bundle,

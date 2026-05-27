@@ -35,8 +35,8 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertTrue(tool.valves["CONNECTOR_PROXY_VERIFY_SSL"])
         self.assertEqual(tool.valves["CONNECTOR_PROXY_CA_BUNDLE"], "")
         self.assertIn("owner: seafile-ragflow-connector", tool.content)
-        self.assertIn("artifact_version: 15", tool.content)
-        self.assertIn("artifact_version: 15", pipe.content)
+        self.assertIn("artifact_version: 17", tool.content)
+        self.assertIn("artifact_version: 17", pipe.content)
         self.assertFalse(tool.valves["TLS_DEBUG"])
         self.assertEqual(tool.valves["SHOW_SOURCE_SCORES"], True)
         self.assertEqual(tool.valves["LANGUAGE"], "de")
@@ -54,6 +54,8 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertEqual(pipe.valves["HIDE_FINAL_STATUS"], False)
         self.assertEqual(pipe.valves["ALLOW_CONNECTOR_SOURCE_LINKS"], False)
         self.assertIn("verify = _httpx_verify(", tool.content)
+        self.assertIn("ssl.create_default_context", tool.content)
+        self.assertIn("ssl.create_default_context", pipe.content)
         self.assertIn("class SourceHit:", pipe.content)
         self.assertIn("_normalize_sources(", pipe.content)
         self.assertIn("DEFAULT_RAG_SYSTEM_PROMPT", pipe.content)
@@ -68,6 +70,37 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertNotIn("proxy-secret", str(pipe.valves).lower())
         compile(tool.content, "<openwebui-tool>", "exec")
         compile(pipe.content, "<openwebui-pipe>", "exec")
+
+    def test_generated_artifacts_clean_html_snippets_with_parser(self) -> None:
+        inputs = DatasetArtifactInputs(
+            namespace="ragflow",
+            repo_id="repo-1",
+            dataset_id="dataset-1234567890",
+            dataset_name="Demo Library",
+            ragflow_chat_id="chat-1",
+            proxy_base_url="http://connector:8080",
+        )
+        tool_namespace: dict[str, object] = {}
+        tool = build_tool_spec(inputs)
+        exec(compile(tool.content, "<openwebui-tool>", "exec"), tool_namespace)
+
+        for namespace in (tool_namespace, _pipe_namespace()):
+            with self.subTest(namespace="tool" if namespace is tool_namespace else "pipe"):
+                cleaner = namespace["_clean_snippet"]
+                cleaned = cleaner(
+                    "<table><tr><td>Alpha</td><td>&uuml;</td></tr></table>"
+                    "<script>hidden()</script>"
+                )
+
+                self.assertEqual(cleaned, "Alpha | ü")
+                self.assertNotIn("hidden", cleaned)
+                self.assertNotIn("<td>", cleaned)
+
+                malformed = (
+                    "<style" * 2000
+                    + "<table><tr><td>Beta</td><td>&Uuml;ber</td></tr></table>"
+                )
+                self.assertEqual(cleaner(malformed), "Beta | Über")
 
     def test_pipe_spec_can_enable_answer_synthesis_without_hashing_api_key(self) -> None:
         inputs = DatasetArtifactInputs(

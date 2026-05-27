@@ -8,11 +8,15 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 import structlog
 
-from seafile_ragflow_connector.clients.tls import classify_httpx_error, safe_url_for_logs
+from seafile_ragflow_connector.clients.tls import (
+    VerifyConfig,
+    classify_httpx_error,
+    safe_url_for_logs,
+)
 from seafile_ragflow_connector.config.settings import Settings
 
 ProbeFn = Callable[
-    [str, str, dict[str, str], dict[str, str | int | float | bool | None], bool | str, float],
+    [str, str, dict[str, str], dict[str, str | int | float | bool | None], VerifyConfig, float],
     "TransportProbeResult",
 ]
 
@@ -36,7 +40,7 @@ class TransportSelection:
     https_error_type: str | None
     fallback_used: bool
     fallback_reason: str | None
-    tls_verify: bool | str
+    tls_verify: VerifyConfig
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -50,7 +54,7 @@ class TransportSelection:
             "https_error_type": self.https_error_type,
             "fallback_used": self.fallback_used,
             "fallback_reason": self.fallback_reason,
-            "tls_verify": self.tls_verify,
+            "tls_verify": _tls_verify_status(self.tls_verify),
         }
 
 
@@ -142,7 +146,7 @@ def _select_transport(
     path: str,
     headers: dict[str, str],
     params: dict[str, str | int | float | bool | None],
-    verify: bool | str,
+    verify: VerifyConfig,
     probe: ProbeFn,
     timeout_seconds: float,
 ) -> TransportSelection:
@@ -201,7 +205,7 @@ def _selection(
     service: str,
     configured_url: str,
     selected_url: str,
-    verify: bool | str,
+    verify: VerifyConfig,
     https_result: TransportProbeResult | None,
     fallback_used: bool,
     fallback_reason: str | None,
@@ -223,7 +227,7 @@ def _selection(
 def _disabled_selection(
     service: str,
     configured_url: str,
-    verify: bool | str,
+    verify: VerifyConfig,
 ) -> TransportSelection:
     return TransportSelection(
         service=service,
@@ -248,12 +252,18 @@ def _transport_candidates(configured_url: str) -> list[str]:
     return [https_url, http_url]
 
 
+def _tls_verify_status(verify: VerifyConfig) -> bool | str:
+    if isinstance(verify, bool):
+        return verify
+    return "custom_ca"
+
+
 def _probe_transport(
     base_url: str,
     path: str,
     headers: dict[str, str],
     params: dict[str, str | int | float | bool | None],
-    verify: bool | str,
+    verify: VerifyConfig,
     timeout_seconds: float,
 ) -> TransportProbeResult:
     try:

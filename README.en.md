@@ -17,7 +17,7 @@
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml"><img alt="Docker image" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml/badge.svg?branch=master"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml/badge.svg?branch=master"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="pyproject.toml"><img alt="Version 0.1.1" src="https://img.shields.io/badge/version-0.1.1-informational.svg"></a>
+  <a href="pyproject.toml"><img alt="Version 0.1.2" src="https://img.shields.io/badge/version-0.1.2-informational.svg"></a>
 </p>
 
 ## Overview
@@ -106,6 +106,11 @@ curl http://127.0.0.1:18080/api/health
 3. Import the values from `connector.env.example` as environment variables.
 4. Replace only the required values; set OpenWebUI values only when that integration is enabled.
 5. Deploy the stack and inspect the logs of `connector-controller`, `connector-worker`, and `connector-reconciler`.
+
+For production-like deployments, pin `CONNECTOR_IMAGE` to a fixed release tag
+such as `ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.2` after that
+release has been published. Treat `latest` as a convenience tag for smoke tests
+and fresh test environments.
 
 ## CLI
 

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import ssl
+import tempfile
 import unittest
+from pathlib import Path
+
+import certifi
 
 from seafile_ragflow_connector.app.transport import (
     TransportProbeResult,
     resolve_service_transports,
 )
+from seafile_ragflow_connector.clients.tls import VerifyConfig
 from seafile_ragflow_connector.config.settings import Settings
 
 
@@ -24,6 +30,10 @@ def _settings(**overrides: object) -> Settings:
     }
     values.update(overrides)
     return Settings(**values)
+
+
+def _write_valid_ca_bundle(path: Path) -> None:
+    path.write_text(Path(certifi.where()).read_text(encoding="utf-8"), encoding="utf-8")
 
 
 class TransportResolutionTests(unittest.TestCase):
@@ -108,6 +118,31 @@ class TransportResolutionTests(unittest.TestCase):
             seafile_status["fallback_reason"],
             "https_failed:CONNECT_ERROR;http_unreachable",
         )
+
+    def test_custom_ca_bundle_uses_context_but_safe_status_label(self) -> None:
+        seen_verify: list[VerifyConfig] = []
+
+        def probe(
+            base_url: str,
+            path: str,
+            headers: dict[str, str],
+            params: dict[str, str | int | float | bool | None],
+            verify: VerifyConfig,
+            timeout_seconds: float,
+        ) -> TransportProbeResult:
+            _ = (base_url, path, headers, params, timeout_seconds)
+            seen_verify.append(verify)
+            return TransportProbeResult(ok=True, status_code=200)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ca_bundle = Path(tmpdir) / "company-ca.pem"
+            _write_valid_ca_bundle(ca_bundle)
+            settings = _settings(connector_ca_bundle=str(ca_bundle))
+
+            resolve_service_transports(settings, probe=probe)
+
+        self.assertTrue(any(isinstance(value, ssl.SSLContext) for value in seen_verify))
+        self.assertEqual(settings.connector_transport_status["seafile"]["tls_verify"], "custom_ca")
 
 
 if __name__ == "__main__":

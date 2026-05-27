@@ -670,9 +670,7 @@ def _html_to_text(value: str) -> str:
         parser.feed(value)
         parser.close()
     except Exception:
-        clean = re.sub(r"(?is)<(script|style).*?</\1>", " ", value)
-        clean = re.sub(r"(?s)<[^>]+>", " ", clean)
-        return clean
+        return ""
     return "".join(parser.parts)
 
 

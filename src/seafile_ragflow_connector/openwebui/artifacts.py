@@ -9,7 +9,7 @@ from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.i18n import SUPPORTED_LANGUAGES, Localizer
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "15"
+ARTIFACT_VERSION = "17"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 _PIPE_TEMPLATE = "ragflow_dataset_pipe_chat_rag_polished.py.txt"
 _TEMPLATE_PACKAGE = "seafile_ragflow_connector.openwebui.templates"
@@ -191,14 +191,15 @@ def _tool_content() -> str:
         """
         title: RAGFlow Dataset Search
         author: Seafile RAGFlow Connector
-        version: 1.4.0
+        version: 1.4.2
         owner: seafile-ragflow-connector
-        artifact_version: 15
+        artifact_version: 17
         """
 
         import httpx
         import logging
         import re
+        import ssl
         from pathlib import Path
         from urllib.parse import urlsplit, urlunsplit
         from pydantic import BaseModel, Field
@@ -441,7 +442,9 @@ def _artifact_source_helpers() -> str:
     return dedent(
         '''
 
+        import ssl
         from html import unescape
+        from html.parser import HTMLParser
         from typing import Any
 
 
@@ -477,7 +480,10 @@ def _artifact_source_helpers() -> str:
                 raise ValueError(f"CA bundle does not exist: {ca_path}")
             if not path.is_file():
                 raise ValueError(f"CA bundle is not a file: {ca_path}")
-            return ca_path
+            try:
+                return ssl.create_default_context(cafile=ca_path)
+            except OSError as exc:
+                raise ValueError(f"CA bundle is not usable: {ca_path}") from exc
 
 
         def _log_proxy_error(exc, url, ca_bundle):
@@ -802,14 +808,68 @@ def _artifact_source_helpers() -> str:
             return clean if len(clean) <= limit else clean[: limit - 3].rstrip() + "..."
 
 
+        class _SnippetHTMLTextExtractor(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self._parts = []
+                self._ignored_depth = 0
+
+            @property
+            def text(self):
+                return "".join(self._parts)
+
+            def handle_starttag(self, tag, _attrs):
+                name = str(tag or "").lower()
+                if name in {"script", "style"}:
+                    self._ignored_depth += 1
+                    return
+                if self._ignored_depth:
+                    return
+                if name == "br":
+                    self._parts.append("\\n")
+                elif name == "tr":
+                    self._append_line_break()
+                elif name in {"td", "th"}:
+                    self._append_table_cell_separator()
+
+            def handle_endtag(self, tag):
+                name = str(tag or "").lower()
+                if name in {"script", "style"} and self._ignored_depth:
+                    self._ignored_depth -= 1
+                    return
+                if self._ignored_depth:
+                    return
+                if name == "tr":
+                    self._append_line_break()
+
+            def handle_data(self, data):
+                if not self._ignored_depth:
+                    self._parts.append(data)
+
+            def _append_line_break(self):
+                if self._parts and self._parts[-1] != "\\n":
+                    self._parts.append("\\n")
+
+            def _append_table_cell_separator(self):
+                if not self._parts:
+                    return
+                current = "".join(self._parts).rstrip()
+                if current and not current.endswith(("\\n", "|")):
+                    self._parts.append(" | ")
+
+
         def _clean_snippet(value):
             clean = str(value or "")
-            clean = re.sub(r"(?is)<(script|style).*?</\\1>", " ", clean)
-            clean = re.sub(r"(?i)</t[dh]>\\s*<t[dh][^>]*>", " | ", clean)
-            clean = re.sub(r"(?i)</tr>\\s*<tr[^>]*>", "\\n", clean)
-            clean = re.sub(r"(?i)<br\\s*/?>", "\\n", clean)
-            clean = re.sub(r"(?s)<[^>]+>", " ", clean)
-            clean = unescape(clean)
+            if not clean:
+                return ""
+            if "<" in clean or "&" in clean:
+                parser = _SnippetHTMLTextExtractor()
+                try:
+                    parser.feed(clean)
+                    parser.close()
+                except Exception:
+                    return ""
+                clean = unescape(parser.text)
             clean = "\\n".join(" ".join(line.split()) for line in clean.splitlines())
             return "\\n".join(line for line in clean.splitlines() if line).strip()
 

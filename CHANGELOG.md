@@ -6,6 +6,27 @@ Alle nennenswerten Änderungen an diesem Repository sollten hier dokumentiert
 werden. Das Format orientiert sich an einer einfachen `Unreleased`-Sektion; es
 werden keine historischen Releases nachträglich erfunden.
 
+## 0.1.2 - 2026-05-27
+
+### Changed
+
+- TLS-/CA-Bundle-Verarbeitung nutzt für HTTPX jetzt `ssl.SSLContext`, damit
+  private CAs konsistent funktionieren und kein veralteter `verify=<pfad>`-Pfad
+  mehr nötig ist.
+- OpenWebUI-Tool- und Pipe-Artefakte wurden auf `artifact_version` 17 gehoben;
+  sie verwenden denselben SSLContext-Ansatz für den Connector-Proxy.
+- Release- und Betreiberhinweise erklären feste SemVer-Image-Tags wie `0.1.2`
+  klarer und grenzen `latest` als Komfortoption ab.
+
+### Fixed
+
+- Ungültige CA-Bundles werden kontrolliert als TLS-Konfigurationsfehler
+  gemeldet, ohne CA-Inhalte oder Secret-Werte auszugeben.
+- OpenWebUI-Quellen-Snippets werden parserbasiert bereinigt, damit
+  fehlerhaftes HTML nicht über ungebundene Regex-Fallbacks verarbeitet wird.
+- Transport- und Dashboard-Diagnose zeigen Custom-CA-Nutzung als `custom_ca`,
+  ohne lokale CA-Pfade oder interne TLS-Objekte offenzulegen.
+
 ## 0.1.1 - 2026-05-27
 
 ### Added

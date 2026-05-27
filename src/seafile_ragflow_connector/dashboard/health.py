@@ -9,7 +9,11 @@ from urllib.parse import urlparse
 import httpx
 from redis import Redis
 
-from seafile_ragflow_connector.clients.tls import classify_httpx_error, safe_url_for_logs
+from seafile_ragflow_connector.clients.tls import (
+    VerifyConfig,
+    classify_httpx_error,
+    safe_url_for_logs,
+)
 from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.store import (
     DashboardEventStore,
@@ -281,7 +285,7 @@ def _tls_probe(
     path: str,
     headers: dict[str, str],
     params: dict[str, str | int | float | bool | None],
-    verify: bool | str,
+    verify: VerifyConfig,
     ca_hint: str,
 ) -> dict[str, Any]:
     safe_url = safe_url_for_logs(url)
