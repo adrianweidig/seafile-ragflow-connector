@@ -62,7 +62,7 @@ Proxy-Secret und keine Preview-URL.
 | `OPENWEBUI_REQUEST_TIMEOUT_SECONDS` | optional | Timeout für OpenWebUI- und Proxy-Aufrufe. |
 | `OPENWEBUI_VERIFY_SSL`, `OPENWEBUI_CA_BUNDLE` | optional | TLS für Connector -> OpenWebUI Admin API. |
 | `OPENWEBUI_FUNCTION_NAMESPACE` | optional | Präfix für erzeugte Tool-/Pipe-IDs. |
-| `OPENWEBUI_SOURCE_PREVIEW_MODE` | optional | `ragflow_link`, `connector_viewer`, `citation_only` oder `disabled`. |
+| `OPENWEBUI_SOURCE_PREVIEW_MODE` | optional | `ragflow_link`, `connector_viewer`, `citation_only` oder `disabled`; `connector_viewer` ist für auditierbare Citations mit Direktlink zur Fundstelle empfohlen. |
 | `OPENWEBUI_PIPE_ANSWER_SYNTHESIS_ENABLED` | optional | Aktiviert einen OpenAI-kompatiblen Modell-Fallback, falls RAGFlow nur Retrieval-Treffer zurückgibt. |
 | `OPENWEBUI_PIPE_ANSWER_LLM_BASE_URL` | optional | Base-URL des Fallback-Modells, z. B. `http://litellm:4000/v1`. |
 | `OPENWEBUI_PIPE_ANSWER_LLM_MODEL` | optional | Modellname für die Antwortsynthese. |

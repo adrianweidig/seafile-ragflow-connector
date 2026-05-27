@@ -1,9 +1,9 @@
 """
 title: RAGFlow Dataset Pipe
 author: Seafile RAGFlow Connector
-version: 3.5.2
+version: 3.6.0
 owner: seafile-ragflow-connector
-artifact_version: 17
+artifact_version: 18
 """
 
 # =============================================================================
@@ -14,10 +14,11 @@ artifact_version: 17
 # Diese OpenWebUI-Pipe verbindet OpenWebUI mit einem eigenen Connector-Proxy,
 # der wiederum RAGFlow beziehungsweise ein RAGFlow-Dataset/Chat anspricht.
 #
-# Wichtig: Die Pipe ist ausdrücklich als Chat-RAG-Pipe gebaut, nicht als reine
-# Such-Pipe. Retrieval-Treffer sind nur Kontext. Die finale Chat-Nachricht soll
-# immer zuerst eine echte KI-Antwort sein. Quellen werden ergänzend über native
-# Citation-Events und/oder als Markdown-Quellenübersicht angezeigt.
+# Wichtig: Die Pipe ist als Audit-RAG-Pipe gebaut. Retrieval-Treffer sind
+# nicht nur Anhang, sondern die Beweiskette der Antwort. Die finale
+# Chat-Nachricht soll zuerst eine echte KI-Antwort sein und jede wesentliche
+# Aussage mit Quellenmarken wie [S1] belegen, danach folgt eine sichtbare
+# Nachweistabelle plus native Citation-Events.
 #
 # Typische Datenflusskette:
 #
@@ -48,8 +49,8 @@ artifact_version: 17
 #   RETRIEVAL_ONLY_FALLBACK=diagnostic
 #   EMIT_CITATION_EVENTS=true
 #   APPEND_SOURCE_OVERVIEW=true
-#   SOURCE_MARKDOWN_MODE=compact
-#   SHOW_SOURCE_SCORES=true
+#   SOURCE_MARKDOWN_MODE=audit
+#   SHOW_SOURCE_SCORES=false
 #   SHOW_SOURCE_DEBUG=false
 #
 # Wann wird ENABLE_ANSWER_SYNTHESIS_FALLBACK benötigt?
@@ -76,7 +77,7 @@ artifact_version: 17
 # - Antwort zuerst, Quellen danach.
 # - Keine Roh-Chunks als Ersatz für eine Antwort.
 # - Native Citation-Events für klickbare Quellen verwenden.
-# - Markdown-Quellenübersicht kompakt halten, außer Debug/Review ist nötig.
+# - Markdown-Nachweistabelle im Audit-Modus sichtbar halten.
 # - Wenn keine generierte Antwort vorliegt, klar diagnostizieren, warum.
 # =============================================================================
 
@@ -112,7 +113,7 @@ MAX_SOURCE_GROUPS_COMPACT = 8
 MAX_SOURCE_GROUPS_DETAILED = 12
 COMPACT_SNIPPET_CHARS = 380
 DETAILED_SNIPPET_CHARS = 900
-VALID_SOURCE_MARKDOWN_MODES = {"none", "off", "disabled", "compact", "detailed"}
+VALID_SOURCE_MARKDOWN_MODES = {"none", "off", "disabled", "compact", "detailed", "audit"}
 VALID_ERROR_VERBOSITY = {"safe", "debug"}
 VALID_RETRIEVAL_ONLY_FALLBACK = {"diagnostic", "brief", "sources_only"}
 VALID_STATUS_MODES = {"off", "minimal", "verbose"}
@@ -148,15 +149,16 @@ ORIGINAL_URL_KEYS = (
 )
 
 DEFAULT_RAG_SYSTEM_PROMPT = """
-Du bist ein professioneller RAG-Assistent für OpenWebUI. Deine Aufgabe ist nicht, Suchtreffer aufzulisten, sondern aus den angebundenen Dokumenten eine klare, direkte und hilfreiche Antwort zu formulieren.
+Du bist ein prüfbares Seafile/RAGFlow-Wissensmodell in OpenWebUI. Deine Aufgabe ist nicht, Suchtreffer aufzulisten, sondern aus den angebundenen Dokumenten eine klare Antwort mit auditierbarer Beweiskette zu formulieren.
 
 Arbeitsweise:
 - Beantworte die aktuelle Nutzerfrage anhand der verfügbaren Dokumente und des bisherigen Gesprächsverlaufs.
-- Nutze Retrieval nur als Kontext. Gib zuerst die eigentliche Antwort, danach höchstens kurze Hinweise auf Quellen.
+- Belege jede wesentliche Aussage mit einer Quellenmarke wie [S1], [S2] oder [S3], wenn der Kontext diese Zuordnung hergibt.
+- Nutze nur Quellen, die im Retrieval-Kontext vorhanden sind. Erfinde keine Seiten, Zeilen, Dokumentnamen oder Quellenmarken.
 - Wenn die Dokumente keine ausreichende Grundlage liefern, sage das klar und nenne, welche Information fehlt.
-- Erfinde keine Fakten, Daten, Zitate oder Fundstellen.
+- Wenn Fundstellen nur grob bekannt sind, formuliere das transparent.
 - Schreibe strukturiert, präzise und professionell.
-- Vermeide reine Trefferlisten, Roh-Chunks und interne Referenzmarker.
+- Vermeide reine Trefferlisten, Roh-Chunks und interne Referenzmarker wie [ID:0].
 """.strip()
 
 DEFAULT_SYNTHESIS_SYSTEM_PROMPT = """
@@ -164,9 +166,10 @@ Du bist der finale Chat-Assistent einer OpenWebUI-RAG-Pipe. Deine Aufgabe ist, a
 
 Regeln für die Antwort:
 - Beginne direkt mit der inhaltlichen Antwort, nicht mit einer Quellenliste.
-- Verwende die Dokumentauszüge als Grundlage und erfinde keine Fakten.
+- Verwende die Dokumentauszüge als Grundlage und erfinde keine Fakten, Seiten, Zeilen oder Dokumentnamen.
+- Belege jede wesentliche Aussage mit der passenden Quellenmarke [S1], [S2] usw. aus dem Kontext.
 - Wenn der Kontext nicht reicht, sage knapp, was fehlt.
-- Verwende keine Platzhalter wie [Quelle 1], [1], {{source:0}} oder Dateinamen als Ersatz für eine Antwort. Die Quellen werden separat durch OpenWebUI angezeigt.
+- Verwende keine Platzhalter wie [Quelle 1], [1], {{source:0}} oder Dateinamen als Ersatz für eine Antwort.
 - Zähle Dokumente nur dann auf, wenn die Nutzerfrage ausdrücklich nach verfügbaren Quellen, Dateien oder Dokumenten fragt.
 - Schreibe auf Deutsch, präzise und professionell.
 """.strip()
@@ -237,8 +240,14 @@ class SourceHit:
     rank: int
     title: str
     snippet: str = ""
+    source_id: str = ""
+    document_name: Optional[str] = None
+    dataset_name: Optional[str] = None
     page: Any = None
     line: Any = None
+    line_start: Any = None
+    line_end: Any = None
+    section: Any = None
     chunk_id: Optional[str] = None
     reference_id: Optional[str] = None
     score: Any = None
@@ -248,8 +257,11 @@ class SourceHit:
     document_id: Optional[str] = None
     dataset_id: Optional[str] = None
     repo_id: Optional[str] = None
+    file_id: Optional[str] = None
+    mime_type: Optional[str] = None
     file_type: Optional[str] = None
     positions: Any = None
+    locator_quality: str = "unknown"
     source_metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -531,12 +543,12 @@ class Pipe:
             description="Maximale Anzahl nativer Quellen-/Citation-Events.",
         )
 
-        # Zeigt Relevanzwerte, sofern RAGFlow/Proxy Scores liefert. Für Vertrauen
-        # und Debugging hilfreich. Für Endnutzer meistens ebenfalls okay, solange
-        # die Werte nicht überinterpretiert werden.
+        # Zeigt numerische Relevanzwerte, sofern RAGFlow/Proxy Scores liefert.
+        # Der Audit-Standard zeigt auch bei False ein grobes Relevanzlabel, aber
+        # keine Prozentwerte.
         SHOW_SOURCE_SCORES: bool = Field(
-            default=True,
-            description="Zeigt Relevanzwerte in Metadaten und Markdown-Quellenübersicht.",
+            default=False,
+            description="Zeigt numerische Relevanzwerte in Metadaten und Quellenübersicht.",
         )
 
         # Debug-Metadaten in Quellen. Nur für Admins. Kann interne IDs, Dataset-
@@ -548,11 +560,12 @@ class Pipe:
 
         # Zusätzlicher Quellenblock im Antworttext:
         #   none     keine Markdown-Quellenübersicht; nur native Citations
-        #   compact  kurze Tabelle; empfohlener Standard
+        #   audit    Nachweistabelle mit Quellen-ID, Fundstelle, Relevanz und Link
+        #   compact  kurze Tabelle
         #   detailed ausführliche Quellen mit Snippets; gut für Reviews/Tests
         SOURCE_MARKDOWN_MODE: str = Field(
-            default="compact",
-            description="Zusätzliche Quellenübersicht im Antworttext: none, compact oder detailed.",
+            default="audit",
+            description="Zusätzliche Quellenübersicht im Antworttext: none, compact, detailed oder audit.",
         )
 
         # Hängt die Markdown-Quellenübersicht an den Antworttext an. Wenn OpenWebUI
@@ -560,7 +573,12 @@ class Pipe:
         # den Chat noch cleaner zu machen.
         APPEND_SOURCE_OVERVIEW: bool = Field(
             default=True,
-            description="Hängt eine professionelle Quellenübersicht an die Antwort an.",
+            description="Hängt eine auditierbare Nachweistabelle an die Antwort an.",
+        )
+
+        SHOW_LOCATOR_QUALITY: bool = Field(
+            default=True,
+            description="Zeigt im Audit-Modus, wenn eine Fundstelle nur grob bestimmbar ist.",
         )
 
         # Sicherheitsventil für Quellenlinks. Standardmäßig werden URLs, die auf
@@ -678,8 +696,9 @@ class Pipe:
             allow_connector_source_links=self.valves.ALLOW_CONNECTOR_SOURCE_LINKS,
         )
 
+        raw_answer = _annotate_answer_source_markers(_extract_answer(data), sources)
         answer = _clean_answer(
-            _extract_answer(data),
+            raw_answer,
             clean_ragflow_markers=self.valves.CLEAN_RAGFLOW_MARKERS,
         )
 
@@ -755,8 +774,8 @@ def _configuration_error(valves: Pipe.Valves) -> str:
         return "Fehlender Wert: `CONNECTOR_PROXY_SHARED_SECRET`."
 
     markdown_mode = _source_markdown_mode(valves.SOURCE_MARKDOWN_MODE)
-    if markdown_mode not in {"none", "compact", "detailed"}:
-        return "Ungültiger Wert: `SOURCE_MARKDOWN_MODE` muss `none`, `compact` oder `detailed` sein."
+    if markdown_mode not in {"none", "compact", "detailed", "audit"}:
+        return "Ungültiger Wert: `SOURCE_MARKDOWN_MODE` muss `none`, `compact`, `detailed` oder `audit` sein."
 
     error_verbosity = _clean(valves.ERROR_VERBOSITY).lower() or "safe"
     if error_verbosity not in VALID_ERROR_VERBOSITY:
@@ -839,6 +858,8 @@ def _build_payload(valves: Pipe.Valves, body: dict, user: Optional[dict]) -> dic
         "openwebui": {
             "source_events": bool(valves.EMIT_CITATION_EVENTS or valves.EMIT_LEGACY_SOURCE_EVENTS),
             "source_markdown_mode": _source_markdown_mode(valves.SOURCE_MARKDOWN_MODE),
+            "source_display_mode": _source_markdown_mode(valves.SOURCE_MARKDOWN_MODE),
+            "audit_evidence": _source_markdown_mode(valves.SOURCE_MARKDOWN_MODE) == "audit",
             "expects_generated_answer": True,
         },
     }
@@ -1044,8 +1065,9 @@ async def _synthesize_answer_from_sources(
                     "Der Kontext ist nicht selbst die Antwort, sondern nur Evidenz.\n\n"
                     "Dokumentkontext:\n"
                     f"{context}\n\n"
-                    "Formuliere jetzt die finale Chat-Antwort. Keine Quellenliste, keine Dateinamen-Aufzählung, "
-                    "keine [Quelle n]-Marker, außer die Nutzerfrage verlangt ausdrücklich eine Quellen-/Dokumentliste."
+                    "Formuliere jetzt die finale Chat-Antwort. Belege jede wesentliche Aussage mit den "
+                    "Quellenmarken [S1], [S2] usw. aus dem Kontext. Keine Quellenliste und keine "
+                    "Dateinamen-Aufzählung, außer die Nutzerfrage verlangt ausdrücklich eine Quellen-/Dokumentliste."
                 ),
             },
         ],
@@ -1244,6 +1266,37 @@ def _postprocess_synthesized_answer(answer: str, sources: list[dict[str, Any]], 
     return text.strip()
 
 
+def _annotate_answer_source_markers(answer: str, sources: list[dict[str, Any]]) -> str:
+    if not answer or not sources:
+        return answer
+
+    def source_id_for_index(raw_index: str) -> str:
+        index = _int_or_none(raw_index)
+        if index is None or index < 0 or index >= len(sources):
+            return f"[ID:{raw_index}]"
+        metadata = _metadata(sources[index])
+        return f"[{_source_id(sources[index], metadata)}]"
+
+    text = re.sub(
+        r"\[\s*ID\s*:\s*(\d+)\s*\]",
+        lambda match: source_id_for_index(match.group(1)),
+        str(answer),
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\{\{\s*source\s*:\s*(\d+)\s*\}\}",
+        lambda match: source_id_for_index(match.group(1)),
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"##(\d+)\$\$",
+        lambda match: source_id_for_index(match.group(1)),
+        text,
+    )
+    return text
+
+
 def _looks_like_source_inventory_answer(answer: str, sources: list[dict[str, Any]]) -> bool:
     clean_answer = _clean(answer).lower()
     if not clean_answer:
@@ -1292,7 +1345,8 @@ def _sources_context(sources: list[dict[str, Any]], *, max_chars: int) -> str:
             snippet = _clean_snippet(source.get("text") or source.get("snippet") or "")
             if not snippet or _is_low_information_snippet(snippet):
                 continue
-            block = f"[Quelle {display_rank}: {title} · {location}]\n{snippet}\n"
+            source_id = _source_id(source, metadata)
+            block = f"[{source_id}: {title} · {location}]\n{snippet}\n"
             if len(block) > remaining:
                 block = block[: max(0, remaining - 1)].rstrip() + "…"
             if not block.strip():
@@ -2001,9 +2055,42 @@ def _normalize_source(
         None,
     )
 
-    page = _first_nonempty(source.get("page"), metadata.get("page"), metadata.get("page_number"), None)
-    line = _first_nonempty(source.get("line"), metadata.get("line"), metadata.get("line_number"), None)
     positions = _first_nonempty(source.get("positions"), metadata.get("positions"), None)
+    page = _first_nonempty(
+        source.get("page"),
+        source.get("page_num"),
+        source.get("page_number"),
+        metadata.get("page"),
+        metadata.get("page_num"),
+        metadata.get("page_number"),
+        _first_page(positions),
+        None,
+    )
+    line = _first_nonempty(source.get("line"), metadata.get("line"), metadata.get("line_number"), None)
+    line_start = _first_nonempty(
+        source.get("line_start"),
+        source.get("start_line"),
+        metadata.get("line_start"),
+        metadata.get("start_line"),
+        line,
+        None,
+    )
+    line_end = _first_nonempty(
+        source.get("line_end"),
+        source.get("end_line"),
+        metadata.get("line_end"),
+        metadata.get("end_line"),
+        None,
+    )
+    section = _first_nonempty(
+        source.get("section"),
+        source.get("section_title"),
+        source.get("heading"),
+        metadata.get("section"),
+        metadata.get("section_title"),
+        metadata.get("heading"),
+        None,
+    )
 
     chunk_id = _string_or_none(
         _first_nonempty(
@@ -2030,13 +2117,49 @@ def _normalize_source(
         source_metadata.setdefault("positions", positions)
     if reference_id:
         source_metadata.setdefault("reference_id", reference_id)
+    source_id = _string_or_none(
+        _first_nonempty(source.get("source_id"), metadata.get("source_id"), None)
+    ) or f"S{_int_or_none(source.get('rank')) or rank}"
+    document_name = _string_or_none(
+        _first_nonempty(
+            source.get("document_name"),
+            source.get("doc_name"),
+            source.get("docnm_kwd"),
+            metadata.get("document_name"),
+            metadata.get("doc_name"),
+            metadata.get("docnm_kwd"),
+            title,
+            None,
+        )
+    )
+    path = _string_or_none(_first_nonempty(source.get("path"), metadata.get("path"), None))
+    locator_quality = _locator_quality(
+        page=page,
+        section=section,
+        line_start=line_start,
+        line_end=line_end,
+        positions=positions,
+        chunk_id=chunk_id,
+        document_id=document_id,
+        document_name=document_name,
+        path=path,
+        snippet=snippet,
+    )
 
     return SourceHit(
         rank=_int_or_none(source.get("rank")) or rank,
         title=str(title),
         snippet=snippet,
+        source_id=source_id,
+        document_name=document_name,
+        dataset_name=_string_or_none(
+            _first_nonempty(source.get("dataset_name"), metadata.get("dataset_name"), None)
+        ),
         page=page,
         line=line,
+        line_start=line_start,
+        line_end=line_end,
+        section=section,
         chunk_id=chunk_id,
         reference_id=reference_id,
         score=score,
@@ -2054,16 +2177,23 @@ def _normalize_source(
             connector_base_url=connector_base_url,
             allow_connector=allow_connector_source_links,
         ),
-        path=_string_or_none(_first_nonempty(source.get("path"), metadata.get("path"), None)),
+        path=path,
         document_id=document_id,
         dataset_id=_string_or_none(
             _first_nonempty(source.get("dataset_id"), metadata.get("dataset_id"), None)
         ),
         repo_id=_string_or_none(_first_nonempty(source.get("repo_id"), metadata.get("repo_id"), None)),
+        file_id=_string_or_none(
+            _first_nonempty(source.get("file_id"), metadata.get("file_id"), metadata.get("seafile_obj_id"), None)
+        ),
+        mime_type=_string_or_none(
+            _first_nonempty(source.get("mime_type"), source.get("mime"), metadata.get("mime_type"), metadata.get("mime"), None)
+        ),
         file_type=_string_or_none(
             _first_nonempty(source.get("file_type"), source.get("doc_type"), metadata.get("file_type"), metadata.get("doc_type"), None)
         ),
         positions=positions,
+        locator_quality=locator_quality,
         source_metadata=source_metadata,
     )
 
@@ -2076,9 +2206,11 @@ def _source_event_data(
 ) -> dict[str, Any]:
     metadata = _public_metadata(hit, show_scores=show_scores, show_debug=show_debug)
     source_url = hit.preview_url or hit.original_url
+    source_name = _source_name_with_location(hit.title, metadata)
 
     event = {
         "name": hit.title,
+        "source_id": hit.source_id,
         "url": source_url,
         "preview_url": hit.preview_url,
         "original_url": hit.original_url,
@@ -2088,21 +2220,26 @@ def _source_event_data(
         "rank": hit.rank,
         "source_metadata": metadata,
         "metadata": [metadata],
-        "source": {"name": hit.title, "url": source_url},
+        "source": {"name": source_name, "url": source_url},
+        "locator_quality": hit.locator_quality,
+        "relevance_label": _relevance(hit.score),
     }
 
     if show_scores:
         event["score"] = hit.score
-        event["relevance"] = _relevance(hit.score)
+        event["relevance"] = _relevance_text(hit.score)
 
     return _drop_empty(event)
 
 
 def _citation_event(source: Mapping[str, Any]) -> dict[str, Any]:
     metadata = _metadata(source)
-    source_url = _safe_http_url(source.get("preview_url") or source.get("original_url"))
+    source_url = _safe_http_url(
+        source.get("preview_url") or source.get("url") or source.get("original_url")
+    )
     title = _clean(source.get("name")) or "Quelle"
     document = _clean_snippet(source.get("text") or source.get("snippet") or title)
+    source_name = _source_name_with_location(title, metadata)
 
     citation_metadata = dict(metadata)
     citation_metadata.setdefault("source", title)
@@ -2115,7 +2252,7 @@ def _citation_event(source: Mapping[str, Any]) -> dict[str, Any]:
         "data": {
             "document": [document or title],
             "metadata": [_drop_empty(citation_metadata)],
-            "source": _drop_empty({"name": title, "url": source_url}),
+            "source": _drop_empty({"name": source_name, "url": source_url}),
         },
     }
 
@@ -2130,21 +2267,31 @@ def _public_metadata(
 
     for key, value in {
         "rank": hit.rank,
+        "source_id": hit.source_id,
+        "document_name": hit.document_name,
+        "dataset_name": hit.dataset_name,
         "page": hit.page,
         "line": hit.line,
+        "line_start": hit.line_start,
+        "line_end": hit.line_end,
+        "section": hit.section,
         "positions": hit.positions,
+        "locator_quality": hit.locator_quality,
         "preview_url": hit.preview_url,
         "original_url": hit.original_url,
         "path": hit.path,
         "file_type": hit.file_type,
+        "mime_type": hit.mime_type,
+        "file_id": hit.file_id,
         "reference_id": hit.reference_id,
+        "relevance_label": _relevance(hit.score),
     }.items():
         if value not in (None, "", [], {}):
             metadata[key] = value
 
     if show_scores and hit.score not in (None, ""):
         metadata["score"] = hit.score
-        metadata["relevance"] = _relevance(hit.score)
+        metadata["relevance"] = _relevance_text(hit.score)
 
     if show_debug:
         for key, value in {
@@ -2174,6 +2321,8 @@ def _compose_final_answer(answer: str, sources: list[dict[str, Any]], valves: Pi
 
     if not answer:
         answer = _retrieval_only_fallback_message(sources, valves)
+    elif markdown_mode == "audit":
+        answer = _ensure_audit_marker(answer, sources)
 
     source_block = ""
     if bool(valves.APPEND_SOURCE_OVERVIEW):
@@ -2182,12 +2331,21 @@ def _compose_final_answer(answer: str, sources: list[dict[str, Any]], valves: Pi
             show_scores=valves.SHOW_SOURCE_SCORES,
             show_debug=valves.SHOW_SOURCE_DEBUG,
             mode=markdown_mode,
+            show_locator_quality=valves.SHOW_LOCATOR_QUALITY,
         )
 
     if source_block:
         return f"{answer.rstrip()}\n\n{source_block}".strip()
 
     return answer.strip()
+
+
+def _ensure_audit_marker(answer: str, sources: list[dict[str, Any]]) -> str:
+    if not answer or not sources or re.search(r"\[S\d+\]", answer):
+        return answer
+    first = sources[0]
+    marker = _source_id(first, _metadata(first))
+    return f"{answer.rstrip()} [{marker}]"
 
 
 def _retrieval_only_fallback_message(sources: list[dict[str, Any]], valves: Pipe.Valves) -> str:
@@ -2226,16 +2384,99 @@ def _source_markdown(
     show_scores: bool = True,
     show_debug: bool = False,
     mode: str = "compact",
+    show_locator_quality: bool = True,
 ) -> str:
     """Render the optional Markdown source overview appended to the answer."""
     mode = _source_markdown_mode(mode)
-    if not sources or mode == "none":
+    if mode == "none":
+        return ""
+
+    if mode == "audit":
+        return _source_markdown_audit(
+            sources,
+            show_scores=show_scores,
+            show_debug=show_debug,
+            show_locator_quality=show_locator_quality,
+        )
+
+    if not sources:
         return ""
 
     groups = _group_sources(sources)
     if mode == "compact":
         return _source_markdown_compact(groups, show_scores=show_scores)
     return _source_markdown_detailed(groups, show_scores=show_scores, show_debug=show_debug)
+
+
+def _source_markdown_audit(
+    sources: list[dict[str, Any]],
+    *,
+    show_scores: bool,
+    show_debug: bool,
+    show_locator_quality: bool,
+) -> str:
+    lines = ["---", "## Nachweise", ""]
+    if not sources:
+        lines.extend(
+            [
+                "Ich habe keine ausreichend belastbare Quelle gefunden, um diese Antwort sicher zu belegen.",
+                "",
+                "**Nachweisqualität:** keine belastbare Quelle.",
+            ]
+        )
+        return "\n".join(lines).rstrip()
+
+    lines.append(_audit_quality_sentence(sources))
+    lines.append("")
+    lines.append("| ID | Gestützte Aussage | Dokument | Fundstelle | Relevanz | Öffnen |")
+    lines.append("|---|---|---|---|---|---|")
+
+    for source in sources[:MAX_SOURCE_GROUPS_DETAILED]:
+        metadata = _metadata(source)
+        source_id = _source_id(source, metadata)
+        claim = _audit_claim(source, metadata)
+        document = _audit_document(source, metadata)
+        location = _location(metadata)
+        locator_quality = str(metadata.get("locator_quality") or "")
+        if show_locator_quality and locator_quality in {"unknown", "snippet_only", "document", "chunk"}:
+            location = f"{location} (nicht genauer bestimmbar)"
+        relevance = _audit_relevance(source, metadata, show_scores=show_scores)
+        actions = _actions(source, metadata) or "kein Direktlink"
+        lines.append(
+            "| "
+            + " | ".join(
+                _escape_table_cell(value)
+                for value in (source_id, claim, document, location, relevance, actions)
+            )
+            + " |"
+        )
+
+    if len(sources) > MAX_SOURCE_GROUPS_DETAILED:
+        remaining = len(sources) - MAX_SOURCE_GROUPS_DETAILED
+        lines.append(f"|  | weitere Quellen ausgeblendet | {remaining} zusätzliche Treffer |  |  |  |")
+
+    if _has_conflicting_sources(sources):
+        lines.extend(
+            [
+                "",
+                "## Hinweis zur Belastbarkeit",
+                "Die Quellenlage enthält als widersprüchlich markierte Hinweise. Prüfe die Nachweise und bevorzugt aktuellere oder fachlich freigegebene Dokumente.",
+            ]
+        )
+    else:
+        lines.extend(["", "## Hinweis zur Belastbarkeit", _audit_reliability_note(sources)])
+
+    if show_debug:
+        debug_lines = []
+        for source in sources[:MAX_SOURCE_GROUPS_DETAILED]:
+            metadata = _metadata(source)
+            debug = _debug_parts(metadata)
+            if debug:
+                debug_lines.append(f"- {_source_id(source, metadata)}: {' · '.join(debug)}")
+        if debug_lines:
+            lines.extend(["", "**Debug:**", *debug_lines])
+
+    return "\n".join(lines).rstrip()
 
 
 def _source_markdown_compact(groups: list[list[dict[str, Any]]], *, show_scores: bool) -> str:
@@ -2325,6 +2566,116 @@ def _source_summary(
     return " · ".join(part for part in parts if part)
 
 
+def _audit_quality_sentence(sources: list[dict[str, Any]]) -> str:
+    quality = _audit_quality(sources)
+    precise = 0
+    linked = 0
+    for source in sources:
+        metadata = _metadata(source)
+        if metadata.get("locator_quality") in {"line", "page", "section", "position"}:
+            precise += 1
+        if source.get("preview_url") or source.get("url") or source.get("original_url"):
+            linked += 1
+    labels = {
+        "strong": f"stark - {len(sources)} Quellen, {precise} konkrete Fundstellen, {linked} Direktlinks.",
+        "medium": f"mittel - {len(sources)} Quellen, {precise} konkrete Fundstellen, {linked} Direktlinks.",
+        "weak": f"schwach - {len(sources)} Quellen, aber nur grobe Dokument-/Chunk-Hinweise.",
+        "none": "keine belastbare Quelle.",
+    }
+    return f"**Nachweisqualität:** {labels[quality]}"
+
+
+def _audit_quality(sources: list[dict[str, Any]]) -> str:
+    if not sources:
+        return "none"
+    precise = 0
+    linked = 0
+    for source in sources:
+        metadata = _metadata(source)
+        if metadata.get("locator_quality") in {"line", "page", "section", "position"}:
+            precise += 1
+        if source.get("preview_url") or source.get("url") or source.get("original_url"):
+            linked += 1
+    if len(sources) >= 2 and precise >= 2 and linked >= 1:
+        return "strong"
+    if precise >= 1 or linked >= 1:
+        return "medium"
+    return "weak"
+
+
+def _audit_claim(source: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
+    claim = _first_nonempty(
+        source.get("claim"),
+        source.get("supported_claim"),
+        metadata.get("claim"),
+        metadata.get("supported_claim"),
+        None,
+    )
+    if claim not in (None, ""):
+        return _compact(claim, 120)
+    snippet = _clean_snippet(source.get("text") or source.get("snippet") or "")
+    if snippet:
+        return _compact(snippet, 120)
+    return "Gestützte Aussage nicht genauer bestimmbar"
+
+
+def _audit_document(source: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
+    title = _clean(
+        source.get("name")
+        or metadata.get("document_name")
+        or metadata.get("doc_name")
+        or "Quelle"
+    )
+    path = _clean(metadata.get("path"))
+    dataset = _clean(metadata.get("dataset_name"))
+    parts = [title]
+    if path and path != title:
+        parts.append(path)
+    if dataset:
+        parts.append(dataset)
+    return " · ".join(parts)
+
+
+def _audit_relevance(
+    source: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    *,
+    show_scores: bool,
+) -> str:
+    if show_scores:
+        return _relevance_text(source.get("score") or metadata.get("score"))
+    return str(
+        metadata.get("relevance_label")
+        or _relevance(source.get("score") or metadata.get("score"))
+    )
+
+
+def _audit_reliability_note(sources: list[dict[str, Any]]) -> str:
+    quality = _audit_quality(sources)
+    if quality == "strong":
+        return "Die Antwort basiert auf mehreren Quellen mit konkreten Fundstellen und Direktlinks."
+    if quality == "medium":
+        return "Die Antwort basiert auf Quellen, deren Fundstellen teilweise konkret bestimmbar sind."
+    return "Die Antwort basiert auf Quellen mit grober Fundstelle; prüfe die Preview, bevor du daraus eine Entscheidung ableitest."
+
+
+def _has_conflicting_sources(sources: list[dict[str, Any]]) -> bool:
+    conflict_values = {"conflict", "conflicting", "contradiction", "contradicts", "widerspruch"}
+    for source in sources:
+        metadata = _metadata(source)
+        for mapping in (source, metadata):
+            for key, value in mapping.items():
+                key_text = str(key).lower()
+                value_text = str(value).lower()
+                if key_text in conflict_values and value not in (None, "", False):
+                    return True
+                if key_text in {"assessment", "status", "note"} and "widerspr" in value_text:
+                    return True
+                if key_text in {"assessment", "status", "note"} and "contradict" in value_text:
+                    return True
+    return False
+
+
 def _group_sources(sources: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
 
@@ -2384,8 +2735,11 @@ def _location(metadata: Mapping[str, Any]) -> str:
     parts = []
     if metadata.get("page") not in (None, ""):
         parts.append(f"Seite {metadata.get('page')}")
-    if metadata.get("line") not in (None, ""):
-        parts.append(f"Zeile {metadata.get('line')}")
+    if metadata.get("section") not in (None, ""):
+        parts.append(f"Abschnitt {metadata.get('section')}")
+    line = _line_range(metadata.get("line_start") or metadata.get("line"), metadata.get("line_end"))
+    if line:
+        parts.append(f"Zeile {line}")
     if not parts and metadata.get("reference_id") not in (None, ""):
         parts.append(f"Referenz {metadata.get('reference_id')}")
     if not parts and metadata.get("positions") not in (None, "", [], {}):
@@ -2671,6 +3025,9 @@ def _is_connector_url(url: str, connector_base_url: str = "") -> bool:
     parsed = urlsplit(str(url or ""))
     path = (parsed.path or "").lower()
 
+    if path.startswith("/api/openwebui/sources/preview"):
+        return False
+
     if "/api/openwebui/proxy" in path or path.endswith(PROXY_CHAT_PATH):
         return True
 
@@ -2718,6 +3075,74 @@ def _first_nonempty(*values: Any) -> Any:
         if value not in (None, "", [], {}):
             return value
     return None
+
+
+def _source_id(source: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
+    value = source.get("source_id") or metadata.get("source_id")
+    if value not in (None, ""):
+        return str(value)
+    rank = source.get("rank") or metadata.get("rank") or 1
+    try:
+        return f"S{int(rank)}"
+    except Exception:
+        return "S?"
+
+
+def _source_name_with_location(title: Any, metadata: Mapping[str, Any]) -> str:
+    clean_title = _clean(title) or "Quelle"
+    location = _location(metadata)
+    if location and location != "Fundstelle nicht angegeben":
+        return f"{clean_title} · {location}"
+    return clean_title
+
+
+def _line_range(start: Any, end: Any) -> str:
+    if start in (None, "") and end in (None, ""):
+        return ""
+    if end in (None, "") or str(end) == str(start):
+        return str(start)
+    if start in (None, ""):
+        return str(end)
+    return f"{start}-{end}"
+
+
+def _first_page(positions: Any) -> Any:
+    if not isinstance(positions, Sequence) or isinstance(positions, (str, bytes)) or not positions:
+        return None
+    first = positions[0]
+    if isinstance(first, Sequence) and not isinstance(first, (str, bytes)) and first:
+        return first[0]
+    return None
+
+
+def _locator_quality(
+    *,
+    page: Any,
+    section: Any,
+    line_start: Any,
+    line_end: Any,
+    positions: Any,
+    chunk_id: Optional[str],
+    document_id: Optional[str],
+    document_name: Optional[str],
+    path: Optional[str],
+    snippet: str,
+) -> str:
+    if line_start not in (None, "") or line_end not in (None, ""):
+        return "line"
+    if page not in (None, ""):
+        return "page"
+    if section not in (None, ""):
+        return "section"
+    if positions not in (None, "", [], {}):
+        return "position"
+    if chunk_id:
+        return "chunk"
+    if document_id or document_name or path:
+        return "document"
+    if snippet:
+        return "snippet_only"
+    return "unknown"
 
 
 def _string_or_none(value: Any) -> Optional[str]:

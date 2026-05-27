@@ -35,15 +35,19 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertTrue(tool.valves["CONNECTOR_PROXY_VERIFY_SSL"])
         self.assertEqual(tool.valves["CONNECTOR_PROXY_CA_BUNDLE"], "")
         self.assertIn("owner: seafile-ragflow-connector", tool.content)
-        self.assertIn("artifact_version: 17", tool.content)
-        self.assertIn("artifact_version: 17", pipe.content)
+        self.assertIn("artifact_version: 18", tool.content)
+        self.assertIn("artifact_version: 18", pipe.content)
         self.assertFalse(tool.valves["TLS_DEBUG"])
         self.assertEqual(tool.valves["SHOW_SOURCE_SCORES"], True)
         self.assertEqual(tool.valves["LANGUAGE"], "de")
-        self.assertEqual(pipe.valves["SOURCE_MARKDOWN_MODE"], "none")
+        self.assertEqual(pipe.name, "Seafile · Demo Library")
+        self.assertEqual(pipe.valves["MODEL_NAME"], "Seafile · Demo Library")
+        self.assertEqual(pipe.valves["SOURCE_MARKDOWN_MODE"], "audit")
         self.assertEqual(pipe.valves["RETRIEVAL_ONLY_FALLBACK"], "diagnostic")
         self.assertEqual(pipe.valves["EMIT_CITATION_EVENTS"], True)
-        self.assertEqual(pipe.valves["APPEND_SOURCE_OVERVIEW"], False)
+        self.assertEqual(pipe.valves["APPEND_SOURCE_OVERVIEW"], True)
+        self.assertEqual(pipe.valves["SHOW_SOURCE_SCORES"], False)
+        self.assertEqual(pipe.valves["SHOW_LOCATOR_QUALITY"], True)
         self.assertEqual(pipe.valves["REQUEST_TIMEOUT_SECONDS"], 180.0)
         self.assertEqual(pipe.valves["ANSWER_SYNTHESIS_MAX_TOKENS"], 700)
         self.assertEqual(pipe.valves["ENABLE_ANSWER_SYNTHESIS_FALLBACK"], False)
@@ -181,7 +185,9 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertTrue(payload["return_sources"])
         self.assertEqual(payload["ragflow"]["mode"], "chat")
         self.assertTrue(payload["openwebui"]["expects_generated_answer"])
-        self.assertEqual(payload["openwebui"]["source_markdown_mode"], "none")
+        self.assertEqual(payload["openwebui"]["source_markdown_mode"], "audit")
+        self.assertEqual(payload["openwebui"]["source_display_mode"], "audit")
+        self.assertTrue(payload["openwebui"]["audit_evidence"])
         self.assertEqual(payload["messages"][0]["role"], "system")
         self.assertIn("RAG_ASSISTANT_BEHAVIOR", payload["messages"][0]["content"])
 
@@ -238,7 +244,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
 
         self.assertEqual(answer, "")
 
-    def test_pipe_final_answer_uses_native_citations_by_default(self) -> None:
+    def test_pipe_final_answer_uses_audit_table_and_native_citations_by_default(self) -> None:
         inputs = DatasetArtifactInputs(
             namespace="ragflow",
             repo_id="repo-1",
@@ -269,8 +275,99 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         )
 
         self.assertTrue(final_answer.startswith("Mobiles Arbeiten ist"))
-        self.assertNotIn("Quellenüberblick", final_answer)
-        self.assertNotIn("| Quelle |", final_answer)
+        self.assertIn("[S1]", final_answer)
+        self.assertIn("## Nachweise", final_answer)
+        self.assertIn(
+            "| ID | Gestützte Aussage | Dokument | Fundstelle | Relevanz | Öffnen |",
+            final_answer,
+        )
+        self.assertNotIn("chunk_id", final_answer)
+        self.assertNotIn("document_id", final_answer)
+
+    def test_pipe_emits_citation_event_payload_for_audit_sources(self) -> None:
+        namespace = _pipe_namespace()
+        source = namespace["_normalize_sources"](
+            [
+                {
+                    "name": "dienstleister.pdf",
+                    "preview_url": "https://connector.example/api/openwebui/sources/preview?token=signed",
+                    "text": "Prüfung vor Beauftragung erforderlich.",
+                    "source_metadata": {
+                        "page": 4,
+                        "section": "Freigabeprozess",
+                        "locator_quality": "page",
+                    },
+                }
+            ],
+            connector_base_url="http://connector:8080",
+            allow_connector_source_links=False,
+        )[0]
+
+        event = namespace["_citation_event"](source)
+
+        self.assertEqual(event["type"], "citation")
+        self.assertEqual(event["data"]["document"], ["Prüfung vor Beauftragung erforderlich."])
+        self.assertEqual(event["data"]["metadata"][0]["source_id"], "S1")
+        self.assertEqual(event["data"]["metadata"][0]["page"], 4)
+        self.assertEqual(event["data"]["metadata"][0]["section"], "Freigabeprozess")
+        self.assertEqual(event["data"]["metadata"][0]["locator_quality"], "page")
+        self.assertEqual(
+            event["data"]["source"]["url"],
+            "https://connector.example/api/openwebui/sources/preview?token=signed",
+        )
+        self.assertIn("Seite 4", event["data"]["source"]["name"])
+
+    def test_pipe_audit_mode_keeps_connector_preview_but_filters_proxy_urls(self) -> None:
+        namespace = _pipe_namespace()
+
+        sources = namespace["_normalize_sources"](
+            [
+                {
+                    "name": "preview.pdf",
+                    "preview_url": "http://connector:8080/api/openwebui/sources/preview?token=signed",
+                    "text": "Dieser Link ist eine geprüfte Connector-Preview.",
+                },
+                {
+                    "name": "proxy.md",
+                    "preview_url": "http://connector:8080/api/openwebui/proxy/chat",
+                    "text": "Dieser Backend-Link darf nicht sichtbar werden.",
+                },
+            ],
+            connector_base_url="http://connector:8080",
+            allow_connector_source_links=False,
+        )
+
+        self.assertEqual(
+            sources[0]["preview_url"],
+            "http://connector:8080/api/openwebui/sources/preview?token=signed",
+        )
+        self.assertNotIn("preview_url", sources[1])
+
+    def test_pipe_audit_mode_handles_conflicting_and_empty_sources(self) -> None:
+        namespace = _pipe_namespace()
+        pipe_instance = namespace["Pipe"]()
+        pipe_instance.valves.SOURCE_MARKDOWN_MODE = "audit"
+        pipe_instance.valves.APPEND_SOURCE_OVERVIEW = True
+
+        conflicting = namespace["_source_markdown"](
+            [
+                {
+                    "name": "alt.pdf",
+                    "text": "Teamleitung genügt.",
+                    "source_metadata": {"page": 3, "conflict": True},
+                },
+                {
+                    "name": "neu.pdf",
+                    "text": "Datenschutz und Fachbereich müssen freigeben.",
+                    "source_metadata": {"page": 5},
+                },
+            ],
+            mode="audit",
+        )
+        empty = namespace["_source_markdown"]([], mode="audit")
+
+        self.assertIn("widersprüchlich", conflicting)
+        self.assertIn("keine ausreichend belastbare Quelle", empty)
 
     def test_pipe_completion_status_counts_grouped_sources_and_hits(self) -> None:
         namespace = _pipe_namespace()

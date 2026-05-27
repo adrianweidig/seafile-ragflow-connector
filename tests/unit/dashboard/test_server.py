@@ -341,7 +341,7 @@ class DashboardServerTests(unittest.TestCase):
             _FakeRAGFlowClient.retrieval_result = {"chunks": []}
 
         self.assertEqual(_FakeRAGFlowClient.retrieve_calls, 1)
-        self.assertIn("Gefundene Quellen", result["answer"])
+        self.assertIn("Nachweise", result["answer"])
         self.assertIn("Fallbacktext aus RAGFlow Retrieval", result["answer"])
         self.assertEqual(len(result["sources"]), 1)
 
@@ -411,10 +411,10 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(_FakeRAGFlowClient.retrieve_calls, 1)
         self.assertEqual(len(result["sources"]), 2)
         self.assertIn("answer", result["answer"])
-        self.assertIn("## Gefundene Quellen", result["answer"])
+        self.assertIn("## Nachweise", result["answer"])
         self.assertIn("demo-a.pdf", result["answer"])
         self.assertIn("demo-b.pdf", result["answer"])
-        self.assertIn("### 1. demo-a.pdf", result["answer"])
+        self.assertIn("| S1 |", result["answer"])
         self.assertNotIn("| # | Dokument", result["answer"])
         self.assertNotIn("<details", result["answer"])
         self.assertNotIn("<summary", result["answer"])
@@ -476,6 +476,7 @@ class DashboardServerTests(unittest.TestCase):
                 "snippet": "Originaler PDF-Auszug",
                 "score": 0.8731,
                 "position": [[7, 10, 20, 30, 40]],
+                "locator_quality": "page",
             },
             "proxy-secret",
         )
@@ -497,6 +498,8 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("relativer RAGFlow-Score", html)
         self.assertIn("Koordinaten vorhanden", html)
         self.assertIn("Position roh", html)
+        self.assertIn("Fundstellenqualität", html)
+        self.assertIn("page", html)
         self.assertIn("#page=7", html)
 
     def test_openwebui_preview_html_explains_missing_original_link(self) -> None:

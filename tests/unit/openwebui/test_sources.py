@@ -87,7 +87,10 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual(sources[0]["name"], "report.pdf")
         self.assertEqual(sources[0]["source_metadata"]["citation_marker"], "[ID:0]")
         self.assertEqual(sources[0]["source_metadata"]["page"], 3)
-        self.assertIn("Quelle 1, Seite 3, Chunk chunk-1", sources[0]["citation_label"])
+        self.assertEqual(sources[0]["citation_label"], "S1")
+        self.assertEqual(sources[0]["source_id"], "S1")
+        self.assertEqual(sources[0]["source_metadata"]["locator_quality"], "page")
+        self.assertEqual(sources[0]["source_metadata"]["relevance_label"], "hoch")
 
         token = sources[0]["preview_url"].rsplit("token=", 1)[1]
         preview = verify_preview_token(token, "proxy-secret", now=100)
@@ -177,7 +180,7 @@ class OpenWebUISourceTests(unittest.TestCase):
             sources,
         )
 
-        self.assertIn("[Quelle 1, Seite 3, Chunk chunk-1](https://connector.example", answer)
+        self.assertIn("[S1](https://connector.example", answer)
         self.assertNotIn("[ID:0]", answer)
         self.assertIn("[ID:9]", answer)
 
@@ -328,6 +331,117 @@ class OpenWebUISourceTests(unittest.TestCase):
         arabic = render_sources_markdown(sources, language="ar")
         self.assertIn("## المصادر الموجودة", arabic)
         self.assertIn("فتح المعاينة", arabic)
+
+    def test_audit_markdown_shows_evidence_table_without_debug_ids(self) -> None:
+        settings = self._settings()
+        settings.seafile_file_url_template = (
+            "https://seafile.example/lib/{repo_id_quoted}/file{path_quoted}{page_fragment}"
+        )
+        sources = normalize_sources(
+            {
+                "chunks": [
+                    {
+                        "id": "chunk-pdf",
+                        "document_id": "doc-pdf",
+                        "document_name": "dienstleister.pdf",
+                        "content": "Externe Dienstleister müssen vor Beauftragung geprüft werden.",
+                        "positions": [[4, 10, 20, 30, 40]],
+                        "similarity": 0.92,
+                    },
+                    {
+                        "id": "chunk-text",
+                        "document_id": "doc-text",
+                        "document_name": "qm-prozess.md",
+                        "content": "Die verantwortliche Stelle muss dokumentiert werden.",
+                        "line_start": 88,
+                        "line_end": 104,
+                        "similarity": 0.73,
+                    },
+                ]
+            },
+            settings=settings,
+            dataset_id="dataset-1",
+            dataset_name="Personalhandbuch",
+            files_by_document_id={
+                "doc-pdf": {"repo_id": "repo-1", "path": "/Richtlinien/dienstleister.pdf"},
+                "doc-text": {"repo_id": "repo-1", "path": "/QM/qm-prozess.md"},
+            },
+        )
+
+        markdown = render_sources_markdown(
+            sources,
+            show_scores=False,
+            show_debug=False,
+            mode="audit",
+        )
+
+        self.assertIn("## Nachweise", markdown)
+        self.assertIn(
+            "| ID | Gestützte Aussage | Dokument | Fundstelle | Relevanz | Öffnen |",
+            markdown,
+        )
+        self.assertIn("| S1 |", markdown)
+        self.assertIn("dienstleister.pdf", markdown)
+        self.assertIn("Seite 4", markdown)
+        self.assertIn("Zeile 88-104", markdown)
+        self.assertIn("hoch", markdown)
+        self.assertIn("Preview öffnen", markdown)
+        self.assertNotIn("chunk-pdf", markdown)
+        self.assertNotIn("doc-pdf", markdown)
+        self.assertNotIn("dataset-1", markdown)
+
+    def test_audit_markdown_debug_shows_internal_ids_without_secrets(self) -> None:
+        sources = normalize_sources(
+            {
+                "chunks": [
+                    {
+                        "id": "chunk-debug",
+                        "document_id": "doc-debug",
+                        "document_name": "debug.pdf",
+                        "content": "Debug-Auszug",
+                    }
+                ]
+            },
+            settings=self._settings(),
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+        )
+
+        markdown = render_sources_markdown(
+            sources,
+            show_scores=True,
+            show_debug=True,
+            mode="audit",
+        )
+
+        self.assertIn("Chunk `chunk-debug`", markdown)
+        self.assertIn("Dokument `doc-debug`", markdown)
+        self.assertIn("Dataset `dataset-1`", markdown)
+        self.assertNotIn("proxy-secret", markdown)
+
+    def test_audit_markdown_does_not_invent_precise_locator(self) -> None:
+        sources = normalize_sources(
+            {
+                "chunks": [
+                    {
+                        "id": "chunk-only",
+                        "document_id": "doc-1",
+                        "document_name": "nur-dokument.pdf",
+                        "content": "Ein grober Hinweis ohne Seite oder Zeile.",
+                    }
+                ]
+            },
+            settings=self._settings(),
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+        )
+
+        markdown = render_sources_markdown(sources, mode="audit")
+
+        self.assertIn("Chunk-Fundstelle", markdown)
+        self.assertIn("nicht genauer bestimmbar", markdown)
+        self.assertNotIn("Seite 1", markdown)
+        self.assertNotIn("Zeile 1", markdown)
 
     def test_normalize_sources_removes_text_projection_wrappers(self) -> None:
         sources = normalize_sources(

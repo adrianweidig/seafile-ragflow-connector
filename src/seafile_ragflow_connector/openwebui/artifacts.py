@@ -9,7 +9,7 @@ from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.i18n import SUPPORTED_LANGUAGES, Localizer
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "17"
+ARTIFACT_VERSION = "18"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 _PIPE_TEMPLATE = "ragflow_dataset_pipe_chat_rag_polished.py.txt"
 _TEMPLATE_PACKAGE = "seafile_ragflow_connector.openwebui.templates"
@@ -80,6 +80,7 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
     l10n = Localizer(inputs.language)
     artifact_id = build_pipe_id(inputs.namespace, inputs.dataset_name, inputs.dataset_id)
     model_name = build_model_name(inputs.namespace, inputs.dataset_name, inputs.dataset_id)
+    display_model_name = l10n.text("product.pipe_model_name", dataset=inputs.dataset_name)
     content = _pipe_content()
     valves: dict[str, object] = {
         "ARTIFACT_ID": artifact_id,
@@ -92,7 +93,7 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "DATASET_ID": inputs.dataset_id,
         "RAGFLOW_CHAT_ID": inputs.ragflow_chat_id or "",
         "MODEL_ID": model_name,
-        "MODEL_NAME": model_name,
+        "MODEL_NAME": display_model_name,
         "TOP_K": 8,
         "INJECT_RAG_SYSTEM_PROMPT": True,
         "SEND_GENERATIVE_RAG_HINTS": True,
@@ -112,10 +113,11 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "EMIT_CITATION_EVENTS": True,
         "EMIT_LEGACY_SOURCE_EVENTS": False,
         "MAX_SOURCE_EVENTS": 20,
-        "SHOW_SOURCE_SCORES": True,
+        "SHOW_SOURCE_SCORES": False,
         "SHOW_SOURCE_DEBUG": False,
-        "SOURCE_MARKDOWN_MODE": "none",
-        "APPEND_SOURCE_OVERVIEW": False,
+        "SOURCE_MARKDOWN_MODE": "audit",
+        "APPEND_SOURCE_OVERVIEW": True,
+        "SHOW_LOCATOR_QUALITY": True,
         "ALLOW_CONNECTOR_SOURCE_LINKS": False,
         "CLEAN_RAGFLOW_MARKERS": True,
         "ERROR_VERBOSITY": "safe",
@@ -130,7 +132,14 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         },
     }
     definition_hash = _definition_hash(payload, valves)
-    return OpenWebUIArtifactSpec(artifact_id, model_name, content, valves, payload, definition_hash)
+    return OpenWebUIArtifactSpec(
+        artifact_id,
+        display_model_name,
+        content,
+        valves,
+        payload,
+        definition_hash,
+    )
 
 
 def build_tool_id(namespace: str, dataset_name: str, dataset_id: str) -> str:
@@ -193,7 +202,7 @@ def _tool_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.4.2
         owner: seafile-ragflow-connector
-        artifact_version: 17
+        artifact_version: 18
         """
 
         import httpx
