@@ -250,17 +250,21 @@ RAGFLOW_DOCUMENT_URL_TEMPLATE=
   `{repo_id}`, `{repo_id_quoted}`, `{path}`, `{path_quoted}`, `{path_query}`,
   `{page}`, `{page_fragment}`, `{document_id}` und `{chunk_id}`. Für PDFs kann
   ein Template z. B. `{page_fragment}` anhängen, um `#page=7` zu erzeugen.
+  Das Ergebnis muss eine für den Browser erreichbare absolute `http(s)`-URL zum
+  Originalsystem sein. Connector-Preview- oder Proxy-URLs werden nicht als
+  primärer Original-Link gerendert.
 
 Im Modus `connector_viewer` erzeugt der Connector signierte Quellenlinks auf
 `/api/openwebui/sources/preview`. Diese Links enthalten die von RAGFlow
 gelieferte Chunk-Referenz inklusive Seite, Position und Textauszug und bleiben
 für gespeicherte OpenWebUI-Chatverläufe dauerhaft gültig, solange
 `OPENWEBUI_PROXY_SHARED_SECRET` unverändert bleibt. Die Preview nutzt nur
-lokales HTML/CSS und keine CDN-Assets. Wenn `SEAFILE_FILE_URL_TEMPLATE` gesetzt
-ist, zeigt die Preview zusätzlich einen Button zum Originaldokument. Wenn
-RAGFlow selbst stabile öffentliche Dokument-/Chunk-Links liefert oder
-`RAGFLOW_DOCUMENT_URL_TEMPLATE` gesetzt ist, kann `ragflow_link` stattdessen
-direkt auf RAGFlow zeigen.
+  lokales HTML/CSS und keine CDN-Assets. Wenn `SEAFILE_FILE_URL_TEMPLATE` gesetzt
+  ist, zeigt die Preview zusätzlich einen priorisierten Button zum
+  Originaldokument und trennt diesen sichtbar von der Connector-Preview. Wenn
+  RAGFlow selbst stabile öffentliche Dokument-/Chunk-Links liefert oder
+  `RAGFLOW_DOCUMENT_URL_TEMPLATE` gesetzt ist, kann `ragflow_link` stattdessen
+  direkt auf RAGFlow zeigen.
 
 Wenn OpenWebUI aktiviert ist, benötigt der Connector-Controller einen
 erreichbaren HTTP-Port für Proxy-Routen wie `/api/openwebui/proxy/chat` und
