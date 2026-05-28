@@ -501,6 +501,7 @@ OPENWEBUI_PROXY_PUBLIC_BASE_URL=""
 OPENWEBUI_PROXY_INTERNAL_BASE_URL=""
 OPENWEBUI_PROXY_SHARED_SECRET_VALUE=""
 OPENWEBUI_PROXY_CA_BUNDLE_VALUE=""
+OPENWEBUI_SOURCE_PREVIEW_MODE_VALUE="connector_viewer"
 if is_true "$ENTERPRISE_WITH_OPENWEBUI"; then
   OPENWEBUI_BASE_URL="${ENTERPRISE_OPENWEBUI_BASE_URL:-${OPENWEBUI_BASE_URL:-}}"
   prompt_value OPENWEBUI_BASE_URL "OpenWebUI-HTTPS-URL aus Sicht des Connector-Containers" "" true
@@ -515,13 +516,19 @@ if is_true "$ENTERPRISE_WITH_OPENWEBUI"; then
   fi
 
   OPENWEBUI_PROXY_PUBLIC_BASE_URL="${ENTERPRISE_CONNECTOR_PUBLIC_BASE_URL:-${OPENWEBUI_PROXY_PUBLIC_BASE_URL:-}}"
-  if [ -n "$OPENWEBUI_ADMIN_API_KEY_VALUE" ]; then
+  if [ -n "$OPENWEBUI_ADMIN_API_KEY_VALUE" ] && [ "$enterprise_mode" != "shared" ]; then
     prompt_value OPENWEBUI_PROXY_PUBLIC_BASE_URL "Öffentliche HTTPS-URL zum Connector-Dashboard/Proxy für Browser-Preview" "" true
     require_https_url OPENWEBUI_PROXY_PUBLIC_BASE_URL "$OPENWEBUI_PROXY_PUBLIC_BASE_URL"
   else
     prompt_value OPENWEBUI_PROXY_PUBLIC_BASE_URL "Öffentliche HTTPS-URL zum Connector-Dashboard/Proxy für Browser-Preview, optional" "" false
     if [ -n "$OPENWEBUI_PROXY_PUBLIC_BASE_URL" ]; then
       require_https_url OPENWEBUI_PROXY_PUBLIC_BASE_URL "$OPENWEBUI_PROXY_PUBLIC_BASE_URL"
+    fi
+  fi
+  if [ -z "$OPENWEBUI_PROXY_PUBLIC_BASE_URL" ]; then
+    OPENWEBUI_SOURCE_PREVIEW_MODE_VALUE="citation_only"
+    if [ -n "$OPENWEBUI_ADMIN_API_KEY_VALUE" ]; then
+      note "Öffentliche Connector-URL fehlt; OpenWebUI-Sync bleibt aktiv, Quellen nutzen vorerst Citation-Links ohne Connector-Preview."
     fi
   fi
 
@@ -643,7 +650,7 @@ if is_true "$ENTERPRISE_WITH_OPENWEBUI"; then
   write_env_line OPENWEBUI_VERIFY_SSL true
   write_env_line OPENWEBUI_CA_BUNDLE "$CA_BUNDLE_VALUE"
   write_env_line OPENWEBUI_FUNCTION_NAMESPACE "${OPENWEBUI_FUNCTION_NAMESPACE:-ragflow}"
-  write_env_line OPENWEBUI_SOURCE_PREVIEW_MODE connector_viewer
+  write_env_line OPENWEBUI_SOURCE_PREVIEW_MODE "$OPENWEBUI_SOURCE_PREVIEW_MODE_VALUE"
   write_env_line OPENWEBUI_PROXY_PUBLIC_BASE_URL "$OPENWEBUI_PROXY_PUBLIC_BASE_URL"
   write_env_line OPENWEBUI_PROXY_INTERNAL_BASE_URL "$OPENWEBUI_PROXY_INTERNAL_BASE_URL"
   write_env_line OPENWEBUI_PROXY_SHARED_SECRET "$OPENWEBUI_PROXY_SHARED_SECRET_VALUE"

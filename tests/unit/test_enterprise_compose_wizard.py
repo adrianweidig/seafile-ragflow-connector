@@ -269,6 +269,9 @@ def test_enterprise_compose_wizard_keeps_proxy_ca_empty_for_internal_http(
     )
 
     generated_env = output_env.read_text(encoding="utf-8")
+    assert "OPENWEBUI_SYNC_MODE=sync" in generated_env
+    assert "OPENWEBUI_SOURCE_PREVIEW_MODE=citation_only" in generated_env
+    assert "OPENWEBUI_PROXY_PUBLIC_BASE_URL=\n" in generated_env
     assert "OPENWEBUI_PROXY_INTERNAL_BASE_URL=http://connector-controller:8080" in generated_env
     assert "OPENWEBUI_PROXY_CA_BUNDLE=\n" in generated_env
     assert "CONNECTOR_PROXY_CA_BUNDLE=\n" in generated_env
