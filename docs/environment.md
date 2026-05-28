@@ -75,7 +75,10 @@ Proxy-Secret und keine Preview-URL.
 | Variable | Pflicht | Wann |
 | --- | --- | --- |
 | `CONNECTOR_CERTS_HOST_DIR` | optional | wenn CA-Dateien per Compose nach `/certs` gemountet werden. |
+| `CONNECTOR_ENTERPRISE_CA_HOST_FILE` | optional | absoluter Host-Pfad zur Unternehmens-Root-CA/Chain für `deploy/compose/enterprise-ca.compose.yml`. |
+| `CONNECTOR_ENTERPRISE_CA_CONTAINER_FILE` | optional | Containerpfad des Enterprise-CA-Mounts, Default `/certs/company-root-ca.pem`. |
 | `CONNECTOR_CA_BUNDLE` | optional | gemeinsamer CA-Fallback für Seafile, RAGFlow und OpenWebUI. |
+| `CONNECTOR_SYSTEM_CA_BUNDLE` | optional | System-Trust-Bundle nach `update-ca-certificates`, Default `/etc/ssl/certs/ca-certificates.crt`. |
 | `SEAFILE_VERIFY_SSL`, `RAGFLOW_VERIFY_SSL`, `OPENWEBUI_VERIFY_SSL` | optional | Default ist `true`; `false` nur für Debug. |
 | `SEAFILE_CA_BUNDLE`, `RAGFLOW_CA_BUNDLE`, `OPENWEBUI_CA_BUNDLE` | optional | nur bei interner CA oder unterschiedlicher PKI je Dienst. |
 | `OPENWEBUI_PROXY_VERIFY_SSL`, `CONNECTOR_PROXY_VERIFY_SSL` | optional | Default ist `true`; betrifft Pipe -> Connector Proxy. |
@@ -87,6 +90,9 @@ Proxy-Secret und keine Preview-URL.
 
 Ein gesetzter CA- oder mTLS-Dateipfad muss im jeweiligen Container existieren
 und eine Datei sein. Ein leerer Pfad ist gültig und nutzt den Standard-Trust.
+Der Container führt `update-ca-certificates` bei jedem Start aus. Ist
+`CONNECTOR_CA_BUNDLE` leer, bleibt das unschädlich und nutzt nur die
+installierten System-CAs.
 
 ## Übliche optionale Betriebswerte
 
@@ -131,3 +137,7 @@ Diese Variablen sind nicht für den ersten Start erforderlich:
 Für produktive Starts ist die kleinste robuste Konfiguration meistens besser:
 erst Minimalpflicht setzen, `connector check-config` ausführen, dann gezielt
 TLS, Dashboard, OpenWebUI oder Tuning ergänzen.
+Der Default `CONNECTOR_STARTUP_CHECK=infra` prüft beim Start nur DB und Redis.
+Seafile/RAGFlow werden über Dashboard-Health oder `connector check-live`
+geprüft, damit die Installation nicht wegen externer TLS-, Auth- oder
+Parserprobleme hängen bleibt.

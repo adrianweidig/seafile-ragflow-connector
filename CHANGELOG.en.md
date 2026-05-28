@@ -6,6 +6,30 @@ All notable changes to this repository should be documented here. The format is
 based on a simple `Unreleased` section; historical releases are not invented
 retroactively.
 
+## Unreleased
+
+## 0.1.4 - 2026-05-28
+
+### Added
+
+- Portainer-ready enterprise Compose wizard that asks for existing Seafile,
+  RAGFlow, and optional OpenWebUI targets and generates a pasteable
+  `portainer-compose.yml` plus matching `portainer.env`.
+- Enterprise CA Compose overlay for HTTPS targets with an internal root CA.
+
+### Changed
+
+- The connector image now runs `update-ca-certificates` on every container
+  start, copies a configured `CONNECTOR_CA_BUNDLE` into the system trust store
+  first, and then starts the connector as an unprivileged user again.
+- Enterprise Compose now defaults to `CONNECTOR_STARTUP_CHECK=infra` so the
+  dashboard and logs stay reachable even while external TLS, auth, or parser
+  issues are being fixed; strict live validation remains available through
+  `check-live.sh`.
+- The enterprise wizard treats unknown root CA paths and missing OpenWebUI admin
+  keys as values that can be filled in later instead of blocking the base stack
+  start.
+
 ## 0.1.3 - 2026-05-27
 
 ### Added

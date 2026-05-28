@@ -61,8 +61,27 @@ Es gibt zwei unterstützte Netzwerkvarianten:
 
 ## Direkter Docker-Compose-Start
 
-Für Betreiber, die nicht über Portainer deployen, ist der einfachste direkte
-Start ebenfalls die zentrale Konfigurationsdatei:
+Für Betreiber, die nicht über Portainer deployen, ist der schnellste direkte
+Start im Unternehmensnetz der Compose-Assistent:
+
+```bash
+bash scripts/configure-enterprise-compose.sh
+bash output/enterprise-compose/check-config.sh
+bash output/enterprise-compose/up.sh
+bash output/enterprise-compose/check-live.sh
+```
+
+Er fragt HTTPS-URLs, optionale interne CA, Secrets und den OpenWebUI-Modus ab
+und erzeugt eine nicht committete `connector.env` sowie Startskripte mit der
+passenden Compose-Dateikombination. Unbekannte optionale Werte bleiben leer
+oder bekommen robuste Defaults; der Start prüft standardmäßig nur DB/Redis,
+damit Dashboard und Logs auch bei externen TLS-, Auth- oder Parserproblemen
+erreichbar sind. Für Portainer schreibt der Assistent zusätzlich
+`output/enterprise-compose/portainer-compose.yml` und
+`output/enterprise-compose/portainer.env`; diese beiden Dateien sind das
+Copy-&-Paste-Paar für den Portainer-Stack.
+
+Manuell bleibt die zentrale Konfigurationsdatei der Einstieg:
 
 ```bash
 cp connector.env.example connector.env
@@ -93,6 +112,7 @@ können ebenfalls mit `--env-file connector.env` gestartet werden:
 | Lokaler Smoke-Test mit Seafile-/RAGFlow-HTTPS-Mocks | zusätzlich `deploy/compose/local-mocks.compose.yml` |
 | Seafile/RAGFlow im bestehenden Docker-Netz | `deploy/compose/shared-network.compose.yml` |
 | Seafile/RAGFlow/OpenWebUI im gemeinsamen Docker-Netz | `deploy/compose/openwebui.compose.yml` |
+| Unternehmensnetz mit eigener Root-CA | zusätzlich `deploy/compose/enterprise-ca.compose.yml` |
 | Lokaler HTTPS-Edge für Windows/WSL unter `connector.top.secret` | zusätzlich `deploy/compose/connector-top-secret.compose.yml` |
 
 Beispiel:
@@ -365,6 +385,10 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
   nur ein einzelner Dienst betroffen ist, stattdessen `SEAFILE_CA_BUNDLE`,
   `RAGFLOW_CA_BUNDLE` oder `OPENWEBUI_CA_BUNDLE` setzen. `*_VERIFY_SSL=false`
   nur kurzfristig zur Diagnose verwenden.
+- RAGFlow meldet Parser-/Offline-Ressourcenfehler, z. B. fehlende NLP-/NLTK-
+  Daten: Connector und Dashboard bleiben mit `CONNECTOR_STARTUP_CHECK=infra`
+  erreichbar. Die Ursache liegt im bestehenden RAGFlow-Server; nach Korrektur
+  können Jobs erneut laufen oder per `connector sync-once` angestoßen werden.
 - Derselbe Zertifikatsfehler in OpenWebUI-Tool/Pipe: Der Aufruf läuft im
   OpenWebUI-Container. Dann muss `OPENWEBUI_PROXY_CA_BUNDLE` auf einen Pfad
   zeigen, der dort existiert, und `OPENWEBUI_SYNC_MODE=repair` den Tool/Pipe-

@@ -130,8 +130,8 @@ x-connector-env: &connector-env
   # Startup / Bootstrap
   # -------------------------------------------------------------------
   CONNECTOR_AUTO_INIT_DB: ${CONNECTOR_AUTO_INIT_DB:-true}
-  CONNECTOR_STARTUP_CHECK: ${CONNECTOR_STARTUP_CHECK:-live}
-  CONNECTOR_BOOTSTRAP_CHECK_LIVE: ${CONNECTOR_BOOTSTRAP_CHECK_LIVE:-true}
+  CONNECTOR_STARTUP_CHECK: ${CONNECTOR_STARTUP_CHECK:-infra}
+  CONNECTOR_BOOTSTRAP_CHECK_LIVE: ${CONNECTOR_BOOTSTRAP_CHECK_LIVE:-false}
 
 # Gemeinsamer Container-Block für Controller, Worker und Reconciler.
 x-connector-common: &connector-common

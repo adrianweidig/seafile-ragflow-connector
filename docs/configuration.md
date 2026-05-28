@@ -50,7 +50,8 @@ vertraut der Connector dem ausstellenden Root- oder Intermediate-Zertifikat
 nicht. Die saubere Lösung ist ein PEM-CA-Bundle statt `VERIFY_SSL=false`.
 
 ```env
-CONNECTOR_CERTS_HOST_DIR=./certs
+CONNECTOR_ENTERPRISE_CA_HOST_FILE=/opt/seafile-ragflow-connector/certs/company-root-ca.pem
+CONNECTOR_ENTERPRISE_CA_CONTAINER_FILE=/certs/company-root-ca.pem
 CONNECTOR_CA_BUNDLE=/certs/company-root-ca.pem
 SEAFILE_VERIFY_SSL=true
 SEAFILE_CA_BUNDLE=
@@ -60,10 +61,21 @@ OPENWEBUI_VERIFY_SSL=true
 OPENWEBUI_CA_BUNDLE=
 ```
 
-- `CONNECTOR_CERTS_HOST_DIR`: Host-Verzeichnis, das in Compose/Portainer
-  read-only nach `/certs` gemountet wird.
+- `CONNECTOR_ENTERPRISE_CA_HOST_FILE`: absoluter Host-Pfad zur
+  Unternehmens-Root-CA oder CA-Chain für das Enterprise-Compose-Overlay. Leer
+  ist gültig; dann wird kein Enterprise-CA-Overlay benötigt und der Container
+  nutzt die System-CAs.
+- `CONNECTOR_ENTERPRISE_CA_CONTAINER_FILE`: Containerpfad dieses Mounts,
+  standardmäßig `/certs/company-root-ca.pem`.
+- `CONNECTOR_CERTS_HOST_DIR`: Host-Verzeichnis, das in älteren
+  Compose-/Portainer-Varianten read-only nach `/certs` gemountet wird.
 - `CONNECTOR_CA_BUNDLE`: gemeinsames PEM-Bundle für Seafile, RAGFlow und
   OpenWebUI. Es muss im Container existieren.
+- Der Entrypoint führt bei jedem Containerstart `update-ca-certificates` aus.
+  Wenn `CONNECTOR_CA_BUNDLE` gesetzt ist, wird dieses Bundle vorher in den
+  System-Trust-Store kopiert. Danach startet der Connector wieder als
+  unprivilegierter Benutzer. Ohne eigenes Bundle bleibt der Schritt
+  unschädlich und nutzt nur den vorhandenen System-Trust.
 - `SEAFILE_CA_BUNDLE`, `RAGFLOW_CA_BUNDLE`, `OPENWEBUI_CA_BUNDLE`: optionale
   service-spezifische Overrides, falls die Systeme unterschiedlichen CAs
   vertrauen müssen.

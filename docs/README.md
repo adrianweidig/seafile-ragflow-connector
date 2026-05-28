@@ -19,7 +19,7 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
   Datasets genutzt wird.
 - `tls-topology.md`, `tls-certificates.md`, `docker-compose-tls.md` und
   `troubleshooting-ssl.md` beschreiben TLS-Strecken, CA-Bundles,
-  Compose-Mounts und SSL-Fehlerdiagnose.
+  Compose-Mounts, den Enterprise-Compose-Assistenten und SSL-Fehlerdiagnose.
 - `local-https-compose.md` beschreibt den produktionsnahen lokalen
   WSL-Docker-Betrieb mit Compose-Updatepfad, lokalen HTTPS-Mocks und
   `https://connector.top.secret`.

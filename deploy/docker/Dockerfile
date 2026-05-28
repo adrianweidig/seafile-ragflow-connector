@@ -11,13 +11,15 @@ COPY pyproject.toml README.md LICENSE /app/
 COPY src /app/src
 COPY deploy/docker/entrypoint.sh /usr/local/bin/connector-entrypoint
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates gosu \
+    && rm -rf /var/lib/apt/lists/*
 RUN pip install --root-user-action=ignore --no-cache-dir .
 RUN chmod +x /usr/local/bin/connector-entrypoint
 
 RUN useradd --create-home --uid 10001 connector \
     && mkdir -p /cache/tmp \
     && chown -R connector:connector /cache /home/connector
-USER connector
 
 ENTRYPOINT ["connector-entrypoint"]
 CMD ["controller"]

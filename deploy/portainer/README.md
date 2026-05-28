@@ -2,6 +2,20 @@
 
 Dieser Ordner ist der Einstiegspunkt für Betreiber.
 
+Für neue Unternehmensnetz-Installationen ist der schnellere Einstieg:
+
+```bash
+bash scripts/configure-enterprise-compose.sh
+```
+
+Der Assistent erzeugt unter `output/enterprise-compose/` eine einfügbare
+`portainer-compose.yml` und die passende `portainer.env`. In Portainer muss
+dann nur noch die Compose-Datei eingefügt und die Env-Datei importiert werden.
+Wenn die Unternehmens-CA oder ein OpenWebUI-Admin-Key beim Erststart noch nicht
+bekannt ist, bleiben diese Werte leer; der Stack startet trotzdem mit
+System-CAs beziehungsweise deaktiviertem OpenWebUI-Sync und kann später über
+die Env-Datei nachgeschärft werden.
+
 - `docker-compose.yml` definiert Controller, Worker, Reconciler, PostgreSQL,
   Redis, Volumes, Healthchecks und das optionale Dashboard-Portmapping.
 - `../../connector.env.example` ist die empfohlene einheitliche Vorlage für
@@ -32,7 +46,9 @@ Portainer-Start:
    genutzt wird.
    Wenn interne Zertifikate genutzt werden, die CA-PEM-Datei in ein
    Host-Verzeichnis legen, `CONNECTOR_CERTS_HOST_DIR` auf dieses Verzeichnis
-   und `CONNECTOR_CA_BUNDLE=/certs/<datei>.pem` setzen.
+   und `CONNECTOR_CA_BUNDLE=/certs/<datei>.pem` setzen. Fehlt die CA beim
+   Erststart noch, bleibt der Wert leer; `update-ca-certificates` läuft trotzdem
+   und nutzt den vorhandenen System-Trust.
 7. `CONNECTOR_IMAGE`, `POSTGRES_IMAGE` und `REDIS_IMAGE` an die in Portainer
    sichtbaren Image-Tags anpassen. Wenn lokale Images genutzt werden sollen,
    kann `*_IMAGE_PULL_POLICY=never` gesetzt werden.
