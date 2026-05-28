@@ -17,6 +17,56 @@ truthy() {
   esac
 }
 
+refresh_system_ca_certificates() {
+  if [ "$(id -u)" -ne 0 ]; then
+    fail "entrypoint must start as root so update-ca-certificates can run"
+  fi
+  if ! command -v update-ca-certificates >/dev/null 2>&1; then
+    fail "update-ca-certificates is not available in this image"
+  fi
+
+  ca_source="${CONNECTOR_CA_BUNDLE:-}"
+  if [ -n "$ca_source" ]; then
+    if [ ! -f "$ca_source" ]; then
+      fail "CA bundle for system trust does not exist: $ca_source"
+    fi
+    if grep -q 'PRIVATE KEY' "$ca_source"; then
+      fail "CA bundle for system trust must not contain a private key: $ca_source"
+    fi
+    ca_target="${CONNECTOR_SYSTEM_CA_CERT:-/usr/local/share/ca-certificates/connector-enterprise-ca.crt}"
+    mkdir -p "$(dirname "$ca_target")"
+    cp "$ca_source" "$ca_target"
+    chmod 0644 "$ca_target"
+  fi
+
+  update-ca-certificates >/dev/null
+
+  system_bundle="${CONNECTOR_SYSTEM_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}"
+  if [ -f "$system_bundle" ]; then
+    export SSL_CERT_FILE="${SSL_CERT_FILE:-$system_bundle}"
+    export REQUESTS_CA_BUNDLE="${REQUESTS_CA_BUNDLE:-$system_bundle}"
+  fi
+  log "refreshed system CA certificates"
+}
+
+drop_privileges_if_needed() {
+  if [ "${CONNECTOR_ENTRYPOINT_PRIVILEGED_DONE:-}" = "1" ]; then
+    return 0
+  fi
+  refresh_system_ca_certificates
+  export CONNECTOR_ENTRYPOINT_PRIVILEGED_DONE=1
+
+  if [ "$(id -u)" -ne 0 ]; then
+    return 0
+  fi
+  if ! truthy "${CONNECTOR_DROP_PRIVILEGES:-true}"; then
+    return 0
+  fi
+  runtime_user="${CONNECTOR_RUNTIME_USER:-connector}"
+  command -v gosu >/dev/null 2>&1 || fail "gosu is required to drop privileges"
+  exec gosu "$runtime_user" "$0" "$@"
+}
+
 wait_for_infra() {
   max_wait="${CONNECTOR_STARTUP_MAX_WAIT_SECONDS:-180}"
   sleep_seconds="${CONNECTOR_STARTUP_SLEEP_SECONDS:-5}"
@@ -107,6 +157,8 @@ if [ "$#" -eq 0 ]; then
   set -- controller
 fi
 
+drop_privileges_if_needed "$@"
+
 case "${1:-}" in
   check-config|--help|-h|help)
     exec connector "$@"
@@ -115,7 +167,7 @@ case "${1:-}" in
     prepare_runtime_dirs
     run_startup_checks
     auto_init_db
-    if truthy "${CONNECTOR_BOOTSTRAP_CHECK_LIVE:-true}"; then
+    if truthy "${CONNECTOR_BOOTSTRAP_CHECK_LIVE:-false}"; then
       connector check-live
     fi
     log "bootstrap completed"

@@ -6,6 +6,29 @@ Alle nennenswerten Änderungen an diesem Repository sollten hier dokumentiert
 werden. Das Format orientiert sich an einer einfachen `Unreleased`-Sektion; es
 werden keine historischen Releases nachträglich erfunden.
 
+## Unreleased
+
+## 0.1.4 - 2026-05-28
+
+### Added
+
+- Portainer-fertiger Enterprise-Compose-Assistent, der bestehende Seafile-,
+  RAGFlow- und optionale OpenWebUI-Instanzen abfragt und eine einfügbare
+  `portainer-compose.yml` plus zugehörige `portainer.env` erzeugt.
+- Enterprise-CA-Compose-Overlay für HTTPS-Ziele mit interner Root-CA.
+
+### Changed
+
+- Das Connector-Image führt beim Containerstart immer `update-ca-certificates`
+  aus, kopiert eine gesetzte `CONNECTOR_CA_BUNDLE` vorher in den
+  System-Trust-Store und startet danach wieder als unprivilegierter Benutzer.
+- Enterprise-Compose startet standardmäßig mit `CONNECTOR_STARTUP_CHECK=infra`,
+  damit Dashboard und Logs auch bei externen TLS-, Auth- oder Parserproblemen
+  erreichbar bleiben; strikte Live-Prüfung bleibt per `check-live.sh` möglich.
+- Der Enterprise-Assistent behandelt unbekannte Root-CA-Pfade und fehlende
+  OpenWebUI-Admin-Keys als nachpflegbare Werte statt als Blocker für den
+  Grundstart.
+
 ## 0.1.3 - 2026-05-27
 
 ### Added

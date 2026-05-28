@@ -17,7 +17,7 @@
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml"><img alt="Docker image" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml/badge.svg?branch=master"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml/badge.svg?branch=master"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="pyproject.toml"><img alt="Version 0.1.3" src="https://img.shields.io/badge/version-0.1.3-informational.svg"></a>
+  <a href="pyproject.toml"><img alt="Version 0.1.4" src="https://img.shields.io/badge/version-0.1.4-informational.svg"></a>
 </p>
 
 ## Overview
@@ -56,6 +56,23 @@ German is the project default for CLI help, human-readable errors, dashboard tex
 GitHub does not automatically switch the normal repository view by visitor language. This repository therefore uses explicit files and links: `README.md` is German, `README.en.md` is English, German docs start at `docs/de/index.md`, and English docs start at `docs/en/index.md`. More details are in [docs/en/i18n.md](docs/en/i18n.md).
 
 ## Docker Compose Quick Start
+
+For enterprise networks with HTTPS, optional internal root CA, and optional
+OpenWebUI wiring, the guided wizard is the fastest path:
+
+```bash
+bash scripts/configure-enterprise-compose.sh
+bash output/enterprise-compose/check-config.sh
+bash output/enterprise-compose/up.sh
+bash output/enterprise-compose/check-live.sh
+```
+
+It generates `connector.env`, selects the Compose files, and writes a
+Portainer-ready `portainer-compose.yml` plus matching `portainer.env`. Unknown
+optional values keep robust defaults: without a CA path the stack uses system
+CAs, without an OpenWebUI admin key OpenWebUI sync stays disabled, and startup
+defaults to `CONNECTOR_STARTUP_CHECK=infra` so dashboard and logs remain
+reachable while external service, TLS, auth, or parser issues are fixed.
 
 Copy the operator configuration and set the required values:
 
@@ -108,7 +125,7 @@ curl http://127.0.0.1:18080/api/health
 5. Deploy the stack and inspect the logs of `connector-controller`, `connector-worker`, and `connector-reconciler`.
 
 For production-like deployments, pin `CONNECTOR_IMAGE` to a fixed release tag
-such as `ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.3` after that
+such as `ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.4` after that
 release has been published. Treat `latest` as a convenience tag for smoke tests
 and fresh test environments.
 

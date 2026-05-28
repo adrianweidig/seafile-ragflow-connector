@@ -1,0 +1,61 @@
+# Enterprise-HTTPS/CA-Overlay für Controller, Worker und Reconciler.
+#
+# Nutze dieses Overlay, wenn Seafile, RAGFlow, OpenWebUI oder der Connector-
+# Proxy per HTTPS mit interner Unternehmens-Root-CA erreichbar sind.
+#
+# Empfohlener Schnellpfad:
+#   bash scripts/configure-enterprise-compose.sh
+#
+# Manuelle Nutzung:
+#   docker compose --env-file connector.env \
+#     -f deploy/compose/external-services.compose.yml \
+#     -f deploy/compose/enterprise-ca.compose.yml config --quiet
+#
+# Erforderliche Host-Variable:
+#   CONNECTOR_ENTERPRISE_CA_HOST_FILE=/absolute/path/to/company-root-ca.pem
+#
+# Die CA-Datei muss Root-CA und benötigte Intermediate-CAs im PEM-Format
+# enthalten. Hier keinen privaten Schlüssel mounten. Der Container führt beim
+# Start immer update-ca-certificates aus; wenn CONNECTOR_CA_BUNDLE gesetzt ist,
+# wird dieses Bundle vorher in den System-Trust-Store kopiert.
+
+x-enterprise-ca-env: &enterprise-ca-env
+  CONNECTOR_CA_BUNDLE: ${CONNECTOR_CA_BUNDLE:-/certs/company-root-ca.pem}
+  CONNECTOR_SYSTEM_CA_BUNDLE: ${CONNECTOR_SYSTEM_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}
+  SSL_CERT_FILE: ${SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}
+  REQUESTS_CA_BUNDLE: ${REQUESTS_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}
+  SEAFILE_VERIFY_SSL: ${SEAFILE_VERIFY_SSL:-true}
+  SEAFILE_CA_BUNDLE: ${SEAFILE_CA_BUNDLE:-/certs/company-root-ca.pem}
+  RAGFLOW_VERIFY_SSL: ${RAGFLOW_VERIFY_SSL:-true}
+  RAGFLOW_CA_BUNDLE: ${RAGFLOW_CA_BUNDLE:-/certs/company-root-ca.pem}
+  OPENWEBUI_VERIFY_SSL: ${OPENWEBUI_VERIFY_SSL:-true}
+  OPENWEBUI_CA_BUNDLE: ${OPENWEBUI_CA_BUNDLE:-/certs/company-root-ca.pem}
+  OPENWEBUI_PROXY_VERIFY_SSL: ${OPENWEBUI_PROXY_VERIFY_SSL:-true}
+  OPENWEBUI_PROXY_CA_BUNDLE: ${OPENWEBUI_PROXY_CA_BUNDLE-/certs/company-root-ca.pem}
+  CONNECTOR_PROXY_VERIFY_SSL: ${CONNECTOR_PROXY_VERIFY_SSL:-true}
+  CONNECTOR_PROXY_CA_BUNDLE: ${CONNECTOR_PROXY_CA_BUNDLE-/certs/company-root-ca.pem}
+
+x-enterprise-ca-volume: &enterprise-ca-volume
+  type: bind
+  source: ${CONNECTOR_ENTERPRISE_CA_HOST_FILE:?CONNECTOR_ENTERPRISE_CA_HOST_FILE auf CA-Bundle setzen}
+  target: ${CONNECTOR_ENTERPRISE_CA_CONTAINER_FILE:-/certs/company-root-ca.pem}
+  read_only: true
+
+services:
+  connector-controller:
+    environment:
+      <<: *enterprise-ca-env
+    volumes:
+      - *enterprise-ca-volume
+
+  connector-worker:
+    environment:
+      <<: *enterprise-ca-env
+    volumes:
+      - *enterprise-ca-volume
+
+  connector-reconciler:
+    environment:
+      <<: *enterprise-ca-env
+    volumes:
+      - *enterprise-ca-volume

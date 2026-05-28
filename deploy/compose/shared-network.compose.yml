@@ -92,8 +92,8 @@ x-connector-env: &connector-env
   ARCHIVE_DATASET_WHEN_LIBRARY_DELETED: ${ARCHIVE_DATASET_WHEN_LIBRARY_DELETED:-false}
 
   CONNECTOR_AUTO_INIT_DB: ${CONNECTOR_AUTO_INIT_DB:-true}
-  CONNECTOR_STARTUP_CHECK: ${CONNECTOR_STARTUP_CHECK:-live}
-  CONNECTOR_BOOTSTRAP_CHECK_LIVE: ${CONNECTOR_BOOTSTRAP_CHECK_LIVE:-true}
+  CONNECTOR_STARTUP_CHECK: ${CONNECTOR_STARTUP_CHECK:-infra}
+  CONNECTOR_BOOTSTRAP_CHECK_LIVE: ${CONNECTOR_BOOTSTRAP_CHECK_LIVE:-false}
 
 x-connector-common: &connector-common
   image: ${CONNECTOR_IMAGE:-ghcr.io/adrianweidig/seafile-ragflow-connector:latest}
@@ -102,7 +102,10 @@ x-connector-common: &connector-common
   environment: *connector-env
   volumes:
     - connector-cache:/cache
-    - ${CONNECTOR_CERTS_HOST_DIR:-./certs}:/certs:ro
+    - type: bind
+      source: ${CONNECTOR_CERTS_HOST_DIR:-./certs}
+      target: /certs
+      read_only: true
   networks:
     - connector-net
   healthcheck:

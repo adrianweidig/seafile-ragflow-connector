@@ -18,7 +18,7 @@
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml"><img alt="Docker image" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml/badge.svg?branch=master"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml/badge.svg?branch=master"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="pyproject.toml"><img alt="Version 0.1.3" src="https://img.shields.io/badge/version-0.1.3-informational.svg"></a>
+  <a href="pyproject.toml"><img alt="Version 0.1.4" src="https://img.shields.io/badge/version-0.1.4-informational.svg"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/issues"><img alt="GitHub issues" src="https://img.shields.io/github/issues/adrianweidig/seafile-ragflow-connector"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/pulls"><img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/adrianweidig/seafile-ragflow-connector"></a>
 </p>
@@ -143,6 +143,31 @@ ergänzt. Details stehen im [Sprach- und Unicode-Modell](docs/i18n.md).
 
 ## Schnellstart mit Docker Compose
 
+Für Unternehmensnetze mit HTTPS, optional eigener Root-CA und optionaler
+OpenWebUI-Anbindung ist der schnellste Pfad der interaktive Compose-Assistent:
+
+```bash
+bash scripts/configure-enterprise-compose.sh
+bash output/enterprise-compose/check-config.sh
+bash output/enterprise-compose/up.sh
+bash output/enterprise-compose/check-live.sh
+```
+
+Er erzeugt `connector.env`, wählt die passenden Compose-Dateien und bindet eine
+Unternehmens-CA über `deploy/compose/enterprise-ca.compose.yml` read-only ein,
+wenn der CA-Pfad bekannt ist. Ohne CA-Pfad startet der Stack mit den System-CAs;
+die CA kann später über die `.env` ergänzt werden. Zusätzlich schreibt der
+Assistent `output/enterprise-compose/portainer-compose.yml` und
+`output/enterprise-compose/portainer.env`; diese beiden Artefakte können direkt
+in Portainer eingefügt beziehungsweise als Environment importiert werden.
+
+Der Assistent setzt für unbekannte optionale Werte robuste Defaults. Externe
+Dienste werden beim Containerstart nicht hart erzwungen
+(`CONNECTOR_STARTUP_CHECK=infra`), damit Dashboard und Logs auch dann
+erreichbar sind, wenn RAGFlow, Seafile, ein Parser-Asset oder eine interne CA
+noch korrigiert werden muss. Die echte Live-Prüfung bleibt über
+`check-live.sh` explizit verfügbar.
+
 Die einzige Betreiberkonfiguration ist [`connector.env.example`](connector.env.example).
 Kopiere sie zu `connector.env`, setze die Pflichtwerte und validiere die
 Compose-Konfiguration:
@@ -233,11 +258,11 @@ der Name auf das bereits vorhandene gemeinsame Docker-Netz zeigen.
 
 Der Online-Start kann das veröffentlichte GHCR-Image nutzen. Für
 produktionsnahe Rollouts sollte nach Veröffentlichung ein fester Release-Tag
-wie `0.1.3` gepinnt werden; `latest` ist eine Komfortoption für Smoke-Tests und
+wie `0.1.4` gepinnt werden; `latest` ist eine Komfortoption für Smoke-Tests und
 frische Testumgebungen.
 
 ```bash
-docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.3
+docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.4
 ```
 
 Für Offline-Umgebungen können die benötigten Images vorab exportiert und auf dem
@@ -245,7 +270,7 @@ Zielhost importiert werden:
 
 ```bash
 docker save \
-  ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.3 \
+  ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.4 \
   postgres:16 \
   redis:7 \
   -o images/seafile-ragflow-portainer-images.tar
@@ -257,7 +282,7 @@ Wenn interne Registry- oder lokale Image-Namen genutzt werden, trage sie in
 `connector.env` ein:
 
 ```env
-CONNECTOR_IMAGE=seafile-ragflow-connector:0.1.3
+CONNECTOR_IMAGE=seafile-ragflow-connector:0.1.4
 POSTGRES_IMAGE=postgres:16
 REDIS_IMAGE=redis:7
 ```
@@ -346,7 +371,8 @@ Connector `unable to get local issuer certificate` meldet, lege die
 Root-/Intermediate-CA als PEM-Datei auf dem Docker-Host ab und setze z. B.:
 
 ```env
-CONNECTOR_CERTS_HOST_DIR=/opt/seafile-ragflow-connector/certs
+CONNECTOR_ENTERPRISE_CA_HOST_FILE=/opt/seafile-ragflow-connector/certs/company-root-ca.pem
+CONNECTOR_ENTERPRISE_CA_CONTAINER_FILE=/certs/company-root-ca.pem
 CONNECTOR_CA_BUNDLE=/certs/company-root-ca.pem
 SEAFILE_VERIFY_SSL=true
 RAGFLOW_VERIFY_SSL=true
@@ -357,6 +383,14 @@ OPENWEBUI_VERIFY_SSL=true
 Dienst betroffen ist, kann stattdessen `SEAFILE_CA_BUNDLE`,
 `RAGFLOW_CA_BUNDLE` oder `OPENWEBUI_CA_BUNDLE` gesetzt werden.
 `*_VERIFY_SSL=false` ist nur als kurzfristige Diagnose gedacht.
+
+Für Compose-Installationen setzt das Overlay
+[`deploy/compose/enterprise-ca.compose.yml`](deploy/compose/enterprise-ca.compose.yml)
+dies konsistent für Controller, Worker und Reconciler. Das Overlay wird nur
+benötigt, wenn eine eigene CA eingebunden werden muss; ohne CA nutzt der
+Container den aktualisierten System-Trust-Store. Der Assistent
+[`scripts/configure-enterprise-compose.sh`](scripts/configure-enterprise-compose.sh)
+erzeugt daraus direkt eine lauffähige Enterprise-Konfiguration.
 
 Beim Start prüft der Connector für Seafile, RAGFlow und, falls aktiviert,
 OpenWebUI zuerst dieselbe Host-/Port-Basis über `https://`. Nur wenn darüber
