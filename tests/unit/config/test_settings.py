@@ -138,6 +138,37 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(settings.delete_dataset_when_library_deleted)
         self.assertFalse(settings.archive_dataset_when_library_deleted)
 
+    def test_seafile_public_base_url_defaults_original_link_template(self) -> None:
+        values = self.base_values()
+        values["database_url"] = "postgresql+psycopg://custom/db"
+
+        settings = Settings(**values)
+
+        self.assertEqual(settings.effective_seafile_public_base_url, "http://seafile.local")
+        self.assertEqual(
+            settings.effective_seafile_file_url_template,
+            "http://seafile.local/lib/{repo_id}/file{path_quoted}{page_fragment}",
+        )
+
+        values["seafile_public_base_url"] = "https://files.example/"
+        settings = Settings(**values)
+
+        self.assertEqual(settings.effective_seafile_public_base_url, "https://files.example")
+        self.assertEqual(
+            settings.effective_seafile_file_url_template,
+            "https://files.example/lib/{repo_id}/file{path_quoted}{page_fragment}",
+        )
+
+        values["seafile_file_url_template"] = (
+            "https://proxy.example/seafile/{repo_id_quoted}?path={path_query}"
+        )
+        settings = Settings(**values)
+
+        self.assertEqual(
+            settings.effective_seafile_file_url_template,
+            "https://proxy.example/seafile/{repo_id_quoted}?path={path_query}",
+        )
+
     def test_openwebui_sync_requires_admin_key_and_proxy_secret(self) -> None:
         values = self.base_values()
         values.update(

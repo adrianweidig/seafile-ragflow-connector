@@ -167,6 +167,9 @@ Dienste werden beim Containerstart nicht hart erzwungen
 erreichbar sind, wenn RAGFlow, Seafile, ein Parser-Asset oder eine interne CA
 noch korrigiert werden muss. Die echte Live-Prüfung bleibt über
 `check-live.sh` explizit verfügbar.
+Interne Service-Adressen, etwa `http://seafile` oder `http://ragflow:9380` in
+einem gemeinsamen Docker-Netz, werden getrennt von extern erreichbaren Browser-
+und OpenWebUI-Preview-URLs abgefragt.
 
 Die einzige Betreiberkonfiguration ist [`connector.env.example`](connector.env.example).
 Kopiere sie zu `connector.env`, setze die Pflichtwerte und validiere die

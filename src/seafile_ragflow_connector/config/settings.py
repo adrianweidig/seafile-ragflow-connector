@@ -67,7 +67,14 @@ class Settings(BaseSettings):
     seafile_rewrite_download_urls: bool = False
     seafile_download_rewrite_from: str | None = None
     seafile_download_rewrite_to: str | None = None
-    seafile_file_url_template: str | None = None
+    seafile_public_base_url: str | None = Field(
+        default=None,
+        validation_alias="SEAFILE_PUBLIC_BASE_URL",
+    )
+    seafile_file_url_template: str | None = Field(
+        default=None,
+        validation_alias="SEAFILE_FILE_URL_TEMPLATE",
+    )
 
     ragflow_base_url: str
     ragflow_internal_url: str | None = None
@@ -192,6 +199,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "seafile_base_url",
+        "seafile_public_base_url",
         "ragflow_base_url",
         "ragflow_public_base_url",
         "openwebui_base_url",
@@ -202,6 +210,14 @@ class Settings(BaseSettings):
     @classmethod
     def strip_url(cls, value: str | None) -> str | None:
         return value.rstrip("/") if value else value
+
+    @field_validator("seafile_file_url_template")
+    @classmethod
+    def strip_optional_template(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
 
     @field_validator(
         "connector_ca_bundle",
@@ -313,6 +329,7 @@ class Settings(BaseSettings):
         if self.openwebui_proxy_internal_base_url is None:
             self.openwebui_proxy_internal_base_url = self.openwebui_proxy_public_base_url
         for name in (
+            "seafile_public_base_url",
             "ragflow_public_base_url",
             "openwebui_proxy_public_base_url",
             "openwebui_proxy_internal_base_url",
@@ -416,6 +433,20 @@ class Settings(BaseSettings):
     @property
     def openwebui_proxy_base_url_for_functions(self) -> str | None:
         return self.openwebui_proxy_internal_base_url or self.openwebui_proxy_public_base_url
+
+    @property
+    def effective_seafile_public_base_url(self) -> str | None:
+        base_url = self.seafile_public_base_url or self.seafile_base_url
+        return base_url.rstrip("/") if base_url else None
+
+    @property
+    def effective_seafile_file_url_template(self) -> str | None:
+        if self.seafile_file_url_template:
+            return self.seafile_file_url_template
+        base_url = self.effective_seafile_public_base_url
+        if not base_url:
+            return None
+        return f"{base_url}/lib/{{repo_id}}/file{{path_quoted}}{{page_fragment}}"
 
     @property
     def seafile_httpx_verify(self) -> VerifyConfig:

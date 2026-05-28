@@ -99,6 +99,7 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
             "ENTERPRISE_WITH_OPENWEBUI": "true",
             "ENTERPRISE_CA_HOST_FILE": str(ca_file),
             "ENTERPRISE_SEAFILE_BASE_URL": "https://seafile.internal",
+            "ENTERPRISE_SEAFILE_PUBLIC_BASE_URL": "https://files.internal",
             "ENTERPRISE_RAGFLOW_BASE_URL": "https://ragflow.internal",
             "ENTERPRISE_OPENWEBUI_BASE_URL": "https://openwebui.internal",
             "ENTERPRISE_CONNECTOR_PUBLIC_BASE_URL": "https://connector.internal",
@@ -130,6 +131,8 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
     assert "CONNECTOR_ENTERPRISE_CA_CONTAINER_FILE=/certs/company-root-ca.pem" in generated_env
     assert "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" in generated_env
     assert "SEAFILE_VERIFY_SSL=true" in generated_env
+    assert "SEAFILE_PUBLIC_BASE_URL=https://files.internal" in generated_env
+    assert "SEAFILE_FILE_URL_TEMPLATE=\n" in generated_env
     assert "RAGFLOW_CA_BUNDLE=/certs/company-root-ca.pem" in generated_env
     assert "OPENWEBUI_SOURCE_PREVIEW_MODE=connector_viewer" in generated_env
     assert "OPENWEBUI_PROXY_PUBLIC_BASE_URL=https://connector.internal" in generated_env
@@ -209,6 +212,7 @@ def test_enterprise_compose_wizard_generates_installable_defaults_without_ca_or_
     assert "RAGFLOW_CA_BUNDLE=\n" in generated_env
     assert "OPENWEBUI_ADMIN_API_KEY=\n" in generated_env
     assert "OPENWEBUI_SYNC_MODE=disabled" in generated_env
+    assert "SEAFILE_PUBLIC_BASE_URL=https://seafile.internal" in generated_env
     assert "CONNECTOR_STARTUP_CHECK=infra" in generated_env
     assert "CONNECTOR_BOOTSTRAP_CHECK_LIVE=false" in generated_env
 
@@ -235,9 +239,10 @@ def test_enterprise_compose_wizard_keeps_proxy_ca_empty_for_internal_http(
             "ENTERPRISE_MODE": "shared",
             "ENTERPRISE_WITH_OPENWEBUI": "true",
             "ENTERPRISE_CA_HOST_FILE": str(ca_file),
-            "ENTERPRISE_SEAFILE_BASE_URL": "https://seafile.internal",
-            "ENTERPRISE_RAGFLOW_BASE_URL": "https://ragflow.internal",
-            "ENTERPRISE_OPENWEBUI_BASE_URL": "https://openwebui.internal",
+            "ENTERPRISE_SEAFILE_BASE_URL": "http://seafile",
+            "ENTERPRISE_SEAFILE_PUBLIC_BASE_URL": "https://files.internal",
+            "ENTERPRISE_RAGFLOW_BASE_URL": "http://ragflow:9380",
+            "ENTERPRISE_OPENWEBUI_BASE_URL": "http://openwebui:8080",
             "CONNECTOR_DOCKER_NETWORK_NAME": "enterprise-network",
             "SEAFILE_ADMIN_TOKEN": "seafile-admin-secret",
             "SEAFILE_SYNC_USER_TOKEN": "seafile-sync-secret",
@@ -269,6 +274,10 @@ def test_enterprise_compose_wizard_keeps_proxy_ca_empty_for_internal_http(
     )
 
     generated_env = output_env.read_text(encoding="utf-8")
+    assert "SEAFILE_BASE_URL=http://seafile" in generated_env
+    assert "SEAFILE_PUBLIC_BASE_URL=https://files.internal" in generated_env
+    assert "RAGFLOW_BASE_URL=http://ragflow:9380" in generated_env
+    assert "OPENWEBUI_BASE_URL=http://openwebui:8080" in generated_env
     assert "OPENWEBUI_SYNC_MODE=sync" in generated_env
     assert "OPENWEBUI_SOURCE_PREVIEW_MODE=citation_only" in generated_env
     assert "OPENWEBUI_PROXY_PUBLIC_BASE_URL=\n" in generated_env

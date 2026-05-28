@@ -10,7 +10,7 @@ nicht automatisch, dass HTTPX im Container dieselbe CA kennt.
 | Connector Proxy -> RAGFlow | `connector-controller` | `RAGFLOW_INTERNAL_URL` oder `RAGFLOW_BASE_URL` | HTTPX im Connector | `RAGFLOW_VERIFY_SSL`, `RAGFLOW_CA_BUNDLE`, optional `CONNECTOR_CA_BUNDLE` |
 | Connector Proxy -> Seafile | `connector-controller` und Sync-Clients | `SEAFILE_INTERNAL_URL` oder `SEAFILE_BASE_URL` | HTTPX im Connector | `SEAFILE_VERIFY_SSL`, `SEAFILE_CA_BUNDLE`, optional `CONNECTOR_CA_BUNDLE` |
 | Browser -> Preview-Seite | Nutzerbrowser | `OPENWEBUI_PROXY_PUBLIC_BASE_URL` | Browser-Trust-Store | öffentlich vertrautes Zertifikat oder intern ausgerollte CA |
-| Preview -> Originaldatei | Browser über Link oder Reverse Proxy | Wert aus `SEAFILE_FILE_URL_TEMPLATE` | Browser oder vorgeschalteter Proxy | `SEAFILE_FILE_URL_TEMPLATE`, Reverse-Proxy-Zertifikat |
+| Preview -> Originaldatei | Browser über Link oder Reverse Proxy | aus `SEAFILE_PUBLIC_BASE_URL` oder `SEAFILE_BASE_URL`, optionaler Override über `SEAFILE_FILE_URL_TEMPLATE` | Browser oder vorgeschalteter Proxy | `SEAFILE_PUBLIC_BASE_URL`, `SEAFILE_FILE_URL_TEMPLATE`, Reverse-Proxy-Zertifikat |
 | Docker Host -> Registry | Docker Engine | GHCR oder interne Registry | Host-/Docker-Trust-Store | Corporate Proxy, MITM-CA, Registry-Konfiguration |
 
 ## CA-Zuständigkeit

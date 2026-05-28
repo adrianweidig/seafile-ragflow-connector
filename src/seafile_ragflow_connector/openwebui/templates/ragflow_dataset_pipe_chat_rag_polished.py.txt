@@ -1,9 +1,9 @@
 """
 title: RAGFlow Dataset Pipe
 author: Seafile RAGFlow Connector
-version: 3.6.0
+version: 3.7.0
 owner: seafile-ragflow-connector
-artifact_version: 18
+artifact_version: 19
 """
 
 # =============================================================================
@@ -46,7 +46,7 @@ artifact_version: 18
 # Empfohlene Chat-RAG-Einstellungen:
 #   INJECT_RAG_SYSTEM_PROMPT=true
 #   SEND_GENERATIVE_RAG_HINTS=true
-#   RETRIEVAL_ONLY_FALLBACK=diagnostic
+#   RETRIEVAL_ONLY_FALLBACK=brief
 #   EMIT_CITATION_EVENTS=true
 #   APPEND_SOURCE_OVERVIEW=true
 #   SOURCE_MARKDOWN_MODE=audit
@@ -415,7 +415,7 @@ class Pipe:
         # brief:      Kürzerer Nutzerhinweis.
         # sources_only: Minimalhinweis; Quellenblock steht im Vordergrund.
         RETRIEVAL_ONLY_FALLBACK: str = Field(
-            default="diagnostic",
+            default="brief",
             description="Verhalten, wenn der Proxy nur Quellen, aber keinen KI-Text liefert: diagnostic, brief oder sources_only.",
         )
 
@@ -696,7 +696,12 @@ class Pipe:
             allow_connector_source_links=self.valves.ALLOW_CONNECTOR_SOURCE_LINKS,
         )
 
-        raw_answer = _annotate_answer_source_markers(_extract_answer(data), sources)
+        raw_answer = _extract_answer(data)
+        if _looks_like_source_markdown_only(raw_answer):
+            raw_answer = ""
+        else:
+            raw_answer = _strip_appended_source_markdown(raw_answer)
+        raw_answer = _annotate_answer_source_markers(raw_answer, sources)
         answer = _clean_answer(
             raw_answer,
             clean_ragflow_markers=self.valves.CLEAN_RAGFLOW_MARKERS,
@@ -781,7 +786,7 @@ def _configuration_error(valves: Pipe.Valves) -> str:
     if error_verbosity not in VALID_ERROR_VERBOSITY:
         return "Ungültiger Wert: `ERROR_VERBOSITY` muss `safe` oder `debug` sein."
 
-    retrieval_fallback = _clean(valves.RETRIEVAL_ONLY_FALLBACK).lower() or "diagnostic"
+    retrieval_fallback = _clean(valves.RETRIEVAL_ONLY_FALLBACK).lower() or "brief"
     if retrieval_fallback not in VALID_RETRIEVAL_ONLY_FALLBACK:
         return "Ungültiger Wert: `RETRIEVAL_ONLY_FALLBACK` muss `diagnostic`, `brief` oder `sources_only` sein."
 
@@ -1086,7 +1091,10 @@ async def _synthesize_answer_from_sources(
         tls_debug=tls_debug,
         error_verbosity=error_verbosity,
     )
-    answer = _clean_answer(_extract_answer(data), clean_ragflow_markers=valves.CLEAN_RAGFLOW_MARKERS)
+    answer = _clean_answer(
+        _strip_appended_source_markdown(_extract_answer(data)),
+        clean_ragflow_markers=valves.CLEAN_RAGFLOW_MARKERS,
+    )
     if not answer:
         raise PipeError(
             "Der Antwort-Synthese-Fallback lieferte keinen verwertbaren Antworttext.",
@@ -1318,6 +1326,100 @@ def _looks_like_source_inventory_answer(answer: str, sources: list[dict[str, Any
         return title_hits >= 2 or len(clean_answer) < 700
 
     return False
+
+
+def _looks_like_source_markdown_only(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    start = _source_markdown_start(raw)
+    if start is None:
+        return _source_table_density(raw) >= 0.55
+    prefix = raw[:start].strip()
+    return not _has_substantive_answer_prefix(prefix)
+
+
+def _contains_source_markdown(text: str) -> bool:
+    raw = str(text or "")
+    if not raw.strip():
+        return False
+    return _source_markdown_start(raw) is not None or _source_table_density(raw) >= 0.55
+
+
+def _strip_appended_source_markdown(text: str) -> str:
+    raw = str(text or "")
+    start = _source_markdown_start(raw)
+    if start is None:
+        return raw.strip()
+    prefix = raw[:start].strip()
+    if not _has_substantive_answer_prefix(prefix):
+        return raw.strip()
+    return prefix
+
+
+def _source_markdown_start(text: str) -> Optional[int]:
+    offset = 0
+    previous_nonempty: tuple[int, str] | None = None
+    for line in str(text or "").replace("\r\n", "\n").replace("\r", "\n").splitlines(keepends=True):
+        line_text = line.rstrip("\n")
+        stripped = line_text.strip()
+        if _is_source_markdown_heading(stripped) or _is_source_table_header(stripped):
+            if previous_nonempty and previous_nonempty[1] == "---":
+                return previous_nonempty[0]
+            return offset
+        if stripped:
+            previous_nonempty = (offset, stripped)
+        offset += len(line)
+    return None
+
+
+def _is_source_markdown_heading(line: str) -> bool:
+    heading = line.lstrip("#").strip().lower()
+    return heading in {
+        "nachweise",
+        "quellen",
+        "quellenüberblick",
+        "gefundene quellen",
+        "found sources",
+        "sources",
+        "source overview",
+    }
+
+
+def _is_source_table_header(line: str) -> bool:
+    compact = " ".join(line.lower().split())
+    return (
+        compact.startswith("|")
+        and "| id |" in compact
+        and "| dokument |" in compact
+        and "| fundstelle |" in compact
+        and "| öffnen |" in compact
+    )
+
+
+def _source_table_density(text: str) -> float:
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if not lines:
+        return 0.0
+    source_lines = 0
+    for line in lines:
+        lower = line.lower()
+        if _is_source_table_header(line) or lower.startswith("|---"):
+            source_lines += 1
+        elif lower.startswith("| s") and "|" in lower:
+            source_lines += 1
+        elif lower.startswith("**nachweisqualität:**"):
+            source_lines += 1
+    return source_lines / len(lines)
+
+
+def _has_substantive_answer_prefix(prefix: str) -> bool:
+    clean = _clean(prefix.replace("---", " "))
+    if not clean:
+        return False
+    if _looks_like_source_markdown_only(clean):
+        return False
+    return bool(re.search(r"[0-9A-Za-zÄÖÜäöüß]{2,}", clean))
 
 
 def _is_low_information_snippet(snippet: Any) -> bool:
@@ -1835,6 +1937,8 @@ def _valid_answer_candidate(text: str) -> bool:
         return False
     if clean in {"[]", "{}", "true", "false", "null", "ok", "OK"}:
         return False
+    if _looks_like_source_markdown_only(text):
+        return False
     if clean.lower().startswith(("## gefundene quellen", "### quellen", "quellenüberblick")):
         return False
     if clean.startswith("[") and clean.endswith("]") and len(clean) < 200:
@@ -2318,6 +2422,10 @@ def _public_metadata(
 def _compose_final_answer(answer: str, sources: list[dict[str, Any]], valves: Pipe.Valves) -> str:
     """Compose the final visible assistant message for OpenWebUI."""
     markdown_mode = _source_markdown_mode(valves.SOURCE_MARKDOWN_MODE)
+    if _looks_like_source_markdown_only(answer):
+        answer = ""
+    else:
+        answer = _strip_appended_source_markdown(answer)
 
     if not answer:
         answer = _retrieval_only_fallback_message(sources, valves)
@@ -2325,7 +2433,7 @@ def _compose_final_answer(answer: str, sources: list[dict[str, Any]], valves: Pi
         answer = _ensure_audit_marker(answer, sources)
 
     source_block = ""
-    if bool(valves.APPEND_SOURCE_OVERVIEW):
+    if bool(valves.APPEND_SOURCE_OVERVIEW) and not _contains_source_markdown(answer):
         source_block = _source_markdown(
             sources,
             show_scores=valves.SHOW_SOURCE_SCORES,
@@ -2355,7 +2463,7 @@ def _retrieval_only_fallback_message(sources: list[dict[str, Any]], valves: Pipe
             "keine passenden Quellen zurückgegeben."
         )
 
-    mode = _clean(valves.RETRIEVAL_ONLY_FALLBACK).lower() or "diagnostic"
+    mode = _clean(valves.RETRIEVAL_ONLY_FALLBACK).lower() or "brief"
     if mode == "sources_only":
         return "Ich habe Quellen gefunden, aber der RAGFlow-Proxy hat keinen KI-Antworttext geliefert."
 
