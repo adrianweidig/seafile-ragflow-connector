@@ -8,6 +8,21 @@ retroactively.
 
 ## Unreleased
 
+## 0.1.5 - 2026-05-28
+
+### Added
+
+- Public Seafile base URL and flexible file-link template for original-file
+  links in OpenWebUI sources.
+
+### Changed
+
+- OpenWebUI source links now distinguish internal Docker service URLs from
+  externally reachable browser and preview URLs more clearly.
+- The enterprise Compose wizard now asks for internal service endpoints and
+  external browser endpoints separately, making shared-network deployments
+  easier to configure.
+
 ## 0.1.4 - 2026-05-28
 
 ### Added

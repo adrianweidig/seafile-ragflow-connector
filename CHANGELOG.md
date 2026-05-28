@@ -8,6 +8,21 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+## 0.1.5 - 2026-05-28
+
+### Added
+
+- Öffentliche Seafile-Basis-URL und flexibles Datei-Link-Template für
+  Originaldatei-Links in OpenWebUI-Quellen.
+
+### Changed
+
+- OpenWebUI-Quellenlinks unterscheiden jetzt sauberer zwischen internen
+  Docker-Service-URLs und extern erreichbaren Browser-/Preview-URLs.
+- Der Enterprise-Compose-Assistent fragt interne Service-Endpunkte und externe
+  Browser-Endpunkte getrennt ab und bleibt dadurch im Shared-Network-Betrieb
+  verständlicher.
+
 ## 0.1.4 - 2026-05-28
 
 ### Added
