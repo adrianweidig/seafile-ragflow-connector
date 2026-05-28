@@ -348,6 +348,67 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("Fallbacktext aus RAGFlow Retrieval", result["source_markdown"])
         self.assertEqual(len(result["sources"]), 1)
 
+    def test_openwebui_chat_proxy_falls_back_to_retrieval_when_chat_times_out(self) -> None:
+        store = _store()
+        with store.session_factory() as session:
+            session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo", status="active"))
+            session.add(
+                File(
+                    repo_id="repo-1",
+                    path="/timeout.txt",
+                    normalized_path="/timeout.txt",
+                    ragflow_document_id="doc-timeout",
+                    ragflow_document_name="timeout.txt",
+                    ingestion_strategy="direct",
+                    sync_status="synced",
+                )
+            )
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                    ragflow_chat_id="chat-1",
+                    openwebui_pipe_id="pipe-1",
+                )
+            )
+            session.commit()
+
+        original_client = dashboard_server.RAGFlowClient
+        dashboard_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        _FakeRAGFlowClient.chat_exception = dashboard_server.httpx.ReadTimeout("timed out")
+        _FakeRAGFlowClient.retrieve_calls = 0
+        _FakeRAGFlowClient.retrieval_result = {
+            "chunks": [
+                {
+                    "id": "chunk-timeout",
+                    "document_id": "doc-timeout",
+                    "content": "Fallback nach Chat-Timeout",
+                }
+            ]
+        }
+        try:
+            result = _handle_openwebui_chat(
+                DashboardContext(store=store, settings=_settings(0), started_at=utcnow()),
+                {
+                    "artifact_id": "pipe-1",
+                    "dataset_id": "dataset-1",
+                    "chat_id": "chat-1",
+                    "messages": [{"role": "user", "content": "Frage"}],
+                },
+                "Bearer proxy-secret",
+            )
+        finally:
+            dashboard_server.RAGFlowClient = original_client  # type: ignore[assignment]
+            _FakeRAGFlowClient.chat_exception = None
+            _FakeRAGFlowClient.retrieval_result = {"chunks": []}
+
+        self.assertEqual(_FakeRAGFlowClient.retrieve_calls, 1)
+        self.assertEqual(result["answer"], "")
+        self.assertTrue(result["retrieval_only"])
+        self.assertIn("Fallback nach Chat-Timeout", result["source_markdown"])
+        self.assertEqual(len(result["sources"]), 1)
+
     def test_openwebui_chat_proxy_enriches_answer_with_multiple_retrieval_chunks(self) -> None:
         store = _store()
         with store.session_factory() as session:
@@ -627,6 +688,7 @@ class DashboardServerTests(unittest.TestCase):
 class _FakeRAGFlowClient:
     last_model: str | None = None
     raise_chat_error = False
+    chat_exception: Exception | None = None
     retrieve_calls = 0
     retrieval_result: dict[str, object] = {"chunks": []}
     answer_content = "answer"
@@ -636,6 +698,8 @@ class _FakeRAGFlowClient:
 
     def chat_completion(self, **kwargs: object) -> dict[str, object]:
         self.__class__.last_model = str(kwargs.get("model"))
+        if self.__class__.chat_exception is not None:
+            raise self.__class__.chat_exception
         if self.__class__.raise_chat_error:
             raise ApiError("API returned an error code", status_code=200, payload={"code": 102})
         return {

@@ -492,7 +492,7 @@ def _handle_openwebui_chat(
                 model=str(payload.get("model") or "model"),
                 stream=True,
             )
-        except ApiError as exc:
+        except (ApiError, httpx.RequestError) as exc:
             if not question:
                 raise
             structlog.get_logger(__name__).warning(
