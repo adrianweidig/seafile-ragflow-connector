@@ -261,9 +261,16 @@ Connector-Lauf einschließlich OpenWebUI-Sync ausführen:
 wsl docker exec seafile-ragflow-connector-demo-connector-controller-1 connector demo-bootstrap --execute --run-sync --wait-parse-seconds 240
 ```
 
-Für eine vollständige Prüfung der Originaldokument-Links muss
-`SEAFILE_FILE_URL_TEMPLATE` in der lokalen Testumgebung gesetzt sein, zum
-Beispiel:
+Für eine vollständige Prüfung der Originaldokument-Links reicht normalerweise
+eine aus dem Browser erreichbare `SEAFILE_PUBLIC_BASE_URL`. Wenn sie leer ist,
+nutzt der Connector `SEAFILE_BASE_URL`:
+
+```env
+SEAFILE_PUBLIC_BASE_URL=http://localhost:18081
+```
+
+Nur bei abweichenden Reverse-Proxy- oder Seafile-Webrouten ist ein expliziter
+Template-Override nötig:
 
 ```env
 SEAFILE_FILE_URL_TEMPLATE=http://localhost:18081/lib/{repo_id_quoted}/file{path_quoted}{page_fragment}

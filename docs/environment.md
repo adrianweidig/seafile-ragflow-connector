@@ -101,7 +101,8 @@ installierten System-CAs.
 | `SEAFILE_INTERNAL_URL`, `RAGFLOW_INTERNAL_URL` | optional | abweichende interne URL für Container-zu-Container-Traffic. |
 | `SEAFILE_SYNC_USER_EMAIL` | optional | Dokumentativer Sync-User-Hinweis; Token ist maßgeblich. |
 | `SEAFILE_SKIP_ENCRYPTED_LIBRARIES`, `SEAFILE_SKIP_VIRTUAL_REPOS` | optional | Discovery-Filter für Seafile-Libraries. |
-| `SEAFILE_FILE_URL_TEMPLATE` | optional | Browser-Link zum Originaldokument in OpenWebUI-Quellen. |
+| `SEAFILE_PUBLIC_BASE_URL` | optional | browserseitige Seafile-Basis-URL für OpenWebUI-Original-Links; fällt auf `SEAFILE_BASE_URL` zurück. |
+| `SEAFILE_FILE_URL_TEMPLATE` | optional | Override für abweichende Seafile-Webrouten; sonst wird der Original-Link automatisch aus Basis-URL, Repo-ID und Pfad erzeugt. |
 | `SEAFILE_REWRITE_DOWNLOAD_URLS`, `SEAFILE_DOWNLOAD_REWRITE_FROM`, `SEAFILE_DOWNLOAD_REWRITE_TO` | optional | Rewrite von Seafile-Download-URLs, z. B. von `127.0.0.1` auf Docker-DNS. |
 | `RAGFLOW_TEMPLATE_DATASET_NAME` | optional | Default ist `connector_template`. |
 | `RAGFLOW_TEMPLATE_AUTO_CREATE` | optional | Default `true`; fehlende Dataset-Templates werden beim Provisioning automatisch angelegt. |

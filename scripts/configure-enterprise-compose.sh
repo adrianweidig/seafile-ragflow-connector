@@ -23,6 +23,7 @@ Nicht interaktiv, z. B. für Automatisierung:
   ENTERPRISE_WITH_OPENWEBUI=true \
   ENTERPRISE_CA_HOST_FILE=/etc/pki/company-root-ca.pem \
   ENTERPRISE_SEAFILE_BASE_URL=https://seafile.intern \
+  ENTERPRISE_SEAFILE_PUBLIC_BASE_URL=https://seafile.intern \
   ENTERPRISE_RAGFLOW_BASE_URL=https://ragflow-api.intern \
   ENTERPRISE_OPENWEBUI_BASE_URL=https://openwebui.intern \
   ENTERPRISE_CONNECTOR_PUBLIC_BASE_URL=https://connector.intern \
@@ -240,6 +241,15 @@ require_https_url() {
   esac
 }
 
+require_http_url() {
+  local name="$1"
+  local value="$2"
+  case "$value" in
+    http://*|https://*) ;;
+    *) die "$name muss mit http:// oder https:// beginnen" ;;
+  esac
+}
+
 validate_ca_bundle() {
   local ca_file="$1"
   [ -f "$ca_file" ] || die "CA-Bundle nicht gefunden: $ca_file"
@@ -417,9 +427,9 @@ fi
 enterprise_mode="${ENTERPRISE_MODE:-}"
 if [ -z "$enterprise_mode" ] && ! is_true "$NON_INTERACTIVE"; then
   note "Betriebsmodus:"
-  note "  1) external  - Seafile/RAGFlow/OpenWebUI über HTTPS-Reverse-Proxy oder LAN"
-  note "  2) shared    - Connector hängt in einem bestehenden Docker-Netz"
-  read -r -p "Auswahl [external]: " enterprise_mode
+  note "  1) external  - Connector erreicht Seafile/RAGFlow/OpenWebUI über veröffentlichte HTTPS-URLs"
+  note "  2) shared    - Connector hängt im bestehenden Docker-Netz und nutzt interne Service-Namen"
+  read -r -p "Wie soll der Connector die bestehenden Dienste erreichen? [external]: " enterprise_mode
 fi
 enterprise_mode="${enterprise_mode:-external}"
 case "$enterprise_mode" in
@@ -451,16 +461,57 @@ else
   CONNECTOR_CERTS_HOST_DIR="${CONNECTOR_CERTS_HOST_DIR:-./certs}"
 fi
 
+if [ "$enterprise_mode" = "shared" ]; then
+  seafile_base_default="http://seafile"
+  seafile_base_label="Wie erreicht der Connector Seafile innerhalb des Docker-Netzwerks? (z. B. http://seafile)"
+else
+  seafile_base_default=""
+  seafile_base_label="Wie erreicht der Connector die Seafile-API außerhalb eines gemeinsamen Docker-Netzwerks? (HTTPS-Reverse-Proxy/LAN)"
+fi
 ENTERPRISE_SEAFILE_BASE_URL="${ENTERPRISE_SEAFILE_BASE_URL:-${SEAFILE_BASE_URL:-}}"
-prompt_value ENTERPRISE_SEAFILE_BASE_URL "Seafile-HTTPS-URL aus Sicht des Connector-Containers" "" true
-require_https_url SEAFILE_BASE_URL "$ENTERPRISE_SEAFILE_BASE_URL"
+prompt_value ENTERPRISE_SEAFILE_BASE_URL "$seafile_base_label" "$seafile_base_default" true
+if [ "$enterprise_mode" = "external" ]; then
+  require_https_url SEAFILE_BASE_URL "$ENTERPRISE_SEAFILE_BASE_URL"
+else
+  require_http_url SEAFILE_BASE_URL "$ENTERPRISE_SEAFILE_BASE_URL"
+fi
 
+if [ "$enterprise_mode" = "shared" ]; then
+  seafile_public_default=""
+else
+  seafile_public_default="$ENTERPRISE_SEAFILE_BASE_URL"
+fi
+ENTERPRISE_SEAFILE_PUBLIC_BASE_URL="${ENTERPRISE_SEAFILE_PUBLIC_BASE_URL:-${SEAFILE_PUBLIC_BASE_URL:-}}"
+prompt_value ENTERPRISE_SEAFILE_PUBLIC_BASE_URL "Wie erreichst du Seafile von extern außerhalb des Docker-Netzwerks? (Browser-/OpenWebUI-Original-Links)" "$seafile_public_default" "$ENTERPRISE_WITH_OPENWEBUI"
+if [ -n "$ENTERPRISE_SEAFILE_PUBLIC_BASE_URL" ]; then
+  require_http_url SEAFILE_PUBLIC_BASE_URL "$ENTERPRISE_SEAFILE_PUBLIC_BASE_URL"
+fi
+
+if [ "$enterprise_mode" = "shared" ]; then
+  ragflow_base_default="http://ragflow:9380"
+  ragflow_base_label="Wie erreicht der Connector die RAGFlow-API innerhalb desselben Docker-Netzwerks? (z. B. http://ragflow:9380)"
+else
+  ragflow_base_default=""
+  ragflow_base_label="Wie erreicht der Connector die RAGFlow-API außerhalb eines gemeinsamen Docker-Netzwerks? (HTTPS-Reverse-Proxy/LAN)"
+fi
 ENTERPRISE_RAGFLOW_BASE_URL="${ENTERPRISE_RAGFLOW_BASE_URL:-${RAGFLOW_BASE_URL:-}}"
-prompt_value ENTERPRISE_RAGFLOW_BASE_URL "RAGFlow-API-HTTPS-URL aus Sicht des Connector-Containers" "" true
-require_https_url RAGFLOW_BASE_URL "$ENTERPRISE_RAGFLOW_BASE_URL"
+prompt_value ENTERPRISE_RAGFLOW_BASE_URL "$ragflow_base_label" "$ragflow_base_default" true
+if [ "$enterprise_mode" = "external" ]; then
+  require_https_url RAGFLOW_BASE_URL "$ENTERPRISE_RAGFLOW_BASE_URL"
+else
+  require_http_url RAGFLOW_BASE_URL "$ENTERPRISE_RAGFLOW_BASE_URL"
+fi
 
 ENTERPRISE_RAGFLOW_PUBLIC_BASE_URL="${ENTERPRISE_RAGFLOW_PUBLIC_BASE_URL:-${RAGFLOW_PUBLIC_BASE_URL:-}}"
-prompt_value ENTERPRISE_RAGFLOW_PUBLIC_BASE_URL "RAGFlow-Browser-URL, falls abweichend von API-URL" "$ENTERPRISE_RAGFLOW_BASE_URL" false
+if [ "$enterprise_mode" = "shared" ]; then
+  ragflow_public_default=""
+else
+  ragflow_public_default="$ENTERPRISE_RAGFLOW_BASE_URL"
+fi
+prompt_value ENTERPRISE_RAGFLOW_PUBLIC_BASE_URL "Wie erreichst du RAGFlow im Browser außerhalb des Docker-Netzwerks, falls Quellen direkt zu RAGFlow verlinken sollen?" "$ragflow_public_default" false
+if [ -n "$ENTERPRISE_RAGFLOW_PUBLIC_BASE_URL" ]; then
+  require_http_url RAGFLOW_PUBLIC_BASE_URL "$ENTERPRISE_RAGFLOW_PUBLIC_BASE_URL"
+fi
 
 SEAFILE_ADMIN_TOKEN="${SEAFILE_ADMIN_TOKEN:-}"
 prompt_secret SEAFILE_ADMIN_TOKEN "Seafile Admin-Token" true false
@@ -483,16 +534,20 @@ CONNECTOR_DASHBOARD_PUBLISHED_PORT="${CONNECTOR_DASHBOARD_PUBLISHED_PORT:-}"
 prompt_value CONNECTOR_DASHBOARD_PUBLISHED_PORT "Dashboard-Port-Bindung" "127.0.0.1:18080" true
 
 SEAFILE_FILE_URL_TEMPLATE="${SEAFILE_FILE_URL_TEMPLATE:-}"
-default_file_template="${ENTERPRISE_SEAFILE_BASE_URL}/lib/{repo_id_quoted}/file{path_quoted}{page_fragment}"
-prompt_value SEAFILE_FILE_URL_TEMPLATE "Browser-Link-Template für Originaldateien" "$default_file_template" false
+seafile_original_link_base="${ENTERPRISE_SEAFILE_PUBLIC_BASE_URL:-$ENTERPRISE_SEAFILE_BASE_URL}"
+default_file_template="${seafile_original_link_base}/lib/{repo_id}/file{path_quoted}{page_fragment}"
+if ! is_true "$NON_INTERACTIVE"; then
+  note "Standard für Originaldatei-Links: $default_file_template"
+fi
+prompt_value SEAFILE_FILE_URL_TEMPLATE "Muss die Seafile-Webroute für Originaldateien vom Standard abweichen? (leer = Standard verwenden)" "" false
 
 SEAFILE_REWRITE_DOWNLOAD_URLS="${SEAFILE_REWRITE_DOWNLOAD_URLS:-}"
 prompt_yes_no SEAFILE_REWRITE_DOWNLOAD_URLS "Liefert Seafile Download-/Fileserver-Links mit anderem Host, der umgeschrieben werden muss?" false
 SEAFILE_DOWNLOAD_REWRITE_FROM="${SEAFILE_DOWNLOAD_REWRITE_FROM:-}"
 SEAFILE_DOWNLOAD_REWRITE_TO="${SEAFILE_DOWNLOAD_REWRITE_TO:-}"
 if is_true "$SEAFILE_REWRITE_DOWNLOAD_URLS"; then
-  prompt_value SEAFILE_DOWNLOAD_REWRITE_FROM "Von welchem Download-Link-Prefix umschreiben?" "" true
-  prompt_value SEAFILE_DOWNLOAD_REWRITE_TO "Auf welchen Download-Link-Prefix umschreiben?" "$ENTERPRISE_SEAFILE_BASE_URL" true
+  prompt_value SEAFILE_DOWNLOAD_REWRITE_FROM "Welche von Seafile erzeugte Download-URL sieht der Connector aktuell? (Prefix, z. B. https://seafile.example/seafhttp)" "" true
+  prompt_value SEAFILE_DOWNLOAD_REWRITE_TO "Welche interne URL soll der Connector stattdessen für Downloads nutzen? (Docker-/LAN-Prefix, z. B. http://seafile/seafhttp)" "$ENTERPRISE_SEAFILE_BASE_URL" true
 fi
 
 OPENWEBUI_BASE_URL=""
@@ -503,9 +558,20 @@ OPENWEBUI_PROXY_SHARED_SECRET_VALUE=""
 OPENWEBUI_PROXY_CA_BUNDLE_VALUE=""
 OPENWEBUI_SOURCE_PREVIEW_MODE_VALUE="connector_viewer"
 if is_true "$ENTERPRISE_WITH_OPENWEBUI"; then
+  if [ "$enterprise_mode" = "shared" ]; then
+    openwebui_base_default="http://openwebui:8080"
+    openwebui_base_label="Wie erreicht der Connector die OpenWebUI-API innerhalb des Docker-Netzwerks? (z. B. http://openwebui:8080)"
+  else
+    openwebui_base_default=""
+    openwebui_base_label="Wie erreicht der Connector die OpenWebUI-API außerhalb eines gemeinsamen Docker-Netzwerks? (HTTPS-Reverse-Proxy/LAN)"
+  fi
   OPENWEBUI_BASE_URL="${ENTERPRISE_OPENWEBUI_BASE_URL:-${OPENWEBUI_BASE_URL:-}}"
-  prompt_value OPENWEBUI_BASE_URL "OpenWebUI-HTTPS-URL aus Sicht des Connector-Containers" "" true
-  require_https_url OPENWEBUI_BASE_URL "$OPENWEBUI_BASE_URL"
+  prompt_value OPENWEBUI_BASE_URL "$openwebui_base_label" "$openwebui_base_default" true
+  if [ "$enterprise_mode" = "external" ]; then
+    require_https_url OPENWEBUI_BASE_URL "$OPENWEBUI_BASE_URL"
+  else
+    require_http_url OPENWEBUI_BASE_URL "$OPENWEBUI_BASE_URL"
+  fi
 
   OPENWEBUI_ADMIN_API_KEY_VALUE="${OPENWEBUI_ADMIN_API_KEY:-}"
   prompt_secret OPENWEBUI_ADMIN_API_KEY_VALUE "OpenWebUI Admin-API-Key (leer = OpenWebUI-Sync vorbereiten, aber deaktiviert lassen)" false false
@@ -517,12 +583,12 @@ if is_true "$ENTERPRISE_WITH_OPENWEBUI"; then
 
   OPENWEBUI_PROXY_PUBLIC_BASE_URL="${ENTERPRISE_CONNECTOR_PUBLIC_BASE_URL:-${OPENWEBUI_PROXY_PUBLIC_BASE_URL:-}}"
   if [ -n "$OPENWEBUI_ADMIN_API_KEY_VALUE" ] && [ "$enterprise_mode" != "shared" ]; then
-    prompt_value OPENWEBUI_PROXY_PUBLIC_BASE_URL "Öffentliche HTTPS-URL zum Connector-Dashboard/Proxy für Browser-Preview" "" true
+    prompt_value OPENWEBUI_PROXY_PUBLIC_BASE_URL "Wie erreichst du den Connector-Proxy aus dem Browser außerhalb des Docker-Netzwerks? (öffentliche HTTPS-URL für OpenWebUI-Preview-Links)" "" true
     require_https_url OPENWEBUI_PROXY_PUBLIC_BASE_URL "$OPENWEBUI_PROXY_PUBLIC_BASE_URL"
   else
-    prompt_value OPENWEBUI_PROXY_PUBLIC_BASE_URL "Öffentliche HTTPS-URL zum Connector-Dashboard/Proxy für Browser-Preview, optional" "" false
+    prompt_value OPENWEBUI_PROXY_PUBLIC_BASE_URL "Wie erreichst du den Connector-Proxy aus dem Browser außerhalb des Docker-Netzwerks? (optional für OpenWebUI-Preview-Links)" "" false
     if [ -n "$OPENWEBUI_PROXY_PUBLIC_BASE_URL" ]; then
-      require_https_url OPENWEBUI_PROXY_PUBLIC_BASE_URL "$OPENWEBUI_PROXY_PUBLIC_BASE_URL"
+      require_http_url OPENWEBUI_PROXY_PUBLIC_BASE_URL "$OPENWEBUI_PROXY_PUBLIC_BASE_URL"
     fi
   fi
   if [ -z "$OPENWEBUI_PROXY_PUBLIC_BASE_URL" ]; then
@@ -539,9 +605,12 @@ if is_true "$ENTERPRISE_WITH_OPENWEBUI"; then
   fi
   OPENWEBUI_PROXY_INTERNAL_BASE_URL="${ENTERPRISE_CONNECTOR_INTERNAL_BASE_URL:-${OPENWEBUI_PROXY_INTERNAL_BASE_URL:-}}"
   if [ -n "$OPENWEBUI_ADMIN_API_KEY_VALUE" ]; then
-    prompt_value OPENWEBUI_PROXY_INTERNAL_BASE_URL "Connector-Proxy-URL aus Sicht der OpenWebUI-Pipe" "$default_proxy_internal" true
+    prompt_value OPENWEBUI_PROXY_INTERNAL_BASE_URL "Wie erreicht die OpenWebUI-Pipe den Connector-Proxy serverseitig? (im Shared-Modus meist http://connector-controller:8080)" "$default_proxy_internal" true
   else
-    prompt_value OPENWEBUI_PROXY_INTERNAL_BASE_URL "Connector-Proxy-URL aus Sicht der OpenWebUI-Pipe, optional" "$default_proxy_internal" false
+    prompt_value OPENWEBUI_PROXY_INTERNAL_BASE_URL "Wie erreicht die OpenWebUI-Pipe den Connector-Proxy serverseitig? (optional)" "$default_proxy_internal" false
+  fi
+  if [ -n "$OPENWEBUI_PROXY_INTERNAL_BASE_URL" ]; then
+    require_http_url OPENWEBUI_PROXY_INTERNAL_BASE_URL "$OPENWEBUI_PROXY_INTERNAL_BASE_URL"
   fi
 
   OPENWEBUI_PROXY_SHARED_SECRET_VALUE="${OPENWEBUI_PROXY_SHARED_SECRET:-}"
@@ -555,7 +624,7 @@ fi
 
 CONNECTOR_DOCKER_NETWORK_NAME="${CONNECTOR_DOCKER_NETWORK_NAME:-}"
 if [ "$enterprise_mode" = "shared" ]; then
-  prompt_value CONNECTOR_DOCKER_NETWORK_NAME "Vorhandenes Docker-Netz für Connector/Seafile/RAGFlow/OpenWebUI" "seafile-ragflow-connector-net" true
+  prompt_value CONNECTOR_DOCKER_NETWORK_NAME "In welchem vorhandenen Docker-Netz hängen Seafile, RAGFlow und optional OpenWebUI gemeinsam mit dem Connector?" "seafile-ragflow-connector-net" true
 fi
 
 compose_files=()
@@ -621,6 +690,7 @@ write_env_line CONNECTOR_DASHBOARD_AUTH_USERNAME "$DASHBOARD_USER"
 write_env_line CONNECTOR_DASHBOARD_AUTH_PASSWORD "$DASHBOARD_PASSWORD"
 
 write_env_line SEAFILE_BASE_URL "$ENTERPRISE_SEAFILE_BASE_URL"
+write_env_line SEAFILE_PUBLIC_BASE_URL "$ENTERPRISE_SEAFILE_PUBLIC_BASE_URL"
 write_env_line SEAFILE_ADMIN_TOKEN "$SEAFILE_ADMIN_TOKEN"
 write_env_line SEAFILE_SYNC_USER_TOKEN "$SEAFILE_SYNC_USER_TOKEN"
 write_env_line SEAFILE_SYNC_USER_EMAIL "$SEAFILE_SYNC_USER_EMAIL"

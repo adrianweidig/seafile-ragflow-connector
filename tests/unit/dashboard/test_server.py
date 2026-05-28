@@ -341,8 +341,11 @@ class DashboardServerTests(unittest.TestCase):
             _FakeRAGFlowClient.retrieval_result = {"chunks": []}
 
         self.assertEqual(_FakeRAGFlowClient.retrieve_calls, 1)
-        self.assertIn("Nachweise", result["answer"])
-        self.assertIn("Fallbacktext aus RAGFlow Retrieval", result["answer"])
+        self.assertEqual(result["answer"], "")
+        self.assertTrue(result["retrieval_only"])
+        self.assertFalse(result["citations_emitted"])
+        self.assertIn("Nachweise", result["source_markdown"])
+        self.assertIn("Fallbacktext aus RAGFlow Retrieval", result["source_markdown"])
         self.assertEqual(len(result["sources"]), 1)
 
     def test_openwebui_chat_proxy_enriches_answer_with_multiple_retrieval_chunks(self) -> None:
@@ -411,14 +414,17 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(_FakeRAGFlowClient.retrieve_calls, 1)
         self.assertEqual(len(result["sources"]), 2)
         self.assertIn("answer", result["answer"])
-        self.assertIn("## Nachweise", result["answer"])
-        self.assertIn("demo-a.pdf", result["answer"])
-        self.assertIn("demo-b.pdf", result["answer"])
-        self.assertIn("| S1 |", result["answer"])
-        self.assertNotIn("| # | Dokument", result["answer"])
-        self.assertNotIn("<details", result["answer"])
-        self.assertNotIn("<summary", result["answer"])
-        self.assertNotIn("<br>", result["answer"])
+        self.assertNotIn("## Nachweise", result["answer"])
+        self.assertFalse(result["retrieval_only"])
+        self.assertFalse(result["citations_emitted"])
+        self.assertIn("## Nachweise", result["source_markdown"])
+        self.assertIn("demo-a.pdf", result["source_markdown"])
+        self.assertIn("demo-b.pdf", result["source_markdown"])
+        self.assertIn("| S1 |", result["source_markdown"])
+        self.assertNotIn("| # | Dokument", result["source_markdown"])
+        self.assertNotIn("<details", result["source_markdown"])
+        self.assertNotIn("<summary", result["source_markdown"])
+        self.assertNotIn("<br>", result["source_markdown"])
 
     def test_openwebui_chat_proxy_sanitizes_html_answer_fragments(self) -> None:
         store = _store()
@@ -519,8 +525,8 @@ class DashboardServerTests(unittest.TestCase):
 
         html = _preview_html(settings, token)
 
-        self.assertIn("Original-Link nicht konfiguriert", html)
-        self.assertIn("SEAFILE_FILE_URL_TEMPLATE", html)
+        self.assertIn("Original-Link nicht verfügbar", html)
+        self.assertIn("Repo-ID oder Pfad", html)
         self.assertNotIn("class=\"button primary original-action\"", html)
 
     def test_openwebui_preview_html_rejects_connector_original_links(self) -> None:
