@@ -30,7 +30,10 @@ services:
       ]
     volumes:
       - ../tls-lab/https_mock.py:/mock/https_mock.py:ro
-      - ${CONNECTOR_CERTS_HOST_DIR:-./certs}:/certs:ro
+      - type: bind
+        source: ${CONNECTOR_CERTS_HOST_DIR:-./certs}
+        target: /certs
+        read_only: true
     networks:
       connector-net:
         aliases:
@@ -64,7 +67,10 @@ services:
       ]
     volumes:
       - ../tls-lab/https_mock.py:/mock/https_mock.py:ro
-      - ${CONNECTOR_CERTS_HOST_DIR:-./certs}:/certs:ro
+      - type: bind
+        source: ${CONNECTOR_CERTS_HOST_DIR:-./certs}
+        target: /certs
+        read_only: true
     networks:
       connector-net:
         aliases:

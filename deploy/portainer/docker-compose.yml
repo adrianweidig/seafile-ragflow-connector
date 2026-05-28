@@ -213,7 +213,10 @@ x-connector-common: &connector-common
     - "host.docker.internal:host-gateway"
   volumes:
     - connector-cache:/cache
-    - ${CONNECTOR_CERTS_HOST_DIR:-./certs}:/certs:ro
+    - type: bind
+      source: ${CONNECTOR_CERTS_HOST_DIR:-./certs}
+      target: /certs
+      read_only: true
   networks:
     - connector-net
   healthcheck:
