@@ -1,6 +1,6 @@
 # Release-Prozess
 
-Dieses Repository enthält aktuell Paketmetadaten mit Version `0.1.5`, einen
+Dieses Repository enthält aktuell Paketmetadaten mit Version `0.1.6`, einen
 Docker-Publish-Workflow für GHCR und einen einfachen SemVer-Release-Pfad. Dieser
 Prozess beschreibt einen vorsichtigen Maintainer-Ablauf für zukünftige Releases.
 

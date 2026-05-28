@@ -888,7 +888,7 @@ wheels = [
 
 [[package]]
 name = "seafile-ragflow-connector"
-version = "0.1.5"
+version = "0.1.6"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },

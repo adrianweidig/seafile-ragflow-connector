@@ -8,6 +8,14 @@ retroactively.
 
 ## Unreleased
 
+## 0.1.6 - 2026-05-28
+
+### Fixed
+
+- The OpenWebUI chat proxy now falls back to retrieval sources when RAGFlow chat
+  completion times out instead of hanging until the HTTP timeout without a
+  response.
+
 ## 0.1.5 - 2026-05-28
 
 ### Added

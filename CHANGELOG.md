@@ -8,6 +8,13 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+## 0.1.6 - 2026-05-28
+
+### Fixed
+
+- OpenWebUI-Chat-Proxy fällt bei RAGFlow-Chat-Timeouts kontrolliert auf
+  Retrieval-Quellen zurück, statt bis zum HTTP-Timeout ohne Antwort zu hängen.
+
 ## 0.1.5 - 2026-05-28
 
 ### Added
