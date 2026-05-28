@@ -35,15 +35,15 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertTrue(tool.valves["CONNECTOR_PROXY_VERIFY_SSL"])
         self.assertEqual(tool.valves["CONNECTOR_PROXY_CA_BUNDLE"], "")
         self.assertIn("owner: seafile-ragflow-connector", tool.content)
-        self.assertIn("artifact_version: 18", tool.content)
-        self.assertIn("artifact_version: 18", pipe.content)
+        self.assertIn("artifact_version: 19", tool.content)
+        self.assertIn("artifact_version: 19", pipe.content)
         self.assertFalse(tool.valves["TLS_DEBUG"])
         self.assertEqual(tool.valves["SHOW_SOURCE_SCORES"], True)
         self.assertEqual(tool.valves["LANGUAGE"], "de")
         self.assertEqual(pipe.name, "Seafile · Demo Library")
         self.assertEqual(pipe.valves["MODEL_NAME"], "Seafile · Demo Library")
         self.assertEqual(pipe.valves["SOURCE_MARKDOWN_MODE"], "audit")
-        self.assertEqual(pipe.valves["RETRIEVAL_ONLY_FALLBACK"], "diagnostic")
+        self.assertEqual(pipe.valves["RETRIEVAL_ONLY_FALLBACK"], "brief")
         self.assertEqual(pipe.valves["EMIT_CITATION_EVENTS"], True)
         self.assertEqual(pipe.valves["APPEND_SOURCE_OVERVIEW"], True)
         self.assertEqual(pipe.valves["SHOW_SOURCE_SCORES"], False)
@@ -64,6 +64,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("_normalize_sources(", pipe.content)
         self.assertIn("DEFAULT_RAG_SYSTEM_PROMPT", pipe.content)
         self.assertIn("generate_answer", pipe.content)
+        self.assertIn("version: 3.7.0", pipe.content)
         self.assertIn("ANSWER_SYNTHESIS_MAX_TOKENS", pipe.content)
         self.assertIn('"max_tokens": int(valves.ANSWER_SYNTHESIS_MAX_TOKENS)', pipe.content)
         self.assertIn("EMIT_CITATION_EVENTS", pipe.content)
@@ -283,6 +284,94 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         )
         self.assertNotIn("chunk_id", final_answer)
         self.assertNotIn("document_id", final_answer)
+
+    def test_pipe_strips_legacy_appended_source_block_before_rendering_once(self) -> None:
+        namespace = _pipe_namespace()
+        pipe_instance = namespace["Pipe"]()
+        pipe_instance.valves.SOURCE_MARKDOWN_MODE = "audit"
+        pipe_instance.valves.APPEND_SOURCE_OVERVIEW = True
+        sources = [
+            {
+                "name": "audit.md",
+                "text": "Der Marker steht im Auditdokument.",
+                "score": 0.91,
+                "source_metadata": {"page": 2},
+            }
+        ]
+
+        legacy_answer = (
+            "Inhaltliche Antwort [S1]\n\n"
+            "---\n"
+            "## Nachweise\n\n"
+            "| ID | Gestützte Aussage | Dokument | Fundstelle | Relevanz | Öffnen |\n"
+            "|---|---|---|---|---|---|\n"
+            "| S1 | Alt | audit.md | Seite 2 | hoch | Preview öffnen |"
+        )
+        final_answer = namespace["_compose_final_answer"](
+            legacy_answer,
+            sources,
+            pipe_instance.valves,
+        )
+
+        self.assertTrue(final_answer.startswith("Inhaltliche Antwort [S1]"))
+        self.assertEqual(final_answer.count("## Nachweise"), 1)
+        self.assertIn("Der Marker steht im Auditdokument.", final_answer)
+
+    def test_pipe_treats_source_markdown_only_as_retrieval_only(self) -> None:
+        namespace = _pipe_namespace()
+        pipe_instance = namespace["Pipe"]()
+        pipe_instance.valves.SOURCE_MARKDOWN_MODE = "audit"
+        pipe_instance.valves.APPEND_SOURCE_OVERVIEW = True
+        pipe_instance.valves.RETRIEVAL_ONLY_FALLBACK = "brief"
+        sources = [
+            {
+                "name": "fallback.md",
+                "text": "Nur Retrieval-Treffer.",
+                "score": 0.73,
+                "source_metadata": {"page": 1},
+            }
+        ]
+
+        source_only = (
+            "## Nachweise\n\n"
+            "| ID | Gestützte Aussage | Dokument | Fundstelle | Relevanz | Öffnen |\n"
+            "|---|---|---|---|---|---|\n"
+            "| S1 | Nur Treffer | fallback.md | Seite 1 | mittel | Preview öffnen |"
+        )
+        final_answer = namespace["_compose_final_answer"](
+            source_only,
+            sources,
+            pipe_instance.valves,
+        )
+
+        self.assertIn("keinen generierten Antworttext", final_answer)
+        self.assertEqual(final_answer.count("## Nachweise"), 1)
+
+    def test_pipe_source_inventory_question_avoids_duplicate_evidence(
+        self,
+    ) -> None:
+        namespace = _pipe_namespace()
+        pipe_instance = namespace["Pipe"]()
+        pipe_instance.valves.SOURCE_MARKDOWN_MODE = "audit"
+        pipe_instance.valves.APPEND_SOURCE_OVERVIEW = True
+        sources = [
+            {"name": "marker-a.md", "text": "Marker XYZ", "source_metadata": {"page": 1}},
+            {"name": "marker-b.md", "text": "Marker XYZ", "source_metadata": {"page": 2}},
+        ]
+
+        self.assertTrue(
+            namespace["_is_source_inventory_question"]("Welche Quellen enthalten den Marker XYZ?")
+        )
+        answer = namespace["_source_inventory_answer"](sources)
+        final_answer = namespace["_compose_final_answer"](
+            answer,
+            sources,
+            pipe_instance.valves,
+        )
+
+        self.assertIn("folgende Dokumente", final_answer)
+        self.assertIn("marker-a.md", final_answer)
+        self.assertEqual(final_answer.count("## Nachweise"), 1)
 
     def test_pipe_emits_citation_event_payload_for_audit_sources(self) -> None:
         namespace = _pipe_namespace()

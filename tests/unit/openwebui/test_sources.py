@@ -139,6 +139,56 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual(preview["source_path"], "/folder/report final.pdf")
         self.assertEqual(preview["original_url"], sources[0]["original_url"])
 
+    def test_normalize_sources_derives_default_original_file_url(self) -> None:
+        settings = self._settings()
+        settings.seafile_file_url_template = None
+
+        sources = normalize_sources(
+            {
+                "chunks": [
+                    {
+                        "id": "chunk-1",
+                        "document_id": "doc-1",
+                        "content": "PDF-Treffertext",
+                        "positions": [[4, 10, 20, 30, 40]],
+                    }
+                ]
+            },
+            settings=settings,
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+            files_by_document_id={
+                "doc-1": {
+                    "repo_id": "repo-1",
+                    "path": "/folder/report final.pdf",
+                    "ragflow_document_name": "report final.pdf",
+                }
+            },
+        )
+
+        self.assertEqual(
+            sources[0]["original_url"],
+            "http://seafile.local/lib/repo-1/file/folder/report%20final.pdf#page=4",
+        )
+
+    def test_normalize_sources_keeps_original_url_unavailable_without_repo_or_path(self) -> None:
+        sources = normalize_sources(
+            {
+                "chunks": [
+                    {
+                        "id": "chunk-1",
+                        "document_id": "doc-1",
+                        "content": "Treffer ohne Seafile-Pfad",
+                    }
+                ]
+            },
+            settings=self._settings(),
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+        )
+
+        self.assertIsNone(sources[0]["original_url"])
+
     def test_preview_token_keeps_long_snippets_compact(self) -> None:
         long_text = "Preview-Auszug " * 80
 

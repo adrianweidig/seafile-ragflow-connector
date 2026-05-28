@@ -9,7 +9,7 @@ from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.i18n import SUPPORTED_LANGUAGES, Localizer
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "18"
+ARTIFACT_VERSION = "19"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 _PIPE_TEMPLATE = "ragflow_dataset_pipe_chat_rag_polished.py.txt"
 _TEMPLATE_PACKAGE = "seafile_ragflow_connector.openwebui.templates"
@@ -97,7 +97,7 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "TOP_K": 8,
         "INJECT_RAG_SYSTEM_PROMPT": True,
         "SEND_GENERATIVE_RAG_HINTS": True,
-        "RETRIEVAL_ONLY_FALLBACK": "diagnostic",
+        "RETRIEVAL_ONLY_FALLBACK": "brief",
         "ENABLE_ANSWER_SYNTHESIS_FALLBACK": inputs.answer_synthesis_enabled,
         "ANSWER_LLM_BASE_URL": inputs.answer_llm_base_url or "",
         # OpenWebUI valve placeholder, not a committed secret.
@@ -202,7 +202,7 @@ def _tool_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.4.2
         owner: seafile-ragflow-connector
-        artifact_version: 18
+        artifact_version: 19
         """
 
         import httpx

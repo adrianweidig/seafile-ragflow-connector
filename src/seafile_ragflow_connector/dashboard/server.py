@@ -367,6 +367,7 @@ def _safe_config(settings: Settings) -> dict[str, Any]:
         "log_format": settings.log_format,
         "dry_run": settings.dry_run,
         "seafile_base_url": settings.seafile_base_url,
+        "seafile_public_base_url": settings.seafile_public_base_url,
         "seafile_file_url_template": settings.seafile_file_url_template,
         "seafile_skip_encrypted_libraries": settings.seafile_skip_encrypted_libraries,
         "seafile_skip_virtual_repos": settings.seafile_skip_virtual_repos,
@@ -450,6 +451,8 @@ def _handle_openwebui_query(
     return {
         "answer": _sources_markdown(sources, context.settings),
         "sources": sources,
+        "source_markdown": _sources_markdown(sources, context.settings),
+        "retrieval_only": True,
         "citations_emitted": True,
     }
 
@@ -508,9 +511,11 @@ def _handle_openwebui_chat(
                 files_by_document_id=files_by_document_id,
             )
             return {
-                "answer": _sources_markdown(sources, context.settings),
+                "answer": "",
                 "sources": sources,
-                "citations_emitted": True,
+                "source_markdown": _sources_markdown(sources, context.settings),
+                "retrieval_only": True,
+                "citations_emitted": False,
             }
         sources = normalize_sources(
             result,
@@ -548,12 +553,13 @@ def _handle_openwebui_chat(
         sources,
         language=l10n.language,
     )
-    if sources and f"## {l10n.text('sources.heading')}" not in answer:
-        answer = (answer.strip() + "\n\n" if answer.strip() else "") + _sources_markdown(
-            sources,
-            context.settings,
-        )
-    return {"answer": answer, "sources": sources, "citations_emitted": True}
+    return {
+        "answer": answer,
+        "sources": sources,
+        "source_markdown": _sources_markdown(sources, context.settings),
+        "retrieval_only": not bool(answer.strip()),
+        "citations_emitted": False,
+    }
 
 
 def _proxy_error_response(

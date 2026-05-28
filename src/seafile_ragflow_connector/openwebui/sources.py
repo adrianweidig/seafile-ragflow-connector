@@ -812,16 +812,19 @@ def _original_source_url(
     chunk_id: str | None,
     page: Any,
 ) -> str | None:
-    template = settings.seafile_file_url_template
+    template = settings.effective_seafile_file_url_template
     if not template or not repo_id or not source_path:
         return None
     clean_path = str(source_path)
+    path_for_file_url = clean_path if clean_path.startswith("/") else f"/{clean_path}"
     page_text = "" if page in (None, "") else str(page)
+    base_url = settings.effective_seafile_public_base_url or ""
     values = {
+        "base": base_url,
         "repo_id": repo_id,
         "repo_id_quoted": quote(repo_id, safe=""),
         "path": clean_path,
-        "path_quoted": quote(clean_path, safe="/"),
+        "path_quoted": quote(path_for_file_url, safe="/"),
         "path_query": quote(clean_path, safe=""),
         "path_no_leading_slash": clean_path.lstrip("/"),
         "path_no_leading_slash_quoted": quote(clean_path.lstrip("/"), safe="/"),
