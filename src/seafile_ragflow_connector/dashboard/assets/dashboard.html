@@ -1187,6 +1187,7 @@
         'counts.entries': 'Einträge',
         'counts.runs': 'Läufe',
         'counts.events': 'Ereignisse',
+        'counts.logs': 'Logs',
         'overview.connectorState': 'Connector Zustand',
         'overview.systemHealth': 'System Health',
         'overview.problems': 'Fehler und Warnungen',
@@ -1252,6 +1253,12 @@
         'table.message': 'Nachricht',
         'openwebui.active': 'aktiv',
         'openwebui.off': 'aus',
+        'openwebui.integration': 'Integration',
+        'openwebui.datasets': 'Datensätze',
+        'openwebui.dataset': 'Datensatz',
+        'openwebui.chat': 'Chat',
+        'openwebui.tool': 'Tool',
+        'openwebui.pipe': 'Pipe',
         'openwebui.knownMappings': 'erkannte Mappings',
         'openwebui.synchronized': 'Synchronisiert',
         'openwebui.dryRunPlanned': 'inkl. Dry-Run geplant',
@@ -1332,6 +1339,7 @@
         'counts.entries': 'entries',
         'counts.runs': 'runs',
         'counts.events': 'events',
+        'counts.logs': 'logs',
         'overview.connectorState': 'Connector state',
         'overview.systemHealth': 'System health',
         'overview.problems': 'Errors and warnings',
@@ -1397,6 +1405,12 @@
         'table.message': 'Message',
         'openwebui.active': 'active',
         'openwebui.off': 'off',
+        'openwebui.integration': 'Integration',
+        'openwebui.datasets': 'Datasets',
+        'openwebui.dataset': 'Dataset',
+        'openwebui.chat': 'Chat',
+        'openwebui.tool': 'Tool',
+        'openwebui.pipe': 'Pipe',
         'openwebui.knownMappings': 'known mappings',
         'openwebui.synchronized': 'Synchronized',
         'openwebui.dryRunPlanned': 'including dry-run planned',
@@ -1967,7 +1981,7 @@
       if ($('log-sync').value) params.set('sync_id', $('log-sync').value);
       if ($('log-query').value) params.set('q', $('log-query').value);
       const data = await api('/api/logs?' + params.toString());
-      setText('log-total', fmtNumber(data.total) + ' Logs');
+      setText('log-total', fmtNumber(data.total) + ' ' + t('counts.logs'));
       table('log-table', [t('table.time'), 'Level', t('table.component'), 'Sync-ID', t('table.message')], data.items.map((entry) => ({
         ...entry,
         __cells: [
@@ -2008,14 +2022,14 @@
       const grid = $('openwebui-metrics');
       clear(grid);
       grid.append(
-        metric('Integration', statusData.enabled ? t('openwebui.active') : t('openwebui.off'), statusData.base_url || '-', statusData.enabled ? 'info' : ''),
-        metric('Datasets', fmtNumber(counts.datasets), t('openwebui.knownMappings')),
+        metric(t('openwebui.integration'), statusData.enabled ? t('openwebui.active') : t('openwebui.off'), statusData.base_url || '-', statusData.enabled ? 'info' : ''),
+        metric(t('openwebui.datasets'), fmtNumber(counts.datasets), t('openwebui.knownMappings')),
         metric(t('openwebui.synchronized'), fmtNumber(counts.synced_or_planned), t('openwebui.dryRunPlanned'), counts.failed ? '' : 'info'),
         metric(t('table.deleted'), fmtNumber(counts.deleted), t('openwebui.libraryRemoved'), counts.deleted ? 'warn' : ''),
         metric(t('openwebui.manual'), fmtNumber(counts.manual_required), t('openwebui.apiFallback'), counts.manual_required ? 'warn' : ''),
         metric(t('metric.errors'), fmtNumber(counts.failed), statusData.last_error || t('openwebui.none'), counts.failed ? 'bad' : '')
       );
-      table('openwebui-table', ['Dataset', t('table.status'), 'Chat', 'Tool', 'Pipe', t('openwebui.model'), t('openwebui.lastSuccess'), t('table.error')], (mappings.items || []).map((item) => ({
+      table('openwebui-table', [t('openwebui.dataset'), t('table.status'), t('openwebui.chat'), t('openwebui.tool'), t('openwebui.pipe'), t('openwebui.model'), t('openwebui.lastSuccess'), t('table.error')], (mappings.items || []).map((item) => ({
         ...item,
         __cells: [
           compactText(item.ragflow_dataset_name, { threshold: 42 }),

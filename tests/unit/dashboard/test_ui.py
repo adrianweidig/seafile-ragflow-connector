@@ -117,9 +117,15 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("'filter.search': 'Search'", DASHBOARD_HTML)
         self.assertIn("'placeholder.changeQuery': 'Path, name, error'", DASHBOARD_HTML)
         self.assertIn("'placeholder.logQuery': 'Message or component'", DASHBOARD_HTML)
+        self.assertIn("'counts.logs': 'logs'", DASHBOARD_HTML)
+        self.assertIn("'openwebui.datasets': 'Datasets'", DASHBOARD_HTML)
+        self.assertIn("'openwebui.dataset': 'Dataset'", DASHBOARD_HTML)
+        self.assertIn("t('openwebui.datasets')", DASHBOARD_HTML)
+        self.assertIn("t('openwebui.dataset')", DASHBOARD_HTML)
         self.assertIn("'openwebui.knownMappings': 'known mappings'", DASHBOARD_HTML)
         self.assertIn("t('openwebui.apiFallback')", DASHBOARD_HTML)
         self.assertIn("t('openwebui.lastSuccess')", DASHBOARD_HTML)
+        self.assertNotIn("metric('Datasets'", DASHBOARD_HTML)
 
     def test_dashboard_controls_keep_touch_target_size(self) -> None:
         self.assertIn("min-height: 40px", DASHBOARD_HTML)
