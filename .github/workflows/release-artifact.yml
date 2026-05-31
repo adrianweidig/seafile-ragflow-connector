@@ -29,9 +29,9 @@ jobs:
 
           repo_name="${GITHUB_REPOSITORY##*/}"
           repo_name="${repo_name,,}"
-          repo_name="$(printf '%s' "$repo_name" | tr -cs '[:alnum:]._-+' '-')"
+          repo_name="$(printf '%s' "$repo_name" | tr -cs '[:alnum:]._+-' '-')"
           ref_name="${GITHUB_REF_NAME:-detached}"
-          ref_slug="$(printf '%s' "$ref_name" | tr '/[:space:]' '--' | tr -cs '[:alnum:]._-+' '-')"
+          ref_slug="$(printf '%s' "$ref_name" | tr '/[:space:]' '--' | tr -cs '[:alnum:]._+-' '-')"
           short_sha="$(git rev-parse --short=12 HEAD)"
           archive_root="${repo_name}-${ref_slug}-${short_sha}"
           zip_name="${archive_root}.zip"
