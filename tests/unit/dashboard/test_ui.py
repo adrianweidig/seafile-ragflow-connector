@@ -77,6 +77,19 @@ class DashboardUiTests(unittest.TestCase):
         )
         self.assertIn("status(statusData.state, connectorState)", DASHBOARD_HTML)
 
+    def test_loaded_overview_data_is_rerendered_on_language_switch(self) -> None:
+        self.assertIn("overviewData: null", DASHBOARD_HTML)
+        self.assertIn("function rerenderActiveData", DASHBOARD_HTML)
+        self.assertIn("rerenderActiveData();", DASHBOARD_HTML)
+        self.assertIn(
+            "state.overviewData = { "
+            "statusData, metricsData, syncs, changes, errors, warnings, health "
+            "}",
+            DASHBOARD_HTML,
+        )
+        self.assertIn("function renderOverview", DASHBOARD_HTML)
+        self.assertIn("renderOverview(state.overviewData)", DASHBOARD_HTML)
+
     def test_health_messages_are_localized_client_side(self) -> None:
         self.assertIn("function healthMessage", DASHBOARD_HTML)
         self.assertIn("function healthName", DASHBOARD_HTML)

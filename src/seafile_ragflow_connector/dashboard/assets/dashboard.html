@@ -1453,7 +1453,8 @@
       pages: { syncs: 0, changes: 0, logs: 0, openwebui: 0 },
       sidebarStatus: null,
       sidebarUpdatedAt: null,
-      titles: {}
+      titles: {},
+      overviewData: null
     };
     const $ = (id) => document.getElementById(id);
     let disclosureId = 0;
@@ -1502,6 +1503,7 @@
       const title = state.titles[state.activeTab] || state.titles.overview;
       setText('view-title', title[0]);
       setText('view-subtitle', title[1]);
+      rerenderActiveData();
     }
 
     function showError(message) {
@@ -1826,6 +1828,11 @@
         node.appendChild(empty);
       }
     }
+    function rerenderActiveData() {
+      if (state.activeTab === 'overview' && state.overviewData) {
+        renderOverview(state.overviewData);
+      }
+    }
     async function loadOverview() {
       const [statusData, metricsData, syncs, changes, errors, warnings, health] = await Promise.all([
         api('/api/status'),
@@ -1836,6 +1843,11 @@
         api('/api/logs?level=warning&limit=4'),
         api('/api/health')
       ]);
+      state.overviewData = { statusData, metricsData, syncs, changes, errors, warnings, health };
+      renderOverview(state.overviewData);
+    }
+    function renderOverview(data) {
+      const { statusData, metricsData, syncs, changes, errors, warnings, health } = data;
       const connectorState = connectorStateLabel(statusData.state);
       setText('state-value', connectorState);
       clear($('state-pill'));

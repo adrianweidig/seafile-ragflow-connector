@@ -236,6 +236,14 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
     _require_text(page, "#recent-syncs", "succeeded")
     _require_text(page, "#recent-changes", "Installationshandbuch.pdf")
 
+    page.select_option("#language-select", "en", timeout=config.timeout_ms)
+    _require_text(page, "#state-value", "waiting")
+    _require_text(page, "#dependency-health", "Dashboard responded.")
+    _require_text(page, "#dependency-health", "Database")
+    page.select_option("#language-select", "de", timeout=config.timeout_ms)
+    _require_text(page, "#state-value", "wartend")
+    _require_text(page, "#dependency-health", "Dashboard antwortet.")
+
     for tab in ("syncs", "changes", "logs", "systems", "openwebui", "diagnostics"):
         page.locator(f'[data-tab="{tab}"]').click(timeout=config.timeout_ms)
         page.wait_for_selector(f"#{tab}:not([hidden])", timeout=config.timeout_ms)
