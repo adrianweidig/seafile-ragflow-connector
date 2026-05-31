@@ -121,12 +121,17 @@ class _FakeRAGFlowClient:
         self.parsed_ids.append(document_ids)
 
 
+def _session_factory(test_case: unittest.TestCase):
+    engine = create_engine("sqlite:///:memory:")
+    test_case.addCleanup(engine.dispose)
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
 @unittest.skipIf(create_engine is None, "sqlalchemy is not installed in this Python environment")
 class OrchestratorUploadTests(unittest.TestCase):
     def test_upload_deletes_existing_ragflow_documents_with_same_name(self) -> None:
-        engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine)
-        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(Library(repo_id="repo", name="Demo", name_slug="demo", status="active"))
             session.commit()
@@ -156,9 +161,7 @@ class OrchestratorUploadTests(unittest.TestCase):
         self.assertEqual(ragflow_client.last_page_size, 1024)
 
     def test_missing_ragflow_document_is_reuploaded_even_when_file_hash_matches(self) -> None:
-        engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine)
-        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        session_factory = _session_factory(self)
         content = b"%PDF-1.4\ncontent"
         content_hash = sha256_bytes(content)
         with session_factory() as session:
@@ -197,9 +200,7 @@ class OrchestratorUploadTests(unittest.TestCase):
         self.assertEqual(ragflow_client.parsed_ids, [["new-doc"]])
 
     def test_dataset_recreation_clears_document_bindings_for_reupload(self) -> None:
-        engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine)
-        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(
                 Library(
@@ -244,9 +245,7 @@ class OrchestratorUploadTests(unittest.TestCase):
             self.assertEqual(db_file.sync_status, "pending")
 
     def test_missing_template_dataset_is_created_with_rag_defaults(self) -> None:
-        engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine)
-        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(Library(repo_id="repo", name="Demo", name_slug="demo", status="active"))
             session.commit()
@@ -280,9 +279,7 @@ class OrchestratorUploadTests(unittest.TestCase):
         self.assertTrue(str(generated_payload["name"]).startswith("seafile__demo__"))
 
     def test_existing_generated_dataset_still_ensures_template_dataset(self) -> None:
-        engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine)
-        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(Library(repo_id="repo", name="Demo", name_slug="demo", status="active"))
             session.commit()
@@ -305,9 +302,7 @@ class OrchestratorUploadTests(unittest.TestCase):
         self.assertEqual(ragflow_client.created_datasets[0]["name"], "connector_template")
 
     def test_deleted_seafile_library_deletes_ragflow_dataset_without_touching_seafile(self) -> None:
-        engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine)
-        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(
                 Library(
@@ -341,9 +336,7 @@ class OrchestratorUploadTests(unittest.TestCase):
             self.assertEqual(session.query(File).count(), 0)
 
     def test_delete_unknown_file_is_skipped_without_ragflow_delete(self) -> None:
-        engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine)
-        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(Library(repo_id="repo", name="Demo", name_slug="demo", status="active"))
             session.commit()
@@ -365,9 +358,7 @@ class OrchestratorUploadTests(unittest.TestCase):
         self.assertEqual(ragflow_client.deleted_ids, [])
 
     def test_recursive_missing_delete_is_scoped_to_directory(self) -> None:
-        engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine)
-        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(Library(repo_id="repo", name="Demo", name_slug="demo", status="active"))
             session.add(

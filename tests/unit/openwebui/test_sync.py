@@ -156,12 +156,13 @@ def _settings(*, mode: str = "sync", answer_synthesis: bool = False) -> Settings
     )
 
 
-def _session_factory():
+def _session_factory(test_case: unittest.TestCase):
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+    test_case.addCleanup(engine.dispose)
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine, expire_on_commit=False)
 
@@ -172,7 +173,7 @@ def _session_factory():
 )
 class OpenWebUISyncServiceTests(unittest.TestCase):
     def test_dry_run_creates_planned_mapping_without_writes(self) -> None:
-        session_factory = _session_factory()
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(
                 Library(
@@ -202,7 +203,7 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
             self.assertEqual(mapping.openwebui_model_name, "ragflow/demo_dataset_dataset1")
 
     def test_sync_creates_chat_tool_and_pipe_once_then_reuses(self) -> None:
-        session_factory = _session_factory()
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(
                 Library(
@@ -262,7 +263,7 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
             self.assertEqual(mapping.artifact_version, "19")
 
     def test_pipe_sync_can_inject_answer_synthesis_valves(self) -> None:
-        session_factory = _session_factory()
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(
                 Library(
@@ -293,7 +294,7 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         self.assertEqual(valves["CONNECTOR_PROXY_SHARED_SECRET"], "proxy-secret")
 
     def test_foreign_openwebui_artifact_keeps_manual_required_status(self) -> None:
-        session_factory = _session_factory()
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(
                 Library(
@@ -330,7 +331,7 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
             self.assertEqual(state.status, "manual_required")
 
     def test_sync_does_not_create_ragflow_chat_when_openwebui_is_unreachable(self) -> None:
-        session_factory = _session_factory()
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(
                 Library(
@@ -357,7 +358,7 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         self.assertEqual(ragflow.created_chats, [])
 
     def test_deleted_library_removes_owned_openwebui_artifacts_and_ragflow_chat(self) -> None:
-        session_factory = _session_factory()
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(
                 Library(
@@ -410,7 +411,7 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
             self.assertEqual(mapping.sync_status, "deleted")
 
     def test_active_dataset_id_change_removes_replaced_openwebui_artifacts(self) -> None:
-        session_factory = _session_factory()
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(
                 Library(

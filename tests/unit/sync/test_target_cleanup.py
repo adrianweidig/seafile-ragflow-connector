@@ -92,12 +92,13 @@ class _FakeOpenWebUIClient:
         return True
 
 
-def _session_factory():
+def _session_factory(test_case: unittest.TestCase):
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+    test_case.addCleanup(engine.dispose)
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine, expire_on_commit=False)
 
@@ -108,7 +109,7 @@ ACTIVE_DATASET_NAME = "seafile__active__repoacti"
 @unittest.skipIf(create_engine is None, "sqlalchemy is not installed in this Python environment")
 class TargetCleanupServiceTests(unittest.TestCase):
     def test_dry_run_plans_only_connector_owned_orphans(self) -> None:
-        session_factory = _session_factory()
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(
                 Library(
@@ -142,7 +143,7 @@ class TargetCleanupServiceTests(unittest.TestCase):
         )
 
     def test_execute_deletes_planned_orphans(self) -> None:
-        session_factory = _session_factory()
+        session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(
                 Library(
@@ -177,7 +178,7 @@ class TargetCleanupServiceTests(unittest.TestCase):
     def test_existing_current_ragflow_dataset_protects_openwebui_artifacts_after_state_loss(
         self,
     ) -> None:
-        session_factory = _session_factory()
+        session_factory = _session_factory(self)
         service = TargetCleanupService(
             session_factory=session_factory,
             ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]

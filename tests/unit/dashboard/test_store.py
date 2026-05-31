@@ -20,12 +20,13 @@ except ModuleNotFoundError as exc:
     create_engine = None  # type: ignore[assignment]
 
 
-def _session_factory():
+def _session_factory(test_case: unittest.TestCase):
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+    test_case.addCleanup(engine.dispose)
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine, expire_on_commit=False)
 
@@ -33,7 +34,7 @@ def _session_factory():
 @unittest.skipIf(create_engine is None, "sqlalchemy is not installed in this Python environment")
 class DashboardEventStoreTests(unittest.TestCase):
     def test_log_history_is_bounded_filterable_and_paginated(self) -> None:
-        session_factory = _session_factory()
+        session_factory = _session_factory(self)
         store = DashboardEventStore(
             session_factory,
             DashboardLimits(max_log_entries=3, page_size=2, max_field_length=40),
@@ -61,7 +62,7 @@ class DashboardEventStoreTests(unittest.TestCase):
             self.assertEqual(session.query(DashboardLogEntry).count(), 3)
 
     def test_sync_runs_and_changes_are_bounded(self) -> None:
-        session_factory = _session_factory()
+        session_factory = _session_factory(self)
         store = DashboardEventStore(
             session_factory,
             DashboardLimits(max_sync_runs=2, max_event_entries=2, page_size=100),
@@ -109,7 +110,7 @@ class DashboardEventStoreTests(unittest.TestCase):
         self.assertEqual(changes["total"], 2)
 
     def test_long_log_messages_are_truncated_and_details_are_redacted(self) -> None:
-        session_factory = _session_factory()
+        session_factory = _session_factory(self)
         store = DashboardEventStore(
             session_factory,
             DashboardLimits(max_log_entries=10, max_field_length=10),
