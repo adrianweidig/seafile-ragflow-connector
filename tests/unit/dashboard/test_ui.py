@@ -58,6 +58,29 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("setAttribute('aria-busy', 'true')", DASHBOARD_HTML)
         self.assertIn("pendingLoad", DASHBOARD_HTML)
 
+    def test_sidebar_status_survives_language_switches(self) -> None:
+        self.assertIn("sidebarStatus: null", DASHBOARD_HTML)
+        self.assertIn("sidebarUpdatedAt: null", DASHBOARD_HTML)
+        self.assertIn("function renderSidebarStatus", DASHBOARD_HTML)
+        self.assertIn("state.sidebarStatus = statusData.state", DASHBOARD_HTML)
+        self.assertIn("renderSidebarStatus();", DASHBOARD_HTML)
+
+    def test_dashboard_qol_labels_are_localized(self) -> None:
+        self.assertIn('id="refresh-label"', DASHBOARD_HTML)
+        self.assertIn('id="language-label"', DASHBOARD_HTML)
+        self.assertIn('data-i18n="overview.connectorState"', DASHBOARD_HTML)
+        self.assertIn('data-i18n="section.syncHistory"', DASHBOARD_HTML)
+        self.assertIn("'action.autoRefresh': 'Auto-refresh'", DASHBOARD_HTML)
+        self.assertIn("'action.language': 'Language'", DASHBOARD_HTML)
+        self.assertIn("'overview.connectorState': 'Connector state'", DASHBOARD_HTML)
+        self.assertIn("'overview.recentChanges': 'Newest changes'", DASHBOARD_HTML)
+        self.assertIn("function renderRefreshOptions", DASHBOARD_HTML)
+        self.assertIn("'refresh.10s': '10 seconds'", DASHBOARD_HTML)
+        self.assertIn("document.querySelectorAll('[data-i18n]')", DASHBOARD_HTML)
+        self.assertIn("'openwebui.knownMappings': 'known mappings'", DASHBOARD_HTML)
+        self.assertIn("t('openwebui.apiFallback')", DASHBOARD_HTML)
+        self.assertIn("t('openwebui.lastSuccess')", DASHBOARD_HTML)
+
     def test_dashboard_controls_keep_touch_target_size(self) -> None:
         self.assertIn("min-height: 40px", DASHBOARD_HTML)
         self.assertIn("min-height: 44px", DASHBOARD_HTML)

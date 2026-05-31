@@ -243,6 +243,15 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
     page.select_option("#language-select", "en", timeout=config.timeout_ms)
     page.locator('[data-tab="overview"]').click(timeout=config.timeout_ms)
     _require_text(page, "#view-title", "Overview")
+    _require_text(page, "#sidebar-state", "Status: wartend")
+    _require_text(page, "#sidebar-updated", "Updated:")
+    _require_text(page, "#language-label", "LANGUAGE")
+    _require_text(page, "#refresh-interval", "10 seconds")
+    _wait_for_text(page, "#metrics", "detected events", config.timeout_ms)
+    _require_text(page, "#overview", "CONNECTOR STATE")
+    _require_text(page, "#overview", "Errors and warnings")
+    _require_text(page, "#overview", "Recent sync runs")
+    _require_text(page, "#metrics", "detected events")
 
     desktop_screenshot = config.output_dir / "dashboard-desktop.png"
     mobile_screenshot = config.output_dir / "dashboard-mobile.png"
@@ -250,7 +259,12 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
     page.set_viewport_size({"width": 390, "height": 844})
     page.locator('[data-tab="openwebui"]').click(timeout=config.timeout_ms)
     page.wait_for_selector("#openwebui:not([hidden])", timeout=config.timeout_ms)
+    _wait_for_text(page, "#openwebui-metrics", "known mappings", config.timeout_ms)
     _require_text(page, "#openwebui-summary", "ready")
+    _require_text(page, "#openwebui-metrics", "known mappings")
+    _require_text(page, "#openwebui-metrics", "including dry-run planned")
+    _require_text(page, "#openwebui-metrics", "API fallback")
+    _require_text(page, "#openwebui-metrics", "none")
     page.screenshot(path=str(mobile_screenshot), full_page=True)
     print(f"Dashboard browser smoke passed: {desktop_screenshot}")
     print(f"Dashboard browser smoke passed: {mobile_screenshot}")
@@ -271,6 +285,17 @@ def _wait_for_text_change(page: Any, selector: str, initial_text: str, timeout_m
             return
         time.sleep(0.2)
     raise RuntimeError(f"{selector} did not update before timeout: {last_text!r}")
+
+
+def _wait_for_text(page: Any, selector: str, expected: str, timeout_ms: int) -> None:
+    deadline = time.monotonic() + (timeout_ms / 1000)
+    last_text = ""
+    while time.monotonic() < deadline:
+        last_text = page.locator(selector).first.inner_text(timeout=1_000)
+        if expected in last_text:
+            return
+        time.sleep(0.2)
+    raise RuntimeError(f"{selector} did not contain {expected!r} before timeout: {last_text!r}")
 
 
 def _require_text(page: Any, selector: str, expected: str) -> None:
