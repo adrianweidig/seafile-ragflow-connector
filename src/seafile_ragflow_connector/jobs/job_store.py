@@ -145,3 +145,6 @@ class JobSignalQueue:
         if item is None:
             return None
         return item[1].decode("utf-8")
+
+    def close(self) -> None:
+        self.redis.close()

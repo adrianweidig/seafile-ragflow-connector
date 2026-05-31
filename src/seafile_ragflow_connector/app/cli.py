@@ -390,12 +390,15 @@ def worker() -> None:
     runtime = build_runtime(settings)
     log = structlog.get_logger(__name__)
     log.info("worker.started")
-    runtime.job_store.requeue_stale_running_jobs()
-    WorkerRunner(
-        runtime.job_store,
-        handlers=_build_job_handlers(runtime),
-        signal_queue=runtime.signal_queue,
-    ).run_forever()
+    try:
+        runtime.job_store.requeue_stale_running_jobs()
+        WorkerRunner(
+            runtime.job_store,
+            handlers=_build_job_handlers(runtime),
+            signal_queue=runtime.signal_queue,
+        ).run_forever()
+    finally:
+        runtime.close()
 
 
 @app.command()
@@ -413,7 +416,10 @@ def reconciler() -> None:
         [PeriodicTask("reconcile", settings.reconcile_interval_seconds, reconcile)]
     )
     log.info("reconciler.started")
-    scheduler.run_forever()
+    try:
+        scheduler.run_forever()
+    finally:
+        runtime.close()
 
 
 @app.command("check-config")

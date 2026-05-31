@@ -46,6 +46,7 @@ class Runtime:
         self.ragflow_client.close()
         if self.openwebui_client is not None:
             self.openwebui_client.close()
+        self.signal_queue.close()
 
 
 def build_file_policy(settings: Settings) -> FilePolicy:
@@ -198,7 +199,11 @@ def check_database(database_url: str) -> None:
 
 
 def check_redis(redis_url: str) -> None:
-    Redis.from_url(redis_url).ping()
+    client = Redis.from_url(redis_url)
+    try:
+        client.ping()
+    finally:
+        client.close()
 
 
 def _retry(
