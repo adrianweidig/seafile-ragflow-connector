@@ -65,6 +65,27 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("state.sidebarStatus = statusData.state", DASHBOARD_HTML)
         self.assertIn("renderSidebarStatus();", DASHBOARD_HTML)
 
+    def test_connector_state_is_localized_client_side(self) -> None:
+        self.assertIn("const CONNECTOR_STATE_LABELS", DASHBOARD_HTML)
+        self.assertIn("'wartend': 'state.waiting'", DASHBOARD_HTML)
+        self.assertIn("'state.waiting': 'waiting'", DASHBOARD_HTML)
+        self.assertIn("function connectorStateLabel", DASHBOARD_HTML)
+        self.assertIn("connectorStateLabel(state.sidebarStatus)", DASHBOARD_HTML)
+        self.assertIn(
+            "const connectorState = connectorStateLabel(statusData.state)",
+            DASHBOARD_HTML,
+        )
+        self.assertIn("status(statusData.state, connectorState)", DASHBOARD_HTML)
+
+    def test_health_messages_are_localized_client_side(self) -> None:
+        self.assertIn("function healthMessage", DASHBOARD_HTML)
+        self.assertIn("function healthName", DASHBOARD_HTML)
+        self.assertIn("'health.dashboardOk': 'Dashboard responded.'", DASHBOARD_HTML)
+        self.assertIn("'health.name.database': 'Database'", DASHBOARD_HTML)
+        self.assertIn("'health.runningJobsNoneDead': 'running jobs, no dead jobs.'", DASHBOARD_HTML)
+        self.assertIn("name.textContent = healthName(check)", DASHBOARD_HTML)
+        self.assertIn("message.textContent = healthMessage(check)", DASHBOARD_HTML)
+
     def test_dashboard_qol_labels_are_localized(self) -> None:
         self.assertIn('id="refresh-label"', DASHBOARD_HTML)
         self.assertIn('id="language-label"', DASHBOARD_HTML)

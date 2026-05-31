@@ -1160,10 +1160,29 @@
         'empty.title': 'Keine Einträge vorhanden',
         'empty.hint': 'Die Ansicht ist geladen und enthält aktuell keine passenden Daten.',
         'status.unknown': 'unbekannt',
+        'state.waiting': 'wartend',
+        'state.syncing': 'synchronisiert gerade',
+        'state.faulty': 'fehlerhaft',
         'health.encrypted': 'verschlüsselt',
         'health.unencrypted': 'unverschlüsselt',
         'health.fallback': 'Fallback nach HTTPS-Fehler',
         'health.none': 'Keine Health-Daten vorhanden.',
+        'health.dashboardOk': 'Dashboard antwortet.',
+        'health.databaseOk': 'SQL-Ping erfolgreich.',
+        'health.redisOk': 'Redis-Ping erfolgreich.',
+        'health.openwebuiDisabled': 'Integration deaktiviert.',
+        'health.openwebuiMissingKey': 'Admin-API-Key fehlt.',
+        'health.openwebuiFunctionsOk': 'Functions-API erreichbar.',
+        'health.deadJobs': 'tote Jobs vorhanden.',
+        'health.jobsWaiting': 'Jobs warten oder retryen.',
+        'health.runningJobsNoneDead': 'laufende Jobs, keine toten Jobs.',
+        'health.name.dashboard': 'Dashboard HTTP',
+        'health.name.database': 'Datenbank',
+        'health.name.redis': 'Redis',
+        'health.name.seafile': 'Seafile Admin API',
+        'health.name.ragflow': 'RAGFlow API',
+        'health.name.openwebui': 'OpenWebUI',
+        'health.name.syncJobs': 'Sync-Jobs',
         'problems.none': 'Keine aktuellen Fehler oder Warnungen.',
         'counts.entries': 'Einträge',
         'counts.runs': 'Läufe',
@@ -1286,10 +1305,29 @@
         'empty.title': 'No entries available',
         'empty.hint': 'The view is loaded and currently has no matching data.',
         'status.unknown': 'unknown',
+        'state.waiting': 'waiting',
+        'state.syncing': 'syncing now',
+        'state.faulty': 'faulty',
         'health.encrypted': 'encrypted',
         'health.unencrypted': 'unencrypted',
         'health.fallback': 'fallback after HTTPS error',
         'health.none': 'No health data available.',
+        'health.dashboardOk': 'Dashboard responded.',
+        'health.databaseOk': 'SQL ping succeeded.',
+        'health.redisOk': 'Redis ping succeeded.',
+        'health.openwebuiDisabled': 'Integration disabled.',
+        'health.openwebuiMissingKey': 'Admin API key missing.',
+        'health.openwebuiFunctionsOk': 'Functions API reachable.',
+        'health.deadJobs': 'dead jobs present.',
+        'health.jobsWaiting': 'jobs waiting or retrying.',
+        'health.runningJobsNoneDead': 'running jobs, no dead jobs.',
+        'health.name.dashboard': 'Dashboard HTTP',
+        'health.name.database': 'Database',
+        'health.name.redis': 'Redis',
+        'health.name.seafile': 'Seafile Admin API',
+        'health.name.ragflow': 'RAGFlow API',
+        'health.name.openwebui': 'OpenWebUI',
+        'health.name.syncJobs': 'Sync jobs',
         'problems.none': 'No current errors or warnings.',
         'counts.entries': 'entries',
         'counts.runs': 'runs',
@@ -1473,7 +1511,7 @@
     }
     function renderSidebarStatus() {
       if (state.sidebarStatus) {
-        setText('sidebar-state', t('table.status') + ': ' + state.sidebarStatus);
+        setText('sidebar-state', t('table.status') + ': ' + connectorStateLabel(state.sidebarStatus));
         setText('sidebar-updated', t('table.updated') + ': ' + state.sidebarUpdatedAt.toLocaleTimeString(localeTag()));
         return;
       }
@@ -1518,10 +1556,26 @@
     function statusClass(value) {
       return String(value || 'unknown').toLowerCase().replace(/[^a-z0-9äöüß_-]+/g, '-');
     }
-    function status(value) {
+    const CONNECTOR_STATE_LABELS = {
+      'wartend': 'state.waiting',
+      'idle': 'state.waiting',
+      'synchronisiert gerade': 'state.syncing',
+      'running': 'state.syncing',
+      'fehlerhaft': 'state.faulty',
+      'failed': 'state.faulty',
+      'error': 'state.faulty',
+      'unbekannt': 'status.unknown',
+      'unknown': 'status.unknown'
+    };
+    function connectorStateLabel(value) {
+      const raw = String(value || '').trim();
+      const key = CONNECTOR_STATE_LABELS[raw.toLowerCase()];
+      return key ? t(key) : (raw || t('status.unknown'));
+    }
+    function status(value, label) {
       const span = document.createElement('span');
       span.className = 'status ' + statusClass(value);
-      span.textContent = value || t('status.unknown');
+      span.textContent = label || value || t('status.unknown');
       return span;
     }
     function longText(value, options = {}) {
@@ -1668,6 +1722,38 @@
         node.appendChild(bar);
       });
     }
+    function healthMessage(check) {
+      if (check.name === 'dashboard' && check.status === 'ok') return t('health.dashboardOk');
+      if (check.name === 'database' && check.status === 'ok') return t('health.databaseOk');
+      if (check.name === 'redis' && check.status === 'ok') return t('health.redisOk');
+      if (check.name === 'openwebui') {
+        if (check.status === 'ok' && !check.endpoint) return t('health.openwebuiDisabled');
+        if (check.status === 'warning' && !check.endpoint) return t('health.openwebuiMissingKey');
+        if (check.status === 'ok') return t('health.openwebuiFunctionsOk');
+      }
+      if (check.name === 'sync_jobs') {
+        const failed = Number(check.failed_jobs || 0);
+        const queued = Number(check.queued_or_retrying_jobs || 0);
+        const running = Number(check.running_jobs || 0);
+        if (failed) return fmtNumber(failed) + ' ' + t('health.deadJobs');
+        if (queued) return fmtNumber(queued) + ' ' + t('health.jobsWaiting');
+        return fmtNumber(running) + ' ' + t('health.runningJobsNoneDead');
+      }
+      return check.message || '-';
+    }
+    const HEALTH_NAME_LABELS = {
+      dashboard: 'health.name.dashboard',
+      database: 'health.name.database',
+      redis: 'health.name.redis',
+      seafile: 'health.name.seafile',
+      ragflow: 'health.name.ragflow',
+      openwebui: 'health.name.openwebui',
+      sync_jobs: 'health.name.syncJobs'
+    };
+    function healthName(check) {
+      const key = HEALTH_NAME_LABELS[check.name];
+      return key ? t(key) : (check.label || check.name || 'Check');
+    }
     function renderProblems(errors, warnings) {
       const node = $('problems');
       clear(node);
@@ -1706,10 +1792,10 @@
         const copy = document.createElement('div');
         const name = document.createElement('div');
         name.className = 'health-name';
-        name.textContent = check.label || check.name || 'Check';
+        name.textContent = healthName(check);
         const message = document.createElement('div');
         message.className = 'health-message';
-        message.textContent = check.message || '-';
+        message.textContent = healthMessage(check);
         copy.append(name, message);
         if (check.transport || check.scheme || check.endpoint) {
           const transport = check.transport || {};
@@ -1750,13 +1836,14 @@
         api('/api/logs?level=warning&limit=4'),
         api('/api/health')
       ]);
-      setText('state-value', statusData.state);
+      const connectorState = connectorStateLabel(statusData.state);
+      setText('state-value', connectorState);
       clear($('state-pill'));
-      $('state-pill').appendChild(status(statusData.state));
+      $('state-pill').appendChild(status(statusData.state, connectorState));
       setText('started-at', t('table.start') + ': ' + fmtDate(statusData.started_at));
       setText('last-success', t('overview.lastSuccess') + ': ' + fmtDate(statusData.last_successful_sync && statusData.last_successful_sync.ended_at));
       setText('last-failure', t('overview.lastFailure') + ': ' + fmtDate(statusData.last_failed_sync && statusData.last_failed_sync.ended_at));
-      state.sidebarStatus = statusData.state || t('status.unknown');
+      state.sidebarStatus = statusData.state || 'unknown';
       state.sidebarUpdatedAt = new Date();
       renderSidebarStatus();
       renderHealthRail(statusData);
