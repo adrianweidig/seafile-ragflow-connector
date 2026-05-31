@@ -14,6 +14,8 @@ Die empfohlene einheitliche Konfigurationsschnittstelle liegt im Repo-Root:
 `connector.env.example`. Kopiere sie zu `connector.env`, ersetze die
 Platzhalter und verwende dieselbe Datei für Docker Compose oder importiere ihren
 Inhalt in Portainer.
+Für die erste Abnahme nach einem neuen Deploy steht die
+[Admin-Erststart-Checkliste](../docs/admin-first-start-checklist.md) bereit.
 
 Der Stack bringt PostgreSQL und Redis für den Connector-State mit. Seafile,
 RAGFlow und optional OpenWebUI bleiben externe Systeme und werden nie durch

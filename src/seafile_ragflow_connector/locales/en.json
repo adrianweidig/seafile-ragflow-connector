@@ -1,6 +1,7 @@
 {
   "cli": {
     "app_help": "Offline-ready Seafile to RAGFlow connector",
+    "output_json": "Print machine-readable JSON.",
     "init_db": {
       "help": "Create or update connector state tables.",
       "done": "Database initialized"

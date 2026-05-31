@@ -1,0 +1,82 @@
+name: release-artifact
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Build repository archive
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          artifact_dir="release-artifacts"
+          mkdir -p "$artifact_dir"
+
+          repo_name="${GITHUB_REPOSITORY##*/}"
+          repo_name="${repo_name,,}"
+          repo_name="$(printf '%s' "$repo_name" | tr -cs '[:alnum:]._-+' '-')"
+          ref_name="${GITHUB_REF_NAME:-detached}"
+          ref_slug="$(printf '%s' "$ref_name" | tr '/[:space:]' '--' | tr -cs '[:alnum:]._-+' '-')"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          archive_root="${repo_name}-${ref_slug}-${short_sha}"
+          zip_name="${archive_root}.zip"
+          created_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+          git archive --format=zip --prefix="${archive_root}/" -o "${artifact_dir}/${zip_name}" HEAD
+          sha256sum "${artifact_dir}/${zip_name}" > "${artifact_dir}/SHA256SUMS"
+
+          {
+            echo "# Release-Artefakt"
+            echo
+            echo "- Repository: ${GITHUB_REPOSITORY}"
+            echo "- Branch/Ref: ${ref_name}"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Kurz-SHA: ${short_sha}"
+            echo "- Event: ${GITHUB_EVENT_NAME}"
+            echo "- Actor: ${GITHUB_ACTOR}"
+            echo "- UTC-Zeitpunkt: ${created_at}"
+            echo "- ZIP-Datei: ${zip_name}"
+            echo
+            echo "## Änderungen"
+            echo
+            if previous_tag="$(git describe --tags --abbrev=0 2>/dev/null)"; then
+              echo "Änderungen seit ${previous_tag}:"
+              echo
+              git log --oneline "${previous_tag}..HEAD" || true
+            else
+              echo "Kein vorheriger Git-Tag im Checkout gefunden. Letzte Commits:"
+              echo
+              git log --oneline -n 20 || true
+            fi
+            echo
+            echo "## Docker/GHCR"
+            echo
+            echo "Der separate Docker-Workflow baut das Image aus deploy/docker/Dockerfile und veröffentlicht bei Pushes GHCR-Tags. Für produktionsnahe Installationen sollten Betreiber einen Release-, Branch- oder SHA-Tag pinnen."
+            echo
+            echo "## Offline-Hinweis"
+            echo
+            echo "Dieses Artefakt enthält den Repository-Stand als git-archive-ZIP sowie SHA256SUMS. Docker-Images und signierte Offline-Bundles bleiben separate Maintainer-Schritte."
+          } > "${artifact_dir}/release-notes.md"
+
+          echo "artifact_name=release-artifact-${ref_slug}-${short_sha}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: release-artifacts/
+          if-no-files-found: error

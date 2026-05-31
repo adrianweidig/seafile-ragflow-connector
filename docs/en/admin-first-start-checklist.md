@@ -1,0 +1,186 @@
+# Admin First-Start Checklist
+
+🌐 Languages: [Deutsch](../admin-first-start-checklist.md) | **English**
+
+This checklist covers the first checks after a new installation. It does not
+replace the detailed operations documentation; it gives administrators a compact
+acceptance path for Portainer, Docker Compose, and the first user-facing
+release.
+
+## Before Deployment
+
+- Docker Compose Plugin or Portainer is available on the target host.
+- Seafile and RAGFlow already run outside the connector stack.
+- The URLs reachable from inside the connector container are known. In a shared
+  Docker network these can be internal names such as `http://seafile` and
+  `http://ragflow:9380`; over LAN or a reverse proxy they are the URLs reachable
+  from that network.
+- Seafile admin token, Seafile download token, RAGFlow API key, and, if
+  OpenWebUI integration is enabled, an OpenWebUI admin key are ready.
+- The network mode is chosen:
+  `CONNECTOR_DOCKER_NETWORK_EXTERNAL=false` for a connector-owned network or
+  `CONNECTOR_DOCKER_NETWORK_EXTERNAL=true` for an existing shared Docker
+  network.
+- Internal root or intermediate CAs are available as PEM files on the Docker
+  host if Seafile, RAGFlow, or OpenWebUI use private certificate chains.
+- Real secrets stay outside the Git worktree. `connector.env`, `stack.env`,
+  Portainer exports, and TLS lab outputs are not committed.
+
+## Prepare Configuration
+
+For direct Docker Compose installs, the guided wizard is the fastest path:
+
+```bash
+bash scripts/configure-enterprise-compose.sh
+bash output/enterprise-compose/check-config.sh
+```
+
+It creates a local `connector.env`, the selected Compose file combination,
+start scripts, and `output/enterprise-compose/portainer-compose.yml` with
+`output/enterprise-compose/portainer.env` for Portainer.
+
+For a manual setup, start with:
+
+```bash
+cp connector.env.example connector.env
+```
+
+Set at least these values:
+
+| Variable | Purpose |
+| --- | --- |
+| `SEAFILE_BASE_URL` | Seafile URL from the connector container |
+| `SEAFILE_ADMIN_TOKEN` | Admin API token for library discovery |
+| `SEAFILE_SYNC_USER_TOKEN` | API token for file downloads |
+| `RAGFLOW_BASE_URL` | RAGFlow API URL from the connector container |
+| `RAGFLOW_API_KEY` | API key of the RAGFlow target user |
+| `POSTGRES_PASSWORD` or `DATABASE_URL` | Database access for connector state |
+
+Only add OpenWebUI, TLS, tuning, and dashboard values when they are needed for
+the selected operating mode.
+
+## Check Before First Start
+
+For the generated Compose configuration:
+
+```bash
+bash output/enterprise-compose/check-config.sh
+```
+
+For the central Portainer/Compose file:
+
+```bash
+docker compose \
+  --env-file connector.env \
+  -f deploy/portainer/docker-compose.yml \
+  config --quiet
+```
+
+If no generated `check-live.sh` is used, run the live check explicitly in the
+Compose stack's controller container:
+
+```bash
+docker compose \
+  --env-file connector.env \
+  -f deploy/portainer/docker-compose.yml \
+  run --rm connector-controller connector check-live
+```
+
+When `CONNECTOR_DASHBOARD_ENABLED=true` is set, a dashboard password should be
+set as well. For local access,
+`CONNECTOR_DASHBOARD_PUBLISHED_PORT=127.0.0.1:18080` is the safer default; LAN
+access should be published intentionally and protected with network or reverse
+proxy controls.
+
+## Start
+
+With generated scripts:
+
+```bash
+bash output/enterprise-compose/up.sh
+```
+
+Or manually:
+
+```bash
+docker compose \
+  --env-file connector.env \
+  -f deploy/portainer/docker-compose.yml \
+  up -d
+```
+
+In Portainer, use `deploy/portainer/docker-compose.yml` or the generated
+`portainer-compose.yml` as stack content. Values from `connector.env.example`
+or `portainer.env` go into the stack environment section.
+
+## Success Criteria After Start
+
+After a few minutes, the stack should meet these criteria:
+
+- `connector-postgres`, `connector-redis`, `connector-controller`,
+  `connector-worker`, and `connector-reconciler` are running.
+- Controller, worker, and reconciler logs do not show missing required
+  variables or persistent authentication failures.
+- `bash output/enterprise-compose/check-live.sh` or the direct
+  `docker compose run --rm connector-controller connector check-live` exits
+  successfully.
+- The dashboard is reachable when enabled.
+- `/api/health` reports dashboard, database, Redis, Seafile, and RAGFlow as
+  `ok` or shows a concrete external error that can be fixed.
+- RAGFlow contains one dataset per relevant Seafile library, created from the
+  template, or the template is created when auto-create is enabled.
+- Initial files are uploaded and parse status is visible in the dashboard or in
+  RAGFlow.
+- If OpenWebUI integration is enabled, chat, tool, pipe, or custom model entries
+  appear after a real sync or repair run.
+
+## User Release
+
+Before exposing the setup to end users, also check:
+
+- The dashboard is reachable only by administrators and protected with Basic
+  Auth or upstream access controls.
+- The visible language fits the target users. German is the default; English
+  and additional dashboard languages can be selected in the UI or through
+  `CONNECTOR_LANGUAGE`.
+- OpenWebUI shows clear custom model names and source links when integration is
+  enabled.
+- The Excel audit export downloads metadata only, not synchronized file
+  contents.
+- A small test dataset was synchronized successfully before large libraries are
+  enabled.
+
+## If It Does Not Turn Green
+
+| Symptom | First check |
+| --- | --- |
+| `docker` or `docker compose` is missing | Docker installation, PATH, and on Windows/WSL the selected context |
+| Compose config fails | Missing required values, typos, and invalid ports in `connector.env` |
+| Seafile or RAGFlow is unreachable | Internal container URL versus host/browser URL |
+| Certificate error | Set CA bundle through `CONNECTOR_CA_BUNDLE`, `SEAFILE_CA_BUNDLE`, `RAGFLOW_CA_BUNDLE`, or `OPENWEBUI_CA_BUNDLE` |
+| Dashboard unreachable | `CONNECTOR_DASHBOARD_ENABLED`, port mapping, bind address, and port conflicts |
+| Dashboard health is `degraded` | Open the detail row and fix DB, Redis, tokens, and target URLs first |
+| No datasets appear | Seafile admin permissions, RAGFlow template, and `RAGFLOW_TEMPLATE_AUTO_CREATE` |
+| OpenWebUI artifacts are missing | `OPENWEBUI_INTEGRATION_ENABLED`, `OPENWEBUI_SYNC_MODE`, and proxy reachability from the OpenWebUI container |
+
+`*_VERIFY_SSL=false` is only a short-term diagnostic aid. For production,
+repair the certificate chain with CA bundles instead.
+
+## Then
+
+For the first production-like run, start small:
+
+```bash
+docker compose \
+  --env-file connector.env \
+  -f deploy/portainer/docker-compose.yml \
+  run --rm connector-controller connector sync-once
+```
+
+For a generated enterprise Compose setup, use the same Compose files as
+`output/enterprise-compose/up.sh`. In Portainer, run the same command as a
+one-off controller task or from a shell inside the controller container.
+
+Then check the dashboard, RAGFlow datasets, OpenWebUI artifacts, and the audit
+export. Enable larger libraries or automated schedules only after that run is
+stable.

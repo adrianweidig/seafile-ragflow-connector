@@ -39,6 +39,18 @@ from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.persistence.models.openwebui import OpenWebUIDatasetMapping
 from seafile_ragflow_connector.utils.redaction import redact_mapping
 
+DASHBOARD_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    "base-uri 'none'; "
+    "frame-ancestors 'none'; "
+    "object-src 'none'; "
+    "img-src 'self' data:; "
+    "style-src 'self' 'unsafe-inline'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "connect-src 'self'; "
+    "form-action 'none'"
+)
+
 
 class DashboardBindError(RuntimeError):
     pass
@@ -248,6 +260,7 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
             self.send_response(status.value)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
+            self._send_security_headers()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -257,6 +270,7 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
             self.send_response(HTTPStatus.OK.value)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
+            self._send_security_headers(include_csp=True)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -269,6 +283,7 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
             )
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
             self.send_header("Cache-Control", "no-store")
+            self._send_security_headers()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -285,9 +300,17 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
             )
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
+            self._send_security_headers()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _send_security_headers(self, *, include_csp: bool = False) -> None:
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Frame-Options", "DENY")
+            if include_csp:
+                self.send_header("Content-Security-Policy", DASHBOARD_CONTENT_SECURITY_POLICY)
 
         def _json_body(self) -> dict[str, Any]:
             raw_length = self.headers.get("Content-Length")

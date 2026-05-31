@@ -1,0 +1,760 @@
+"""
+title: RAGFlow Dataset Pipe
+author: Seafile RAGFlow Connector
+version: 3.7.0
+owner: seafile-ragflow-connector
+artifact_version: 19
+"""
+
+# =============================================================================
+# ADMIN- UND ENTWICKLERDOKUMENTATION
+# =============================================================================
+# Zweck dieser Pipe
+# -----------------
+# Diese OpenWebUI-Pipe verbindet OpenWebUI mit einem eigenen Connector-Proxy,
+# der wiederum RAGFlow beziehungsweise ein RAGFlow-Dataset/Chat anspricht.
+#
+# Wichtig: Die Pipe ist als Audit-RAG-Pipe gebaut. Retrieval-Treffer sind
+# nicht nur Anhang, sondern die Beweiskette der Antwort. Die finale
+# Chat-Nachricht soll zuerst eine echte KI-Antwort sein und jede wesentliche
+# Aussage mit Quellenmarken wie [S1] belegen, danach folgt eine sichtbare
+# Nachweistabelle plus native Citation-Events.
+#
+# Typische Datenflusskette:
+#
+#   OpenWebUI Chat
+#        -> diese Pipe
+#        -> Connector-Proxy: /api/openwebui/proxy/chat
+#        -> RAGFlow Dataset/Chat
+#        -> generierte Antwort + Quellen
+#        -> OpenWebUI Antwort mit Citations
+#
+# Wo werden Einstellungen vorgenommen?
+# ------------------------------------
+# In OpenWebUI öffnest du die Funktion/Pipe und pflegst die Werte im Bereich
+# "Valves". Valves sind OpenWebUI-konforme Laufzeitparameter. Sie erlauben, die
+# Pipe ohne Codeänderung auf verschiedene Server, Datasets, Modelle und UX-Modi
+# anzupassen.
+#
+# Minimal notwendige Einstellungen:
+#   CONNECTOR_PROXY_BASE_URL       URL deines Connector-Proxys
+#   CONNECTOR_PROXY_SHARED_SECRET  Bearer-Secret, das auch der Proxy kennt
+#   DATASET_ID oder RAGFLOW_CHAT_ID abhängig davon, was dein Proxy erwartet
+#   MODEL_ID                       interne Modell-ID in OpenWebUI
+#   MODEL_NAME                     schöner Anzeigename im Modellmenü
+#
+# Empfohlene Chat-RAG-Einstellungen:
+#   INJECT_RAG_SYSTEM_PROMPT=true
+#   SEND_GENERATIVE_RAG_HINTS=true
+#   RETRIEVAL_ONLY_FALLBACK=brief
+#   EMIT_CITATION_EVENTS=true
+#   APPEND_SOURCE_OVERVIEW=true
+#   SOURCE_MARKDOWN_MODE=audit
+#   SHOW_SOURCE_SCORES=false
+#   SHOW_SOURCE_DEBUG=false
+#
+# Wann wird ENABLE_ANSWER_SYNTHESIS_FALLBACK benötigt?
+# ----------------------------------------------------
+# Nur dann, wenn dein Connector-Proxy aktuell ausschließlich Retrieval-Treffer
+# zurückliefert, aber keinen generierten Antworttext. Dann kann diese Pipe aus
+# den gefundenen Quellen über ein separates OpenAI-kompatibles LLM eine Antwort
+# erzeugen. Das ist ein Fallback, nicht der bevorzugte Hauptpfad.
+#
+# Bevorzugter Hauptpfad:
+#   Proxy/RAGFlow liefert selbst ein Feld wie answer, data.answer oder
+#   choices[0].message.content.
+#
+# Sicherheitsgrundsätze
+# ---------------------
+# - Secrets niemals in Logs, Fehlermeldungen oder Chat-Antworten ausgeben.
+# - CONNECTOR_PROXY_VERIFY_SSL nur für lokale Tests deaktivieren.
+# - SHOW_SOURCE_DEBUG nur für Admin-Debugging aktivieren, weil interne IDs und
+#   technische Metadaten sichtbar werden können.
+# - ERROR_VERBOSITY=debug nur temporär nutzen.
+#
+# UX-Grundsätze für die Chat-Ausgabe
+# ----------------------------------
+# - Antwort zuerst, Quellen danach.
+# - Keine Roh-Chunks als Ersatz für eine Antwort.
+# - Native Citation-Events für klickbare Quellen verwenden.
+# - Markdown-Nachweistabelle im Audit-Modus sichtbar halten.
+# - Wenn keine generierte Antwort vorliegt, klar diagnostizieren, warum.
+# =============================================================================
+
+
+from __future__ import annotations
+
+import html
+import json
+import logging
+import re
+import ssl
+import time
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from html.parser import HTMLParser
+from pathlib import Path
+from typing import Any, Optional
+from urllib.parse import urlsplit, urlunsplit
+
+import httpx
+from pydantic import BaseModel, Field
+
+
+LOGGER = logging.getLogger(__name__)
+
+PROXY_CHAT_PATH = "/api/openwebui/proxy/chat"
+DEFAULT_MODEL_ID = "ragflow"
+DEFAULT_MODEL_NAME = "RAGFlow Dataset"
+
+MAX_SOURCE_EVENTS_HARD_LIMIT = 50
+MAX_SOURCE_GROUPS_COMPACT = 8
+MAX_SOURCE_GROUPS_DETAILED = 12
+COMPACT_SNIPPET_CHARS = 380
+DETAILED_SNIPPET_CHARS = 900
+VALID_SOURCE_MARKDOWN_MODES = {"none", "off", "disabled", "compact", "detailed", "audit"}
+VALID_ERROR_VERBOSITY = {"safe", "debug"}
+VALID_RETRIEVAL_ONLY_FALLBACK = {"diagnostic", "brief", "sources_only"}
+VALID_STATUS_MODES = {"off", "minimal", "verbose"}
+
+PREVIEW_URL_KEYS = (
+    "preview_url",
+    "previewUrl",
+    "viewer_url",
+    "viewerUrl",
+    "view_url",
+    "web_url",
+    "webUrl",
+    "seafile_url",
+    "seafile_web_url",
+    "share_url",
+    "document_url",
+    "source_url",
+    "url",
+)
+ORIGINAL_URL_KEYS = (
+    "original_url",
+    "originalUrl",
+    "download_url",
+    "downloadUrl",
+    "file_url",
+    "fileUrl",
+    "raw_url",
+    "rawUrl",
+    "external_url",
+    "externalUrl",
+    "source_url",
+    "url",
+)
+
+DEFAULT_RAG_SYSTEM_PROMPT = """
+Du bist ein prüfbares Seafile/RAGFlow-Wissensmodell in OpenWebUI. Deine Aufgabe ist nicht, Suchtreffer aufzulisten, sondern aus den angebundenen Dokumenten eine klare Antwort mit auditierbarer Beweiskette zu formulieren.
+
+Arbeitsweise:
+- Beantworte die aktuelle Nutzerfrage anhand der verfügbaren Dokumente und des bisherigen Gesprächsverlaufs.
+- Belege jede wesentliche Aussage mit einer Quellenmarke wie [S1], [S2] oder [S3], wenn der Kontext diese Zuordnung hergibt.
+- Nutze nur Quellen, die im Retrieval-Kontext vorhanden sind. Erfinde keine Seiten, Zeilen, Dokumentnamen oder Quellenmarken.
+- Wenn die Dokumente keine ausreichende Grundlage liefern, sage das klar und nenne, welche Information fehlt.
+- Wenn Fundstellen nur grob bekannt sind, formuliere das transparent.
+- Schreibe strukturiert, präzise und professionell.
+- Vermeide reine Trefferlisten, Roh-Chunks und interne Referenzmarker wie [ID:0].
+""".strip()
+
+DEFAULT_SYNTHESIS_SYSTEM_PROMPT = """
+Du bist der finale Chat-Assistent einer OpenWebUI-RAG-Pipe. Deine Aufgabe ist, aus den bereitgestellten Dokumentauszügen eine echte Antwort auf die aktuelle Nutzerfrage zu formulieren.
+
+Regeln für die Antwort:
+- Beginne direkt mit der inhaltlichen Antwort, nicht mit einer Quellenliste.
+- Verwende die Dokumentauszüge als Grundlage und erfinde keine Fakten, Seiten, Zeilen oder Dokumentnamen.
+- Belege jede wesentliche Aussage mit der passenden Quellenmarke [S1], [S2] usw. aus dem Kontext.
+- Wenn der Kontext nicht reicht, sage knapp, was fehlt.
+- Verwende keine Platzhalter wie [Quelle 1], [1], {{source:0}} oder Dateinamen als Ersatz für eine Antwort.
+- Zähle Dokumente nur dann auf, wenn die Nutzerfrage ausdrücklich nach verfügbaren Quellen, Dateien oder Dokumenten fragt.
+- Schreibe auf Deutsch, präzise und professionell.
+""".strip()
+
+SOURCE_LIST_KEYS = (
+    "sources",
+    "source_documents",
+    "sourceDocuments",
+    "citations",
+    "references",
+    "chunks",
+)
+REFERENCE_KEYS = ("reference", "references")
+ANSWER_KEYS = (
+    "answer",
+    "final_answer",
+    "generated_answer",
+    "assistant_answer",
+    "assistant_response",
+    "response",
+    "output",
+    "result",
+    "generated_text",
+    "generation",
+    "completion",
+    "content",
+    "text",
+)
+HIGH_CONFIDENCE_ANSWER_KEYS = {
+    "answer",
+    "final_answer",
+    "generated_answer",
+    "assistant_answer",
+    "assistant_response",
+    "response",
+    "output",
+    "generated_text",
+    "generation",
+    "completion",
+}
+LOW_CONFIDENCE_ANSWER_KEYS = {"content", "text", "result"}
+SKIP_RECURSIVE_ANSWER_KEYS = set(SOURCE_LIST_KEYS) | set(REFERENCE_KEYS) | {
+    "chunks",
+    "doc_aggs",
+    "source",
+    "source_metadata",
+    "metadata",
+    "documents",
+    "document",
+    "messages",
+    "prompt",
+    "query",
+    "user",
+}
+
+
+class PipeError(Exception):
+    """Exception with a safe end-user message and a status-line variant."""
+
+    def __init__(self, user_message: str, *, status: Optional[str] = None) -> None:
+        super().__init__(user_message)
+        self.user_message = user_message
+        self.status = status or user_message
+
+
+@dataclass(slots=True)
+class SourceHit:
+    rank: int
+    title: str
+    snippet: str = ""
+    source_id: str = ""
+    document_name: Optional[str] = None
+    dataset_name: Optional[str] = None
+    page: Any = None
+    line: Any = None
+    line_start: Any = None
+    line_end: Any = None
+    section: Any = None
+    chunk_id: Optional[str] = None
+    reference_id: Optional[str] = None
+    score: Any = None
+    preview_url: Optional[str] = None
+    original_url: Optional[str] = None
+    path: Optional[str] = None
+    document_id: Optional[str] = None
+    dataset_id: Optional[str] = None
+    repo_id: Optional[str] = None
+    file_id: Optional[str] = None
+    mime_type: Optional[str] = None
+    file_type: Optional[str] = None
+    positions: Any = None
+    locator_quality: str = "unknown"
+    source_metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class Pipe:
+    class Valves(BaseModel):
+        """OpenWebUI-Valves: zentrale Laufzeitkonfiguration der Pipe.
+
+        Jede Einstellung ist absichtlich als Valve modelliert, damit Admins sie
+        in OpenWebUI ändern können, ohne das Skript neu zu bearbeiten.
+
+        Konfigurationslogik:
+        - Proxy-/RAGFlow-Valves bestimmen, wohin die Anfrage geht.
+        - Chat-RAG-Valves bestimmen, ob generative Antworten erzwungen werden.
+        - Fallback-Valves bestimmen, was passiert, wenn nur Quellen ankommen.
+        - UX-Valves bestimmen, wie Status, Citations und Quellen aussehen.
+        - Debug-Valves sind für Fehlersuche gedacht und sollten im Normalbetrieb
+          deaktiviert bleiben.
+        """
+
+        # ------------------------------------------------------------------
+        # 1) Connector- und RAGFlow-Zielsystem
+        # ------------------------------------------------------------------
+        # ARTIFACT_ID ist optional. Nutze diesen Wert, wenn dein Proxy mehrere
+        # Artefakte/Installationen unterscheiden muss. Wenn dein Proxy damit
+        # nichts macht, leer lassen.
+        ARTIFACT_ID: str = Field(
+            default="",
+            description="Optionale Artefakt-ID für den Connector/Proxy.",
+        )
+
+        # Basis-URL des eigenen Connector-Proxys ohne abschließenden API-Pfad.
+        # Die Pipe hängt automatisch PROXY_CHAT_PATH an, standardmäßig:
+        # /api/openwebui/proxy/chat
+        # Beispiel: https://rag-proxy.example.org
+        CONNECTOR_PROXY_BASE_URL: str = Field(
+            default="",
+            description="Basis-URL des Connector-Proxys, z. B. https://proxy.example.org.",
+        )
+
+        # Shared Secret für die Verbindung OpenWebUI -> Connector-Proxy.
+        # Der Wert wird als HTTP-Header gesendet:
+        # Authorization: Bearer <CONNECTOR_PROXY_SHARED_SECRET>
+        # Niemals in Support-Tickets, Logs oder Screenshots veröffentlichen.
+        CONNECTOR_PROXY_SHARED_SECRET: str = Field(
+            default="",
+            description="Bearer-Secret für den Connector-Proxy. Niemals in Logs oder Chat ausgeben.",
+        )
+
+        # TLS-Zertifikatsprüfung. Im produktiven Betrieb immer True lassen.
+        # False ist nur für lokale Entwicklung mit selbstsignierten Zertifikaten
+        # vertretbar. Bei False ist die Transportverbindung anfälliger für
+        # Man-in-the-Middle-Risiken.
+        CONNECTOR_PROXY_VERIFY_SSL: bool = Field(
+            default=True,
+            description="TLS-Zertifikate des Connector-Proxys prüfen. Nur für lokale Tests deaktivieren.",
+        )
+
+        # Optionaler Pfad zu einer CA-Bundle-Datei, wenn dein Proxy ein Zertifikat
+        # einer internen/private CA nutzt. Der Pfad muss aus Sicht der
+        # OpenWebUI-Runtime erreichbar sein, nicht aus Sicht deines Browsers.
+        # Beispiel: /etc/ssl/certs/company-ca.pem
+        CONNECTOR_PROXY_CA_BUNDLE: str = Field(
+            default="",
+            description="Optionaler Pfad zu einem CA-Bundle für interne Zertifizierungsstellen.",
+        )
+
+        # Schaltet ausführlichere Exception-Logs für TLS/HTTP ein. Secrets werden
+        # weiterhin nicht geloggt. Nur temporär aktivieren, wenn Verbindungsfehler
+        # untersucht werden.
+        TLS_DEBUG: bool = Field(
+            default=False,
+            description="Aktiviert ausführlichere TLS-/HTTP-Fehlerlogs ohne Secrets offenzulegen.",
+        )
+
+        # Dataset-ID für RAGFlow. Je nach Proxy-Implementierung kann entweder
+        # DATASET_ID, RAGFLOW_CHAT_ID oder beides nötig sein. DATASET_ID ist
+        # typisch, wenn der Proxy selbst den Chat-/Retrieval-Flow baut.
+        DATASET_ID: str = Field(
+            default="",
+            description="RAGFlow-Dataset-ID, die der Proxy verwenden soll.",
+        )
+
+        # Chat-/Assistant-ID für RAGFlow. Wichtig, wenn der Proxy RAGFlows
+        # Chat-API nutzt und dort ein konkreter Chat/Assistant konfiguriert ist.
+        # Für echte Chat-RAG-Antworten ist dieser Wert häufig entscheidender als
+        # eine reine Dataset-ID.
+        RAGFLOW_CHAT_ID: str = Field(
+            default="",
+            description="RAGFlow-Chat-/Assistant-ID, die der Proxy verwenden soll.",
+        )
+
+        # ------------------------------------------------------------------
+        # 2) Darstellung als Modell in OpenWebUI
+        # ------------------------------------------------------------------
+        # Interne Modell-ID, die OpenWebUI für diese Pipe verwendet. Kurz,
+        # stabil und ohne Leerzeichen wählen, z. B. seafile-ragflow.
+        MODEL_ID: str = Field(
+            default="",
+            description="Modell-ID, unter der diese Pipe in OpenWebUI erscheint.",
+        )
+
+        # Sichtbarer Name im Modellmenü. Hier darf ein schöner, sprechender Name
+        # stehen, z. B. "Seafile RAGFlow Chat".
+        MODEL_NAME: str = Field(
+            default="",
+            description="Anzeigename im OpenWebUI-Modellmenü.",
+        )
+
+        # Anzahl angeforderter Retrieval-Treffer. Höher ist nicht automatisch
+        # besser: Zu viele Chunks können Antworten verwässern, Latenz erhöhen und
+        # Quellenübersichten überladen. Für Chat-RAG sind 6 bis 10 meist sinnvoll.
+        TOP_K: int = Field(
+            default=8,
+            ge=1,
+            le=30,
+            description="Maximale Anzahl angeforderter Retrieval-Treffer.",
+        )
+
+        # ------------------------------------------------------------------
+        # 3) Chat-RAG-Verhalten: Antwort statt Suchergebnisliste
+        # ------------------------------------------------------------------
+        # Fügt den RAG_SYSTEM_PROMPT als Systemnachricht in den Chatverlauf ein.
+        # Eingeschaltet lassen, wenn der Proxy/RAGFlow sonst dazu tendiert, nur
+        # Trefferlisten oder Roh-Chunks zurückzugeben.
+        INJECT_RAG_SYSTEM_PROMPT: bool = Field(
+            default=True,
+            description="Ergänzt einen System-Prompt, der RAGFlow explizit auf Chat-Antworten statt Suchergebnisse ausrichtet.",
+        )
+
+        # Admin-feinjustierbarer System-Prompt. Hier wird das Antwortverhalten
+        # definiert: Antwort zuerst, Quellen unterstützend, keine Halluzinationen,
+        # keine Rohmarker. Nur ändern, wenn Tonalität oder Regeln bewusst angepasst
+        # werden sollen.
+        RAG_SYSTEM_PROMPT: str = Field(
+            default=DEFAULT_RAG_SYSTEM_PROMPT,
+            description="System-Prompt für generatives RAG-Verhalten.",
+        )
+
+        # Sendet zusätzliche maschinenlesbare Hinweise an den Connector-Proxy.
+        # Diese Felder sind absichtlich redundant, weil Proxy-/RAGFlow-Versionen
+        # unterschiedliche Parameter auswerten können.
+        # Wichtig: Dein Proxy muss diese Felder weiterreichen oder interpretieren,
+        # sonst bleibt er eventuell im Retrieval-only-Modus.
+        SEND_GENERATIVE_RAG_HINTS: bool = Field(
+            default=True,
+            description="Sendet zusätzliche Proxy-Hinweise wie generate_answer=true und response_mode=chat.",
+        )
+
+        # Verhalten, wenn zwar Quellen zurückkommen, aber kein KI-Antworttext.
+        # diagnostic: Beste Admin-Hilfe; erklärt, welche Antwortfelder fehlen.
+        # brief:      Kürzerer Nutzerhinweis.
+        # sources_only: Minimalhinweis; Quellenblock steht im Vordergrund.
+        RETRIEVAL_ONLY_FALLBACK: str = Field(
+            default="brief",
+            description="Verhalten, wenn der Proxy nur Quellen, aber keinen KI-Text liefert: diagnostic, brief oder sources_only.",
+        )
+
+        # ------------------------------------------------------------------
+        # 4) Optionaler Antwort-Synthese-Fallback
+        # ------------------------------------------------------------------
+        # Aktivieren, wenn dein Proxy derzeit nur Retrieval kann. Die Pipe ruft
+        # dann ein separates OpenAI-kompatibles Chat-Completions-Modell auf und
+        # erzeugt aus den Quellen eine finale Antwort.
+        # Empfehlung: Aus lassen, sobald dein Proxy/RAGFlow selbst generative
+        # Chat-Antworten liefert. Sonst entsteht unnötige Latenz/Komplexität.
+        ENABLE_ANSWER_SYNTHESIS_FALLBACK: bool = Field(
+            default=False,
+            description="Optional: Wenn der Proxy nur Retrieval liefert, wird aus den Quellen über ein OpenAI-kompatibles LLM eine Antwort generiert.",
+        )
+
+        # Base-URL des OpenAI-kompatiblen Fallback-LLMs.
+        # Beispiele:
+        #   https://openwebui.example.org/api
+        #   https://llm-gateway.example.org/v1
+        # Die Pipe ergänzt /chat/completions automatisch, falls nötig.
+        ANSWER_LLM_BASE_URL: str = Field(
+            default="",
+            description="OpenAI-kompatible Base-URL für den optionalen Antwort-Synthese-Fallback, z. B. https://openwebui.example.org/api.",
+        )
+
+        # API-Key für das Fallback-LLM. Nur nötig, wenn
+        # ENABLE_ANSWER_SYNTHESIS_FALLBACK=true ist.
+        ANSWER_LLM_API_KEY: str = Field(
+            default="",
+            description="API-Key für den optionalen Antwort-Synthese-Fallback. Niemals in Logs oder Chat ausgeben.",
+        )
+
+        # Modellname für das Fallback-LLM, z. B. gpt-4.1-mini, llama3.1:8b oder
+        # der Name, den dein OpenWebUI/LLM-Gateway erwartet.
+        ANSWER_LLM_MODEL: str = Field(
+            default="",
+            description="Modell für den optionalen Antwort-Synthese-Fallback.",
+        )
+
+        # Maximale Kontextmenge aus Quellen für den Fallback. Höher bedeutet mehr
+        # Kontext, aber mehr Tokenkosten und potenziell langsamere Antworten.
+        ANSWER_CONTEXT_MAX_CHARS: int = Field(
+            default=12000,
+            ge=1000,
+            le=60000,
+            description="Maximale Kontextlänge aus Quellen für den optionalen Antwort-Synthese-Fallback.",
+        )
+
+        # Temperatur für den Fallback. Für RAG niedrig halten, damit Antworten
+        # faktenorientiert und stabil bleiben.
+        ANSWER_SYNTHESIS_TEMPERATURE: float = Field(
+            default=0.2,
+            ge=0.0,
+            le=1.0,
+            description="Temperatur für den optionalen Antwort-Synthese-Fallback.",
+        )
+
+        # Begrenzung der generierten Antwortlänge. Hilft besonders bei lokalen
+        # Modellen und langsamen Gateways gegen unnötige Timeouts.
+        ANSWER_SYNTHESIS_MAX_TOKENS: int = Field(
+            default=700,
+            ge=64,
+            le=4096,
+            description="Maximale Ausgabetokens für den optionalen Antwort-Synthese-Fallback.",
+        )
+
+        # ------------------------------------------------------------------
+        # 5) HTTP- und Laufzeitverhalten
+        # ------------------------------------------------------------------
+        # Gesamt-Timeout für den Proxy-Call. RAG kann durch Embedding-Suche,
+        # Re-Ranking und LLM-Generierung länger dauern. 120 bis 180 Sekunden sind
+        # für größere Dokumentbestände realistisch.
+        REQUEST_TIMEOUT_SECONDS: float = Field(
+            default=180.0,
+            ge=5.0,
+            le=600.0,
+            description="Gesamtes HTTP-Timeout für den Proxy-Aufruf.",
+        )
+
+        # Statusmeldungen im OpenWebUI-Chat. Einschalten, weil Nutzer bei RAG sonst
+        # nicht erkennen, ob Retrieval/Generierung noch läuft.
+        STATUS_UPDATES: bool = Field(
+            default=True,
+            description="Zeigt OpenWebUI-Statusmeldungen während der Verarbeitung.",
+        )
+
+        # Blendet die finale Statusmeldung aus, falls die OpenWebUI-Version dieses
+        # Feld unterstützt. Praktisch für besonders cleane Chats. Für Debugging
+        # eher False lassen.
+        STATUS_MODE: str = Field(
+            default="minimal",
+            description="Status-UX: off, minimal oder verbose. Minimal vermeidet lange Statuslisten über der Antwort.",
+        )
+
+        HIDE_FINAL_STATUS: bool = Field(
+            default=False,
+            description="Blendet die finale Statusmeldung nach Abschluss aus, sofern OpenWebUI dies unterstützt.",
+        )
+
+        # ------------------------------------------------------------------
+        # 6) Quellen-UX in OpenWebUI
+        # ------------------------------------------------------------------
+        # Native Citation-Events erzeugen klickbare Quellen-/Citation-Elemente in
+        # OpenWebUI. Das ist die professionellste UX und sollte aktiv sein.
+        EMIT_CITATION_EVENTS: bool = Field(
+            default=True,
+            description="Sendet Quellen als native OpenWebUI-Citation-Events.",
+        )
+
+        # Legacy-Source-Events nur aktivieren, wenn deine OpenWebUI-Version oder
+        # ein Custom-Frontend keine Citation-Events verarbeitet. Normalerweise
+        # deaktiviert lassen, um doppelte Quellenanzeigen zu vermeiden.
+        EMIT_LEGACY_SOURCE_EVENTS: bool = Field(
+            default=False,
+            description="Sendet zusätzlich Legacy-Source-Events für ältere OpenWebUI-Setups.",
+        )
+
+        # Begrenzung der Event-Anzahl. Zu viele Events machen den Chat schwer
+        # lesbar und können Frontends verlangsamen. 10 bis 20 sind meist ideal.
+        MAX_SOURCE_EVENTS: int = Field(
+            default=20,
+            ge=1,
+            le=MAX_SOURCE_EVENTS_HARD_LIMIT,
+            description="Maximale Anzahl nativer Quellen-/Citation-Events.",
+        )
+
+        # Zeigt numerische Relevanzwerte, sofern RAGFlow/Proxy Scores liefert.
+        # Der Audit-Standard zeigt auch bei False ein grobes Relevanzlabel, aber
+        # keine Prozentwerte.
+        SHOW_SOURCE_SCORES: bool = Field(
+            default=False,
+            description="Zeigt numerische Relevanzwerte in Metadaten und Quellenübersicht.",
+        )
+
+        # Debug-Metadaten in Quellen. Nur für Admins. Kann interne IDs, Dataset-
+        # oder Chunk-Informationen sichtbar machen.
+        SHOW_SOURCE_DEBUG: bool = Field(
+            default=False,
+            description="Zeigt technische IDs wie Chunk-, Dokument- und Dataset-ID in Debug-Ausgaben.",
+        )
+
+        # Zusätzlicher Quellenblock im Antworttext:
+        #   none     keine Markdown-Quellenübersicht; nur native Citations
+        #   audit    Nachweistabelle mit Quellen-ID, Fundstelle, Relevanz und Link
+        #   compact  kurze Tabelle
+        #   detailed ausführliche Quellen mit Snippets; gut für Reviews/Tests
+        SOURCE_MARKDOWN_MODE: str = Field(
+            default="audit",
+            description="Zusätzliche Quellenübersicht im Antworttext: none, compact, detailed oder audit.",
+        )
+
+        # Hängt die Markdown-Quellenübersicht an den Antworttext an. Wenn OpenWebUI
+        # Citations optisch sehr gut darstellt, kann man das auf False setzen, um
+        # den Chat noch cleaner zu machen.
+        APPEND_SOURCE_OVERVIEW: bool = Field(
+            default=True,
+            description="Hängt eine auditierbare Nachweistabelle an die Antwort an.",
+        )
+
+        SHOW_LOCATOR_QUALITY: bool = Field(
+            default=True,
+            description="Zeigt im Audit-Modus, wenn eine Fundstelle nur grob bestimmbar ist.",
+        )
+
+        # Sicherheitsventil für Quellenlinks. Standardmäßig werden URLs, die auf
+        # den Connector-Proxy selbst zeigen, NICHT als Quellenlink verwendet. Das
+        # verhindert irreführende Links auf Backend-/API-Endpunkte. Aktivieren nur,
+        # wenn dein Connector bewusst echte Preview-Seiten unter seiner eigenen
+        # Domain ausliefert.
+        ALLOW_CONNECTOR_SOURCE_LINKS: bool = Field(
+            default=False,
+            description="Erlaubt Quellenlinks auf die Connector-Proxy-Domain. Standardmäßig deaktiviert, damit keine Backend-URLs als Preview erscheinen.",
+        )
+
+        # Entfernt technische Referenzmarker, die manche RAG-Engines in Antworten
+        # einbetten, z. B. {{source:0}}, ##0$$ oder [ID:0]. Im Normalbetrieb True.
+        CLEAN_RAGFLOW_MARKERS: bool = Field(
+            default=True,
+            description="Entfernt rohe RAGFlow-Referenzmarker wie {{source:0}}, ##0$$ oder [ID:0].",
+        )
+
+        # Fehlerausgaben:
+        #   safe  Endnutzerfreundliche Fehler ohne technische Response-Bodies
+        #   debug Ergänzt gekürzte Proxy-/Fallback-Antworten zur Fehlersuche
+        # Debug nie dauerhaft aktiv lassen, wenn sensible Backend-Fehler möglich
+        # sind.
+        ERROR_VERBOSITY: str = Field(
+            default="safe",
+            description="safe oder debug. Debug zeigt etwas mehr technische Hinweise, aber keine Secrets.",
+        )
+
+    # ------------------------------------------------------------------
+    # OpenWebUI-Lifecycle
+    # ------------------------------------------------------------------
+    # __init__ wird von OpenWebUI beim Laden der Pipe ausgeführt.
+    # self.type="manifold" erlaubt, dass die Pipe ein Modell über pipes()
+    # bereitstellt. self.citation=False verhindert, dass OpenWebUI eigene
+    # automatische Quellenlogik über unsere kontrollierten Citation-Events legt.
+    def __init__(self) -> None:
+        self.valves = self.Valves()
+        self.type = "manifold"
+        self.citation = False
+
+    def pipes(self) -> list[dict[str, str]]:
+        model_id = _clean(self.valves.MODEL_ID) or DEFAULT_MODEL_ID
+        return [
+            {
+                "id": model_id,
+                "name": _clean(self.valves.MODEL_NAME) or DEFAULT_MODEL_NAME,
+            }
+        ]
+
+    async def pipe(
+        self,
+        body: dict,
+        __event_emitter__=None,
+        __user__: Optional[dict] = None,
+        __task__: Optional[str] = None,
+        __task_body__: Optional[dict] = None,
+        __metadata__: Optional[dict] = None,
+    ) -> str:
+        task = _normalize_task(__task__ or (__metadata__ or {}).get("task"))
+        if task:
+            return _task_response(task, __task_body__ or body)
+
+        started_at = time.perf_counter()
+        config_error = _configuration_error(self.valves)
+        if config_error:
+            await _emit_status(self.valves, __event_emitter__, config_error, done=True)
+            return _error_card("Konfiguration unvollständig", config_error)
+
+        await _emit_status(
+            self.valves,
+            __event_emitter__,
+            "RAGFlow-Dataset wird vorbereitet …",
+            done=False,
+        )
+
+        url = _proxy_chat_url(self.valves.CONNECTOR_PROXY_BASE_URL)
+        payload = _build_payload(self.valves, body, __user__)
+        headers = _build_headers(self.valves.CONNECTOR_PROXY_SHARED_SECRET)
+
+        try:
+            await _emit_status(
+                self.valves,
+                __event_emitter__,
+                "Anfrage wird an den RAGFlow-Proxy übergeben …",
+                done=False,
+            )
+            data = await _post_json(
+                url,
+                payload,
+                headers,
+                verify_ssl=self.valves.CONNECTOR_PROXY_VERIFY_SSL,
+                ca_bundle=self.valves.CONNECTOR_PROXY_CA_BUNDLE,
+                timeout_seconds=self.valves.REQUEST_TIMEOUT_SECONDS,
+                tls_debug=self.valves.TLS_DEBUG,
+                error_verbosity=self.valves.ERROR_VERBOSITY,
+            )
+        except PipeError as exc:
+            await _emit_status(self.valves, __event_emitter__, exc.status, done=True)
+            return _error_card("RAGFlow-Anfrage fehlgeschlagen", exc.user_message)
+
+        await _emit_status(
+            self.valves,
+            __event_emitter__,
+            "Antwort empfangen, Quellen werden geprüft …",
+            done=False,
+        )
+
+        sources = _normalize_sources(
+            _extract_sources(data),
+            show_scores=self.valves.SHOW_SOURCE_SCORES,
+            show_debug=self.valves.SHOW_SOURCE_DEBUG,
+            limit=self.valves.MAX_SOURCE_EVENTS,
+            connector_base_url=self.valves.CONNECTOR_PROXY_BASE_URL,
+            allow_connector_source_links=self.valves.ALLOW_CONNECTOR_SOURCE_LINKS,
+        )
+
+        raw_answer = _extract_answer(data)
+        if _looks_like_source_markdown_only(raw_answer):
+            raw_answer = ""
+        else:
+            raw_answer = _strip_appended_source_markdown(raw_answer)
+        raw_answer = _annotate_answer_source_markers(raw_answer, sources)
+        answer = _clean_answer(
+            raw_answer,
+            clean_ragflow_markers=self.valves.CLEAN_RAGFLOW_MARKERS,
+        )
+
+        question = _last_user_text((body if isinstance(body, Mapping) else {}).get("messages") or [])
+
+        if not answer and sources and _is_source_inventory_question(question):
+            answer = _source_inventory_answer(sources)
+
+        if not answer and sources and bool(self.valves.ENABLE_ANSWER_SYNTHESIS_FALLBACK):
+            await _emit_status(
+                self.valves,
+                __event_emitter__,
+                "Antwort wird aus Dokumentkontext formuliert …",
+                done=False,
+                hidden=True,
+            )
+            try:
+                answer = await _synthesize_answer_from_sources(
+                    self.valves,
+                    body,
+                    sources,
+                    verify_ssl=self.valves.CONNECTOR_PROXY_VERIFY_SSL,
+                    ca_bundle=self.valves.CONNECTOR_PROXY_CA_BUNDLE,
+                    tls_debug=self.valves.TLS_DEBUG,
+                    error_verbosity=self.valves.ERROR_VERBOSITY,
+                )
+                answer = _postprocess_synthesized_answer(answer, sources, question)
+            except PipeError as exc:
+                LOGGER.warning("Answer synthesis fallback failed: %s", exc.status)
+
+        if self.valves.EMIT_CITATION_EVENTS:
+            for source in sources:
+                await _emit_event(__event_emitter__, _citation_event(source))
+
+        if self.valves.EMIT_LEGACY_SOURCE_EVENTS:
+            for source in sources:
+                await _emit_event(__event_emitter__, {"type": "source", "data": source})
+
+        elapsed = max(0.0, time.perf_counter() - started_at)
+        source_group_count = len(_group_sources(sources)) if sources else 0
+        await _emit_status(
+            self.valves,
+            __event_emitter__,
+            _completion_status(
+                source_group_count,
+                elapsed,
+                generated=bool(answer),
+                hit_count=len(sources),
+            ),
+            done=True,
+            hidden=self.valves.HIDE_FINAL_STATUS,
+        )
+
+        return _compose_final_answer(answer, sources, self.valves)

@@ -42,6 +42,7 @@ RAGFlow-Secrets in OpenWebUI-Funktionen abzulegen.
 | Ziel | Einstieg |
 | --- | --- |
 | Schnellstart | [Docker Compose](#schnellstart-mit-docker-compose) oder [Portainer](#portainer-start) |
+| Admin-Erststart | [Checkliste für den ersten produktionsnahen Start](docs/admin-first-start-checklist.md) |
 | Konfiguration | [`connector.env.example`](connector.env.example), [Environment-Referenz](docs/environment.md) |
 | Betrieb | [Operations-Handbuch](docs/operations.md) |
 | Architektur | [Architektur](docs/architecture.md) |
@@ -170,6 +171,8 @@ noch korrigiert werden muss. Die echte Live-Prüfung bleibt über
 Interne Service-Adressen, etwa `http://seafile` oder `http://ragflow:9380` in
 einem gemeinsamen Docker-Netz, werden getrennt von extern erreichbaren Browser-
 und OpenWebUI-Preview-URLs abgefragt.
+Für die erste Administrator-Abnahme nach dem Start gibt es eine kompakte
+[Admin-Erststart-Checkliste](docs/admin-first-start-checklist.md).
 
 Die einzige Betreiberkonfiguration ist [`connector.env.example`](connector.env.example).
 Kopiere sie zu `connector.env`, setze die Pflichtwerte und validiere die
@@ -231,6 +234,8 @@ Wichtig für Portainer-Image-Uploads: Der Stack startet genau das Image, dessen
 Name in `CONNECTOR_IMAGE` steht. Wenn das hochgeladene Image z. B. als
 `seafile-ragflow-connector:latest` angezeigt wird, muss `CONNECTOR_IMAGE` auch
 diesen Wert enthalten.
+Die erste Abnahme nach dem Deploy ist in der
+[Admin-Erststart-Checkliste](docs/admin-first-start-checklist.md) zusammengefasst.
 
 ## Netzwerkvarianten
 
@@ -443,7 +448,7 @@ Services statt über manuelle CLI-Prozesse.
 
 ```bash
 uv sync --locked --all-extras
-python -m compileall src tests migrations
+python -m compileall src tests migrations scripts
 PYTHONPATH=src python -m unittest discover -s tests/unit
 ```
 
@@ -474,6 +479,7 @@ python scripts/verify.py --with-compose
 - [Dokumentationsindex](docs/README.md)
 - [Deutscher Dokumentationseinstieg](docs/de/index.md)
 - [English documentation entry](docs/en/index.md)
+- [Admin-Erststart-Checkliste](docs/admin-first-start-checklist.md)
 - [Internationalisierung und Unicode](docs/i18n.md)
 - [Architektur](docs/architecture.md)
 - [Konfiguration](docs/configuration.md)

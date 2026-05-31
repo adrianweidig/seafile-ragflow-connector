@@ -1,6 +1,7 @@
 {
   "cli": {
     "app_help": "Offline-fähiger Seafile-zu-RAGFlow-Connector",
+    "output_json": "Maschinenlesbares JSON ausgeben.",
     "init_db": {
       "help": "Connector-State-Tabellen anlegen oder aktualisieren.",
       "done": "Datenbank initialisiert"

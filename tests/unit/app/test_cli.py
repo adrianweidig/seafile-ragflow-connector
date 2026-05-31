@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import unittest
 from types import SimpleNamespace
 
 from seafile_ragflow_connector.app.cli import (
     _discover_job_specs,
+    _format_payload,
     _sync_openwebui_if_enabled,
 )
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
@@ -33,6 +35,15 @@ def _runtime(mode: str, service: _FakeOpenWebUIService | None = None):
 
 
 class CliSyncHelpersTests(unittest.TestCase):
+    def test_format_payload_can_emit_stable_json(self) -> None:
+        output = _format_payload({"message": "für", "count": 2}, json_output=True)
+
+        self.assertEqual(json.loads(output), {"message": "für", "count": 2})
+        self.assertEqual(output, '{"count": 2, "message": "für"}')
+
+    def test_format_payload_keeps_legacy_dict_output_by_default(self) -> None:
+        self.assertEqual(_format_payload({"status": "ok"}), "{'status': 'ok'}")
+
     def test_discovery_adds_openwebui_sync_job_when_enabled(self) -> None:
         specs = _discover_job_specs(_runtime("sync"))  # type: ignore[arg-type]
 

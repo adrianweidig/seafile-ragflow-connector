@@ -15,6 +15,9 @@ Wenn die Unternehmens-CA oder ein OpenWebUI-Admin-Key beim Erststart noch nicht
 bekannt ist, bleiben diese Werte leer; der Stack startet trotzdem mit
 System-CAs beziehungsweise deaktiviertem OpenWebUI-Sync und kann später über
 die Env-Datei nachgeschärft werden.
+Die Abnahme nach dem Deploy ist in der
+[Admin-Erststart-Checkliste](../../docs/admin-first-start-checklist.md)
+zusammengefasst.
 
 - `docker-compose.yml` definiert Controller, Worker, Reconciler, PostgreSQL,
   Redis, Volumes, Healthchecks und das optionale Dashboard-Portmapping.
@@ -53,6 +56,10 @@ Portainer-Start:
    sichtbaren Image-Tags anpassen. Wenn lokale Images genutzt werden sollen,
    kann `*_IMAGE_PULL_POLICY=never` gesetzt werden.
 8. Stack deployen und Logs von Controller, Worker und Reconciler prüfen.
+9. Danach die
+   [Admin-Erststart-Checkliste](../../docs/admin-first-start-checklist.md)
+   vollständig durchlaufen, bevor größere Libraries oder Endnutzer freigegeben
+   werden.
 
 Wichtig: Seafile ist die Quelle der Wahrheit. Der Connector kann Zielartefakte
 in RAGFlow und OpenWebUI löschen oder neu erzeugen, wenn Seafile-Libraries oder

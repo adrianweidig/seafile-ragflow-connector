@@ -1,0 +1,333 @@
+# =============================================================================
+# TEXTBEREINIGUNG UND SICHERE MARKDOWN-AUSGABE
+# =============================================================================
+# Entfernt technische Marker, HTML-Reste und escapet Markdown, damit Chat und
+# Quellenübersicht sauber und professionell dargestellt werden.
+def _clean_answer(answer: str, *, clean_ragflow_markers: bool) -> str:
+    text = str(answer or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = html.unescape(text).replace("\u00a0", " ")
+
+    if clean_ragflow_markers:
+        text = re.sub(r"\{\{\s*source\s*:\s*\d+\s*\}\}", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*##\d+\$\$", "", text)
+        text = re.sub(r"\s*\[\s*ID\s*:\s*\d+\s*\]", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*\[\s*source\s*:\s*\d+\s*\]", "", text, flags=re.IGNORECASE)
+
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{4,}", "\n\n\n", text)
+    return text.strip()
+
+
+class _SnippetHTMLTextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._ignored_depth = 0
+
+    @property
+    def text(self) -> str:
+        return "".join(self._parts)
+
+    def handle_starttag(self, tag: str, _attrs: list[tuple[str, str | None]]) -> None:
+        name = tag.lower()
+        if name in {"script", "style"}:
+            self._ignored_depth += 1
+            return
+        if self._ignored_depth:
+            return
+        if name == "br":
+            self._parts.append("\n")
+        elif name == "tr":
+            self._append_line_break()
+        elif name in {"td", "th"}:
+            self._append_table_cell_separator()
+
+    def handle_endtag(self, tag: str) -> None:
+        name = tag.lower()
+        if name in {"script", "style"} and self._ignored_depth:
+            self._ignored_depth -= 1
+            return
+        if self._ignored_depth:
+            return
+        if name == "tr":
+            self._append_line_break()
+
+    def handle_data(self, data: str) -> None:
+        if not self._ignored_depth:
+            self._parts.append(data)
+
+    def _append_line_break(self) -> None:
+        if self._parts and self._parts[-1] != "\n":
+            self._parts.append("\n")
+
+    def _append_table_cell_separator(self) -> None:
+        if not self._parts:
+            return
+        current = "".join(self._parts).rstrip()
+        if current and not current.endswith(("\n", "|")):
+            self._parts.append(" | ")
+
+
+def _clean_snippet(value: Any) -> str:
+    clean = str(value or "")
+    if not clean:
+        return ""
+
+    if "<" in clean or "&" in clean:
+        parser = _SnippetHTMLTextExtractor()
+        try:
+            parser.feed(clean)
+            parser.close()
+        except Exception:
+            return ""
+        clean = html.unescape(parser.text).replace("\u00a0", " ")
+    clean = clean.replace("\r\n", "\n").replace("\r", "\n")
+
+    lines = (" ".join(line.split()) for line in clean.splitlines())
+    return "\n".join(line for line in lines if line).strip()
+
+
+def _blockquote(text: Any) -> list[str]:
+    return [
+        f"> {_escape_markdown(line)}" if line else ">"
+        for line in str(text or "").splitlines()
+    ]
+
+
+def _error_card(title: str, message: str) -> str:
+    return f"### {title}\n\n{message.strip()}"
+
+
+def _compact(value: Any, limit: int = 220) -> str:
+    clean = _clean(value)
+    return clean if len(clean) <= limit else clean[: limit - 1].rstrip() + "…"
+
+
+def _clean(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _escape_markdown(value: Any) -> str:
+    replacements = {
+        "\\": "\\\\",
+        "`": "\\`",
+        "*": "\\*",
+        "_": "\\_",
+        "{": "\\{",
+        "}": "\\}",
+        "[": "\\[",
+        "]": "\\]",
+        "(": "\\(",
+        ")": "\\)",
+        "#": "\\#",
+        "|": "\\|",
+        "<": "&lt;",
+        ">": "&gt;",
+    }
+    return "".join(replacements.get(char, char) for char in str(value or ""))
+
+
+def _escape_table_cell(value: Any) -> str:
+    text = str(value or "")
+    replacements = {
+        "\\": "\\\\",
+        "`": "\\`",
+        "|": "\\|",
+        "<": "&lt;",
+        ">": "&gt;",
+    }
+    return "".join(replacements.get(char, char) for char in text).replace("\n", "<br>")
+
+
+def _escape_link_label(value: Any) -> str:
+    text = str(value or "")
+    replacements = {
+        "\\": "\\\\",
+        "[": "\\[",
+        "]": "\\]",
+        "`": "\\`",
+        "|": "\\|",
+    }
+    return "".join(replacements.get(char, char) for char in text)
+
+
+def _escape_inline_code(value: Any) -> str:
+    return str(value or "").replace("`", "ʼ")
+
+
+
+
+def _best_source_url(
+    source: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    *,
+    keys: Sequence[str],
+    connector_base_url: str = "",
+    allow_connector: bool = False,
+) -> Optional[str]:
+    """Pick the best real document URL and avoid leaking connector API links."""
+    for mapping in (source, metadata):
+        if not isinstance(mapping, Mapping):
+            continue
+        for key in keys:
+            url = _allowed_source_url(
+                mapping.get(key),
+                connector_base_url=connector_base_url,
+                allow_connector=allow_connector,
+            )
+            if url:
+                return url
+    return None
+
+
+def _allowed_source_url(value: Any, *, connector_base_url: str = "", allow_connector: bool = False) -> Optional[str]:
+    url = _safe_http_url(value)
+    if not url:
+        return None
+    if not allow_connector and _is_connector_url(url, connector_base_url):
+        return None
+    return url
+
+
+def _is_connector_url(url: str, connector_base_url: str = "") -> bool:
+    parsed = urlsplit(str(url or ""))
+    path = (parsed.path or "").lower()
+
+    if path.startswith("/api/openwebui/sources/preview"):
+        return False
+
+    if "/api/openwebui/proxy" in path or path.endswith(PROXY_CHAT_PATH):
+        return True
+
+    base = urlsplit(_clean(connector_base_url))
+    if base.netloc and parsed.netloc.lower() == base.netloc.lower():
+        return True
+
+    return False
+
+
+def _middle_ellipsis(value: Any, limit: int = 72) -> str:
+    text = _clean(value)
+    if len(text) <= limit:
+        return text
+    keep = max(8, (limit - 1) // 2)
+    tail = max(8, limit - keep - 1)
+    return f"{text[:keep].rstrip()}…{text[-tail:].lstrip()}"
+
+def _safe_http_url(value: Any) -> Optional[str]:
+    url = str(value or "").strip()
+    if not url:
+        return None
+
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+
+    return url.replace("\r", "").replace("\n", "").replace(">", "%3E")
+
+
+def _drop_empty(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _drop_empty(item)
+            for key, item in value.items()
+            if item not in (None, "", [], {})
+        }
+    if isinstance(value, list):
+        return [_drop_empty(item) for item in value if item not in (None, "", [], {})]
+    return value
+
+
+def _first_nonempty(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _source_id(source: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
+    value = source.get("source_id") or metadata.get("source_id")
+    if value not in (None, ""):
+        return str(value)
+    rank = source.get("rank") or metadata.get("rank") or 1
+    try:
+        return f"S{int(rank)}"
+    except Exception:
+        return "S?"
+
+
+def _source_name_with_location(title: Any, metadata: Mapping[str, Any]) -> str:
+    clean_title = _clean(title) or "Quelle"
+    location = _location(metadata)
+    if location and location != "Fundstelle nicht angegeben":
+        return f"{clean_title} · {location}"
+    return clean_title
+
+
+def _line_range(start: Any, end: Any) -> str:
+    if start in (None, "") and end in (None, ""):
+        return ""
+    if end in (None, "") or str(end) == str(start):
+        return str(start)
+    if start in (None, ""):
+        return str(end)
+    return f"{start}-{end}"
+
+
+def _first_page(positions: Any) -> Any:
+    if not isinstance(positions, Sequence) or isinstance(positions, (str, bytes)) or not positions:
+        return None
+    first = positions[0]
+    if isinstance(first, Sequence) and not isinstance(first, (str, bytes)) and first:
+        return first[0]
+    return None
+
+
+def _locator_quality(
+    *,
+    page: Any,
+    section: Any,
+    line_start: Any,
+    line_end: Any,
+    positions: Any,
+    chunk_id: Optional[str],
+    document_id: Optional[str],
+    document_name: Optional[str],
+    path: Optional[str],
+    snippet: str,
+) -> str:
+    if line_start not in (None, "") or line_end not in (None, ""):
+        return "line"
+    if page not in (None, ""):
+        return "page"
+    if section not in (None, ""):
+        return "section"
+    if positions not in (None, "", [], {}):
+        return "position"
+    if chunk_id:
+        return "chunk"
+    if document_id or document_name or path:
+        return "document"
+    if snippet:
+        return "snippet_only"
+    return "unknown"
+
+
+def _string_or_none(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    try:
+        return int(str(value))
+    except Exception:
+        return None
+
+
+def _basename(path: Any) -> Optional[str]:
+    clean = _clean(path)
+    if not clean:
+        return None
+    return clean.rstrip("/").rsplit("/", 1)[-1] or None

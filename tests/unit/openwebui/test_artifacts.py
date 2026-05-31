@@ -2,15 +2,41 @@ from __future__ import annotations
 
 import json
 import unittest
+from importlib import resources
 
+import seafile_ragflow_connector.openwebui.templates.pipe as pipe_templates
 from seafile_ragflow_connector.openwebui.artifacts import (
+    _PIPE_TEMPLATE_FRAGMENTS,
     DatasetArtifactInputs,
+    _pipe_content,
     build_pipe_spec,
     build_tool_spec,
 )
 
 
 class OpenWebUIArtifactTests(unittest.TestCase):
+    def test_pipe_template_is_composed_from_packaged_fragments(self) -> None:
+        template_root = resources.files(pipe_templates)
+        parts = [
+            template_root.joinpath(fragment).read_text(encoding="utf-8")
+            for fragment in _PIPE_TEMPLATE_FRAGMENTS
+        ]
+
+        self.assertGreater(len(parts), 3)
+        self.assertTrue(all(part.strip() for part in parts))
+        self.assertIn("class Pipe:", parts[0])
+        self.assertIn("KONFIGURATIONSPRÜFUNG", parts[1])
+        self.assertIn("OPTIONALER ANTWORT-SYNTHESE-FALLBACK", parts[2])
+        self.assertIn("OPENWEBUI-EVENTS", parts[3])
+        self.assertIn("FINALE CHAT-AUSGABE", parts[4])
+        self.assertIn("TEXTBEREINIGUNG", parts[5])
+        self.assertEqual("".join(parts), _pipe_content())
+        self.assertFalse(
+            resources.files("seafile_ragflow_connector.openwebui.templates")
+            .joinpath("ragflow_dataset_pipe_chat_rag_polished.py.txt")
+            .is_file()
+        )
+
     def test_tool_and_pipe_specs_are_deterministic_and_secret_free(self) -> None:
         inputs = DatasetArtifactInputs(
             namespace="ragflow",
