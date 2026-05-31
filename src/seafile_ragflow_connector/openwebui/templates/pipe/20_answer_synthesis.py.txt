@@ -1,0 +1,521 @@
+# =============================================================================
+# OPTIONALER ANTWORT-SYNTHESE-FALLBACK
+# =============================================================================
+# Dieser Block ist nur relevant, wenn der Proxy keinen KI-Text erzeugt.
+# Dann nutzt die Pipe Quellen als Kontext und ruft ein OpenAI-kompatibles LLM auf.
+async def _synthesize_answer_from_sources(
+    valves: Pipe.Valves,
+    body: dict,
+    sources: list[dict[str, Any]],
+    *,
+    verify_ssl: bool,
+    ca_bundle: str,
+    tls_debug: bool,
+    error_verbosity: str,
+) -> str:
+    original_messages = (body if isinstance(body, Mapping) else {}).get("messages") or []
+    question = _last_user_text(original_messages)
+    context = _sources_context(sources, max_chars=int(valves.ANSWER_CONTEXT_MAX_CHARS))
+    if not question or not context:
+        return ""
+
+    url = _openai_chat_completions_url(valves.ANSWER_LLM_BASE_URL)
+    headers = {
+        "Authorization": f"Bearer {_clean(valves.ANSWER_LLM_API_KEY)}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "OpenWebUI-RAGFlow-Dataset-Pipe/3.4 Answer-Synthesis",
+    }
+    payload = {
+        "model": _clean(valves.ANSWER_LLM_MODEL),
+        "messages": [
+            {"role": "system", "content": DEFAULT_SYNTHESIS_SYSTEM_PROMPT},
+            *_recent_messages_for_synthesis(original_messages, max_messages=6),
+            {
+                "role": "user",
+                "content": (
+                    "Beantworte die letzte Nutzerfrage anhand dieses Dokumentkontexts. "
+                    "Der Kontext ist nicht selbst die Antwort, sondern nur Evidenz.\n\n"
+                    "Dokumentkontext:\n"
+                    f"{context}\n\n"
+                    "Formuliere jetzt die finale Chat-Antwort. Belege jede wesentliche Aussage mit den "
+                    "Quellenmarken [S1], [S2] usw. aus dem Kontext. Keine Quellenliste und keine "
+                    "Dateinamen-Aufzählung, außer die Nutzerfrage verlangt ausdrücklich eine Quellen-/Dokumentliste."
+                ),
+            },
+        ],
+        "temperature": float(valves.ANSWER_SYNTHESIS_TEMPERATURE),
+        "max_tokens": int(valves.ANSWER_SYNTHESIS_MAX_TOKENS),
+        "stream": False,
+    }
+
+    data = await _post_answer_llm_json(
+        url,
+        _drop_empty(payload),
+        headers,
+        verify_ssl=verify_ssl,
+        ca_bundle=ca_bundle,
+        timeout_seconds=valves.REQUEST_TIMEOUT_SECONDS,
+        tls_debug=tls_debug,
+        error_verbosity=error_verbosity,
+    )
+    answer = _clean_answer(
+        _strip_appended_source_markdown(_extract_answer(data)),
+        clean_ragflow_markers=valves.CLEAN_RAGFLOW_MARKERS,
+    )
+    if not answer:
+        raise PipeError(
+            "Der Antwort-Synthese-Fallback lieferte keinen verwertbaren Antworttext.",
+            status="Antwort-Synthese ohne Inhalt.",
+        )
+    return answer
+
+
+async def _post_answer_llm_json(
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    *,
+    verify_ssl: bool,
+    ca_bundle: str,
+    timeout_seconds: float,
+    tls_debug: bool,
+    error_verbosity: str,
+) -> dict[str, Any]:
+    try:
+        verify = _httpx_verify(verify_ssl, ca_bundle)
+    except ValueError as exc:
+        _log_proxy_error(exc, url, ca_bundle, debug=tls_debug)
+        raise PipeError(
+            "Die TLS-Konfiguration für den Antwort-Synthese-Fallback ist ungültig.",
+            status="TLS-Konfiguration für Antwort-Synthese ungültig.",
+        ) from exc
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=_httpx_timeout(timeout_seconds),
+            verify=verify,
+            follow_redirects=False,
+        ) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+    except httpx.TimeoutException as exc:
+        _log_proxy_error(exc, url, ca_bundle, debug=tls_debug)
+        raise PipeError(
+            "Der Antwort-Synthese-Fallback hat nicht rechtzeitig geantwortet.",
+            status="Antwort-Synthese-Timeout.",
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        _log_proxy_error(exc, url, ca_bundle, debug=tls_debug)
+        status_code = exc.response.status_code
+        raise PipeError(
+            _answer_llm_status_message(status_code, exc.response, error_verbosity),
+            status=f"Antwort-Synthese antwortete mit HTTP {status_code}.",
+        ) from exc
+    except httpx.RequestError as exc:
+        _log_proxy_error(exc, url, ca_bundle, debug=tls_debug)
+        raise PipeError(
+            "Der Antwort-Synthese-Fallback war nicht erreichbar.",
+            status="Antwort-Synthese nicht erreichbar.",
+        ) from exc
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        _log_proxy_error(exc, url, ca_bundle, debug=tls_debug)
+        raise PipeError(
+            "Der Antwort-Synthese-Fallback lieferte keine gültige JSON-Antwort.",
+            status="Ungültige JSON-Antwort der Antwort-Synthese.",
+        ) from exc
+
+    if not isinstance(data, Mapping):
+        raise PipeError(
+            "Der Antwort-Synthese-Fallback lieferte ein unerwartetes Antwortformat.",
+            status="Unerwartetes Antwort-Synthese-Format.",
+        )
+    return dict(data)
+
+
+def _answer_llm_status_message(status_code: int, response: httpx.Response, error_verbosity: str) -> str:
+    if status_code in {401, 403}:
+        message = "Der Antwort-Synthese-Fallback hat die Anfrage abgelehnt. Prüfe `ANSWER_LLM_API_KEY` und Berechtigungen."
+    elif status_code == 404:
+        message = "Der Antwort-Synthese-Endpunkt wurde nicht gefunden. Prüfe `ANSWER_LLM_BASE_URL`."
+    elif status_code == 429:
+        message = "Der Antwort-Synthese-Fallback ist ausgelastet oder limitiert Anfragen."
+    elif 500 <= status_code <= 599:
+        message = f"Der Antwort-Synthese-Fallback meldete einen Serverfehler (HTTP {status_code})."
+    else:
+        message = f"Der Antwort-Synthese-Fallback antwortete mit HTTP {status_code}."
+
+    if _clean(error_verbosity).lower() == "debug":
+        body_hint = _compact(_clean(response.text), 500)
+        if body_hint:
+            message += f"\n\n**Fallback-Hinweis:** `{_escape_inline_code(body_hint)}`"
+    return message
+
+
+def _openai_chat_completions_url(base_url: str) -> str:
+    clean = _clean(base_url).rstrip("/")
+    parsed = urlsplit(clean)
+    path = parsed.path.rstrip("/")
+    if path.endswith("/chat/completions"):
+        return clean
+    if path.endswith("/v1") or path.endswith("/api"):
+        return clean + "/chat/completions"
+    return clean + "/v1/chat/completions"
+
+
+
+
+def _recent_messages_for_synthesis(messages: Any, *, max_messages: int = 6) -> list[dict[str, str]]:
+    """Return a compact user/assistant history for answer synthesis."""
+    if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
+        return []
+
+    normalized: list[dict[str, str]] = []
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        role = _clean(message.get("role")).lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = message.get("content")
+        text = content if isinstance(content, str) else _content_parts_to_text(content)
+        text = _compact(_clean_answer(text, clean_ragflow_markers=True), 1800)
+        if text:
+            normalized.append({"role": role, "content": text})
+
+    return normalized[-max(1, int(max_messages or 6)):]
+
+
+def _is_source_inventory_question(question: Any) -> bool:
+    text = _clean(question).lower()
+    if not text:
+        return False
+    return bool(
+        re.search(r"\b(welche|welche\s+dateien|zeige|liste|nenn[e]?)\b.*\b(quellen|dokumente|dateien)\b", text)
+        or re.search(r"\b(quellen|dokumente|dateien)\b.*\b(verfügbar|vorhanden|gefunden|angebunden|indexiert)\b", text)
+        or re.search(r"\bwas\s+(ist|sind)\s+.*\b(quellen|dokumente|dateien)\b", text)
+    )
+
+
+def _source_inventory_answer(sources: list[dict[str, Any]]) -> str:
+    groups = _group_sources(sources)
+    if not groups:
+        return "Ich habe aktuell keine Quellen gefunden."
+
+    lines = ["Ich habe folgende Dokumente als Quellen gefunden:", ""]
+    for index, group in enumerate(groups[:12], start=1):
+        source = group[0]
+        metadata = _metadata(source)
+        title = _clean(source.get("name") or metadata.get("document_name") or metadata.get("doc_name") or "Quelle")
+        location = _location(metadata)
+        details = []
+        if location and location != "Fundstelle nicht angegeben":
+            details.append(location)
+        if len(group) > 1:
+            details.append(f"{len(group)} Treffer")
+        suffix = f" — {' · '.join(details)}" if details else ""
+        lines.append(f"{index}. **{_escape_markdown(title)}**{suffix}")
+
+    if len(groups) > 12:
+        lines.append(f"\nWeitere {len(groups) - 12} Quellen wurden ausgeblendet.")
+
+    lines.append("\nStelle mir eine konkrete Frage zum Inhalt dieser Dokumente, dann formuliere ich daraus eine inhaltliche RAG-Antwort.")
+    return "\n".join(lines).strip()
+
+
+def _postprocess_synthesized_answer(answer: str, sources: list[dict[str, Any]], question: Any) -> str:
+    text = _clean_answer(answer, clean_ragflow_markers=True)
+    if not text:
+        return ""
+
+    text = re.sub(r"\bDie\s+Verfügbaren\s+Quellen\b", "Die verfügbaren Quellen", text)
+    text = re.sub(r"\s*\[(?:Quelle|Source)\s*\d+\]", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*\[\d+\]", "", text)
+    text = re.sub(r" {2,}", " ", text)
+
+    if not _is_source_inventory_question(question) and _looks_like_source_inventory_answer(text, sources):
+        return ""
+
+    return text.strip()
+
+
+def _annotate_answer_source_markers(answer: str, sources: list[dict[str, Any]]) -> str:
+    if not answer or not sources:
+        return answer
+
+    def source_id_for_index(raw_index: str) -> str:
+        index = _int_or_none(raw_index)
+        if index is None or index < 0 or index >= len(sources):
+            return f"[ID:{raw_index}]"
+        metadata = _metadata(sources[index])
+        return f"[{_source_id(sources[index], metadata)}]"
+
+    text = re.sub(
+        r"\[\s*ID\s*:\s*(\d+)\s*\]",
+        lambda match: source_id_for_index(match.group(1)),
+        str(answer),
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\{\{\s*source\s*:\s*(\d+)\s*\}\}",
+        lambda match: source_id_for_index(match.group(1)),
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"##(\d+)\$\$",
+        lambda match: source_id_for_index(match.group(1)),
+        text,
+    )
+    return text
+
+
+def _looks_like_source_inventory_answer(answer: str, sources: list[dict[str, Any]]) -> bool:
+    clean_answer = _clean(answer).lower()
+    if not clean_answer:
+        return False
+
+    inventory_phrases = (
+        "verfügbaren quellen",
+        "gefundenen quellen",
+        "folgende quellen",
+        "quellen sind",
+        "dokumente sind",
+    )
+    if any(phrase in clean_answer for phrase in inventory_phrases):
+        title_hits = 0
+        for source in sources:
+            title = _clean(source.get("name") or _metadata(source).get("document_name") or "").lower()
+            if title and title in clean_answer:
+                title_hits += 1
+        return title_hits >= 2 or len(clean_answer) < 700
+
+    return False
+
+
+def _looks_like_source_markdown_only(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    start = _source_markdown_start(raw)
+    if start is None:
+        return _source_table_density(raw) >= 0.55
+    prefix = raw[:start].strip()
+    return not _has_substantive_answer_prefix(prefix)
+
+
+def _contains_source_markdown(text: str) -> bool:
+    raw = str(text or "")
+    if not raw.strip():
+        return False
+    return _source_markdown_start(raw) is not None or _source_table_density(raw) >= 0.55
+
+
+def _strip_appended_source_markdown(text: str) -> str:
+    raw = str(text or "")
+    start = _source_markdown_start(raw)
+    if start is None:
+        return raw.strip()
+    prefix = raw[:start].strip()
+    if not _has_substantive_answer_prefix(prefix):
+        return raw.strip()
+    return prefix
+
+
+def _source_markdown_start(text: str) -> Optional[int]:
+    offset = 0
+    previous_nonempty: tuple[int, str] | None = None
+    for line in str(text or "").replace("\r\n", "\n").replace("\r", "\n").splitlines(keepends=True):
+        line_text = line.rstrip("\n")
+        stripped = line_text.strip()
+        if _is_source_markdown_heading(stripped) or _is_source_table_header(stripped):
+            if previous_nonempty and previous_nonempty[1] == "---":
+                return previous_nonempty[0]
+            return offset
+        if stripped:
+            previous_nonempty = (offset, stripped)
+        offset += len(line)
+    return None
+
+
+def _is_source_markdown_heading(line: str) -> bool:
+    heading = line.lstrip("#").strip().lower()
+    return heading in {
+        "nachweise",
+        "quellen",
+        "quellenüberblick",
+        "gefundene quellen",
+        "found sources",
+        "sources",
+        "source overview",
+    }
+
+
+def _is_source_table_header(line: str) -> bool:
+    compact = " ".join(line.lower().split())
+    return (
+        compact.startswith("|")
+        and "| id |" in compact
+        and "| dokument |" in compact
+        and "| fundstelle |" in compact
+        and "| öffnen |" in compact
+    )
+
+
+def _source_table_density(text: str) -> float:
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if not lines:
+        return 0.0
+    source_lines = 0
+    for line in lines:
+        lower = line.lower()
+        if _is_source_table_header(line) or lower.startswith("|---"):
+            source_lines += 1
+        elif lower.startswith("| s") and "|" in lower:
+            source_lines += 1
+        elif lower.startswith("**nachweisqualität:**"):
+            source_lines += 1
+    return source_lines / len(lines)
+
+
+def _has_substantive_answer_prefix(prefix: str) -> bool:
+    clean = _clean(prefix.replace("---", " "))
+    if not clean:
+        return False
+    if _looks_like_source_markdown_only(clean):
+        return False
+    return bool(re.search(r"[0-9A-Za-zÄÖÜäöüß]{2,}", clean))
+
+
+def _is_low_information_snippet(snippet: Any) -> bool:
+    text = _clean(snippet).lower()
+    if not text:
+        return True
+    if re.fullmatch(r"\d+\s+treffer\s+im\s+dokument", text):
+        return True
+    if re.fullmatch(r"(seite|page)\s+\d+", text):
+        return True
+    if len(text) < 30 and not re.search(r"[.!?:;]", text):
+        return True
+    return False
+
+def _sources_context(sources: list[dict[str, Any]], *, max_chars: int) -> str:
+    groups = _group_sources(sources)
+    lines: list[str] = []
+    remaining = max(1000, int(max_chars or 12000))
+
+    for display_rank, group in enumerate(groups, start=1):
+        for source in group[:2]:
+            metadata = _metadata(source)
+            title = _clean(source.get("name") or metadata.get("document_name") or metadata.get("doc_name") or "Quelle")
+            location = _location(metadata)
+            snippet = _clean_snippet(source.get("text") or source.get("snippet") or "")
+            if not snippet or _is_low_information_snippet(snippet):
+                continue
+            source_id = _source_id(source, metadata)
+            block = f"[{source_id}: {title} · {location}]\n{snippet}\n"
+            if len(block) > remaining:
+                block = block[: max(0, remaining - 1)].rstrip() + "…"
+            if not block.strip():
+                break
+            lines.append(block)
+            remaining -= len(block)
+            if remaining <= 0:
+                return "\n".join(lines).strip()
+
+    return "\n".join(lines).strip()
+
+def _http_status_user_message(status_code: int, response: httpx.Response, error_verbosity: str) -> str:
+    if status_code in {401, 403}:
+        message = "RAGFlow-Proxy hat die Anfrage abgelehnt. Prüfe `CONNECTOR_PROXY_SHARED_SECRET` und Proxy-Berechtigungen."
+    elif status_code == 404:
+        message = "Der RAGFlow-Proxy-Endpunkt wurde nicht gefunden. Prüfe `CONNECTOR_PROXY_BASE_URL` und Proxy-Routing."
+    elif status_code == 408:
+        message = "Der RAGFlow-Proxy hat die Anfrage wegen Zeitüberschreitung beendet."
+    elif status_code == 429:
+        message = "Der RAGFlow-Proxy ist ausgelastet oder limitiert Anfragen."
+    elif 500 <= status_code <= 599:
+        message = f"Der RAGFlow-Proxy meldete einen Serverfehler (HTTP {status_code})."
+    else:
+        message = f"Der RAGFlow-Proxy antwortete mit HTTP {status_code}."
+
+    if _clean(error_verbosity).lower() == "debug":
+        body_hint = _compact(_clean(response.text), 500)
+        if body_hint:
+            message += f"\n\n**Proxy-Hinweis:** `{_escape_inline_code(body_hint)}`"
+
+    return message
+
+
+def _httpx_timeout(timeout_seconds: float) -> httpx.Timeout:
+    """Create conservative timeouts suitable for RAG workloads."""
+    total = max(5.0, min(float(timeout_seconds or 180.0), 600.0))
+    connect = min(20.0, total)
+    write = min(30.0, total)
+    pool = min(20.0, total)
+    return httpx.Timeout(total, connect=connect, read=total, write=write, pool=pool)
+
+
+def _httpx_verify(verify_ssl: bool, ca_bundle: str) -> bool | ssl.SSLContext:
+    if not bool(verify_ssl):
+        LOGGER.warning(
+            "OpenWebUI Pipe -> Connector Proxy uses VERIFY_SSL=false; this is intended only for debug/dev."
+        )
+        return False
+
+    ca_path = _clean(ca_bundle)
+    if not ca_path:
+        return True
+
+    path = Path(ca_path)
+    if not path.exists():
+        raise ValueError(f"CA bundle does not exist: {ca_path}")
+    if not path.is_file():
+        raise ValueError(f"CA bundle is not a file: {ca_path}")
+
+    try:
+        return ssl.create_default_context(cafile=ca_path)
+    except OSError as exc:
+        raise ValueError(f"CA bundle is not usable: {ca_path}") from exc
+
+
+def _log_proxy_error(exc: Exception, url: str, ca_bundle: str, *, debug: bool = False) -> None:
+    LOGGER.warning(
+        "OpenWebUI Pipe -> Connector Proxy failed target=%s error_class=%s ca_bundle_set=%s",
+        _safe_url(url),
+        _error_class(exc),
+        bool(_clean(ca_bundle)),
+        exc_info=debug,
+    )
+
+
+def _safe_url(url: str) -> str:
+    parsed = urlsplit(str(url or ""))
+    if not parsed.scheme or not parsed.netloc:
+        return str(url or "").split("?", 1)[0]
+
+    host = parsed.hostname or ""
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+
+    return urlunsplit((parsed.scheme, host, parsed.path.rstrip("/") or "", "", ""))
+
+
+def _error_class(exc: Exception) -> str:
+    if isinstance(exc, httpx.TimeoutException):
+        return "TIMEOUT"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP_{exc.response.status_code}"
+    if isinstance(exc, httpx.ConnectError):
+        text = str(exc).lower()
+        if any(token in text for token in ("certificate", "cert", "ssl", "tls")):
+            return "CERTIFICATE_VERIFY_FAILED"
+        return "CONNECT_ERROR"
+    if isinstance(exc, httpx.RequestError):
+        return exc.__class__.__name__.upper()
+    if isinstance(exc, ValueError):
+        return "CONFIGURATION_OR_RESPONSE_ERROR"
+    return exc.__class__.__name__.upper()

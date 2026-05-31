@@ -10,6 +10,8 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
   Dashboard und OpenWebUI-Modi.
 - `environment.md` trennt minimale Pflichtvariablen von optionalen und
   modusabhängigen Variablen.
+- `admin-first-start-checklist.md` führt Administratoren durch Vorprüfung,
+  ersten Start, Erfolgskriterien und Nutzerfreigabe.
 - `operations.md` enthält Portainer-Betrieb, Docker-Compose-Varianten,
   Docker-Swarm-Betrieb, GHCR-/Offline-Hinweise, Recovery, Troubleshooting und
   lokale WSL-/Docker-Prüfungen.

@@ -29,6 +29,7 @@ The connector is an offline-ready sync control plane for environments where Seaf
 | Goal | Entry point |
 | --- | --- |
 | Quick start | [Docker Compose](#docker-compose-quick-start) or [Portainer](#portainer-start) |
+| Admin first start | [first-start checklist](docs/en/admin-first-start-checklist.md) |
 | Configuration | [`connector.env.example`](connector.env.example), [environment reference](docs/environment.md) |
 | Operations | [operations guide](docs/operations.md) |
 | Architecture | [architecture](docs/architecture.md) |
@@ -73,6 +74,8 @@ optional values keep robust defaults: without a CA path the stack uses system
 CAs, without an OpenWebUI admin key OpenWebUI sync stays disabled, and startup
 defaults to `CONNECTOR_STARTUP_CHECK=infra` so dashboard and logs remain
 reachable while external service, TLS, auth, or parser issues are fixed.
+For the first administrator acceptance after deployment, use the compact
+[admin first-start checklist](docs/en/admin-first-start-checklist.md).
 
 Copy the operator configuration and set the required values:
 
@@ -122,12 +125,15 @@ curl http://127.0.0.1:18080/api/health
 2. Paste `deploy/portainer/docker-compose.yml` into the web editor or use this repository as a Git stack.
 3. Import the values from `connector.env.example` as environment variables.
 4. Replace only the required values; set OpenWebUI values only when that integration is enabled.
-5. Deploy the stack and inspect the logs of `connector-controller`, `connector-worker`, and `connector-reconciler`.
+5. If images are provided offline, align `CONNECTOR_IMAGE`, `POSTGRES_IMAGE`, `REDIS_IMAGE`, and the `*_PULL_POLICY` values with the imported local images.
+6. Deploy the stack and inspect the logs of `connector-controller`, `connector-worker`, and `connector-reconciler`.
 
 For production-like deployments, pin `CONNECTOR_IMAGE` to a fixed release tag
 such as `ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.6` after that
 release has been published. Treat `latest` as a convenience tag for smoke tests
 and fresh test environments.
+The first acceptance path after deployment is summarized in the
+[admin first-start checklist](docs/en/admin-first-start-checklist.md).
 
 ## CLI
 
@@ -147,7 +153,7 @@ The package exposes the `connector` command:
 
 ```bash
 uv sync --locked --all-extras
-python -m compileall src tests migrations
+python -m compileall src tests migrations scripts
 PYTHONPATH=src python -m unittest discover -s tests/unit
 ```
 
@@ -171,6 +177,7 @@ python scripts/verify.py --with-compose
 
 - [German documentation entry](docs/de/index.md)
 - [English documentation entry](docs/en/index.md)
+- [Admin first-start checklist](docs/en/admin-first-start-checklist.md)
 - [Architecture](docs/architecture.md)
 - [Configuration](docs/configuration.md)
 - [Environment variables](docs/environment.md)

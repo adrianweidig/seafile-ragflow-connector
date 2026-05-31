@@ -8,6 +8,10 @@ Nutze `docker-stack.yml`, wenn der Connector als Swarm-Stack laufen soll und
 PostgreSQL/Redis ebenfalls durch Swarm verwaltet werden sollen. Seafile,
 RAGFlow und optional OpenWebUI bleiben externe Systeme. Sie müssen aus den
 Swarm-Nodes beziehungsweise aus den Connector-Tasks erreichbar sein.
+Die allgemeine erste Abnahme steht in der
+[Admin-Erststart-Checkliste](../../docs/admin-first-start-checklist.md);
+Swarm-spezifisch ist zusätzlich die reine Portnummer für
+`CONNECTOR_DASHBOARD_PUBLISHED_PORT` zu beachten.
 
 ## Wichtige Unterschiede zu Docker Compose
 
@@ -44,6 +48,11 @@ Status prüfen:
 docker stack services seafile-ragflow-connector
 docker service logs seafile-ragflow-connector_connector-controller
 ```
+
+Danach die
+[Admin-Erststart-Checkliste](../../docs/admin-first-start-checklist.md)
+durchlaufen. Für Swarm ersetzt `docker stack services` die Compose-Container-
+Liste, alle Health-, Dashboard- und Zielsystemkriterien bleiben gleich.
 
 Stack entfernen:
 

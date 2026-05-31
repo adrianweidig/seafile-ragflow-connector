@@ -14,6 +14,7 @@ for later static documentation pages.
 - [Architecture](../architecture.md)
 - [Configuration](../configuration.md)
 - [Environment variables](../environment.md)
+- [Admin first-start checklist](admin-first-start-checklist.md)
 - [Internationalization and Unicode](i18n.md)
 - [Testing model](../testing.md)
 - [Operations and deployment](../operations.md)

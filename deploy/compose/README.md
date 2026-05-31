@@ -27,6 +27,10 @@ output/enterprise-compose/portainer.env
 
 In Portainer reicht dann: Compose-Inhalt einfügen, Env-Werte importieren,
 Stack deployen. Secret-Werte stehen nur in der Env-Datei.
+Für die erste Abnahme nach dem Start verweist die
+[Admin-Erststart-Checkliste](../../docs/admin-first-start-checklist.md) auf die
+konkreten Erfolgskriterien für `check-config`, `check-live`, Dashboard-Health
+und erste Nutzerfreigabe.
 
 Für manuelle Installationen bleibt die zentrale Datei im Repo-Root gültig:
 
@@ -54,6 +58,7 @@ Mit `CONNECTOR_IMAGE_PULL_POLICY=never`, `POSTGRES_IMAGE_PULL_POLICY=never` und
 | Bestehendes Docker-Netz | `shared-network.compose.yml` | `../../connector.env.example` | Connector, Seafile, RAGFlow und optional OpenWebUI hängen im selben Docker-Netz und sprechen sich über Service-Namen an. |
 | OpenWebUI zusätzlich anbinden | `openwebui.compose.yml` | `../../connector.env.example` | Wie Shared-Network, zusätzlich mit Dashboard/Proxy und aktivierter OpenWebUI-Synchronisation. |
 | Unternehmensnetz mit interner CA | `enterprise-ca.compose.yml` als Overlay | per `scripts/configure-enterprise-compose.sh` | Mountet die Unternehmens-Root-CA/Chain read-only, wenn ein CA-Pfad bekannt ist, und setzt alle Connector-TLS-Strecken auf verifizierte HTTPS-Kommunikation. |
+| Manuelles TLS-Beispiel | `docker-compose.tls-example.yml` als Overlay | `../../connector.env.example` | Schlankes Referenz-Overlay für selbst konfigurierte CA-Mounts. Für neue Enterprise-Installationen ist `enterprise-ca.compose.yml` klarer. |
 
 Die Compose-Varianten starten standardmäßig mit `CONNECTOR_STARTUP_CHECK=infra`.
 Damit kommen Controller, Dashboard und Logs hoch, auch wenn Seafile, RAGFlow
@@ -61,7 +66,6 @@ oder RAGFlow-Parserressourcen noch nicht vollständig bereit sind. Für strikte
 Starts kann `CONNECTOR_STARTUP_CHECK=live` gesetzt werden; die explizite
 Live-Prüfung bleibt über `connector check-live` beziehungsweise das generierte
 `check-live.sh` verfügbar.
-| Manuelles TLS-Beispiel | `docker-compose.tls-example.yml` als Overlay | `../../connector.env.example` | Schlankes Referenz-Overlay für selbst konfigurierte CA-Mounts. Für neue Enterprise-Installationen ist `enterprise-ca.compose.yml` klarer. |
 
 ## Startbeispiele
 

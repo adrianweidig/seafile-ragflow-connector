@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import unittest
+from importlib import resources
 
+import seafile_ragflow_connector.dashboard as dashboard_package
 from seafile_ragflow_connector.dashboard.ui import DASHBOARD_HTML
 
 
 class DashboardUiTests(unittest.TestCase):
+    def test_dashboard_html_is_loaded_from_packaged_asset(self) -> None:
+        asset = resources.files(dashboard_package).joinpath("assets/dashboard.html")
+        self.assertTrue(asset.is_file())
+        self.assertEqual(asset.read_text(encoding="utf-8"), DASHBOARD_HTML)
+
     def test_long_table_cells_are_expandable_and_accessible(self) -> None:
         self.assertIn("function longText", DASHBOARD_HTML)
         self.assertIn("aria-expanded", DASHBOARD_HTML)

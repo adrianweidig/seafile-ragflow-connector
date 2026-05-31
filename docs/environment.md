@@ -59,7 +59,7 @@ Proxy-Secret und keine Preview-URL.
 | `OPENWEBUI_SYNC_ON_STARTUP` | optional | Sync beim Controller-Start ausführen. |
 | `OPENWEBUI_SYNC_MODE` | optional | `disabled`, `dry-run`, `sync` oder `repair`. |
 | `OPENWEBUI_CREATE_TOOLS`, `OPENWEBUI_CREATE_PIPES` | optional | Tool-/Pipe-Erzeugung getrennt steuern. |
-| `OPENWEBUI_REQUEST_TIMEOUT_SECONDS` | optional | Timeout für OpenWebUI- und Proxy-Aufrufe. |
+| `OPENWEBUI_REQUEST_TIMEOUT_SECONDS` | optional | Timeout für OpenWebUI- und Proxy-Aufrufe. Default `180` unterstützt lange RAG-Antworten; für latenzkritische Proxy-/Edge-Flows eher `30` bis `60` Sekunden wählen und Reverse-Proxy-Timeouts angleichen. |
 | `OPENWEBUI_VERIFY_SSL`, `OPENWEBUI_CA_BUNDLE` | optional | TLS für Connector -> OpenWebUI Admin API. |
 | `OPENWEBUI_FUNCTION_NAMESPACE` | optional | Präfix für erzeugte Tool-/Pipe-IDs. |
 | `OPENWEBUI_SOURCE_PREVIEW_MODE` | optional | `ragflow_link`, `connector_viewer`, `citation_only` oder `disabled`; `connector_viewer` ist für auditierbare Citations mit Direktlink zur Fundstelle empfohlen. |

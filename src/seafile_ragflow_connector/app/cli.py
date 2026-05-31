@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -65,7 +66,12 @@ def init_db() -> None:
 
 
 @app.command("check-live")
-def check_live() -> None:
+def check_live(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help=t("cli.output_json")),
+    ] = False,
+) -> None:
     """Live-Abhängigkeiten prüfen, ohne Seafile oder RAGFlow zu verändern."""
     settings = _bootstrap()
     check_database(settings.database_url)
@@ -82,14 +88,15 @@ def check_live() -> None:
             ),
             "RAGFlow",
         )
-        typer.echo(
+        _emit_payload(
             {
                 "database": "ok",
                 "redis": "ok",
                 "seafile_admin_libraries_visible": len(libraries),
                 "ragflow_template_found": bool(templates),
                 "template_name": settings.ragflow_template_dataset_name,
-            }
+            },
+            json_output=json_output,
         )
     finally:
         runtime.close()
@@ -104,6 +111,10 @@ def sync_once(
             help=t("cli.sync_once.wait_parse"),
         ),
     ] = 0,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help=t("cli.output_json")),
+    ] = False,
 ) -> None:
     """Einen vollständigen Discovery- und Sync-Lauf ausführen."""
     settings = _bootstrap()
@@ -116,7 +127,7 @@ def sync_once(
         openwebui_summary = _sync_openwebui_if_enabled(runtime)
         if openwebui_summary is not None:
             payload["openwebui"] = openwebui_summary
-        typer.echo(payload)
+        _emit_payload(payload, json_output=json_output)
     finally:
         runtime.close()
 
@@ -144,6 +155,10 @@ def cleanup_orphans(
             help=t("cli.sync_once.wait_parse"),
         ),
     ] = 0,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help=t("cli.output_json")),
+    ] = False,
 ) -> None:
     """Verwaiste connector-eigene RAGFlow-/OpenWebUI-Artefakte planen oder löschen."""
     settings = _bootstrap()
@@ -179,7 +194,7 @@ def cleanup_orphans(
             openwebui_summary = _sync_openwebui_if_enabled(runtime)
             if openwebui_summary is not None:
                 payload["openwebui"] = openwebui_summary
-        typer.echo(payload)
+        _emit_payload(payload, json_output=json_output)
     finally:
         if extra_openwebui_client is not None:
             extra_openwebui_client.close()
@@ -195,13 +210,17 @@ def openwebui_sync_once(
             help=t("cli.openwebui.mode"),
         ),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help=t("cli.output_json")),
+    ] = False,
 ) -> None:
     """Einen OpenWebUI-Synchronisationslauf ausführen."""
     settings = _bootstrap()
     runtime = build_runtime(settings)
     try:
         if runtime.openwebui_sync_service is None:
-            typer.echo({"status": "disabled"})
+            _emit_payload({"status": "disabled"}, json_output=json_output)
             return
         selected_mode = mode or settings.openwebui_effective_sync_mode
         if selected_mode not in {"disabled", "dry-run", "sync", "repair"}:
@@ -209,7 +228,7 @@ def openwebui_sync_once(
         summary = runtime.openwebui_sync_service.sync_once(
             mode_override=cast(OpenWebUIMode, selected_mode)
         )
-        typer.echo(summary.__dict__)
+        _emit_payload(summary.__dict__, json_output=json_output)
     finally:
         runtime.close()
 
@@ -398,10 +417,15 @@ def reconciler() -> None:
 
 
 @app.command("check-config")
-def check_config() -> None:
+def check_config(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help=t("cli.output_json")),
+    ] = False,
+) -> None:
     """Konfiguration laden und validieren, ohne externe Dienste zu kontaktieren."""
     settings = _bootstrap()
-    typer.echo(
+    _emit_payload(
         {
             "app_env": settings.app_env,
             "connector_language": localizer_for(settings).language,
@@ -417,7 +441,8 @@ def check_config() -> None:
             "openwebui_base_url": settings.openwebui_base_url,
             "openwebui_create_tools": settings.openwebui_create_tools,
             "openwebui_create_pipes": settings.openwebui_create_pipes,
-        }
+        },
+        json_output=json_output,
     )
 
 
@@ -455,6 +480,16 @@ def _enqueue_specs(
             signal_queue.signal(job_id)
         except Exception as exc:
             log.warning("job.signal_failed", job_id=job_id, job_type=spec.job_type, error=str(exc))
+
+
+def _emit_payload(payload: dict[str, Any], *, json_output: bool = False) -> None:
+    typer.echo(_format_payload(payload, json_output=json_output))
+
+
+def _format_payload(payload: dict[str, Any], *, json_output: bool = False) -> str:
+    if json_output:
+        return json.dumps(payload, ensure_ascii=False, default=str, sort_keys=True)
+    return str(payload)
 
 
 def _retry_until(action: Callable[[], Any], label: str, timeout_seconds: int = 180) -> Any:

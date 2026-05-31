@@ -2,6 +2,8 @@
 
 Dieses Dokument bündelt Offline-Deployment, Portainer-Betrieb, Recovery,
 Troubleshooting, Release und die lokale WSL-/Docker-Prüfung.
+Für die erste Administrator-Abnahme nach einem neuen Deploy steht zusätzlich
+die [Admin-Erststart-Checkliste](admin-first-start-checklist.md) bereit.
 
 ## Portainer-Deployment
 
@@ -22,6 +24,9 @@ Image vorab exportiert und auf dem Zielhost geladen werden.
 Die Compose-Datei referenziert keine lokale `env_file`. In Portainer reicht es,
 die Compose-Datei einzufügen oder das Repo als Git-Stack zu nutzen und die Werte
 aus `connector.env.example` im Bereich `Environment variables` zu importieren.
+Die Connector-Env-Blöcke in Compose, Portainer und Swarm werden im Verify-Lauf
+gegen `connector.env.example` geprüft, damit neue Runtime-Variablen nicht in
+einzelnen Deployment-Pfaden fehlen.
 
 1. Bei Offline-Betrieb benötigte Images auf dem Docker-Host importieren,
    beispielsweise:
@@ -46,6 +51,9 @@ aus `connector.env.example` im Bereich `Environment variables` zu importieren.
 
 Der Stack stellt Seafile und RAGFlow nicht bereit. Beide Systeme bleiben extern
 und müssen über die konfigurierten URLs erreichbar sein.
+Nach dem Deploy sollte die
+[Admin-Erststart-Checkliste](admin-first-start-checklist.md) einmal vollständig
+durchlaufen werden, bevor größere Libraries oder Endnutzer freigegeben werden.
 
 Es gibt zwei unterstützte Netzwerkvarianten:
 
@@ -80,6 +88,9 @@ erreichbar sind. Für Portainer schreibt der Assistent zusätzlich
 `output/enterprise-compose/portainer-compose.yml` und
 `output/enterprise-compose/portainer.env`; diese beiden Dateien sind das
 Copy-&-Paste-Paar für den Portainer-Stack.
+Die darin erzeugten `check-config.sh`, `up.sh` und `check-live.sh` entsprechen
+der kurzen Abnahmefolge aus der
+[Admin-Erststart-Checkliste](admin-first-start-checklist.md).
 
 Manuell bleibt die zentrale Konfigurationsdatei der Einstieg:
 
@@ -123,6 +134,18 @@ docker compose \
   -f deploy/compose/external-services.compose.yml \
   up -d
 ```
+
+Für einen reproduzierbaren lokalen Mock-Smoke-Check ohne echte Seafile- oder
+RAGFlow-Instanz kann der Verify-Runner Docker explizit nutzen:
+
+```bash
+python scripts/verify.py --skip-compose --with-mock-smoke
+```
+
+Der Check erzeugt lokale TLS-Lab-Zertifikate, startet
+`deploy/compose/local-mocks.compose.yml`, führt `connector check-live --json`
+im Controller aus und prüft `/health/tls`. Ohne Docker wird dieser Check nicht
+im Standardlauf ausgeführt.
 
 Für das Shared-Network- und OpenWebUI-Szenario muss das konfigurierte
 `CONNECTOR_DOCKER_NETWORK_NAME` bei `docker compose up` bereits existieren.
@@ -227,6 +250,12 @@ REDIS_IMAGE_PULL_POLICY=never
 Der Runtime-Container darf beim Start keine Pakete installieren und keine
 Artefakte nachladen.
 
+Der GitHub-Actions-Workflow `release-artifact` erzeugt bei Pushes auf `master`
+oder `main` ein Repository-ZIP, `release-notes.md` und `SHA256SUMS` als
+Actions-Artefakt. Dieses Artefakt ist der reproduzierbare Code-Stand für ein
+Offline-Bundle; Docker-Images und deren Export bleiben separate
+Maintainer-Schritte.
+
 ## Lokale WSL-/Docker-Prüfung
 
 Die folgenden Kommandos prüfen schrittweise, ob Python-Logik, Dockerfile,
@@ -286,7 +315,7 @@ und API-Antworten prüfbar.
 ### 1. Python-Schnelltest auf Windows
 
 ```powershell
-python -m compileall src tests migrations
+python -m compileall src tests migrations scripts
 $env:PYTHONPATH='src'; python -m unittest discover -s tests/unit
 ```
 
@@ -384,6 +413,10 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
 
 - Keine Libraries: `SEAFILE_BASE_URL`, `SEAFILE_ADMIN_TOKEN` und Admin-Rechte für
   `/api/v2.1/admin/libraries/` prüfen.
+- Automationen und Skripte: `connector check-config`, `connector check-live`,
+  `connector sync-once`, `connector cleanup-orphans` und
+  `connector openwebui-sync-once` unterstützen `--json`. Ohne dieses Flag bleibt
+  die bisherige menschenlesbare Ausgabe erhalten.
 - Template nicht gefunden: `RAGFLOW_TEMPLATE_AUTO_CREATE=true` nutzen oder
   `RAGFLOW_TEMPLATE_DATASET_NAME`, `RAGFLOW_API_KEY` und RAGFlow-User prüfen.
 - `unable to get local issuer certificate`: Root- und Intermediate-CA als PEM

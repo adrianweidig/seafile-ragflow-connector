@@ -35,6 +35,17 @@ Der Docker-Workflow veröffentlicht für SemVer-Tags entsprechende GHCR-Tags. F�
 produktionsnahe Installationen sollten Betreiber nach Möglichkeit einen Release-
 oder SHA-Tag statt eines beweglichen Branch-Tags pinnen.
 
+## Automatische Release-Artefakte
+
+Der Workflow `.github/workflows/release-artifact.yml` läuft bei jedem Push auf
+`master` oder `main` sowie manuell per `workflow_dispatch`. Er erstellt mit
+`git archive` ein ZIP des exakten Commits, `release-notes.md` mit Branch,
+Commit, Event, Actor, UTC-Zeitpunkt und Änderungsliste sowie `SHA256SUMS`.
+
+Der Workflow erzeugt bewusst keine Tags und keine GitHub Releases. Die
+SemVer-Entscheidung und die Veröffentlichung eines GitHub Releases bleiben
+Maintainer-Schritte.
+
 ## Offline-Bundle
 
 Ein manuelles Offline-Bundle kann enthalten:

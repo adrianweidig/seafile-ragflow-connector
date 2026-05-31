@@ -34,7 +34,7 @@ uv sync --locked --all-extras
 Schnelle lokale Syntaxprüfung:
 
 ```bash
-python -m compileall src tests migrations
+python -m compileall src tests migrations scripts
 ```
 
 Standardchecks:
@@ -113,6 +113,12 @@ erzwungen, wenn `--with-compose` gesetzt ist.
 - Vor Änderungen immer `git status --short --branch` prüfen.
 - Fremde oder bereits vorhandene Änderungen nicht zurücksetzen oder
   überschreiben.
+- Automationsläufe sollen am Ende einen sauberen Git-Zustand herstellen:
+  eigene Änderungen sinnvoll bündeln, passende Prüfungen ausführen, committen,
+  pushen und bei geschütztem Hauptbranch über Pull Request und Merge
+  abschließen. Wenn fremde Änderungen, fehlende Rechte, ausstehende CI oder
+  Branch-Protection-Regeln das verhindern, wird der Blocker dokumentiert und
+  der Arbeitsbaum nicht destruktiv bereinigt.
 - Keine destruktiven Git-Befehle ohne ausdrückliche Nutzerfreigabe:
   `reset`, `restore`, `checkout --`, `clean`, Rebase, Amend oder Force-Push.
 - Generierte lokale Artefakte bleiben ungetrackt, insbesondere Caches,
@@ -146,3 +152,36 @@ erzwungen, wenn `--with-compose` gesetzt ist.
   wurden ausgeführt und dokumentiert.
 - `git diff --check` ist sauber.
 - Es wurden keine Secrets oder lokalen privaten Dateien hinzugefügt.
+
+## Repository-To-do-Wartung mit Codex
+
+- Der gemeinsame Analyse- und To-do-Workspace liegt unter
+  `E:\Codex-Shared-Workspace\Repo-Analysis-Todos`.
+- Vor produktiven Codeänderungen zuerst die dortige `AGENTS.md`,
+  `todo-prioritized.md`, `todo-active.md`, `todo-master-list.md` und
+  `automation-state.json` lesen.
+- Codeänderungen brauchen eine klare Zuordnung zu einem dokumentierten To-do.
+  Riskante Migrationen, Löschungen, Major-Dependency-Upgrades oder
+  produktive Runtime-Änderungen bleiben manuell zu prüfen.
+- Installierbarkeit für Administratoren und Nutzerfreundlichkeit für
+  Endnutzer sind bei der Priorisierung besonders zu gewichten.
+- Jede Änderung an Markdown-Dateien im To-do-Workspace muss die Metadaten-
+  Zeitstempel aktualisieren.
+- Jede To-do-Änderung muss in `todo-changelog.md` dokumentiert werden.
+- Automationsläufe müssen `automation-run-log.md` und `automation-state.json`
+  aktualisieren.
+- Automationsläufe sollen nicht nach einer einzelnen Aufgabe stoppen, sondern
+  sichere aktive To-dos nacheinander bearbeiten.
+- Automationsläufe sollen nicht mit absichtlich dirty Worktree enden, wenn die
+  Änderungen lokal sicher prüfbar und veröffentlichbar sind. Zielzustand ist:
+  Commit erstellt, Branch gepusht, Pull Request gemergt oder der konkrete
+  Git-/CI-/Rechte-Blocker in `automation-run-log.md` und
+  `automation-state.json` dokumentiert.
+- Wenn keine aktiven To-dos mehr vorhanden sind, muss automatisch eine
+  vollständige Repository-Analyse ausgeführt werden. Der Lauf darf erst enden,
+  wenn diese Vollanalyse keine neuen belegbaren To-dos findet oder nur noch
+  externe Tool-/Zugangsgrenzen übrig bleiben.
+- Nach Code-, Deployment- oder Konfigurationsänderungen passende Tests, Lints,
+  Builds oder Smoke-Checks ausführen und das Ergebnis dokumentieren.
+- Sicherheitsarbeit bleibt defensiv: keine Secrets ausgeben, keine produktiven
+  Daten löschen und keine ausnutzbaren Angriffsanleitungen erzeugen.

@@ -1,0 +1,522 @@
+# =============================================================================
+# FINALE CHAT-AUSGABE
+# =============================================================================
+# Antworttext und Quellen werden hier zur sichtbaren Assistant-Nachricht
+# zusammengesetzt. UX-Regel: Antwort zuerst, Quellen danach.
+def _compose_final_answer(answer: str, sources: list[dict[str, Any]], valves: Pipe.Valves) -> str:
+    """Compose the final visible assistant message for OpenWebUI."""
+    markdown_mode = _source_markdown_mode(valves.SOURCE_MARKDOWN_MODE)
+    if _looks_like_source_markdown_only(answer):
+        answer = ""
+    else:
+        answer = _strip_appended_source_markdown(answer)
+
+    if not answer:
+        answer = _retrieval_only_fallback_message(sources, valves)
+    elif markdown_mode == "audit":
+        answer = _ensure_audit_marker(answer, sources)
+
+    source_block = ""
+    if bool(valves.APPEND_SOURCE_OVERVIEW) and not _contains_source_markdown(answer):
+        source_block = _source_markdown(
+            sources,
+            show_scores=valves.SHOW_SOURCE_SCORES,
+            show_debug=valves.SHOW_SOURCE_DEBUG,
+            mode=markdown_mode,
+            show_locator_quality=valves.SHOW_LOCATOR_QUALITY,
+        )
+
+    if source_block:
+        return f"{answer.rstrip()}\n\n{source_block}".strip()
+
+    return answer.strip()
+
+
+def _ensure_audit_marker(answer: str, sources: list[dict[str, Any]]) -> str:
+    if not answer or not sources or re.search(r"\[S\d+\]", answer):
+        return answer
+    first = sources[0]
+    marker = _source_id(first, _metadata(first))
+    return f"{answer.rstrip()} [{marker}]"
+
+
+def _retrieval_only_fallback_message(sources: list[dict[str, Any]], valves: Pipe.Valves) -> str:
+    if not sources:
+        return (
+            "Ich habe keine belastbare Antwort vom RAGFlow-Proxy erhalten und es wurden "
+            "keine passenden Quellen zurückgegeben."
+        )
+
+    mode = _clean(valves.RETRIEVAL_ONLY_FALLBACK).lower() or "brief"
+    if mode == "sources_only":
+        return "Ich habe Quellen gefunden, aber der RAGFlow-Proxy hat keinen KI-Antworttext geliefert."
+
+    if mode == "brief":
+        return (
+            "Der RAGFlow-Proxy hat passende Dokumentstellen gefunden, aber keinen generierten "
+            "Antworttext zurückgegeben. Deshalb kann ich hier noch keine echte Chat-RAG-Antwort anzeigen."
+        )
+
+    return (
+        "### Antwort nicht generiert\n\n"
+        "Der RAGFlow-Proxy hat für diese Anfrage nur Retrieval-Treffer zurückgegeben, "
+        "aber keinen KI-Antworttext. Diese Pipe ist auf echte Chat-RAG-Antworten ausgelegt "
+        "und sendet bereits `response_mode=chat`, `generate_answer=true`, `retrieval_only=false`, "
+        "einen RAG-System-Prompt sowie `extra_body.reference=true`.\n\n"
+        "Damit im Chat eine echte Antwort statt einer Suchergebnisliste erscheint, muss der Proxy "
+        "mindestens eines dieser Antwortfelder zurückgeben: `answer`, `data.answer` oder "
+        "OpenAI-kompatibel `choices[0].message.content`. Wenn weiterhin nur Quellen erscheinen, "
+        "läuft der Proxy sehr wahrscheinlich noch im Search-/Retrieval-Modus statt im RAGFlow-Chat-Modus."
+    )
+
+
+def _source_markdown(
+    sources: list[dict[str, Any]],
+    *,
+    show_scores: bool = True,
+    show_debug: bool = False,
+    mode: str = "compact",
+    show_locator_quality: bool = True,
+) -> str:
+    """Render the optional Markdown source overview appended to the answer."""
+    mode = _source_markdown_mode(mode)
+    if mode == "none":
+        return ""
+
+    if mode == "audit":
+        return _source_markdown_audit(
+            sources,
+            show_scores=show_scores,
+            show_debug=show_debug,
+            show_locator_quality=show_locator_quality,
+        )
+
+    if not sources:
+        return ""
+
+    groups = _group_sources(sources)
+    if mode == "compact":
+        return _source_markdown_compact(groups, show_scores=show_scores)
+    return _source_markdown_detailed(groups, show_scores=show_scores, show_debug=show_debug)
+
+
+def _source_markdown_audit(
+    sources: list[dict[str, Any]],
+    *,
+    show_scores: bool,
+    show_debug: bool,
+    show_locator_quality: bool,
+) -> str:
+    lines = ["---", "## Nachweise", ""]
+    if not sources:
+        lines.extend(
+            [
+                "Ich habe keine ausreichend belastbare Quelle gefunden, um diese Antwort sicher zu belegen.",
+                "",
+                "**Nachweisqualität:** keine belastbare Quelle.",
+            ]
+        )
+        return "\n".join(lines).rstrip()
+
+    lines.append(_audit_quality_sentence(sources))
+    lines.append("")
+    lines.append("| ID | Gestützte Aussage | Dokument | Fundstelle | Relevanz | Öffnen |")
+    lines.append("|---|---|---|---|---|---|")
+
+    for source in sources[:MAX_SOURCE_GROUPS_DETAILED]:
+        metadata = _metadata(source)
+        source_id = _source_id(source, metadata)
+        claim = _audit_claim(source, metadata)
+        document = _audit_document(source, metadata)
+        location = _location(metadata)
+        locator_quality = str(metadata.get("locator_quality") or "")
+        if show_locator_quality and locator_quality in {"unknown", "snippet_only", "document", "chunk"}:
+            location = f"{location} (nicht genauer bestimmbar)"
+        relevance = _audit_relevance(source, metadata, show_scores=show_scores)
+        actions = _actions(source, metadata) or "kein Direktlink"
+        lines.append(
+            "| "
+            + " | ".join(
+                _escape_table_cell(value)
+                for value in (source_id, claim, document, location, relevance, actions)
+            )
+            + " |"
+        )
+
+    if len(sources) > MAX_SOURCE_GROUPS_DETAILED:
+        remaining = len(sources) - MAX_SOURCE_GROUPS_DETAILED
+        lines.append(f"|  | weitere Quellen ausgeblendet | {remaining} zusätzliche Treffer |  |  |  |")
+
+    if _has_conflicting_sources(sources):
+        lines.extend(
+            [
+                "",
+                "## Hinweis zur Belastbarkeit",
+                "Die Quellenlage enthält als widersprüchlich markierte Hinweise. Prüfe die Nachweise und bevorzugt aktuellere oder fachlich freigegebene Dokumente.",
+            ]
+        )
+    else:
+        lines.extend(["", "## Hinweis zur Belastbarkeit", _audit_reliability_note(sources)])
+
+    if show_debug:
+        debug_lines = []
+        for source in sources[:MAX_SOURCE_GROUPS_DETAILED]:
+            metadata = _metadata(source)
+            debug = _debug_parts(metadata)
+            if debug:
+                debug_lines.append(f"- {_source_id(source, metadata)}: {' · '.join(debug)}")
+        if debug_lines:
+            lines.extend(["", "**Debug:**", *debug_lines])
+
+    return "\n".join(lines).rstrip()
+
+
+def _source_markdown_compact(groups: list[list[dict[str, Any]]], *, show_scores: bool) -> str:
+    lines = ["---", "### Quellenüberblick", ""]
+    lines.append("| # | Quelle | Fundstelle | Relevanz |")
+    lines.append("|---:|---|---|---|")
+
+    for display_rank, group in enumerate(groups[:MAX_SOURCE_GROUPS_COMPACT], start=1):
+        source = group[0]
+        metadata = _metadata(source)
+        source_cell = _source_table_link(source, metadata)
+        location = _escape_table_cell(_location(metadata))
+        relevance = _escape_table_cell(_relevance_text(source.get("score") or metadata.get("score")) if show_scores else "—")
+        if len(group) > 1:
+            location = f"{location}<br>{len(group)} Treffer"
+        lines.append(f"| {display_rank} | {source_cell} | {location} | {relevance} |")
+
+    if len(groups) > MAX_SOURCE_GROUPS_COMPACT:
+        remaining = len(groups) - MAX_SOURCE_GROUPS_COMPACT
+        lines.append(f"|  | weitere Quellen | {remaining} zusätzliche Treffer |  |")
+
+    return "\n".join(lines).rstrip()
+
+
+def _source_markdown_detailed(
+    groups: list[list[dict[str, Any]]],
+    *,
+    show_scores: bool,
+    show_debug: bool,
+) -> str:
+    lines = ["---", "## Quellen & Fundstellen", ""]
+
+    for display_rank, group in enumerate(groups[:MAX_SOURCE_GROUPS_DETAILED], start=1):
+        source = group[0]
+        metadata = _metadata(source)
+        title = _escape_markdown(source.get("name") or "Quelle")
+        summary = _source_summary(metadata, source, len(group), show_scores=show_scores)
+
+        lines.append(f"### {display_rank}. {title}")
+        if summary:
+            lines.append(f"**{summary}**")
+
+        actions = _actions(source, metadata)
+        if actions:
+            lines.append(f"**Aktionen:** {actions}")
+
+        snippet = _clean_snippet(source.get("text") or source.get("snippet") or "")
+        if snippet:
+            lines.append("")
+            lines.extend(_blockquote(_compact(snippet, DETAILED_SNIPPET_CHARS)))
+
+        if show_debug:
+            debug = _debug_parts(metadata)
+            if debug:
+                lines.append("")
+                lines.append(f"Debug: {' · '.join(debug)}")
+
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
+def _source_markdown_mode(value: Any) -> str:
+    mode = _clean(value).lower() or "compact"
+    if mode in {"off", "disabled"}:
+        return "none"
+    if mode in VALID_SOURCE_MARKDOWN_MODES:
+        return mode
+    return "compact"
+
+
+def _source_summary(
+    metadata: Mapping[str, Any],
+    source: Mapping[str, Any],
+    group_size: int,
+    *,
+    show_scores: bool,
+) -> str:
+    parts = [_location(metadata)]
+
+    if show_scores:
+        parts.append(_relevance_text(source.get("score") or metadata.get("score")))
+
+    if group_size > 1:
+        parts.append(f"{group_size} Treffer")
+
+    return " · ".join(part for part in parts if part)
+
+
+def _audit_quality_sentence(sources: list[dict[str, Any]]) -> str:
+    quality = _audit_quality(sources)
+    precise = 0
+    linked = 0
+    for source in sources:
+        metadata = _metadata(source)
+        if metadata.get("locator_quality") in {"line", "page", "section", "position"}:
+            precise += 1
+        if source.get("preview_url") or source.get("url") or source.get("original_url"):
+            linked += 1
+    labels = {
+        "strong": f"stark - {len(sources)} Quellen, {precise} konkrete Fundstellen, {linked} Direktlinks.",
+        "medium": f"mittel - {len(sources)} Quellen, {precise} konkrete Fundstellen, {linked} Direktlinks.",
+        "weak": f"schwach - {len(sources)} Quellen, aber nur grobe Dokument-/Chunk-Hinweise.",
+        "none": "keine belastbare Quelle.",
+    }
+    return f"**Nachweisqualität:** {labels[quality]}"
+
+
+def _audit_quality(sources: list[dict[str, Any]]) -> str:
+    if not sources:
+        return "none"
+    precise = 0
+    linked = 0
+    for source in sources:
+        metadata = _metadata(source)
+        if metadata.get("locator_quality") in {"line", "page", "section", "position"}:
+            precise += 1
+        if source.get("preview_url") or source.get("url") or source.get("original_url"):
+            linked += 1
+    if len(sources) >= 2 and precise >= 2 and linked >= 1:
+        return "strong"
+    if precise >= 1 or linked >= 1:
+        return "medium"
+    return "weak"
+
+
+def _audit_claim(source: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
+    claim = _first_nonempty(
+        source.get("claim"),
+        source.get("supported_claim"),
+        metadata.get("claim"),
+        metadata.get("supported_claim"),
+        None,
+    )
+    if claim not in (None, ""):
+        return _compact(claim, 120)
+    snippet = _clean_snippet(source.get("text") or source.get("snippet") or "")
+    if snippet:
+        return _compact(snippet, 120)
+    return "Gestützte Aussage nicht genauer bestimmbar"
+
+
+def _audit_document(source: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
+    title = _clean(
+        source.get("name")
+        or metadata.get("document_name")
+        or metadata.get("doc_name")
+        or "Quelle"
+    )
+    path = _clean(metadata.get("path"))
+    dataset = _clean(metadata.get("dataset_name"))
+    parts = [title]
+    if path and path != title:
+        parts.append(path)
+    if dataset:
+        parts.append(dataset)
+    return " · ".join(parts)
+
+
+def _audit_relevance(
+    source: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    *,
+    show_scores: bool,
+) -> str:
+    if show_scores:
+        return _relevance_text(source.get("score") or metadata.get("score"))
+    return str(
+        metadata.get("relevance_label")
+        or _relevance(source.get("score") or metadata.get("score"))
+    )
+
+
+def _audit_reliability_note(sources: list[dict[str, Any]]) -> str:
+    quality = _audit_quality(sources)
+    if quality == "strong":
+        return "Die Antwort basiert auf mehreren Quellen mit konkreten Fundstellen und Direktlinks."
+    if quality == "medium":
+        return "Die Antwort basiert auf Quellen, deren Fundstellen teilweise konkret bestimmbar sind."
+    return "Die Antwort basiert auf Quellen mit grober Fundstelle; prüfe die Preview, bevor du daraus eine Entscheidung ableitest."
+
+
+def _has_conflicting_sources(sources: list[dict[str, Any]]) -> bool:
+    conflict_values = {"conflict", "conflicting", "contradiction", "contradicts", "widerspruch"}
+    for source in sources:
+        metadata = _metadata(source)
+        for mapping in (source, metadata):
+            for key, value in mapping.items():
+                key_text = str(key).lower()
+                value_text = str(value).lower()
+                if key_text in conflict_values and value not in (None, "", False):
+                    return True
+                if key_text in {"assessment", "status", "note"} and "widerspr" in value_text:
+                    return True
+                if key_text in {"assessment", "status", "note"} and "contradict" in value_text:
+                    return True
+    return False
+
+
+def _group_sources(sources: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+
+    for source in sources:
+        metadata = _metadata(source)
+        key = _first_nonempty(
+            metadata.get("path"),
+            metadata.get("document_id"),
+            metadata.get("document_name"),
+            metadata.get("doc_name"),
+            source.get("name"),
+            "Quelle",
+        )
+        grouped.setdefault(str(key), []).append(source)
+
+    groups = list(grouped.values())
+    for group in groups:
+        group.sort(key=lambda item: (_score_sort(item), _rank_sort(item)))
+
+    groups.sort(key=lambda group: (_score_sort(group[0]), _rank_sort(group[0])))
+    return groups
+
+
+def _score_sort(source: Mapping[str, Any]) -> float:
+    score = _score_float(source.get("score") or _metadata(source).get("score"))
+    return -1.0 if score is None else -score
+
+
+def _rank_sort(source: Mapping[str, Any]) -> int:
+    try:
+        return int(source.get("rank") or _metadata(source).get("rank") or 9999)
+    except Exception:
+        return 9999
+
+
+def _metadata(source: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = source.get("source_metadata")
+    if isinstance(metadata, Mapping):
+        return dict(metadata)
+
+    metadata_items = source.get("metadata")
+    if (
+        isinstance(metadata_items, Sequence)
+        and not isinstance(metadata_items, (str, bytes))
+        and metadata_items
+        and isinstance(metadata_items[0], Mapping)
+    ):
+        return dict(metadata_items[0])
+
+    if isinstance(metadata_items, Mapping):
+        return dict(metadata_items)
+
+    return {}
+
+
+def _location(metadata: Mapping[str, Any]) -> str:
+    parts = []
+    if metadata.get("page") not in (None, ""):
+        parts.append(f"Seite {metadata.get('page')}")
+    if metadata.get("section") not in (None, ""):
+        parts.append(f"Abschnitt {metadata.get('section')}")
+    line = _line_range(metadata.get("line_start") or metadata.get("line"), metadata.get("line_end"))
+    if line:
+        parts.append(f"Zeile {line}")
+    if not parts and metadata.get("reference_id") not in (None, ""):
+        parts.append(f"Referenz {metadata.get('reference_id')}")
+    if not parts and metadata.get("positions") not in (None, "", [], {}):
+        parts.append("Positionen vorhanden")
+    return " · ".join(parts) or "Fundstelle nicht angegeben"
+
+
+def _actions(source: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
+    links = []
+
+    preview = _safe_http_url(source.get("preview_url") or metadata.get("preview_url"))
+    original = _safe_http_url(source.get("original_url") or metadata.get("original_url"))
+
+    if preview:
+        links.append(_markdown_link("Preview öffnen", preview))
+    if original and original != preview:
+        links.append(_markdown_link("Original öffnen", original))
+
+    return " · ".join(link for link in links if link)
+
+
+def _source_table_link(source: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
+    title = _clean(source.get("name") or metadata.get("document_name") or metadata.get("doc_name") or "Quelle")
+    label = _middle_ellipsis(title, 72)
+    url = _safe_http_url(source.get("preview_url") or source.get("original_url"))
+    if not url:
+        return _escape_table_cell(label)
+    return f"[{_escape_link_label(label)}](<{url}>)"
+
+
+def _markdown_link(label: str, url: str) -> str:
+    safe_url = _safe_http_url(url)
+    if not safe_url:
+        return ""
+    return f"[{_escape_markdown(label)}](<{safe_url}>)"
+
+
+def _debug_parts(metadata: Mapping[str, Any]) -> list[str]:
+    parts = []
+    for label, key in (
+        ("Chunk", "chunk_id"),
+        ("Dokument", "document_id"),
+        ("Dataset", "dataset_id"),
+        ("Repo", "repo_id"),
+    ):
+        value = metadata.get(key)
+        if value not in (None, ""):
+            parts.append(f"{label} `{_escape_markdown(str(value)[:12])}`")
+    return parts
+
+
+def _relevance_text(score: Any) -> str:
+    formatted = _format_score(score)
+    if formatted:
+        return f"{_relevance(score)} ({formatted})"
+    return "unbekannt"
+
+
+def _relevance(score: Any) -> str:
+    value = _score_float(score)
+    if value is None:
+        return "unbekannt"
+    if value >= 0.85:
+        return "sehr hoch"
+    if value >= 0.7:
+        return "hoch"
+    if value >= 0.5:
+        return "mittel"
+    return "niedrig"
+
+
+def _format_score(score: Any) -> str:
+    value = _score_float(score)
+    if value is None:
+        return ""
+    return f"{value:.0%}"
+
+
+def _score_float(score: Any) -> Optional[float]:
+    try:
+        value = float(score)
+    except Exception:
+        return None
+
+    if value > 1:
+        value = value / 100
+
+    return max(0.0, min(1.0, value))

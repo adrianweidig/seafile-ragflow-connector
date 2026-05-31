@@ -11,8 +11,15 @@ from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
 ARTIFACT_VERSION = "19"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
-_PIPE_TEMPLATE = "ragflow_dataset_pipe_chat_rag_polished.py.txt"
-_TEMPLATE_PACKAGE = "seafile_ragflow_connector.openwebui.templates"
+_PIPE_TEMPLATE_PACKAGE = "seafile_ragflow_connector.openwebui.templates.pipe"
+_PIPE_TEMPLATE_FRAGMENTS = (
+    "00_header_pipe_core.py.txt",
+    "10_configuration_payload_http.py.txt",
+    "20_answer_synthesis.py.txt",
+    "30_events_answers_sources.py.txt",
+    "40_final_output_markdown.py.txt",
+    "50_text_cleanup_urls.py.txt",
+)
 
 
 @dataclass(frozen=True)
@@ -396,7 +403,11 @@ def _tool_content() -> str:
 
 
 def _pipe_content() -> str:
-    return resources.files(_TEMPLATE_PACKAGE).joinpath(_PIPE_TEMPLATE).read_text(encoding="utf-8")
+    template_root = resources.files(_PIPE_TEMPLATE_PACKAGE)
+    return "".join(
+        template_root.joinpath(fragment).read_text(encoding="utf-8")
+        for fragment in _PIPE_TEMPLATE_FRAGMENTS
+    )
 
 
 def _artifact_text_catalog() -> dict[str, dict[str, str]]:

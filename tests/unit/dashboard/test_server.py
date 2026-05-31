@@ -205,6 +205,39 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("Signierter Treffer", html)
         self.assertIn("Original öffnen", html)
 
+    def test_dashboard_and_preview_send_defensive_security_headers(self) -> None:
+        store = _store()
+        settings = _settings(0)
+        token = sign_preview_payload(
+            {
+                "document_name": "report.pdf",
+                "citation_label": "Quelle 1",
+                "source_path": "/report.pdf",
+                "snippet": "Signierter Treffer",
+            },
+            "proxy-secret",
+        )
+        handle = start_dashboard_server(
+            DashboardContext(store=store, settings=settings, started_at=utcnow())
+        )
+        port = handle.server.server_address[1]
+        try:
+            _, dashboard_headers = _get_text_with_headers(port, "/dashboard")
+            _, preview_headers = _get_text_with_headers(
+                port, f"/api/openwebui/sources/preview?token={token}"
+            )
+        finally:
+            handle.stop()
+
+        for headers in (dashboard_headers, preview_headers):
+            self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
+            self.assertEqual(headers.get("Referrer-Policy"), "no-referrer")
+            self.assertEqual(headers.get("X-Frame-Options"), "DENY")
+            csp = headers.get("Content-Security-Policy", "")
+            self.assertIn("default-src 'self'", csp)
+            self.assertIn("frame-ancestors 'none'", csp)
+            self.assertIn("object-src 'none'", csp)
+
     def test_openwebui_mapping_requires_assigned_tool_and_pipe(self) -> None:
         store = _store()
         with store.session_factory() as session:
@@ -749,6 +782,11 @@ def _get_bytes(port: int, path: str) -> tuple[bytes, str, str]:
 def _get_text(port: int, path: str) -> str:
     with urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as response:
         return response.read().decode("utf-8")
+
+
+def _get_text_with_headers(port: int, path: str) -> tuple[str, dict[str, str]]:
+    with urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as response:
+        return response.read().decode("utf-8"), dict(response.headers.items())
 
 
 if __name__ == "__main__":

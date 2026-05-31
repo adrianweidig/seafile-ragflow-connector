@@ -254,6 +254,11 @@ RAGFLOW_DOCUMENT_URL_TEMPLATE=
   Connector erreicht. Erforderlich ist eine interne oder öffentliche Proxy-URL
   nur, wenn Tools oder Pipes in `sync` oder `repair` synchronisiert werden.
   Wenn leer, wird `OPENWEBUI_PROXY_PUBLIC_BASE_URL` verwendet.
+- `OPENWEBUI_REQUEST_TIMEOUT_SECONDS`: Timeout für OpenWebUI-Admin-, Tool- und
+  Proxy-Aufrufe. Der Repository-Default `180` eignet sich für lange
+  RAG-Antworten und langsame Parserpfade. Für latenzkritische OpenWebUI-
+  Proxy- oder Edge-Flows sind meist `30` bis `60` Sekunden sinnvoller; dann
+  müssen Reverse-Proxy- und OpenWebUI-Timeouts dazu passen.
 - `OPENWEBUI_SOURCE_PREVIEW_MODE`: `ragflow_link`, `connector_viewer`,
   `citation_only` oder `disabled`. Für auditierbare OpenWebUI-Antworten ist
   `connector_viewer` empfohlen, weil Citation-Chips und Markdown-Nachweistabelle

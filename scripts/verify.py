@@ -30,6 +30,16 @@ def main() -> int:
         action="store_true",
         help="Require Docker Compose configuration validation.",
     )
+    parser.add_argument(
+        "--with-mock-smoke",
+        action="store_true",
+        help="Run the local HTTPS mock Compose smoke check. Requires Docker Compose.",
+    )
+    parser.add_argument(
+        "--with-dashboard-browser-smoke",
+        action="store_true",
+        help="Run the local Playwright browser smoke check for the dashboard.",
+    )
     args = parser.parse_args()
 
     checks: list[tuple[str, Sequence[str], dict[str, str] | None]] = []
@@ -39,11 +49,26 @@ def main() -> int:
         [
             (
                 "Compile Python sources",
-                ("uv", "run", "python", "-m", "compileall", "src", "tests", "migrations"),
+                (
+                    "uv",
+                    "run",
+                    "python",
+                    "-m",
+                    "compileall",
+                    "src",
+                    "tests",
+                    "migrations",
+                    "scripts",
+                ),
                 None,
             ),
             ("Lint", ("uv", "run", "ruff", "check", "."), None),
             ("Typecheck", ("uv", "run", "mypy", "src"), None),
+            (
+                "Deployment environment drift check",
+                ("uv", "run", "python", "scripts/validate_deployment_env.py"),
+                None,
+            ),
             ("Pytest suite", ("uv", "run", "pytest"), None),
             (
                 "Unit tests via unittest",
@@ -77,6 +102,15 @@ def main() -> int:
         else:
             run_optional("Docker Compose config", compose_command)
 
+    if args.with_mock_smoke and not run_mock_smoke():
+        return 1
+
+    if args.with_dashboard_browser_smoke and not run(
+        "Dashboard browser smoke",
+        ("uv", "run", "--extra", "dev", "python", "scripts/playwright_dashboard_smoke.py"),
+    ):
+        return 1
+
     print("\nAll requested verification checks completed.")
     return 0
 
@@ -101,6 +135,100 @@ def run_optional(label: str, command: Sequence[str]) -> bool:
         print(f"SKIPPED: {executable!r} is not available on PATH")
         return True
     return run(label, command)
+
+
+def run_mock_smoke() -> bool:
+    if shutil.which("docker") is None:
+        print("\n==> Local HTTPS mock smoke")
+        print("FAILED: 'docker' is not available on PATH", file=sys.stderr)
+        return False
+    if not run_optional("Docker Compose version", ("docker", "compose", "version")):
+        return False
+
+    certs_dir = ROOT / "deploy" / "tls-lab" / "certs"
+    if not run(
+        "Generate local TLS lab certificates",
+        (
+            "uv",
+            "run",
+            "python",
+            "deploy/tls-lab/generate_certs.py",
+            "--out-dir",
+            str(certs_dir),
+        ),
+    ):
+        return False
+
+    env_overlay = {
+        "COMPOSE_PROJECT_NAME": "seafile-ragflow-connector-mock-smoke",
+        "CONNECTOR_CERTS_HOST_DIR": str(certs_dir),
+        "CONNECTOR_DASHBOARD_ENABLED": "true",
+        "CONNECTOR_STARTUP_CHECK": "infra",
+        "POSTGRES_PASSWORD": "mock-smoke-postgres",
+        "SEAFILE_BASE_URL": "https://seafile.top.secret:8443",
+        "SEAFILE_ADMIN_TOKEN": "mock-smoke-seafile-admin",
+        "SEAFILE_SYNC_USER_TOKEN": "mock-smoke-seafile-sync",
+        "SEAFILE_CA_BUNDLE": "/certs/top-secret-root-ca.pem",
+        "RAGFLOW_BASE_URL": "https://rag.top.secret:8443",
+        "RAGFLOW_API_KEY": "mock-smoke-ragflow",
+        "RAGFLOW_CA_BUNDLE": "/certs/top-secret-root-ca.pem",
+        "OPENWEBUI_INTEGRATION_ENABLED": "false",
+        "OPENWEBUI_SYNC_MODE": "disabled",
+    }
+    compose_command = (
+        "docker",
+        "compose",
+        "--env-file",
+        "connector.env.example",
+        "-f",
+        "deploy/compose/external-services.compose.yml",
+        "-f",
+        "deploy/compose/local-mocks.compose.yml",
+    )
+    try:
+        if not run(
+            "Local HTTPS mock Compose up",
+            (*compose_command, "up", "-d", "--wait"),
+            env_overlay=env_overlay,
+        ):
+            return False
+        if not run(
+            "Local HTTPS mock check-live",
+            (
+                *compose_command,
+                "exec",
+                "-T",
+                "connector-controller",
+                "connector",
+                "check-live",
+                "--json",
+            ),
+            env_overlay=env_overlay,
+        ):
+            return False
+        return run(
+            "Local HTTPS mock TLS health",
+            (
+                *compose_command,
+                "exec",
+                "-T",
+                "connector-controller",
+                "python",
+                "-c",
+                (
+                    "import urllib.request; "
+                    "print(urllib.request.urlopen('http://127.0.0.1:8080/health/tls', "
+                    "timeout=10).read().decode())"
+                ),
+            ),
+            env_overlay=env_overlay,
+        )
+    finally:
+        run(
+            "Local HTTPS mock Compose down",
+            (*compose_command, "down", "--remove-orphans"),
+            env_overlay=env_overlay,
+        )
 
 
 def format_command(command: Sequence[str]) -> str:
