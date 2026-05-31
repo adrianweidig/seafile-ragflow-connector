@@ -23,7 +23,7 @@ from seafile_ragflow_connector.dashboard.store import DashboardEventStore, Dashb
 from seafile_ragflow_connector.domain.file_classification import FilePolicy
 from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
 from seafile_ragflow_connector.openwebui.sync import OpenWebUISyncService
-from seafile_ragflow_connector.persistence.db import get_session_factory, init_database
+from seafile_ragflow_connector.persistence.db import get_engine, get_session_factory, init_database
 from seafile_ragflow_connector.sync.orchestrator import SyncOrchestrator
 
 
@@ -189,9 +189,12 @@ def _warn_insecure_tls(settings: Settings) -> None:
 
 
 def check_database(database_url: str) -> None:
-    session_factory = get_session_factory(database_url)
-    with session_factory() as session:
-        session.execute(text("select 1"))
+    engine = get_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("select 1"))
+    finally:
+        engine.dispose()
 
 
 def check_redis(redis_url: str) -> None:
