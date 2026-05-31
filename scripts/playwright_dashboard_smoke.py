@@ -247,6 +247,11 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
     for tab in ("syncs", "changes", "logs", "systems", "openwebui", "diagnostics"):
         page.locator(f'[data-tab="{tab}"]').click(timeout=config.timeout_ms)
         page.wait_for_selector(f"#{tab}:not([hidden])", timeout=config.timeout_ms)
+        if tab == "logs":
+            _wait_for_text(page, "#log-total", "Logs", config.timeout_ms)
+        if tab == "openwebui":
+            _wait_for_text(page, "#openwebui-metrics", "DATENSÄTZE", config.timeout_ms)
+            _require_text(page, "#openwebui-table", "DATENSATZ")
 
     page.select_option("#language-select", "en", timeout=config.timeout_ms)
     page.locator('[data-tab="overview"]').click(timeout=config.timeout_ms)
@@ -285,7 +290,9 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
     page.wait_for_selector("#openwebui:not([hidden])", timeout=config.timeout_ms)
     _wait_for_text(page, "#openwebui-metrics", "known mappings", config.timeout_ms)
     _require_text(page, "#openwebui-summary", "ready")
+    _require_text(page, "#openwebui-metrics", "DATASETS")
     _require_text(page, "#openwebui-metrics", "known mappings")
+    _require_text(page, "#openwebui-table", "DATASET")
     _require_text(page, "#openwebui-metrics", "including dry-run planned")
     _require_text(page, "#openwebui-metrics", "API fallback")
     _require_text(page, "#openwebui-metrics", "none")
