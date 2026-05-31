@@ -23,7 +23,10 @@ def init_database(database_url: str) -> None:
     from seafile_ragflow_connector.persistence import models  # noqa: F401
 
     engine = get_engine(database_url)
-    Base.metadata.create_all(engine)
+    try:
+        Base.metadata.create_all(engine)
+    finally:
+        engine.dispose()
 
 
 def session_scope(session_factory: sessionmaker[Session]) -> Generator[Session, None, None]:
