@@ -56,12 +56,13 @@ def _settings(port: int) -> Settings:
     return settings
 
 
-def _store() -> DashboardEventStore:
+def _store(test_case: unittest.TestCase) -> DashboardEventStore:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+    test_case.addCleanup(engine.dispose)
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     return DashboardEventStore(session_factory, DashboardLimits(page_size=10))
@@ -73,7 +74,7 @@ def _store() -> DashboardEventStore:
 )
 class DashboardServerTests(unittest.TestCase):
     def test_health_status_and_log_endpoints_return_bounded_json(self) -> None:
-        store = _store()
+        store = _store(self)
         store.record_log(level="info", message="server-log", component="unit", sync_id="sync-a")
         original_dashboard_health = dashboard_server.collect_dashboard_health
         original_tls_health = dashboard_server.collect_tls_health
@@ -120,7 +121,7 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(logs["items"][0]["message"], "server-log")
 
     def test_audit_export_endpoint_returns_xlsx(self) -> None:
-        store = _store()
+        store = _store(self)
         store.create_sync_run(
             sync_id="sync-export",
             source="seafile:repo",
@@ -154,7 +155,7 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn(".xlsx", disposition)
 
     def test_dashboard_basic_auth_challenges_and_accepts_configured_credentials(self) -> None:
-        store = _store()
+        store = _store(self)
         settings = _settings(0)
         settings.connector_dashboard_auth_username = "admin"
         settings.connector_dashboard_auth_password = "secret"
@@ -179,7 +180,7 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("state", status)
 
     def test_openwebui_preview_route_uses_signed_token_without_dashboard_auth(self) -> None:
-        store = _store()
+        store = _store(self)
         settings = _settings(0)
         settings.connector_dashboard_auth_username = "admin"
         settings.connector_dashboard_auth_password = "secret"
@@ -206,7 +207,7 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("Original öffnen", html)
 
     def test_dashboard_and_preview_send_defensive_security_headers(self) -> None:
-        store = _store()
+        store = _store(self)
         settings = _settings(0)
         token = sign_preview_payload(
             {
@@ -239,7 +240,7 @@ class DashboardServerTests(unittest.TestCase):
             self.assertIn("object-src 'none'", csp)
 
     def test_openwebui_mapping_requires_assigned_tool_and_pipe(self) -> None:
-        store = _store()
+        store = _store(self)
         with store.session_factory() as session:
             session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo", status="active"))
             session.add(
@@ -263,7 +264,7 @@ class DashboardServerTests(unittest.TestCase):
             _load_mapping(store, dataset_id="dataset-1", chat_id="chat-1", pipe_id="other-pipe")
 
     def test_openwebui_mapping_rejects_deleted_library(self) -> None:
-        store = _store()
+        store = _store(self)
         with store.session_factory() as session:
             session.add(
                 Library(repo_id="repo-1", name="Demo", name_slug="demo", status="deleted")
@@ -282,7 +283,7 @@ class DashboardServerTests(unittest.TestCase):
             _load_mapping(store, dataset_id="dataset-1", tool_id="tool-1")
 
     def test_openwebui_chat_proxy_uses_requested_openwebui_model(self) -> None:
-        store = _store()
+        store = _store(self)
         with store.session_factory() as session:
             session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo", status="active"))
             session.add(
@@ -319,7 +320,7 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(_FakeRAGFlowClient.last_model, "ragflow/openwebui-model-id")
 
     def test_openwebui_chat_proxy_falls_back_to_retrieval_when_chat_fails(self) -> None:
-        store = _store()
+        store = _store(self)
         with store.session_factory() as session:
             session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo", status="active"))
             session.add(
@@ -382,7 +383,7 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(len(result["sources"]), 1)
 
     def test_openwebui_chat_proxy_falls_back_to_retrieval_when_chat_times_out(self) -> None:
-        store = _store()
+        store = _store(self)
         with store.session_factory() as session:
             session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo", status="active"))
             session.add(
@@ -443,7 +444,7 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(len(result["sources"]), 1)
 
     def test_openwebui_chat_proxy_enriches_answer_with_multiple_retrieval_chunks(self) -> None:
-        store = _store()
+        store = _store(self)
         with store.session_factory() as session:
             session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo", status="active"))
             session.add_all(
@@ -521,7 +522,7 @@ class DashboardServerTests(unittest.TestCase):
         self.assertNotIn("<br>", result["source_markdown"])
 
     def test_openwebui_chat_proxy_sanitizes_html_answer_fragments(self) -> None:
-        store = _store()
+        store = _store(self)
         with store.session_factory() as session:
             session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo", status="active"))
             session.add(
