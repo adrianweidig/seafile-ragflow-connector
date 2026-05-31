@@ -274,6 +274,9 @@ def _check_sync_jobs(status: dict[str, Any]) -> dict[str, Any]:
         "status": state,
         "latency_ms": 0,
         "message": message,
+        "running_jobs": running,
+        "queued_or_retrying_jobs": queued,
+        "failed_jobs": failed,
     }
 
 
