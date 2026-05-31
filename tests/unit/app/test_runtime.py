@@ -43,6 +43,29 @@ class _FakeEngine:
         self.disposed = True
 
 
+class _FakeRedisClient:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.ping_calls = 0
+        self.closed = False
+
+    def ping(self) -> None:
+        self.ping_calls += 1
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _Closeable:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class RuntimeDatabaseChecksTests(unittest.TestCase):
     def test_check_database_disposes_probe_engine(self) -> None:
         engine = _FakeEngine()
@@ -79,6 +102,53 @@ class RuntimeDatabaseChecksTests(unittest.TestCase):
 
         self.assertEqual(create_all_calls, [engine])
         self.assertTrue(engine.disposed)
+
+
+class RuntimeRedisChecksTests(unittest.TestCase):
+    def test_check_redis_closes_probe_client(self) -> None:
+        client = _FakeRedisClient()
+
+        with patch.object(runtime.Redis, "from_url", return_value=client):
+            runtime.check_redis("redis://127.0.0.1:6379/0")
+
+        self.assertEqual(client.ping_calls, 1)
+        self.assertTrue(client.closed)
+
+    def test_check_redis_closes_probe_client_after_error(self) -> None:
+        client = _FakeRedisClient(fail=True)
+
+        with (
+            patch.object(runtime.Redis, "from_url", return_value=client),
+            self.assertRaises(RuntimeError),
+        ):
+            runtime.check_redis("redis://127.0.0.1:6379/0")
+
+        self.assertTrue(client.closed)
+
+
+class RuntimeCloseTests(unittest.TestCase):
+    def test_close_closes_signal_queue(self) -> None:
+        admin_client = _Closeable()
+        sync_client = _Closeable()
+        ragflow_client = _Closeable()
+        signal_queue = _Closeable()
+
+        app_runtime = runtime.Runtime(
+            settings=object(),  # type: ignore[arg-type]
+            admin_client=admin_client,  # type: ignore[arg-type]
+            sync_client=sync_client,  # type: ignore[arg-type]
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            orchestrator=object(),  # type: ignore[arg-type]
+            job_store=object(),  # type: ignore[arg-type]
+            signal_queue=signal_queue,  # type: ignore[arg-type]
+        )
+
+        app_runtime.close()
+
+        self.assertTrue(admin_client.closed)
+        self.assertTrue(sync_client.closed)
+        self.assertTrue(ragflow_client.closed)
+        self.assertTrue(signal_queue.closed)
 
 
 if __name__ == "__main__":
