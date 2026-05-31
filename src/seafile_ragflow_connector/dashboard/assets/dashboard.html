@@ -934,7 +934,7 @@
         </div>
         <div class="actions">
           <label class="refresh-control" for="refresh-interval">
-            <span>Auto-Refresh</span>
+            <span id="refresh-label">Auto-Refresh</span>
             <select id="refresh-interval">
               <option value="0">Aus</option>
               <option value="5000">5 Sekunden</option>
@@ -944,7 +944,7 @@
             <b class="refresh-progress" aria-hidden="true"><i></i></b>
           </label>
           <label class="refresh-control" for="language-select">
-            <span>Sprache</span>
+            <span id="language-label">Sprache</span>
             <select id="language-select" autocomplete="off">
               <option value="de">Deutsch</option>
               <option value="en">English</option>
@@ -974,7 +974,7 @@
           <div class="status-stage">
             <div class="status-line">
               <div>
-                <div class="status-title">Connector Zustand</div>
+                <div class="status-title" data-i18n="overview.connectorState">Connector Zustand</div>
                 <div class="state-value" id="state-value">-</div>
               </div>
               <div id="state-pill"></div>
@@ -988,14 +988,14 @@
           </div>
           <div class="panel">
             <div class="panel-header">
-              <h3>System Health</h3>
+              <h3 data-i18n="overview.systemHealth">System Health</h3>
               <small id="health-summary">prüfe...</small>
             </div>
             <div class="panel-body"><div id="dependency-health" class="health-list"></div></div>
           </div>
           <div class="panel">
             <div class="panel-header">
-              <h3>Fehler und Warnungen</h3>
+              <h3 data-i18n="overview.problems">Fehler und Warnungen</h3>
               <small id="problem-count">0 Einträge</small>
             </div>
             <div class="panel-body"><div id="problems" class="problem-list"></div></div>
@@ -1004,11 +1004,11 @@
         <div class="metric-grid" id="metrics"></div>
         <div class="split">
           <div class="panel compact-table">
-            <div class="panel-header"><h3>Letzte Sync-Läufe</h3><small id="recent-sync-count">0</small></div>
+            <div class="panel-header"><h3 data-i18n="overview.recentSyncs">Letzte Sync-Läufe</h3><small id="recent-sync-count">0</small></div>
             <div class="table-wrap"><table id="recent-syncs"></table></div>
           </div>
           <div class="panel compact-table">
-            <div class="panel-header"><h3>Neueste Änderungen</h3><small id="recent-change-count">0</small></div>
+            <div class="panel-header"><h3 data-i18n="overview.recentChanges">Neueste Änderungen</h3><small id="recent-change-count">0</small></div>
             <div class="table-wrap"><table id="recent-changes"></table></div>
           </div>
         </div>
@@ -1016,12 +1016,12 @@
 
       <section id="syncs" hidden>
         <div class="panel">
-          <div class="panel-header"><h3>Synchronisationshistorie</h3><small id="sync-total">0 Läufe</small></div>
+          <div class="panel-header"><h3 data-i18n="section.syncHistory">Synchronisationshistorie</h3><small id="sync-total">0 Läufe</small></div>
           <div class="panel-body">
             <div class="filters">
               <label>Status
                 <select id="sync-status">
-                  <option value="">Alle</option>
+                  <option value="" data-i18n="form.all">Alle</option>
                   <option value="running">running</option>
                   <option value="succeeded">succeeded</option>
                   <option value="failed">failed</option>
@@ -1040,7 +1040,7 @@
 
       <section id="changes" hidden>
         <div class="panel">
-          <div class="panel-header"><h3>Erkannte Änderungen</h3><small id="change-total">0 Ereignisse</small></div>
+          <div class="panel-header"><h3 data-i18n="section.detectedChanges">Erkannte Änderungen</h3><small id="change-total">0 Ereignisse</small></div>
           <div class="panel-body">
             <div class="filters">
               <label>Sync-ID <input id="change-sync" autocomplete="off" placeholder="optional"></label>
@@ -1057,12 +1057,12 @@
 
       <section id="logs" hidden>
         <div class="panel">
-          <div class="panel-header"><h3>Logereignisse</h3><small id="log-total">0 Logs</small></div>
+          <div class="panel-header"><h3 data-i18n="section.logEvents">Logereignisse</h3><small id="log-total">0 Logs</small></div>
           <div class="panel-body">
             <div class="filters">
               <label>Level
                 <select id="log-level">
-                  <option value="">Alle</option>
+                  <option value="" data-i18n="form.all">Alle</option>
                   <option value="debug">debug</option>
                   <option value="info">info</option>
                   <option value="warning">warning</option>
@@ -1083,11 +1083,11 @@
       <section id="systems" hidden>
         <div class="split">
           <div class="panel">
-            <div class="panel-header"><h3>Quellsysteme</h3><small>Seafile</small></div>
+            <div class="panel-header"><h3 data-i18n="section.sourceSystems">Quellsysteme</h3><small>Seafile</small></div>
             <div class="table-wrap"><table id="source-table"></table></div>
           </div>
           <div class="panel">
-            <div class="panel-header"><h3>Zielsysteme</h3><small>RAGFlow</small></div>
+            <div class="panel-header"><h3 data-i18n="section.targetSystems">Zielsysteme</h3><small>RAGFlow</small></div>
             <div class="table-wrap"><table id="target-table"></table></div>
           </div>
         </div>
@@ -1095,7 +1095,7 @@
 
       <section id="openwebui" hidden>
         <div class="panel">
-          <div class="panel-header"><h3>OpenWebUI Integration</h3><small id="openwebui-summary">-</small></div>
+          <div class="panel-header"><h3 data-i18n="section.openwebuiIntegration">OpenWebUI Integration</h3><small id="openwebui-summary">-</small></div>
           <div class="panel-body">
             <div class="metric-grid" id="openwebui-metrics"></div>
             <div class="table-wrap"><table id="openwebui-table"></table></div>
@@ -1107,7 +1107,7 @@
 
       <section id="diagnostics" hidden>
         <div class="panel">
-          <div class="panel-header"><h3>Technische Diagnose</h3><small>maskierte Konfiguration</small></div>
+          <div class="panel-header"><h3 data-i18n="section.technicalDiagnostics">Technische Diagnose</h3><small data-i18n="diagnostics.maskedConfig">maskierte Konfiguration</small></div>
           <div class="panel-body"><pre id="diagnostics-json" class="detail"></pre></div>
         </div>
       </section>
@@ -1130,11 +1130,20 @@
         'nav.diagnostics': 'Diagnose',
         'sidebar.loading': 'Lade Status...',
         'sidebar.notUpdated': 'Noch nicht aktualisiert',
+        'action.autoRefresh': 'Auto-Refresh',
+        'action.language': 'Sprache',
         'action.refresh': 'Aktualisieren',
         'action.audit': 'Audit Excel',
         'action.filter': 'Filtern',
         'action.more': 'Mehr',
         'action.less': 'Weniger',
+        'theme.dark': 'Dunkel',
+        'theme.light': 'Hell',
+        'refresh.off': 'Aus',
+        'refresh.5s': '5 Sekunden',
+        'refresh.10s': '10 Sekunden',
+        'refresh.1m': '1 Minute',
+        'form.all': 'Alle',
         'pager.of': 'von',
         'pager.previous': 'Zurück',
         'pager.next': 'Weiter',
@@ -1149,6 +1158,28 @@
         'counts.entries': 'Einträge',
         'counts.runs': 'Läufe',
         'counts.events': 'Ereignisse',
+        'overview.connectorState': 'Connector Zustand',
+        'overview.systemHealth': 'System Health',
+        'overview.problems': 'Fehler und Warnungen',
+        'overview.recentSyncs': 'Letzte Sync-Läufe',
+        'overview.recentChanges': 'Neueste Änderungen',
+        'overview.lastSuccess': 'Letzter Erfolg',
+        'overview.lastFailure': 'Letzter Fehler',
+        'overview.seafileSources': 'Seafile-Quellen',
+        'overview.knownState': 'bekannter State',
+        'overview.persistedHistory': 'persistierte Historie',
+        'overview.detectedEvents': 'erkannte Events',
+        'overview.sumAcrossRuns': 'Summe aller Läufe',
+        'overview.waitingJobs': 'wartende Jobs',
+        'section.syncHistory': 'Synchronisationshistorie',
+        'section.detectedChanges': 'Erkannte Änderungen',
+        'section.logEvents': 'Logereignisse',
+        'section.sourceSystems': 'Quellsysteme',
+        'section.targetSystems': 'Zielsysteme',
+        'section.openwebuiIntegration': 'OpenWebUI Integration',
+        'section.technicalDiagnostics': 'Technische Diagnose',
+        'diagnostics.maskedConfig': 'maskierte Konfiguration',
+        'sync.detail': 'Detail',
         'titles.overview': 'Übersicht',
         'subtitles.overview': 'Live-Zustand, Durchsatz und Auffälligkeiten',
         'titles.syncs': 'Sync-Läufe',
@@ -1174,8 +1205,12 @@
         'table.time': 'Zeit',
         'table.start': 'Start',
         'table.status': 'Status',
+        'table.checked': 'Geprüft',
         'table.source': 'Quelle',
         'table.target': 'Ziel',
+        'table.object': 'Objekt',
+        'table.component': 'Komponente',
+        'table.lastSync': 'Letzter Sync',
         'table.objects': 'Objekte',
         'table.duration': 'Dauer',
         'table.new': 'Neu',
@@ -1188,6 +1223,15 @@
         'table.message': 'Nachricht',
         'openwebui.active': 'aktiv',
         'openwebui.off': 'aus',
+        'openwebui.knownMappings': 'erkannte Mappings',
+        'openwebui.synchronized': 'Synchronisiert',
+        'openwebui.dryRunPlanned': 'inkl. Dry-Run geplant',
+        'openwebui.libraryRemoved': 'Seafile-Library entfernt',
+        'openwebui.manual': 'Manuell',
+        'openwebui.apiFallback': 'API-Fallback',
+        'openwebui.none': 'keine',
+        'openwebui.model': 'Modell',
+        'openwebui.lastSuccess': 'Letzter Erfolg',
         'api.error': 'API-Fehler'
       },
       en: {
@@ -1202,11 +1246,20 @@
         'nav.diagnostics': 'Diagnostics',
         'sidebar.loading': 'Loading status...',
         'sidebar.notUpdated': 'Not updated yet',
+        'action.autoRefresh': 'Auto-refresh',
+        'action.language': 'Language',
         'action.refresh': 'Refresh',
         'action.audit': 'Audit Excel',
         'action.filter': 'Filter',
         'action.more': 'More',
         'action.less': 'Less',
+        'theme.dark': 'Dark',
+        'theme.light': 'Light',
+        'refresh.off': 'Off',
+        'refresh.5s': '5 seconds',
+        'refresh.10s': '10 seconds',
+        'refresh.1m': '1 minute',
+        'form.all': 'All',
         'pager.of': 'of',
         'pager.previous': 'Previous',
         'pager.next': 'Next',
@@ -1221,6 +1274,28 @@
         'counts.entries': 'entries',
         'counts.runs': 'runs',
         'counts.events': 'events',
+        'overview.connectorState': 'Connector state',
+        'overview.systemHealth': 'System health',
+        'overview.problems': 'Errors and warnings',
+        'overview.recentSyncs': 'Recent sync runs',
+        'overview.recentChanges': 'Newest changes',
+        'overview.lastSuccess': 'Last success',
+        'overview.lastFailure': 'Last error',
+        'overview.seafileSources': 'Seafile sources',
+        'overview.knownState': 'known state',
+        'overview.persistedHistory': 'persisted history',
+        'overview.detectedEvents': 'detected events',
+        'overview.sumAcrossRuns': 'sum across all runs',
+        'overview.waitingJobs': 'waiting jobs',
+        'section.syncHistory': 'Synchronization history',
+        'section.detectedChanges': 'Detected changes',
+        'section.logEvents': 'Log events',
+        'section.sourceSystems': 'Source systems',
+        'section.targetSystems': 'Target systems',
+        'section.openwebuiIntegration': 'OpenWebUI integration',
+        'section.technicalDiagnostics': 'Technical diagnostics',
+        'diagnostics.maskedConfig': 'masked configuration',
+        'sync.detail': 'Detail',
         'titles.overview': 'Overview',
         'subtitles.overview': 'Live state, throughput, and anomalies',
         'titles.syncs': 'Sync runs',
@@ -1246,8 +1321,12 @@
         'table.time': 'Time',
         'table.start': 'Start',
         'table.status': 'Status',
+        'table.checked': 'Checked',
         'table.source': 'Source',
         'table.target': 'Target',
+        'table.object': 'Object',
+        'table.component': 'Component',
+        'table.lastSync': 'Last sync',
         'table.objects': 'Objects',
         'table.duration': 'Duration',
         'table.new': 'New',
@@ -1260,6 +1339,15 @@
         'table.message': 'Message',
         'openwebui.active': 'active',
         'openwebui.off': 'off',
+        'openwebui.knownMappings': 'known mappings',
+        'openwebui.synchronized': 'Synchronized',
+        'openwebui.dryRunPlanned': 'including dry-run planned',
+        'openwebui.libraryRemoved': 'Seafile library removed',
+        'openwebui.manual': 'Manual',
+        'openwebui.apiFallback': 'API fallback',
+        'openwebui.none': 'none',
+        'openwebui.model': 'Model',
+        'openwebui.lastSuccess': 'Last success',
         'api.error': 'API error'
       }
     };
@@ -1305,6 +1393,8 @@
       refreshTimer: null,
       refreshMs: Number(localStorage.getItem('connector-dashboard-refresh-ms') || '10000'),
       pages: { syncs: 0, changes: 0, logs: 0, openwebui: 0 },
+      sidebarStatus: null,
+      sidebarUpdatedAt: null,
       titles: {}
     };
     const $ = (id) => document.getElementById(id);
@@ -1318,6 +1408,9 @@
         : 'Seafile RAGFlow Connector Dashboard';
       const languageSelect = $('language-select');
       if (languageSelect) languageSelect.value = currentLanguage;
+      document.querySelectorAll('[data-i18n]').forEach((node) => {
+        node.textContent = t(node.dataset.i18n);
+      });
       document.querySelector('.brand span').textContent = t('brand.subtitle');
       document.querySelector('.nav').setAttribute('aria-label', t('nav.label'));
       document.querySelector('[data-tab="overview"]').lastChild.textContent = t('nav.overview');
@@ -1326,8 +1419,11 @@
       document.querySelector('[data-tab="logs"]').lastChild.textContent = t('nav.logs');
       document.querySelector('[data-tab="systems"]').lastChild.textContent = t('nav.systems');
       document.querySelector('[data-tab="diagnostics"]').lastChild.textContent = t('nav.diagnostics');
-      $('sidebar-state').textContent = t('sidebar.loading');
-      $('sidebar-updated').textContent = t('sidebar.notUpdated');
+      setText('refresh-label', t('action.autoRefresh'));
+      setText('language-label', t('action.language'));
+      $('theme-toggle').lastChild.textContent = (document.documentElement.dataset.theme || 'dark') === 'dark' ? t('theme.dark') : t('theme.light');
+      renderRefreshOptions();
+      renderSidebarStatus();
       $('refresh-active').lastChild.textContent = t('action.refresh');
       $('audit-export').lastChild.textContent = t('action.audit');
       document.querySelectorAll('.filter-actions button').forEach((button) => {
@@ -1351,6 +1447,27 @@
       const node = $('error');
       node.textContent = message || '';
       node.style.display = message ? 'block' : 'none';
+    }
+    function renderSidebarStatus() {
+      if (state.sidebarStatus) {
+        setText('sidebar-state', t('table.status') + ': ' + state.sidebarStatus);
+        setText('sidebar-updated', t('table.updated') + ': ' + state.sidebarUpdatedAt.toLocaleTimeString(localeTag()));
+        return;
+      }
+      $('sidebar-state').textContent = t('sidebar.loading');
+      $('sidebar-updated').textContent = t('sidebar.notUpdated');
+    }
+    function renderRefreshOptions() {
+      const select = $('refresh-interval');
+      const labels = {
+        '0': t('refresh.off'),
+        '5000': t('refresh.5s'),
+        '10000': t('refresh.10s'),
+        '60000': t('refresh.1m')
+      };
+      Array.from(select.options).forEach((option) => {
+        option.textContent = labels[option.value] || option.textContent;
+      });
     }
     async function api(path) {
       const res = await fetch(path, { headers: { 'Accept': 'application/json' } });
@@ -1614,21 +1731,22 @@
       clear($('state-pill'));
       $('state-pill').appendChild(status(statusData.state));
       setText('started-at', t('table.start') + ': ' + fmtDate(statusData.started_at));
-      setText('last-success', (currentLanguage === 'de' ? 'Letzter Erfolg' : 'Last success') + ': ' + fmtDate(statusData.last_successful_sync && statusData.last_successful_sync.ended_at));
-      setText('last-failure', (currentLanguage === 'de' ? 'Letzter Fehler' : 'Last error') + ': ' + fmtDate(statusData.last_failed_sync && statusData.last_failed_sync.ended_at));
-      setText('sidebar-state', t('table.status') + ': ' + (statusData.state || t('status.unknown')));
-      setText('sidebar-updated', (currentLanguage === 'de' ? 'Aktualisiert' : 'Updated') + ': ' + new Date().toLocaleTimeString(localeTag()));
+      setText('last-success', t('overview.lastSuccess') + ': ' + fmtDate(statusData.last_successful_sync && statusData.last_successful_sync.ended_at));
+      setText('last-failure', t('overview.lastFailure') + ': ' + fmtDate(statusData.last_failed_sync && statusData.last_failed_sync.ended_at));
+      state.sidebarStatus = statusData.state || t('status.unknown');
+      state.sidebarUpdatedAt = new Date();
+      renderSidebarStatus();
       renderHealthRail(statusData);
       renderDependencyHealth(health);
       const grid = $('metrics');
       clear(grid);
       grid.append(
-        metric(t('metric.libraries'), fmtNumber(metricsData.libraries), currentLanguage === 'de' ? 'Seafile-Quellen' : 'Seafile sources', 'info'),
-        metric(t('metric.files'), fmtNumber(metricsData.files), currentLanguage === 'de' ? 'bekannter State' : 'known state'),
-        metric(t('metric.syncRuns'), fmtNumber(metricsData.sync_runs), currentLanguage === 'de' ? 'persistierte Historie' : 'persisted history'),
-        metric(t('metric.changes'), fmtNumber(statusData.changes_detected), currentLanguage === 'de' ? 'erkannte Events' : 'detected events', 'info'),
-        metric(t('metric.checked'), fmtNumber(statusData.objects_processed), currentLanguage === 'de' ? 'Summe aller Läufe' : 'sum across all runs'),
-        metric(t('metric.queue'), fmtNumber(statusData.queued_or_retrying_jobs), currentLanguage === 'de' ? 'wartende Jobs' : 'waiting jobs', 'warn'),
+        metric(t('metric.libraries'), fmtNumber(metricsData.libraries), t('overview.seafileSources'), 'info'),
+        metric(t('metric.files'), fmtNumber(metricsData.files), t('overview.knownState')),
+        metric(t('metric.syncRuns'), fmtNumber(metricsData.sync_runs), t('overview.persistedHistory')),
+        metric(t('metric.changes'), fmtNumber(statusData.changes_detected), t('overview.detectedEvents'), 'info'),
+        metric(t('metric.checked'), fmtNumber(statusData.objects_processed), t('overview.sumAcrossRuns')),
+        metric(t('metric.queue'), fmtNumber(statusData.queued_or_retrying_jobs), t('overview.waitingJobs'), 'warn'),
         metric(t('metric.warnings'), fmtNumber(statusData.warnings_count), 'Log-Level warning', 'warn'),
         metric(t('metric.errors'), fmtNumber(statusData.errors_count), 'Log-Level error', statusData.errors_count ? 'bad' : '')
       );
@@ -1639,7 +1757,7 @@
         __cells: [fmtDate(run.started_at), status(run.status), compactText(run.source, { threshold: 40 }), compactText(run.target, { threshold: 40 }), fmtNumber(run.objects_checked)]
       })), (run) => openSyncDetail(run.sync_id));
       setText('recent-change-count', changes.items.length);
-      table('recent-changes', [t('table.time'), t('table.type'), t('table.status'), 'Objekt', t('table.target')], changes.items.map((change) => ({
+      table('recent-changes', [t('table.time'), t('table.type'), t('table.status'), t('table.object'), t('table.target')], changes.items.map((change) => ({
         ...change,
         __cells: [fmtDate(change.occurred_at), change.change_type, status(change.status), compactText(change.object_name, { threshold: 36 }), compactText(change.target_path, { threshold: 44 })]
       })));
@@ -1651,7 +1769,7 @@
       if (statusValue) params.set('status', statusValue);
       const data = await api('/api/sync-runs?' + params.toString());
       setText('sync-total', fmtNumber(data.total) + ' ' + t('counts.runs'));
-      table('sync-table', ['Sync-ID', t('table.start'), t('table.duration'), t('table.status'), currentLanguage === 'de' ? 'Geprüft' : 'Checked', t('table.new'), t('table.updated'), t('table.deleted'), t('table.skipped')], data.items.map((run) => ({
+      table('sync-table', ['Sync-ID', t('table.start'), t('table.duration'), t('table.status'), t('table.checked'), t('table.new'), t('table.updated'), t('table.deleted'), t('table.skipped')], data.items.map((run) => ({
         ...run,
         __cells: [compactText(run.sync_id, { threshold: 34 }), fmtDate(run.started_at), fmtDuration(run.duration_ms), status(run.status), fmtNumber(run.objects_checked), fmtNumber(run.objects_created), fmtNumber(run.objects_updated), fmtNumber(run.objects_deleted), fmtNumber(run.objects_skipped)]
       })), (run) => openSyncDetail(run.sync_id, false));
@@ -1669,7 +1787,7 @@
       const header = document.createElement('div');
       header.className = 'panel-header';
       const title = document.createElement('h3');
-      title.textContent = (currentLanguage === 'en' ? 'Detail ' : 'Detail ') + syncId;
+      title.textContent = t('sync.detail') + ' ' + syncId;
       const small = document.createElement('small');
       small.appendChild(status(data.status));
       header.append(title, small);
@@ -1682,7 +1800,7 @@
         t('table.target') + ': ' + (data.target || '-'),
         t('table.duration') + ': ' + fmtDuration(data.duration_ms),
         t('metric.changes') + ': ' + (data.changes || []).length,
-        'Logs: ' + (data.logs || []).length
+        t('nav.logs') + ': ' + (data.logs || []).length
       ].forEach((item) => {
         const pill = document.createElement('span');
         pill.className = 'mini-pill';
@@ -1704,7 +1822,7 @@
       });
       const data = await api('/api/changes?' + params.toString());
       setText('change-total', fmtNumber(data.total) + ' ' + t('counts.events'));
-      table('change-table', [t('table.time'), 'Sync-ID', t('table.action'), t('table.type'), t('table.status'), 'Objekt', t('table.source'), t('table.target'), t('table.error')], data.items.map((change) => ({
+      table('change-table', [t('table.time'), 'Sync-ID', t('table.action'), t('table.type'), t('table.status'), t('table.object'), t('table.source'), t('table.target'), t('table.error')], data.items.map((change) => ({
         ...change,
         __cells: [
           fmtDate(change.occurred_at),
@@ -1728,7 +1846,7 @@
       if ($('log-query').value) params.set('q', $('log-query').value);
       const data = await api('/api/logs?' + params.toString());
       setText('log-total', fmtNumber(data.total) + ' Logs');
-      table('log-table', [t('table.time'), 'Level', currentLanguage === 'de' ? 'Komponente' : 'Component', 'Sync-ID', t('table.message')], data.items.map((entry) => ({
+      table('log-table', [t('table.time'), 'Level', t('table.component'), 'Sync-ID', t('table.message')], data.items.map((entry) => ({
         ...entry,
         __cells: [
           fmtDate(entry.occurred_at),
@@ -1746,7 +1864,7 @@
     }
     async function loadSystems() {
       const data = await api('/api/systems');
-      table('source-table', ['Repo-ID', 'Name', t('table.status'), 'Head Commit', currentLanguage === 'de' ? 'Letzter Sync' : 'Last sync', t('table.error')], (data.source.libraries || []).map((library) => ({
+      table('source-table', ['Repo-ID', 'Name', t('table.status'), 'Head Commit', t('table.lastSync'), t('table.error')], (data.source.libraries || []).map((library) => ({
         ...library,
         __cells: [compactText(library.repo_id, { threshold: 34 }), compactText(library.name, { threshold: 38 }), status(library.status), compactText(library.head_commit_id, { threshold: 34 }), compactText(library.last_synced_commit_id, { threshold: 34 }), compactText(library.last_error, { threshold: 48 })]
       })));
@@ -1769,13 +1887,13 @@
       clear(grid);
       grid.append(
         metric('Integration', statusData.enabled ? t('openwebui.active') : t('openwebui.off'), statusData.base_url || '-', statusData.enabled ? 'info' : ''),
-        metric('Datasets', fmtNumber(counts.datasets), currentLanguage === 'de' ? 'erkannte Mappings' : 'known mappings'),
-        metric(currentLanguage === 'de' ? 'Synchronisiert' : 'Synchronized', fmtNumber(counts.synced_or_planned), currentLanguage === 'de' ? 'inkl. Dry-Run geplant' : 'including dry-run planned', counts.failed ? '' : 'info'),
-        metric(t('table.deleted'), fmtNumber(counts.deleted), currentLanguage === 'de' ? 'Seafile-Library entfernt' : 'Seafile library removed', counts.deleted ? 'warn' : ''),
-        metric(currentLanguage === 'de' ? 'Manuell' : 'Manual', fmtNumber(counts.manual_required), 'API-Fallback', counts.manual_required ? 'warn' : ''),
-        metric(t('metric.errors'), fmtNumber(counts.failed), statusData.last_error || (currentLanguage === 'de' ? 'keine' : 'none'), counts.failed ? 'bad' : '')
+        metric('Datasets', fmtNumber(counts.datasets), t('openwebui.knownMappings')),
+        metric(t('openwebui.synchronized'), fmtNumber(counts.synced_or_planned), t('openwebui.dryRunPlanned'), counts.failed ? '' : 'info'),
+        metric(t('table.deleted'), fmtNumber(counts.deleted), t('openwebui.libraryRemoved'), counts.deleted ? 'warn' : ''),
+        metric(t('openwebui.manual'), fmtNumber(counts.manual_required), t('openwebui.apiFallback'), counts.manual_required ? 'warn' : ''),
+        metric(t('metric.errors'), fmtNumber(counts.failed), statusData.last_error || t('openwebui.none'), counts.failed ? 'bad' : '')
       );
-      table('openwebui-table', ['Dataset', t('table.status'), 'Chat', 'Tool', 'Pipe', currentLanguage === 'de' ? 'Modell' : 'Model', currentLanguage === 'de' ? 'Letzter Erfolg' : 'Last success', t('table.error')], (mappings.items || []).map((item) => ({
+      table('openwebui-table', ['Dataset', t('table.status'), 'Chat', 'Tool', 'Pipe', t('openwebui.model'), t('openwebui.lastSuccess'), t('table.error')], (mappings.items || []).map((item) => ({
         ...item,
         __cells: [
           compactText(item.ragflow_dataset_name, { threshold: 42 }),
@@ -1842,7 +1960,7 @@
       const update = () => {
         const theme = document.documentElement.dataset.theme || 'dark';
         button.setAttribute('aria-pressed', String(theme === 'dark'));
-        button.lastChild.textContent = theme === 'dark' ? 'Dark' : 'Light';
+        button.lastChild.textContent = theme === 'dark' ? t('theme.dark') : t('theme.light');
       };
       button.addEventListener('click', () => {
         const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
