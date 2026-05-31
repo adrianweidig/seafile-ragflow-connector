@@ -252,6 +252,16 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
     _require_text(page, "#overview", "Errors and warnings")
     _require_text(page, "#overview", "Recent sync runs")
     _require_text(page, "#metrics", "detected events")
+    page.locator('[data-tab="changes"]').click(timeout=config.timeout_ms)
+    page.wait_for_selector("#changes:not([hidden])", timeout=config.timeout_ms)
+    _require_text(page, "#changes .filters", "Type")
+    _require_text(page, "#changes .filters", "Search")
+    _require_attribute(page, "#change-query", "placeholder", "Path, name, error")
+    page.locator('[data-tab="logs"]').click(timeout=config.timeout_ms)
+    page.wait_for_selector("#logs:not([hidden])", timeout=config.timeout_ms)
+    _require_text(page, "#logs .filters", "Search")
+    _require_attribute(page, "#log-query", "placeholder", "Message or component")
+    page.locator('[data-tab="overview"]').click(timeout=config.timeout_ms)
 
     desktop_screenshot = config.output_dir / "dashboard-desktop.png"
     mobile_screenshot = config.output_dir / "dashboard-mobile.png"
@@ -303,6 +313,13 @@ def _require_text(page: Any, selector: str, expected: str) -> None:
     text = locator.inner_text(timeout=5_000)
     if expected not in text:
         raise RuntimeError(f"{selector} does not contain {expected!r}: {text!r}")
+
+
+def _require_attribute(page: Any, selector: str, attribute: str, expected: str) -> None:
+    locator = page.locator(selector).first
+    value = locator.get_attribute(attribute, timeout=5_000)
+    if value != expected:
+        raise RuntimeError(f"{selector} {attribute} is not {expected!r}: {value!r}")
 
 
 if __name__ == "__main__":
