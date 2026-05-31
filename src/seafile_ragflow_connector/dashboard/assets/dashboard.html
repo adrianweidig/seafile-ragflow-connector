@@ -1019,7 +1019,7 @@
           <div class="panel-header"><h3 data-i18n="section.syncHistory">Synchronisationshistorie</h3><small id="sync-total">0 Läufe</small></div>
           <div class="panel-body">
             <div class="filters">
-              <label>Status
+              <label><span data-i18n="filter.status">Status</span>
                 <select id="sync-status">
                   <option value="" data-i18n="form.all">Alle</option>
                   <option value="running">running</option>
@@ -1043,10 +1043,10 @@
           <div class="panel-header"><h3 data-i18n="section.detectedChanges">Erkannte Änderungen</h3><small id="change-total">0 Ereignisse</small></div>
           <div class="panel-body">
             <div class="filters">
-              <label>Sync-ID <input id="change-sync" autocomplete="off" placeholder="optional"></label>
-              <label>Status <input id="change-status" autocomplete="off" placeholder="synced, failed, skipped"></label>
-              <label>Typ <input id="change-type" autocomplete="off" placeholder="created, updated, deleted"></label>
-              <label>Suche <input id="change-query" autocomplete="off" placeholder="Pfad, Name, Fehler"></label>
+              <label><span data-i18n="filter.syncId">Sync-ID</span> <input id="change-sync" autocomplete="off" placeholder="optional" data-i18n-placeholder="placeholder.optional"></label>
+              <label><span data-i18n="filter.status">Status</span> <input id="change-status" autocomplete="off" placeholder="synced, failed, skipped" data-i18n-placeholder="placeholder.changeStatus"></label>
+              <label><span data-i18n="filter.type">Typ</span> <input id="change-type" autocomplete="off" placeholder="created, updated, deleted" data-i18n-placeholder="placeholder.changeType"></label>
+              <label><span data-i18n="filter.search">Suche</span> <input id="change-query" autocomplete="off" placeholder="Pfad, Name, Fehler" data-i18n-placeholder="placeholder.changeQuery"></label>
               <div class="filter-actions"><button class="primary" id="change-refresh" type="button">Filtern</button></div>
             </div>
             <div class="table-wrap"><table id="change-table"></table></div>
@@ -1060,7 +1060,7 @@
           <div class="panel-header"><h3 data-i18n="section.logEvents">Logereignisse</h3><small id="log-total">0 Logs</small></div>
           <div class="panel-body">
             <div class="filters">
-              <label>Level
+              <label><span data-i18n="filter.level">Level</span>
                 <select id="log-level">
                   <option value="" data-i18n="form.all">Alle</option>
                   <option value="debug">debug</option>
@@ -1069,8 +1069,8 @@
                   <option value="error">error</option>
                 </select>
               </label>
-              <label>Sync-ID <input id="log-sync" autocomplete="off" placeholder="optional"></label>
-              <label>Suche <input id="log-query" autocomplete="off" placeholder="Nachricht oder Komponente"></label>
+              <label><span data-i18n="filter.syncId">Sync-ID</span> <input id="log-sync" autocomplete="off" placeholder="optional" data-i18n-placeholder="placeholder.optional"></label>
+              <label><span data-i18n="filter.search">Suche</span> <input id="log-query" autocomplete="off" placeholder="Nachricht oder Komponente" data-i18n-placeholder="placeholder.logQuery"></label>
               <div class="filter-actions"><button class="primary" id="log-refresh" type="button">Filtern</button></div>
             </div>
             <div class="table-wrap"><table id="log-table"></table></div>
@@ -1144,6 +1144,16 @@
         'refresh.10s': '10 Sekunden',
         'refresh.1m': '1 Minute',
         'form.all': 'Alle',
+        'filter.status': 'Status',
+        'filter.syncId': 'Sync-ID',
+        'filter.type': 'Typ',
+        'filter.search': 'Suche',
+        'filter.level': 'Level',
+        'placeholder.optional': 'optional',
+        'placeholder.changeStatus': 'synced, failed, skipped',
+        'placeholder.changeType': 'created, updated, deleted',
+        'placeholder.changeQuery': 'Pfad, Name, Fehler',
+        'placeholder.logQuery': 'Nachricht oder Komponente',
         'pager.of': 'von',
         'pager.previous': 'Zurück',
         'pager.next': 'Weiter',
@@ -1260,6 +1270,16 @@
         'refresh.10s': '10 seconds',
         'refresh.1m': '1 minute',
         'form.all': 'All',
+        'filter.status': 'Status',
+        'filter.syncId': 'Sync ID',
+        'filter.type': 'Type',
+        'filter.search': 'Search',
+        'filter.level': 'Level',
+        'placeholder.optional': 'optional',
+        'placeholder.changeStatus': 'synced, failed, skipped',
+        'placeholder.changeType': 'created, updated, deleted',
+        'placeholder.changeQuery': 'Path, name, error',
+        'placeholder.logQuery': 'Message or component',
         'pager.of': 'of',
         'pager.previous': 'Previous',
         'pager.next': 'Next',
@@ -1410,6 +1430,9 @@
       if (languageSelect) languageSelect.value = currentLanguage;
       document.querySelectorAll('[data-i18n]').forEach((node) => {
         node.textContent = t(node.dataset.i18n);
+      });
+      document.querySelectorAll('[data-i18n-placeholder]').forEach((node) => {
+        node.setAttribute('placeholder', t(node.dataset.i18nPlaceholder));
       });
       document.querySelector('.brand span').textContent = t('brand.subtitle');
       document.querySelector('.nav').setAttribute('aria-label', t('nav.label'));
