@@ -221,6 +221,27 @@ curl http://127.0.0.1:18080/api/health
 Das Dashboard ist bei Default-Portbindung lokal unter `http://127.0.0.1:18080`
 erreichbar, wenn `CONNECTOR_DASHBOARD_ENABLED=true` gesetzt ist.
 
+## Automatisierungen
+
+`connector-controller` plant Discovery, Delta-Sync, RAGFlow-Template-Refresh
+und optionalen OpenWebUI-Sync. `connector-reconciler` führt den
+Reconciliation-Lauf aus. Alle periodischen Laufzeit-Automationen nutzen als
+Standard `1800` Sekunden, also 30 Minuten, und lehnen Werte unter 60 Sekunden
+ab. Der aktive Intervall wird beim Start der Prozesse geloggt.
+
+Manuelle Prüfungen und Syncs sind unabhängig vom Zeitplan möglich:
+
+```bash
+connector check-live
+connector sync-once
+connector openwebui-sync-once
+```
+
+In Compose und Portainer sind die Werte über
+`DISCOVERY_INTERVAL_SECONDS`, `DELTA_SYNC_INTERVAL_SECONDS`,
+`RECONCILE_INTERVAL_SECONDS`, `RAGFLOW_TEMPLATE_REFRESH_SECONDS` und
+`OPENWEBUI_SYNC_INTERVAL_SECONDS` konfigurierbar.
+
 ## Portainer-Start
 
 1. In Portainer einen neuen Stack erstellen.

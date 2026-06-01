@@ -70,6 +70,37 @@ class SettingsTests(unittest.TestCase):
         self.assertIsNone(settings.connector_dashboard_auth_password)
         self.assertIsNone(settings.connector_language)
 
+    def test_automation_intervals_default_to_30_minutes(self) -> None:
+        values = self.base_values()
+        values["database_url"] = "postgresql+psycopg://custom/db"
+
+        settings = Settings(**values)
+
+        self.assertEqual(settings.ragflow_template_refresh_seconds, 1800)
+        self.assertEqual(settings.openwebui_sync_interval_seconds, 1800)
+        self.assertEqual(settings.discovery_interval_seconds, 1800)
+        self.assertEqual(settings.delta_sync_interval_seconds, 1800)
+        self.assertEqual(settings.reconcile_interval_seconds, 1800)
+
+    def test_automation_intervals_have_safe_minimum(self) -> None:
+        for field in (
+            "ragflow_template_refresh_seconds",
+            "openwebui_sync_interval_seconds",
+            "discovery_interval_seconds",
+            "delta_sync_interval_seconds",
+            "reconcile_interval_seconds",
+        ):
+            values = self.base_values()
+            values.update(
+                {
+                    "database_url": "postgresql+psycopg://custom/db",
+                    field: 59,
+                }
+            )
+
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                Settings(**values)
+
     def test_connector_language_accepts_supported_locales_and_drops_unknown_values(self) -> None:
         values = self.base_values()
         values["database_url"] = "postgresql+psycopg://custom/db"

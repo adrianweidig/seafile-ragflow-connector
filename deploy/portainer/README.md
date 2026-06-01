@@ -26,6 +26,15 @@ zusammengefasst.
 - `stack.env.example` bleibt als Portainer-spezifische Referenz erhalten.
 - `stack.env` ist eine lokale, nicht zu commitende Arbeitskopie für Tests.
 
+Controller, Reconciler, RAGFlow-Template-Refresh und OpenWebUI-Sync laufen mit
+30-Minuten-Defaults (`1800` Sekunden). In Portainer können Betreiber die
+Intervalle über `DISCOVERY_INTERVAL_SECONDS`, `DELTA_SYNC_INTERVAL_SECONDS`,
+`RECONCILE_INTERVAL_SECONDS`, `RAGFLOW_TEMPLATE_REFRESH_SECONDS` und
+`OPENWEBUI_SYNC_INTERVAL_SECONDS` anpassen. Werte unter 60 Sekunden werden von
+der Anwendung abgelehnt, damit kein versehentlicher Retry- oder Sync-Sturm
+entsteht. Manuelle Läufe bleiben über `connector check-live`,
+`connector sync-once` und `connector openwebui-sync-once` möglich.
+
 Der Standardwert für `CONNECTOR_IMAGE` ist
 `ghcr.io/adrianweidig/seafile-ragflow-connector:latest`. Für Offline-Betrieb
 kann dort ein lokal geladenes Image oder eine interne Registry eingetragen

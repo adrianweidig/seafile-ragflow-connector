@@ -229,7 +229,7 @@ OPENWEBUI_PROXY_INTERNAL_BASE_URL=
 OPENWEBUI_PROXY_SHARED_SECRET=
 OPENWEBUI_PROXY_VERIFY_SSL=true
 OPENWEBUI_PROXY_CA_BUNDLE=
-OPENWEBUI_SYNC_INTERVAL_SECONDS=300
+OPENWEBUI_SYNC_INTERVAL_SECONDS=1800
 OPENWEBUI_DATASET_ALLOWLIST=
 SEAFILE_PUBLIC_BASE_URL=
 SEAFILE_FILE_URL_TEMPLATE=
@@ -254,6 +254,10 @@ RAGFLOW_DOCUMENT_URL_TEMPLATE=
   Connector erreicht. Erforderlich ist eine interne oder öffentliche Proxy-URL
   nur, wenn Tools oder Pipes in `sync` oder `repair` synchronisiert werden.
   Wenn leer, wird `OPENWEBUI_PROXY_PUBLIC_BASE_URL` verwendet.
+- `OPENWEBUI_SYNC_INTERVAL_SECONDS`: periodischer OpenWebUI-Sync im Controller.
+  Der Default ist `1800` Sekunden, also 30 Minuten. Werte unter 60 Sekunden
+  werden abgelehnt; manuelle Läufe bleiben über `connector openwebui-sync-once`
+  möglich.
 - `OPENWEBUI_REQUEST_TIMEOUT_SECONDS`: Timeout für OpenWebUI-Admin-, Tool- und
   Proxy-Aufrufe. Der Repository-Default `180` eignet sich für lange
   RAG-Antworten und langsame Parserpfade. Für latenzkritische OpenWebUI-
