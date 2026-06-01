@@ -37,6 +37,14 @@ Zertifikate und SQLite ersetzt.
    python scripts/verify.py --with-compose
    ```
 
+   Unter Windows mit Docker in WSL sollte der Wrapper genutzt werden, damit
+   `uv` eine WSL-eigene virtuelle Umgebung außerhalb des Windows-Checkouts
+   verwendet:
+
+   ```bash
+   wsl -d Debian -- bash -lc 'cd /mnt/e/Codex_Workspace/repos/seafile-ragflow-connector && bash scripts/verify_wsl.sh --with-compose --with-dashboard-browser-smoke'
+   ```
+
    Für einen lokalen HTTPS-Mock-Smoke-Check mit Seafile-/RAGFlow-Mocks,
    `connector check-live --json` und Dashboard-TLS-Health:
 
@@ -44,8 +52,9 @@ Zertifikate und SQLite ersetzt.
    python scripts/verify.py --skip-compose --with-mock-smoke
    ```
 
-   Dieser Check startet Docker-Services und ist deshalb explizit opt-in. Ohne
-   Docker bleibt der Standardlauf mit `--skip-compose` rein lokal.
+   Dieser Check baut zuerst ein lokales Test-Image aus dem aktuellen Checkout,
+   startet Docker-Services und ist deshalb explizit opt-in. Ohne Docker bleibt
+   der Standardlauf mit `--skip-compose` rein lokal.
 
 5. Vor Abschluss immer prüfen:
 

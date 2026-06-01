@@ -143,9 +143,10 @@ python scripts/verify.py --skip-compose --with-mock-smoke
 ```
 
 Der Check erzeugt lokale TLS-Lab-Zertifikate, startet
-`deploy/compose/local-mocks.compose.yml`, führt `connector check-live --json`
-im Controller aus und prüft `/health/tls`. Ohne Docker wird dieser Check nicht
-im Standardlauf ausgeführt.
+`deploy/compose/local-mocks.compose.yml`, baut ein lokales Connector-Test-Image
+aus dem aktuellen Checkout, führt `connector check-live --json` im Controller
+aus und prüft `/health/tls` mit Dashboard Basic Auth. Ohne Docker wird dieser
+Check nicht im Standardlauf ausgeführt.
 
 Für das Shared-Network- und OpenWebUI-Szenario muss das konfigurierte
 `CONNECTOR_DOCKER_NETWORK_NAME` bei `docker compose up` bereits existieren.

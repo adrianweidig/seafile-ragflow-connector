@@ -445,8 +445,8 @@ Das Paket stellt den Befehl `connector` bereit. Wichtige Kommandos:
 | `connector demo-fixtures` | lokale Demo-Dateien erzeugen |
 | `connector demo-bootstrap` | Demo-Libraries vorbereiten und optional synchronisieren |
 | `connector demo-cleanup` | klar benannte lokale Demo-Artefakte planen oder löschen |
-| `connector serve-dashboard` | lesendes Dashboard starten |
-| `connector run-controller`, `run-worker`, `run-reconciler` | Runtime-Prozesse starten |
+| `connector dashboard` | lesendes Dashboard starten |
+| `connector controller`, `worker`, `reconciler` | Runtime-Prozesse starten |
 
 Die produktive Nutzung erfolgt normalerweise über die Compose-/Portainer-
 Services statt über manuelle CLI-Prozesse.
@@ -493,6 +493,14 @@ Portainer-Compose-Konfiguration. Erzwingen lässt sich diese Prüfung mit:
 
 ```bash
 python scripts/verify.py --with-compose
+```
+
+Unter Windows mit Docker in WSL sollte der WSL-Wrapper genutzt werden. Er legt
+die `uv`-Umgebung außerhalb des Windows-Checkouts an und vermeidet Konflikte
+mit einer vorhandenen Windows-`.venv`:
+
+```bash
+wsl -d Debian -- bash -lc 'cd /mnt/e/Codex_Workspace/repos/seafile-ragflow-connector && bash scripts/verify_wsl.sh --with-compose --with-dashboard-browser-smoke'
 ```
 
 ## Dokumentation

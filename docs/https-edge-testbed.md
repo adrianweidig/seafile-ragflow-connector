@@ -94,7 +94,8 @@ curl --cacert /tmp/codex-https-edge/certs-export/top-secret-edge-root-ca.pem \
   --resolve connector.top.secret:24443:127.0.0.1 \
   https://connector.top.secret:24443/api/health
 
-curl http://127.0.0.1:18080/health/tls
+curl -u admin:change-me-dashboard-password \
+  http://127.0.0.1:18080/health/tls
 
 docker exec ki-test-openwebui sh -lc \
   'python -c "import urllib.request; print(urllib.request.urlopen(\"https://connector.top.secret/api/health\", timeout=10).status)"'

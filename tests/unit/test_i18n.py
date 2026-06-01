@@ -7,6 +7,7 @@ from seafile_ragflow_connector.i18n import (
     SUPPORTED_LANGUAGES,
     Localizer,
     detect_language,
+    language_from_settings,
     normalize_language,
 )
 
@@ -32,6 +33,11 @@ class I18nTests(unittest.TestCase):
         self.assertEqual(normalize_language("de_DE.UTF-8"), "de")
         self.assertEqual(normalize_language("pt_BR.UTF-8"), "pt")
         self.assertEqual(normalize_language("ar_SA.UTF-8"), "ar")
+
+    def test_settings_without_language_keep_german_default_independent_of_host_locale(self) -> None:
+        settings = type("Settings", (), {"connector_language": None})()
+
+        self.assertEqual(language_from_settings(settings), "de")
 
     def test_missing_translation_keys_fall_back_to_german_key_safely(self) -> None:
         self.assertEqual(Localizer("en").text("sources.no_sources"), "No matching sources found.")

@@ -59,7 +59,8 @@ PY
 Wenn das Dashboard aktiv ist:
 
 ```bash
-curl http://127.0.0.1:18080/health/tls
+curl -u admin:change-me-dashboard-password \
+  http://127.0.0.1:18080/health/tls
 ```
 
 Der Endpunkt prüft RAGFlow und Seafile separat und gibt keine Tokens aus. Ein

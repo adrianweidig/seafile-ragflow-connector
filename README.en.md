@@ -167,8 +167,8 @@ The package exposes the `connector` command:
 | `connector sync-once` | Run one full discovery and sync pass |
 | `connector cleanup-orphans` | Plan or delete connector-owned orphan target artifacts |
 | `connector openwebui-sync-once` | Run one OpenWebUI sync pass |
-| `connector serve-dashboard` | Start the read-only dashboard |
-| `connector run-controller`, `run-worker`, `run-reconciler` | Start runtime processes |
+| `connector dashboard` | Start the read-only dashboard |
+| `connector controller`, `worker`, `reconciler` | Start runtime processes |
 
 ## Development
 
@@ -192,6 +192,14 @@ When Docker Compose is available on the host, the verify runner can also check t
 
 ```bash
 python scripts/verify.py --with-compose
+```
+
+On Windows with Docker in WSL, use the WSL wrapper. It keeps the `uv`
+environment outside the Windows checkout and avoids conflicts with an existing
+Windows `.venv`:
+
+```bash
+wsl -d Debian -- bash -lc 'cd /mnt/e/Codex_Workspace/repos/seafile-ragflow-connector && bash scripts/verify_wsl.sh --with-compose --with-dashboard-browser-smoke'
 ```
 
 ## Documentation
