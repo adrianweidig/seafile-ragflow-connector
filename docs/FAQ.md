@@ -36,8 +36,9 @@ Retries und Backpressure für Worker-Prozesse.
 
 Ja, wenn `CONNECTOR_DASHBOARD_AUTH_USERNAME` und
 `CONNECTOR_DASHBOARD_AUTH_PASSWORD` gesetzt sind. Dann schützt HTTP Basic Auth
-die Weboberfläche und die lesenden Dashboard-API-Endpunkte. Die OpenWebUI-Proxy-
-Endpunkte nutzen weiterhin ihr separates `OPENWEBUI_PROXY_SHARED_SECRET`.
+die Weboberfläche, die Status-API und die Dashboard-Workflow-Steuerung. Die
+OpenWebUI-Proxy-Endpunkte nutzen weiterhin ihr separates
+`OPENWEBUI_PROXY_SHARED_SECRET`.
 
 ## Darf `*_VERIFY_SSL=false` produktiv genutzt werden?
 

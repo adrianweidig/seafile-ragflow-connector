@@ -100,7 +100,7 @@ Mehr Details stehen in [docs/architecture.md](docs/architecture.md).
 | Sync und Cleanup | Delta-Sync, Full-Sync, Delete-Propagation, orphan cleanup, Schutz vor unklaren Fremdartefakten. |
 | Drift Repair | Wiederaufbau fehlender Datasets und Dokumente aus Seafile, Reparatur eigener OpenWebUI-Artefakte. |
 | OpenWebUI Integration | deterministische Chats, Tools, Pipes, Custom-Model-Namen, Quellen/Citations und optionaler Preview-Viewer. |
-| Dashboard und Audit | Health, Sync-Historie, Änderungen, Logs, Diagnose, TLS-Status und Excel-Audit-Export ohne Dateiinhaltsexfiltration. |
+| Dashboard und Audit | Health, Sync-Historie, Änderungen, Logs, Diagnose, TLS-Status, kontrollierte Bibliotheksauswahl und Excel-Audit-Export ohne Dateiinhaltsexfiltration. |
 | Deployment | GHCR-Image, Portainer-Stack, direkte Compose-Varianten, Shared-Network-Modus, Swarm-Stack und Offline-Image-Workflow. |
 | TLS und Betrieb | interne CAs, mTLS-Dateien, `.top.secret`-Lab, lokale HTTPS-Mocks und Troubleshooting für Zertifikatsketten. |
 | Qualität | Ruff, mypy strict, pytest, unittest, CodeQL, Docker-Build-Workflow und Dependabot. |
@@ -112,7 +112,7 @@ Mehr Details stehen in [docs/architecture.md](docs/architecture.md).
 - RAGFlow-Dataset-Einstellungen bleiben nach der Erstellung live; das Template wird nur für neue Datasets genutzt.
 - OpenWebUI-Funktionen bekommen keine RAGFlow-Admin-Secrets, sondern sprechen mit dem Connector-Proxy.
 - Der Runtime-Betrieb ist offline-fähig: keine Telemetrie und keine externen Service-Abhängigkeiten außerhalb der konfigurierten Zielsysteme.
-- Das Dashboard ist lesend; Schreib- und Löschaktionen laufen über explizite CLI-/Runtime-Pfade.
+- Das Dashboard startet nur explizit ausgewählte Prüfläufe; Löschaktionen bleiben CLI-/Runtime-Pfaden vorbehalten.
 
 ## Internationalisierung
 
@@ -332,18 +332,21 @@ die Werte über `--env-file connector.env`; Portainer bekommt dieselben Werte
 
 ## Dashboard
 
-Der Connector enthält ein lesendes HTTP-Dashboard für Administratoren,
-Auditoren und Entwickler. Es zeigt Connector-Zustand, Sync-Historie,
-Änderungen, Quellen/Ziele, gefilterte Logs und technische Diagnosewerte. Es
-unterstützt einfache HTTP-Basic-Authentifizierung per Environment. Wer die
-Oberfläche nicht erreichbar machen will, aktiviert sie nicht oder veröffentlicht
-den Port nicht.
+Der Connector enthält ein HTTP-Dashboard für Administratoren, Auditoren und
+Entwickler. Es zeigt Connector-Zustand, Sync-Historie, Änderungen,
+Quellen/Ziele, gefilterte Logs und technische Diagnosewerte. Im laufenden
+`connector-controller` kann der Tab **Prüfablauf** die mit dem aktuellen
+Seafile-API-Key sichtbaren Bibliotheken anzeigen und ausgewählte Bibliotheken
+für RAGFlow-Dataset-/Dokument-Sync sowie OpenWebUI-Chat-/Tool-/Pipe-Sync
+starten. Es unterstützt einfache HTTP-Basic-Authentifizierung per Environment.
+Wer die Oberfläche nicht erreichbar machen will, aktiviert sie nicht oder
+veröffentlicht den Port nicht.
 
 Die Oberfläche nutzt keine CDN- oder Internet-Assets, bietet einen Dark-/Light-
 Modus und enthält Auto-Refresh für 5 Sekunden, 10 Sekunden oder 1 Minute. Der
 Excel-Audit-Export enthält mehrere Tabellenblätter und exportiert nur Status-,
 Sync-, Änderungs-, Log- und Diagnosemetadaten. Datei-Inhalte aus Seafile oder
-RAGFlow werden nicht heruntergeladen. Schreibaktionen werden nicht angeboten.
+RAGFlow werden nicht heruntergeladen. Löschaktionen werden nicht angeboten.
 
 ```env
 CONNECTOR_DASHBOARD_ENABLED=true
@@ -513,6 +516,7 @@ wsl -d Debian -- bash -lc 'cd /mnt/e/Codex_Workspace/repos/seafile-ragflow-conne
 - [Architektur](docs/architecture.md)
 - [Konfiguration](docs/configuration.md)
 - [Environment-Variablen](docs/environment.md)
+- [Manueller Seafile-RAGFlow-OpenWebUI-Prüfablauf](docs/manual-workflow-verification.md)
 - [Test- und Ausführungsmodell](docs/testing.md)
 - [Betrieb, Offline-Deployment und WSL-/Docker-Prüfung](docs/operations.md)
 - [Lokaler HTTPS-Compose-Betrieb mit connector.top.secret](docs/local-https-compose.md)

@@ -5,7 +5,7 @@ Dieses Paket enthält den vollständigen Connector.
 - `app/`: CLI, Runtime-Bootstrap, Logging und Prometheus-Metriken.
 - `clients/`: HTTP-Clients für Seafile, RAGFlow und OpenWebUI.
 - `config/`: Pydantic-Settings und Environment-Validierung.
-- `dashboard/`: lesendes Admin-Dashboard, API-Endpunkte, Health und Audit-XLSX.
+- `dashboard/`: Admin-Dashboard, API-Endpunkte, Workflow-Steuerung, Health und Audit-XLSX.
 - `domain/`: reine Fachlogik für Dateiklassifikation, Namen und Templates.
 - `jobs/`: persistente Job-Queue, Prioritäten, Worker und Redis-Signale.
 - `openwebui/`: optionale Sync-Logik, Tool-/Pipe-Generatoren und Quellenmapping.

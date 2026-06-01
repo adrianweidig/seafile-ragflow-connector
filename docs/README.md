@@ -12,6 +12,8 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
   modusabhängigen Variablen.
 - `admin-first-start-checklist.md` führt Administratoren durch Vorprüfung,
   ersten Start, Erfolgskriterien und Nutzerfreigabe.
+- `manual-workflow-verification.md` beschreibt den manuell prüfbaren
+  Seafile-Upload-zu-RAGFlow-Dataset-zu-OpenWebUI-Pipe-Ablauf.
 - `operations.md` enthält Portainer-Betrieb, Docker-Compose-Varianten,
   Docker-Swarm-Betrieb, GHCR-/Offline-Hinweise, Recovery, Troubleshooting und
   lokale WSL-/Docker-Prüfungen.

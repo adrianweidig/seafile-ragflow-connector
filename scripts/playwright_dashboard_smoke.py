@@ -260,9 +260,12 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
     _require_text(page, "#state-value", "wartend")
     _require_text(page, "#dependency-health", "Dashboard antwortet.")
 
-    for tab in ("syncs", "changes", "logs", "systems", "openwebui", "diagnostics"):
+    for tab in ("workflow", "syncs", "changes", "logs", "systems", "openwebui", "diagnostics"):
         page.locator(f'[data-tab="{tab}"]').click(timeout=config.timeout_ms)
         page.wait_for_selector(f"#{tab}:not([hidden])", timeout=config.timeout_ms)
+        if tab == "workflow":
+            _wait_for_text(page, "#workflow-summary", "nicht verfügbar", config.timeout_ms)
+            _require_text(page, "#workflow-table", "Keine Einträge")
         if tab == "logs":
             _wait_for_text(page, "#log-total", "Logeinträge", config.timeout_ms)
             _require_text(page, "#log-table", "STUFE")

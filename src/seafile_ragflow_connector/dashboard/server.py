@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import structlog
+from sqlalchemy import select
 
 from seafile_ragflow_connector.clients.http import ApiError
 from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
@@ -37,6 +38,7 @@ from seafile_ragflow_connector.openwebui.sources import (
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.persistence.models.openwebui import OpenWebUIDatasetMapping
+from seafile_ragflow_connector.sync.discovery import normalize_library, should_skip_library
 from seafile_ragflow_connector.utils.redaction import redact_mapping
 
 DASHBOARD_CONTENT_SECURITY_POLICY = (
@@ -72,6 +74,8 @@ class DashboardContext:
     store: DashboardEventStore
     settings: Settings
     started_at: datetime
+    orchestrator: Any | None = None
+    openwebui_sync_service: Any | None = None
 
 
 def start_dashboard_server(context: DashboardContext, *, background: bool = True) -> DashboardServerHandle:
@@ -144,6 +148,9 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                     systems = context.store.systems()
                     systems["transport"] = context.settings.connector_transport_status
                     self._send_json(systems)
+                    return
+                if parsed.path == "/api/workflow/libraries":
+                    self._send_json(_handle_workflow_libraries(context))
                     return
                 if parsed.path == "/api/sync-runs":
                     params = parse_qs(parsed.query)
@@ -238,6 +245,13 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/api/openwebui/proxy/chat":
                     self._send_json(_handle_openwebui_chat(context, self._json_body(), self.headers.get("Authorization")))
                     return
+                if parsed.path == "/api/workflow/run":
+                    if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
+                        self._send_auth_required()
+                        return
+                    payload, status = _handle_workflow_run(context, self._json_body())
+                    self._send_json(payload, status=status)
+                    return
                 self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
             except PermissionError:
                 self._send_json({"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
@@ -249,8 +263,15 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                 )
                 return
             except Exception as exc:
-                payload, status = _proxy_error_response(context.settings, parsed.path, exc)
-                self._send_json(payload, status=status)
+                if parsed.path.startswith("/api/openwebui/proxy/"):
+                    payload, status = _proxy_error_response(context.settings, parsed.path, exc)
+                    self._send_json(payload, status=status)
+                    return
+                structlog.get_logger(__name__).warning("dashboard.request_failed", path=parsed.path, error=str(exc))
+                self._send_json(
+                    {"error": "dashboard request failed", "message": "Die Aktion konnte nicht ausgeführt werden."},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
 
         def log_message(self, format: str, *args: Any) -> None:
             structlog.get_logger(__name__).debug("dashboard.http_access", message=format % args)
@@ -441,6 +462,281 @@ def _safe_config(settings: Settings) -> dict[str, Any]:
         "ragflow_document_url_template": settings.ragflow_document_url_template,
     }
     return dict(redact_mapping(safe))
+
+
+def _handle_workflow_libraries(context: DashboardContext) -> dict[str, Any]:
+    if context.orchestrator is None:
+        return {
+            "enabled": False,
+            "message": "Dashboard-Steuerung ist nur im laufenden Connector-Controller verfügbar.",
+            "libraries": [],
+            "summary": {"visible": 0, "selectable": 0, "with_dataset": 0},
+            "options": _workflow_options(context),
+        }
+    libraries = _visible_workflow_libraries(context)
+    return {
+        "enabled": True,
+        "libraries": libraries,
+        "summary": {
+            "visible": len(libraries),
+            "selectable": sum(1 for item in libraries if item["selectable"]),
+            "with_dataset": sum(1 for item in libraries if item["ragflow_dataset_id"]),
+        },
+        "options": _workflow_options(context),
+    }
+
+
+def _handle_workflow_run(
+    context: DashboardContext,
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], HTTPStatus]:
+    if context.orchestrator is None:
+        return (
+            {
+                "status": "unavailable",
+                "message": "Dashboard-Steuerung ist nur im laufenden Connector-Controller verfügbar.",
+            },
+            HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+    repo_ids = _workflow_repo_ids(payload)
+    create_dataset = _workflow_bool(payload, "create_dataset", default=True)
+    sync_openwebui = _workflow_bool(payload, "sync_openwebui", default=True)
+    if not create_dataset and not sync_openwebui:
+        raise ValueError("Mindestens RAGFlow-Dataset oder OpenWebUI-Sync muss ausgewählt sein.")
+    scope = _workflow_scope(payload)
+    visible = _visible_workflow_libraries(context)
+    visible_by_repo = {str(item["repo_id"]): item for item in visible}
+    missing = [repo_id for repo_id in repo_ids if repo_id not in visible_by_repo]
+    if missing:
+        raise ValueError(
+            "Nicht mit dem aktuellen Seafile-API-Key sichtbar: " + ", ".join(missing)
+        )
+    skipped = [
+        repo_id
+        for repo_id in repo_ids
+        if not bool(visible_by_repo[repo_id].get("selectable"))
+    ]
+    if skipped:
+        raise ValueError("Nicht auswählbare Bibliotheken: " + ", ".join(skipped))
+
+    context.orchestrator.discover_libraries()
+    results: list[dict[str, Any]] = []
+    ready_for_openwebui: list[str] = []
+    dataset_ready = _repo_ids_with_dataset(context, repo_ids)
+    for repo_id in repo_ids:
+        item: dict[str, Any] = {
+            "repo_id": repo_id,
+            "name": visible_by_repo[repo_id].get("name"),
+            "status": "skipped",
+            "dataset": None,
+            "openwebui": None,
+        }
+        if create_dataset:
+            try:
+                summary = context.orchestrator.sync_library_full(repo_id, scope=scope)
+            except Exception as exc:
+                item["status"] = "failed"
+                item["error"] = str(exc)
+                results.append(item)
+                continue
+            item["status"] = "dataset_synced"
+            item["dataset"] = _summary_payload(summary)
+            dataset_ready = _repo_ids_with_dataset(context, repo_ids)
+        if sync_openwebui:
+            if repo_id in dataset_ready:
+                ready_for_openwebui.append(repo_id)
+            else:
+                item["status"] = "failed"
+                item["error"] = "Für diese Bibliothek ist noch kein RAGFlow-Dataset bekannt."
+        elif item["status"] == "skipped":
+            item["status"] = "selected"
+        results.append(item)
+
+    openwebui_result: dict[str, Any] | None = None
+    if sync_openwebui:
+        if context.openwebui_sync_service is None:
+            openwebui_result = {
+                "status": "failed",
+                "message": "OpenWebUI-Sync-Service ist nicht verfügbar.",
+            }
+        elif ready_for_openwebui:
+            openwebui_summary = context.openwebui_sync_service.sync_once(
+                repo_ids=set(ready_for_openwebui)
+            )
+            openwebui_result = {
+                "status": "failed" if openwebui_summary.failed else "succeeded",
+                "repo_ids": ready_for_openwebui,
+                "summary": _summary_payload(openwebui_summary),
+            }
+            for item in results:
+                if item["repo_id"] in ready_for_openwebui:
+                    item["openwebui"] = openwebui_result["summary"]
+                    if item["status"] == "dataset_synced":
+                        item["status"] = "completed"
+        else:
+            openwebui_result = {
+                "status": "skipped",
+                "message": "Keine ausgewählte Bibliothek hat ein nutzbares RAGFlow-Dataset.",
+            }
+
+    status = _workflow_result_status(results, openwebui_result)
+    return (
+        {
+            "status": status,
+            "scope": scope,
+            "selected_repo_ids": repo_ids,
+            "create_dataset": create_dataset,
+            "sync_openwebui": sync_openwebui,
+            "results": results,
+            "openwebui": openwebui_result,
+            "libraries": _visible_workflow_libraries(context),
+        },
+        HTTPStatus.OK,
+    )
+
+
+def _workflow_options(context: DashboardContext) -> dict[str, Any]:
+    return {
+        "default_scope": "/",
+        "openwebui_enabled": context.openwebui_sync_service is not None,
+        "openwebui_sync_mode": context.settings.openwebui_effective_sync_mode,
+        "openwebui_create_tools": context.settings.openwebui_create_tools,
+        "openwebui_create_pipes": context.settings.openwebui_create_pipes,
+    }
+
+
+def _visible_workflow_libraries(context: DashboardContext) -> list[dict[str, Any]]:
+    if context.orchestrator is None:
+        return []
+    stored_libraries, stored_mappings = _stored_workflow_state(context)
+    rows = []
+    for raw in context.orchestrator.admin_client.iter_libraries():
+        library = normalize_library(raw)
+        skipped, reason = should_skip_library(
+            library,
+            skip_encrypted=context.orchestrator.skip_encrypted_libraries,
+            skip_virtual=context.orchestrator.skip_virtual_repos,
+        )
+        stored = stored_libraries.get(library.repo_id, {})
+        mapping = stored_mappings.get(library.repo_id, {})
+        rows.append(
+            {
+                "repo_id": library.repo_id,
+                "name": library.name,
+                "owner_email": library.owner_email,
+                "encrypted": library.encrypted,
+                "virtual": library.virtual,
+                "seafile_mtime": library.seafile_mtime,
+                "head_commit_id": library.head_commit_id,
+                "last_synced_commit_id": stored.get("last_synced_commit_id"),
+                "status": f"skipped:{reason}" if skipped else stored.get("status", "visible"),
+                "selectable": not skipped,
+                "skip_reason": reason,
+                "ragflow_dataset_id": stored.get("ragflow_dataset_id"),
+                "ragflow_dataset_name": stored.get("ragflow_dataset_name"),
+                "last_error": stored.get("last_error"),
+                "openwebui": {
+                    "sync_status": mapping.get("sync_status", "not_created"),
+                    "ragflow_chat_id": mapping.get("ragflow_chat_id"),
+                    "openwebui_tool_id": mapping.get("openwebui_tool_id"),
+                    "openwebui_pipe_id": mapping.get("openwebui_pipe_id"),
+                    "openwebui_model_name": mapping.get("openwebui_model_name"),
+                    "last_error": mapping.get("last_error"),
+                },
+            }
+        )
+    return sorted(rows, key=lambda item: str(item["name"]).lower())
+
+
+def _stored_workflow_state(
+    context: DashboardContext,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    with context.store.session_factory() as session:
+        libraries = {
+            row.repo_id: {
+                "status": row.status,
+                "last_synced_commit_id": row.last_synced_commit_id,
+                "ragflow_dataset_id": row.ragflow_dataset_id,
+                "ragflow_dataset_name": row.ragflow_dataset_name,
+                "last_error": row.last_error,
+            }
+            for row in session.scalars(select(Library)).all()
+        }
+        mappings = {
+            row.repo_id: {
+                "sync_status": row.sync_status,
+                "ragflow_chat_id": row.ragflow_chat_id,
+                "openwebui_tool_id": row.openwebui_tool_id,
+                "openwebui_pipe_id": row.openwebui_pipe_id,
+                "openwebui_model_name": row.openwebui_model_name,
+                "last_error": row.last_error,
+            }
+            for row in session.scalars(select(OpenWebUIDatasetMapping)).all()
+        }
+    return libraries, mappings
+
+
+def _workflow_repo_ids(payload: dict[str, Any]) -> list[str]:
+    raw = payload.get("repo_ids")
+    if not isinstance(raw, list):
+        raise ValueError("repo_ids muss eine Liste sein.")
+    repo_ids: list[str] = []
+    for value in raw:
+        text = str(value or "").strip()
+        if text and text not in repo_ids:
+            repo_ids.append(text)
+    if not repo_ids:
+        raise ValueError("Mindestens eine Bibliothek muss ausgewählt sein.")
+    if len(repo_ids) > 200:
+        raise ValueError("Maximal 200 Bibliotheken pro Dashboard-Lauf.")
+    return repo_ids
+
+
+def _workflow_bool(payload: dict[str, Any], key: str, *, default: bool) -> bool:
+    value = payload.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "ja", "on"}
+    return bool(value)
+
+
+def _workflow_scope(payload: dict[str, Any]) -> str:
+    scope = str(payload.get("scope") or "/").strip() or "/"
+    if len(scope) > 512:
+        raise ValueError("scope ist zu lang.")
+    if not scope.startswith("/"):
+        raise ValueError("scope muss mit / beginnen.")
+    return scope
+
+
+def _repo_ids_with_dataset(context: DashboardContext, repo_ids: list[str]) -> set[str]:
+    with context.store.session_factory() as session:
+        rows = session.scalars(
+            select(Library)
+            .where(Library.repo_id.in_(repo_ids))
+            .where(Library.status == "active")
+            .where(Library.ragflow_dataset_id.is_not(None))
+        ).all()
+        return {row.repo_id for row in rows}
+
+
+def _summary_payload(summary: Any) -> dict[str, Any]:
+    raw = getattr(summary, "__dict__", {})
+    return {str(key): value for key, value in raw.items()}
+
+
+def _workflow_result_status(
+    results: list[dict[str, Any]],
+    openwebui_result: dict[str, Any] | None,
+) -> str:
+    failed = sum(1 for item in results if item.get("status") == "failed")
+    openwebui_failed = bool(openwebui_result and openwebui_result.get("status") == "failed")
+    if failed and failed < len(results):
+        return "partial"
+    if failed or openwebui_failed:
+        return "failed"
+    return "succeeded"
 
 
 def _handle_openwebui_query(

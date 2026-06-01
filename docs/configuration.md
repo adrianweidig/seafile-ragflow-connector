@@ -145,15 +145,20 @@ ARCHIVE_DATASET_WHEN_LIBRARY_DELETED=false
 
 ## Dashboard
 
-Das Dashboard ist eine rein lesende Weboberfläche für Status, Sync-Historie,
-Änderungen, Logs, Quellen/Ziele und technische Diagnose. Da das Projekt vorher
-keine Weboberfläche hatte, ist sie standardmäßig deaktiviert. Das UI wird
-vollständig aus dem Connector ausgeliefert und lädt keine CDN- oder
-Internet-Assets nach. Der Theme-Wechsel zwischen Dark und Light wird lokal im
-Browser gespeichert. Der Auto-Refresh ist im Dashboard zwischen aus, 5
-Sekunden, 10 Sekunden und 1 Minute wählbar und wird ebenfalls lokal im Browser
-gespeichert. Die Sprachwahl ist sichtbar im Dashboard, nutzt Deutsch als
-Fallback und kann für englische Bedienung auf `English` gestellt werden.
+Das Dashboard ist eine Weboberfläche für Status, Sync-Historie, Änderungen,
+Logs, Quellen/Ziele, technische Diagnose und kontrollierte Prüfläufe. Da das
+Projekt vorher keine Weboberfläche hatte, ist sie standardmäßig deaktiviert. Im
+laufenden `connector-controller` kann der Tab **Prüfablauf** die mit dem
+Seafile-API-Key sichtbaren Bibliotheken anzeigen und ausgewählte Bibliotheken
+für RAGFlow-Dataset-/Dokument-Sync sowie optional OpenWebUI-Chat-/Tool-/Pipe-
+Sync starten. Der Standalone-Befehl `connector dashboard` bleibt ein
+Status-Dashboard ohne Runtime-Controller und zeigt diese Steuerung als nicht
+verfügbar. Das UI wird vollständig aus dem Connector ausgeliefert und lädt
+keine CDN- oder Internet-Assets nach. Der Theme-Wechsel zwischen Dark und Light
+wird lokal im Browser gespeichert. Der Auto-Refresh ist im Dashboard zwischen
+aus, 5 Sekunden, 10 Sekunden und 1 Minute wählbar und wird ebenfalls lokal im
+Browser gespeichert. Die Sprachwahl ist sichtbar im Dashboard, nutzt Deutsch
+als Fallback und kann für englische Bedienung auf `English` gestellt werden.
 
 ```env
 CONNECTOR_DASHBOARD_ENABLED=false
@@ -185,17 +190,18 @@ CONNECTOR_DASHBOARD_AUTH_PASSWORD=change-me-dashboard-password
   Meldungen, Pfade und Debug-Felder.
 - `CONNECTOR_DASHBOARD_AUTH_USERNAME` und
   `CONNECTOR_DASHBOARD_AUTH_PASSWORD`: aktivieren HTTP Basic Auth für
-  Dashboard-Oberfläche und lesende Dashboard-API. Beide Werte müssen zusammen
-  gesetzt werden. Die OpenWebUI-Proxy-POST-Endpunkte nutzen weiterhin das
-  separate `OPENWEBUI_PROXY_SHARED_SECRET`.
+  Dashboard-Oberfläche, Status-API und Workflow-Steuerung. Beide Werte müssen
+  zusammen gesetzt werden. Die OpenWebUI-Proxy-POST-Endpunkte nutzen weiterhin
+  das separate `OPENWEBUI_PROXY_SHARED_SECRET`.
 
 Sensible Felder wie Tokens, API-Keys, Passwörter und Secrets werden maskiert.
-Das Dashboard bietet keine Downloads von synchronisierten Dateien, keine
-Schreibaktionen und keine destruktiven Steuerungsfunktionen. Der einzige
-Download ist der Audit-Export unter `/api/audit.xlsx`. Diese Excel-Datei enthält
-mehrere Tabellenblätter für Übersicht, Sync-Läufe, Änderungen, Logs, Quellen,
-Ziele und Diagnose. Sie basiert auf den begrenzten Dashboard-Historien und
-enthält keine Seafile-/RAGFlow-Dateiinhalte.
+Das Dashboard bietet keine Downloads von synchronisierten Dateien und keine
+destruktiven Steuerungsfunktionen. Workflow-Aktionen starten nur explizit
+ausgewählte Syncs für Bibliotheken, die der aktuelle Seafile-API-Key sieht. Der
+einzige Download ist der Audit-Export unter `/api/audit.xlsx`. Diese Excel-Datei
+enthält mehrere Tabellenblätter für Übersicht, Sync-Läufe, Änderungen, Logs,
+Quellen, Ziele und Diagnose. Sie basiert auf den begrenzten Dashboard-Historien
+und enthält keine Seafile-/RAGFlow-Dateiinhalte.
 
 Der Health-Endpunkt `/api/health` liefert begrenzte Statusdaten für Dashboard,
 Datenbank, Redis, Seafile-Admin-API, RAGFlow-API und Sync-Job-Zustand. Externe

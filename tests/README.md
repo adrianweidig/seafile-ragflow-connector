@@ -4,7 +4,7 @@ Dieser Ordner enthält die automatisierten Prüfungen.
 
 - `unit/`: schnelle Unit-Tests mit Fakes, SQLite und lokalen Fixtures.
 - `integration/`: Platz für Tests gegen echte oder containerisierte
-  Abhängigkeiten.
+  Abhängigkeiten sowie lokale Fake-basierte End-to-End-Prüfungen.
 - `fixtures/`: kleine Beispielantworten und Testdaten.
 - `support/`: geteilte Testhilfen.
 

@@ -73,6 +73,7 @@ class OpenWebUISyncService:
         self,
         *,
         mode_override: Literal["disabled", "dry-run", "sync", "repair"] | None = None,
+        repo_ids: set[str] | None = None,
     ) -> OpenWebUISyncSummary:
         mode = mode_override or self.settings.openwebui_effective_sync_mode
         summary = OpenWebUISyncSummary(dry_run=mode == "dry-run")
@@ -116,13 +117,14 @@ class OpenWebUISyncService:
             return summary
         try:
             self._ensure_template_chat(mode=mode, sync_id=sync_id)
-            self._sync_deleted_library_mappings(
-                mode=mode,
-                capabilities=capabilities,
-                summary=summary,
-                sync_id=sync_id,
-            )
-            for library in self._discover_libraries():
+            if repo_ids is None:
+                self._sync_deleted_library_mappings(
+                    mode=mode,
+                    capabilities=capabilities,
+                    summary=summary,
+                    sync_id=sync_id,
+                )
+            for library in self._discover_libraries(repo_ids=repo_ids):
                 summary.datasets_seen += 1
                 self.log.info(
                     "openwebui.sync.dataset.discovered",
@@ -334,8 +336,9 @@ class OpenWebUISyncService:
                     stored_mapping.last_successful_sync_at = _utcnow()
                 session.commit()
 
-    def _discover_libraries(self) -> list[Library]:
+    def _discover_libraries(self, *, repo_ids: set[str] | None = None) -> list[Library]:
         allowlist = set(self.settings.openwebui_dataset_allowlist)
+        requested = set(repo_ids or ())
         with self.session_factory() as session:
             rows = session.scalars(
                 select(Library)
@@ -345,6 +348,12 @@ class OpenWebUISyncService:
             ).all()
             result = []
             for row in rows:
+                if (
+                    requested
+                    and row.repo_id not in requested
+                    and row.ragflow_dataset_id not in requested
+                ):
+                    continue
                 if (
                     allowlist
                     and row.repo_id not in allowlist
