@@ -8,6 +8,38 @@ retroactively.
 
 ## Unreleased
 
+## 0.1.7 - 2026-06-01
+
+### Added
+
+- WSL verify wrapper for Windows hosts that runs `uv` in a WSL-owned
+  environment instead of touching an existing Windows `.venv`.
+- Reproducible Docker mock smoke check in the verify runner. It builds a local
+  connector test image from the current checkout, cleans test volumes before
+  and after the run, and checks both `check-live` and `/health/tls`.
+
+### Changed
+
+- Periodic discovery, delta sync, reconcile, RAGFlow template refresh, and
+  OpenWebUI sync defaults are consolidated to 30 minutes across configuration,
+  Compose, Portainer, Swarm examples, and documentation.
+- Dashboard and export labels are localized in more operator-facing views,
+  including first-paint placeholders, systems tables, audit export, OpenWebUI
+  labels, and log labels.
+- The local HTTPS mock smoke uses the same Basic Auth path for `/health/tls` as
+  the operator examples.
+
+### Fixed
+
+- Parallel controller, worker, and reconciler starts now serialize PostgreSQL
+  schema initialization with an advisory lock.
+- `language_from_settings()` keeps the documented German default when no
+  connector language is explicitly configured, independent of host locale.
+- README CLI examples now use the existing Typer commands `dashboard`,
+  `controller`, `worker`, and `reconciler`.
+- Short-lived runtime check paths close database and Redis resources more
+  deterministically.
+
 ## 0.1.6 - 2026-05-28
 
 ### Fixed

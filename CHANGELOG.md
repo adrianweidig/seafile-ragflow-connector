@@ -8,6 +8,40 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+## 0.1.7 - 2026-06-01
+
+### Added
+
+- WSL-Verify-Wrapper für Windows-Hosts, der `uv` in einer WSL-eigenen
+  Umgebung ausführt und dadurch bestehende Windows-`.venv`-Verzeichnisse nicht
+  berührt.
+- Reproduzierbarer Docker-Mock-Smoke im Verify-Runner, der ein lokales
+  Connector-Test-Image aus dem aktuellen Checkout baut, Test-Volumes vor und
+  nach dem Lauf bereinigt und `check-live` sowie `/health/tls` prüft.
+
+### Changed
+
+- Periodische Discovery-, Delta-Sync-, Reconcile-, RAGFlow-Template-Refresh-
+  und OpenWebUI-Sync-Defaults sind auf 30 Minuten konsolidiert und in
+  Konfiguration, Compose-/Portainer-/Swarm-Beispielen sowie Dokumentation
+  beschrieben.
+- Dashboard- und Export-Texte wurden in weiteren Betreiberansichten
+  konsistent lokalisiert, inklusive First-Paint-Platzhaltern, Systemtabellen,
+  Audit-Export und OpenWebUI-/Log-Labels.
+- Der lokale HTTPS-Mock-Smoke nutzt für `/health/tls` denselben Basic-Auth-Pfad
+  wie die Betreiberbeispiele.
+
+### Fixed
+
+- Parallele Controller-, Worker- und Reconciler-Starts serialisieren die
+  PostgreSQL-Schema-Initialisierung per Advisory Lock.
+- `language_from_settings()` bleibt ohne explizite Connector-Sprache beim
+  dokumentierten deutschen Default, unabhängig von der Host-Locale.
+- README-CLI-Beispiele nutzen die existierenden Typer-Kommandos `dashboard`,
+  `controller`, `worker` und `reconciler`.
+- Kurzlebige Runtime-Prüfpfade schließen Datenbank- und Redis-Ressourcen
+  deterministischer.
+
 ## 0.1.6 - 2026-05-28
 
 ### Fixed
