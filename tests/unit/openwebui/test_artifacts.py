@@ -61,20 +61,20 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertTrue(tool.valves["CONNECTOR_PROXY_VERIFY_SSL"])
         self.assertEqual(tool.valves["CONNECTOR_PROXY_CA_BUNDLE"], "")
         self.assertIn("owner: seafile-ragflow-connector", tool.content)
-        self.assertIn("artifact_version: 20", tool.content)
-        self.assertIn("artifact_version: 20", pipe.content)
+        self.assertIn("artifact_version: 21", tool.content)
+        self.assertIn("artifact_version: 21", pipe.content)
         self.assertFalse(tool.valves["TLS_DEBUG"])
         self.assertEqual(tool.valves["SHOW_SOURCE_SCORES"], True)
         self.assertEqual(tool.valves["LANGUAGE"], "de")
         self.assertEqual(pipe.name, "Seafile · Demo Library")
         self.assertEqual(pipe.valves["MODEL_NAME"], "Seafile · Demo Library")
         self.assertEqual(pipe.valves["RAGFLOW_MODEL_ID"], "model")
-        self.assertEqual(pipe.valves["SOURCE_DISPLAY_MODE"], "native")
-        self.assertEqual(pipe.valves["SOURCE_MARKDOWN_MODE"], "none")
+        self.assertEqual(pipe.valves["SOURCE_DISPLAY_MODE"], "audit")
+        self.assertEqual(pipe.valves["SOURCE_MARKDOWN_MODE"], "audit")
         self.assertEqual(pipe.valves["RETRIEVAL_ONLY_FALLBACK"], "brief")
-        self.assertEqual(pipe.valves["EMIT_CITATION_EVENTS"], True)
-        self.assertEqual(pipe.valves["APPEND_SOURCE_OVERVIEW"], False)
-        self.assertEqual(pipe.valves["SHOW_SOURCE_SCORES"], False)
+        self.assertEqual(pipe.valves["EMIT_CITATION_EVENTS"], False)
+        self.assertEqual(pipe.valves["APPEND_SOURCE_OVERVIEW"], True)
+        self.assertEqual(pipe.valves["SHOW_SOURCE_SCORES"], True)
         self.assertEqual(pipe.valves["SHOW_LOCATOR_QUALITY"], True)
         self.assertEqual(pipe.valves["REQUEST_TIMEOUT_SECONDS"], 180.0)
         self.assertEqual(pipe.valves["ANSWER_SYNTHESIS_MAX_TOKENS"], 700)
@@ -92,7 +92,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("_normalize_sources(", pipe.content)
         self.assertIn("DEFAULT_RAG_SYSTEM_PROMPT", pipe.content)
         self.assertIn("generate_answer", pipe.content)
-        self.assertIn("version: 3.8.0", pipe.content)
+        self.assertIn("version: 3.9.0", pipe.content)
         self.assertIn("ANSWER_SYNTHESIS_MAX_TOKENS", pipe.content)
         self.assertIn('"max_tokens": int(valves.ANSWER_SYNTHESIS_MAX_TOKENS)', pipe.content)
         self.assertIn("EMIT_CITATION_EVENTS", pipe.content)
@@ -217,9 +217,9 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertEqual(payload["model"], "ragflow-chat-model")
         self.assertEqual(payload["ragflow"]["mode"], "chat")
         self.assertTrue(payload["openwebui"]["expects_generated_answer"])
-        self.assertEqual(payload["openwebui"]["source_markdown_mode"], "none")
-        self.assertEqual(payload["openwebui"]["source_display_mode"], "native")
-        self.assertFalse(payload["openwebui"]["audit_evidence"])
+        self.assertEqual(payload["openwebui"]["source_markdown_mode"], "audit")
+        self.assertEqual(payload["openwebui"]["source_display_mode"], "markdown_audit")
+        self.assertTrue(payload["openwebui"]["audit_evidence"])
         self.assertEqual(
             payload["extra_body"]["reference_metadata"]["fields"][:3],
             ["document_id", "document_name", "positions"],
@@ -281,7 +281,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
 
         self.assertEqual(answer, "")
 
-    def test_pipe_final_answer_uses_native_citations_without_markdown_by_default(self) -> None:
+    def test_pipe_final_answer_uses_audit_markdown_by_default(self) -> None:
         inputs = DatasetArtifactInputs(
             namespace="ragflow",
             repo_id="repo-1",
@@ -313,9 +313,39 @@ class OpenWebUIArtifactTests(unittest.TestCase):
 
         self.assertTrue(final_answer.startswith("Mobiles Arbeiten ist"))
         self.assertNotIn("[S1]", final_answer)
-        self.assertNotIn("## Nachweise", final_answer)
+        self.assertIn("## Nachweise", final_answer)
+        self.assertIn("**Audit-Status:** nicht ausreichend belegt", final_answer)
+        self.assertIn("**Claim-Abdeckung:** 0/1 Aussagen belegt", final_answer)
+        self.assertIn(
+            "| ID | Rolle | Dokument | Fundstelle | Score | Match | Aussage | Öffnen |",
+            final_answer,
+        )
         self.assertNotIn("chunk_id", final_answer)
         self.assertNotIn("document_id", final_answer)
+
+    def test_pipe_compact_mode_keeps_answer_without_markdown_block(self) -> None:
+        namespace = _pipe_namespace()
+        pipe_instance = namespace["Pipe"]()
+        pipe_instance.valves.SOURCE_DISPLAY_MODE = "compact"
+        pipe_instance.valves.SOURCE_MARKDOWN_MODE = "none"
+        pipe_instance.valves.APPEND_SOURCE_OVERVIEW = False
+        sources = [
+            {
+                "name": "report.pdf",
+                "text": "Der relevante Auszug steht hier.",
+                "score": 0.91,
+                "source_metadata": {"page": 2},
+            }
+        ]
+
+        final_answer = namespace["_compose_final_answer"](
+            "Mobiles Arbeiten ist im Dokument als geregelter Prozess beschrieben.",
+            sources,
+            pipe_instance.valves,
+        )
+
+        self.assertTrue(final_answer.startswith("Mobiles Arbeiten ist"))
+        self.assertNotIn("## Nachweise", final_answer)
 
     def test_pipe_strips_legacy_appended_source_block_before_rendering_once(self) -> None:
         namespace = _pipe_namespace()

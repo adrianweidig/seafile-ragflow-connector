@@ -8,6 +8,34 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+## 0.1.12 - 2026-06-02
+
+### Added
+
+- OpenWebUI-Pipe-Auditmodus als Standard: Antworten zeigen zuerst die
+  Nutzerantwort und danach ein deutsches Evidenzregister mit Audit-Status,
+  Claim-Abdeckung, Rollen, Match-Typ, Audit-Score und sicheren
+  Lauf-Metadaten.
+- Quellen-Normalisierung mit `source_role`, `match_type`, `audit_score`,
+  `score_components`, `used_in_answer`, Claim-IDs und ursprünglicher
+  RAGFlow-Provider-Zitation.
+
+### Changed
+
+- RAGFlow-Referenzen werden nach Audit-Relevanz sortiert und anschließend
+  stabil als `S1`, `S2`, ... neu nummeriert. Exakte Marker-, ID-, Hash-,
+  Ticket- und Dateinamenfragen priorisieren Exact Matches vor semantisch
+  ähnlichen Treffern.
+- OpenWebUI-Pipe-Defaults wechseln von nativen Citation-Events auf den
+  sichtbaren Auditmodus, damit OpenWebUI keine zweite, anders nummerierte
+  Quellenliste erzeugt.
+
+### Fixed
+
+- Antwortmarker wie `[ID:3]` werden nach der Audit-Sortierung gegen die
+  ursprüngliche RAGFlow-Referenz-ID aufgelöst und sichtbar konsistent als
+  `[S1]`/`[S2]` gerendert.
+
 ## 0.1.11 - 2026-06-02
 
 ### Added

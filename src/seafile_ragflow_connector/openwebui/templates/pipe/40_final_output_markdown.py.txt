@@ -9,6 +9,7 @@ def _compose_final_answer(
     valves: Pipe.Valves,
     *,
     answer_origin: str = "canonical_answer",
+    diagnostics: Any = None,
 ) -> str:
     """Compose the final visible assistant message for OpenWebUI."""
     markdown_mode = _effective_source_markdown_mode(valves)
@@ -35,6 +36,8 @@ def _compose_final_answer(
             mode=markdown_mode,
             show_locator_quality=valves.SHOW_LOCATOR_QUALITY,
             answer_origin=answer_origin,
+            answer=answer,
+            diagnostics=diagnostics,
         )
 
     if source_block:
@@ -81,6 +84,8 @@ def _source_markdown(
     mode: str = "compact",
     show_locator_quality: bool = True,
     answer_origin: str = "canonical_answer",
+    answer: str = "",
+    diagnostics: Any = None,
 ) -> str:
     """Render the optional Markdown source overview appended to the answer."""
     mode = _source_markdown_mode(mode)
@@ -94,6 +99,8 @@ def _source_markdown(
             show_debug=show_debug,
             show_locator_quality=show_locator_quality,
             answer_origin=answer_origin,
+            answer=answer,
+            diagnostics=diagnostics,
         )
 
     if not sources:
@@ -112,6 +119,8 @@ def _source_markdown_audit(
     show_debug: bool,
     show_locator_quality: bool,
     answer_origin: str,
+    answer: str,
+    diagnostics: Any,
 ) -> str:
     lines = ["---", "## Nachweise", ""]
     if not sources:
@@ -126,32 +135,38 @@ def _source_markdown_audit(
 
     lines.append(_audit_quality_sentence(sources, answer_origin=answer_origin))
     lines.append("")
-    lines.append("| ID | Gestützte Aussage | Dokument | Fundstelle | Relevanz | Öffnen |")
-    lines.append("|---|---|---|---|---|---|")
+    audit = _claim_audit(answer, sources, answer_origin=answer_origin)
+    lines.append(f"**Audit-Status:** {audit['status_label']}")
+    lines.append(f"**Claim-Abdeckung:** {audit['coverage_label']}")
+    lines.append("")
+    lines.append("| ID | Rolle | Dokument | Fundstelle | Score | Match | Aussage | Öffnen |")
+    lines.append("|---|---|---|---|---|---|---|---|")
 
     for source in sources[:MAX_SOURCE_GROUPS_DETAILED]:
         metadata = _metadata(source)
         source_id = _source_id(source, metadata)
+        role = _source_role_label(metadata)
         claim = _audit_claim(source, metadata)
         document = _audit_document(source, metadata)
         location = _location(metadata)
         locator_quality = str(metadata.get("locator_quality") or "")
         if show_locator_quality and locator_quality in {"unknown", "snippet_only", "document", "chunk"}:
             location = f"{location} (nicht genauer bestimmbar)"
-        relevance = _audit_relevance(source, metadata, show_scores=show_scores)
+        relevance = _audit_score_text(source, metadata, show_scores=show_scores)
+        match_type = str(metadata.get("match_type") or source.get("match_type") or "unbekannt")
         actions = _actions(source, metadata) or "kein Direktlink"
         lines.append(
             "| "
             + " | ".join(
                 _escape_table_cell(value)
-                for value in (source_id, claim, document, location, relevance, actions)
+                for value in (source_id, role, document, location, relevance, match_type, claim, actions)
             )
             + " |"
         )
 
     if len(sources) > MAX_SOURCE_GROUPS_DETAILED:
         remaining = len(sources) - MAX_SOURCE_GROUPS_DETAILED
-        lines.append(f"|  | weitere Quellen ausgeblendet | {remaining} zusätzliche Treffer |  |  |  |")
+        lines.append(f"|  | weitere Quellen ausgeblendet | {remaining} zusätzliche Treffer |  |  |  |  |  |")
 
     if _has_conflicting_sources(sources):
         lines.extend(
@@ -179,6 +194,10 @@ def _source_markdown_audit(
                 debug_lines.append(f"- {_source_id(source, metadata)}: {' · '.join(debug)}")
         if debug_lines:
             lines.extend(["", "**Debug:**", *debug_lines])
+
+    run_metadata = _run_metadata_lines(diagnostics)
+    if run_metadata:
+        lines.extend(["", "## Lauf-Metadaten", *run_metadata])
 
     return "\n".join(lines).rstrip()
 
@@ -254,6 +273,15 @@ def _source_markdown_mode(value: Any) -> str:
 
 def _source_display_mode(valves: Pipe.Valves) -> str:
     mode = _clean(getattr(valves, "SOURCE_DISPLAY_MODE", "")).lower()
+    aliases = {
+        "compact": "native",
+        "audit": "markdown_audit",
+        "debug": "both_debug",
+        "retrieval_only": "markdown_audit",
+        "error": "none",
+    }
+    if mode in aliases:
+        return aliases[mode]
     if mode in VALID_SOURCE_DISPLAY_MODES:
         return mode
     if bool(getattr(valves, "EMIT_CITATION_EVENTS", False)):
@@ -353,6 +381,108 @@ def _audit_quality(
     if precise >= 1 or linked >= 1:
         return "answer_with_precise_sources"
     return "answer_with_rough_sources"
+
+
+def _run_metadata_lines(diagnostics: Any) -> list[str]:
+    if not isinstance(diagnostics, Mapping):
+        return []
+    fields = (
+        ("Antwortquelle", diagnostics.get("answer_path")),
+        ("Referenzquelle", diagnostics.get("reference_path")),
+        ("Retrieval", diagnostics.get("retrieval_mode")),
+        ("Top-K", diagnostics.get("top_k")),
+        ("Quellen nach Deduplizierung", diagnostics.get("source_count_after_dedup")),
+        ("Latenz", f"{diagnostics.get('latency_ms')} ms" if diagnostics.get("latency_ms") not in (None, "") else ""),
+        ("Query-ID", diagnostics.get("query_id")),
+    )
+    lines = []
+    for label, value in fields:
+        if value in (None, "", [], {}):
+            continue
+        lines.append(f"- **{label}:** `{_escape_inline_code(value)}`")
+    coverage = diagnostics.get("claim_coverage")
+    if isinstance(coverage, Mapping):
+        status = coverage.get("status")
+        supported = coverage.get("supported_claims")
+        total = coverage.get("total_claims")
+        if status not in (None, "") and supported not in (None, "") and total not in (None, ""):
+            lines.append(f"- **Claim-Abdeckung intern:** `{supported}/{total} - {_escape_inline_code(status)}`")
+    return lines
+
+
+def _claim_audit(
+    answer: str,
+    sources: list[dict[str, Any]],
+    *,
+    answer_origin: str,
+) -> dict[str, str]:
+    if answer_origin not in ANSWER_GENERATED_ORIGINS:
+        return {
+            "status_label": "retrieval-only",
+            "coverage_label": "0/0 Aussagen belegt",
+        }
+    source_ids = {_source_id(source, _metadata(source)) for source in sources}
+    claims = _extract_visible_claims(answer)
+    if not claims:
+        return {
+            "status_label": "nicht ausreichend belegt",
+            "coverage_label": "0/0 Aussagen belegt",
+        }
+    supported = 0
+    for claim in claims:
+        markers = {f"S{match.group(1)}" for match in re.finditer(r"\[S(\d+)\]", claim, flags=re.IGNORECASE)}
+        if markers and markers.issubset(source_ids):
+            supported += 1
+    total = len(claims)
+    if supported == total:
+        status = "vollständig belegt"
+    elif supported:
+        status = "teilweise belegt"
+    else:
+        status = "nicht ausreichend belegt"
+    return {
+        "status_label": status,
+        "coverage_label": f"{supported}/{total} Aussagen belegt",
+    }
+
+
+def _extract_visible_claims(answer: str) -> list[str]:
+    clean = _strip_appended_source_markdown(str(answer or ""))
+    clean = re.sub(r"^>\s*Hinweis:.*$", "", clean, flags=re.MULTILINE)
+    parts = re.split(r"(?<=[.!?])\s+|\n+", clean)
+    claims = []
+    for part in parts:
+        text = _clean(part)
+        if len(text) < 12:
+            continue
+        if text.startswith(("## ", "### ", "|")):
+            continue
+        claims.append(text)
+    return claims
+
+
+def _source_role_label(metadata: Mapping[str, Any]) -> str:
+    role = str(metadata.get("source_role") or metadata.get("role") or "related")
+    return {
+        "primary": "Primärbeleg",
+        "supporting": "stützend",
+        "related": "verwandt",
+        "unused": "nicht verwendet",
+        "duplicate": "Dublette",
+        "rejected": "verworfen",
+    }.get(role, role)
+
+
+def _audit_score_text(
+    source: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    *,
+    show_scores: bool,
+) -> str:
+    audit_score = _score_float(source.get("audit_score") or metadata.get("audit_score"))
+    if show_scores and audit_score is not None:
+        return f"{audit_score:.2f}"
+    return _audit_relevance(source, metadata, show_scores=show_scores)
 
 
 def _audit_claim(source: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:

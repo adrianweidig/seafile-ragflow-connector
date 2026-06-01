@@ -86,7 +86,8 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual(sources[0]["source_metadata"]["dataset_id"], "dataset-1")
         self.assertEqual(sources[0]["document"], ["Treffertext"])
         self.assertEqual(sources[0]["name"], "report.pdf")
-        self.assertEqual(sources[0]["source_metadata"]["citation_marker"], "[ID:0]")
+        self.assertEqual(sources[0]["source_metadata"]["citation_marker"], "[S1]")
+        self.assertEqual(sources[0]["source_metadata"]["provider_citation_marker"], "[ID:0]")
         self.assertEqual(sources[0]["source_metadata"]["page"], 3)
         self.assertEqual(sources[0]["citation_label"], "S1")
         self.assertEqual(sources[0]["source_id"], "S1")
@@ -234,6 +235,68 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertIn("[S1](https://connector.example", answer)
         self.assertNotIn("[ID:0]", answer)
         self.assertIn("[ID:9]", answer)
+
+    def test_exact_marker_source_becomes_s1_and_rewrites_provider_id(self) -> None:
+        marker = "ENTERPRISE_CA_RAGFLOW_E2E_20260528T000130Z"
+        sources = normalize_sources(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Der Marker steht in der Testdatei [ID:3].",
+                            "reference": {
+                                "chunks": {
+                                    "0": {
+                                        "id": "chunk-related-a",
+                                        "document_id": "doc-a",
+                                        "document_name": "connector-live-check.md",
+                                        "content": "Verwandter Live-Check ohne gesuchten Marker.",
+                                        "similarity": 0.91,
+                                    },
+                                    "1": {
+                                        "id": "chunk-related-b",
+                                        "document_id": "doc-b",
+                                        "document_name": "codex_audit_e2e.md",
+                                        "content": "Semantisch ähnlicher Audit-Kontext.",
+                                        "similarity": 0.88,
+                                    },
+                                    "3": {
+                                        "id": "chunk-exact",
+                                        "document_id": "doc-exact",
+                                        "document_name": (
+                                            "codex_enterprise_ca_e2e_20260528T000130Z.md"
+                                        ),
+                                        "content": f"Testdatei enthält Marker {marker}.",
+                                        "page": 2,
+                                        "similarity": 0.71,
+                                    },
+                                }
+                            },
+                        }
+                    }
+                ]
+            },
+            settings=self._settings(),
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+            question=f"Welche Testdatei enthält den Marker `{marker}`?",
+            answer="Der Marker steht in der Testdatei [ID:3].",
+        )
+
+        self.assertEqual(sources[0]["source_id"], "S1")
+        self.assertEqual(sources[0]["name"], "codex_enterprise_ca_e2e_20260528T000130Z.md")
+        self.assertEqual(sources[0]["source_metadata"]["provider_citation_id"], 3)
+        self.assertEqual(sources[0]["source_metadata"]["source_role"], "primary")
+        self.assertEqual(sources[0]["source_metadata"]["match_type"], "exact_string_match")
+        self.assertGreaterEqual(sources[0]["source_metadata"]["audit_score"], 0.95)
+
+        answer = annotate_answer_citations(
+            "Der Marker steht in der Testdatei [ID:3].",
+            sources,
+        )
+
+        self.assertIn("[S1](https://connector.example", answer)
+        self.assertNotIn("[ID:3]", answer)
 
     def test_normalize_sources_extracts_ragflow_reference_mapping_without_path_leak(self) -> None:
         sources = normalize_sources(
@@ -428,9 +491,11 @@ class OpenWebUISourceTests(unittest.TestCase):
 
         self.assertIn("## Nachweise", markdown)
         self.assertIn(
-            "| ID | Gestützte Aussage | Dokument | Fundstelle | Relevanz | Öffnen |",
+            "| ID | Rolle | Dokument | Fundstelle | Score | Match | Aussage | Öffnen |",
             markdown,
         )
+        self.assertIn("**Audit-Status:** retrieval-only", markdown)
+        self.assertIn("**Claim-Abdeckung:** 0/1 Aussagen belegt", markdown)
         self.assertIn("| S1 |", markdown)
         self.assertIn("dienstleister.pdf", markdown)
         self.assertIn("Seite 4", markdown)

@@ -246,12 +246,31 @@ def _annotate_answer_source_markers(answer: str, sources: list[dict[str, Any]]) 
     if not answer or not sources:
         return answer
 
+    by_provider_id: dict[int, dict[str, Any]] = {}
+    by_current_id: dict[int, dict[str, Any]] = {}
+    for index, source in enumerate(sources):
+        metadata = _metadata(source)
+        provider_id = _int_or_none(
+            _first_nonempty(
+                metadata.get("provider_citation_id"),
+                metadata.get("reference_id"),
+                None,
+            )
+        )
+        if provider_id is not None:
+            by_provider_id.setdefault(provider_id, source)
+        current_id = _int_or_none(metadata.get("citation_id"))
+        by_current_id.setdefault(current_id if current_id is not None else index, source)
+
     def source_id_for_index(raw_index: str) -> str:
         index = _int_or_none(raw_index)
-        if index is None or index < 0 or index >= len(sources):
+        if index is None:
             return f"[ID:{raw_index}]"
-        metadata = _metadata(sources[index])
-        return f"[{_source_id(sources[index], metadata)}]"
+        source = by_provider_id.get(index) or by_current_id.get(index)
+        if source is None:
+            return f"[ID:{raw_index}]"
+        metadata = _metadata(source)
+        return f"[{_source_id(source, metadata)}]"
 
     text = re.sub(
         r"\[\s*ID\s*:\s*(\d+)\s*\]",

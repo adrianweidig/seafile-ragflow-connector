@@ -5,7 +5,7 @@ import hmac
 import json
 import re
 import zlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from hashlib import sha256
 from html import unescape
 from html.parser import HTMLParser
@@ -19,6 +19,15 @@ if TYPE_CHECKING:
     from seafile_ragflow_connector.config.settings import Settings
 
 _RAGFLOW_INLINE_CITATION_RE = re.compile(r"\[ID:(\d+)\]")
+_SOURCE_LABEL_RE = re.compile(r"\[S(\d+)\]", re.IGNORECASE)
+_EXACT_QUERY_TOKEN_RE = re.compile(
+    r"\b(?:"
+    r"[A-Z][A-Z0-9]+(?:_[A-Z0-9]+){2,}"
+    r"|[A-Fa-f0-9]{12,}"
+    r"|[A-Za-z0-9_.-]+\.(?:md|txt|pdf|docx?|xlsx?|csv|json|ya?ml|py|sh|ps1)"
+    r"|[A-Z]{2,}-\d{2,}"
+    r")\b"
+)
 _PREVIEW_SNIPPET_MAX_CHARS = 120
 _SOURCE_SNIPPET_MAX_CHARS = 420
 _TEXT_PROJECTION_WRAPPER_RE = re.compile(
@@ -56,6 +65,14 @@ class SourceHit:
     position: Any = None
     locator_quality: str = "unknown"
     citation_label: str | None = None
+    provider_citation_id: int | None = None
+    source_role: str = "related"
+    match_type: str = "semantic"
+    audit_score: float | None = None
+    score_components: dict[str, Any] = field(default_factory=dict)
+    used_in_answer: bool = False
+    claim_ids: tuple[str, ...] = ()
+    support_status: str = "not_evaluated"
     language: str = "de"
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -96,8 +113,22 @@ class SourceHit:
             "document_name": self.document_name,
             "chunk_id": self.chunk_id,
             "citation_id": self.rank - 1,
-            "citation_marker": f"[ID:{self.rank - 1}]",
+            "citation_marker": f"[S{self.rank}]",
             "citation_label": self.citation_label,
+            "provider_citation_id": self.provider_citation_id,
+            "provider_citation_marker": (
+                f"[ID:{self.provider_citation_id}]"
+                if self.provider_citation_id is not None
+                else None
+            ),
+            "source_role": self.source_role,
+            "role": self.source_role,
+            "match_type": self.match_type,
+            "audit_score": self.audit_score,
+            "score_components": self.score_components or None,
+            "used_in_answer": self.used_in_answer,
+            "claim_ids": list(self.claim_ids) if self.claim_ids else None,
+            "support_status": self.support_status,
             "page": self.page,
             "section": self.section,
             "line": self.line,
@@ -143,7 +174,7 @@ class SourceHit:
             "original_url": self.original_url,
             "citation": {
                 "id": self.rank - 1,
-                "marker": f"[ID:{self.rank - 1}]",
+                "marker": f"[S{self.rank}]",
                 "label": self.citation_label,
             },
             "citation_label": self.citation_label,
@@ -152,6 +183,14 @@ class SourceHit:
             "rank": self.rank,
             "score": self.score,
             "relevance": self.relevance,
+            "source_role": self.source_role,
+            "role": self.source_role,
+            "match_type": self.match_type,
+            "audit_score": self.audit_score,
+            "score_components": self.score_components,
+            "used_in_answer": self.used_in_answer,
+            "claim_ids": list(self.claim_ids),
+            "support_status": self.support_status,
         }
 
 
@@ -296,21 +335,57 @@ def normalize_sources(
     dataset_id: str,
     dataset_name: str,
     files_by_document_id: dict[str, dict[str, Any]] | None = None,
+    question: str | None = None,
+    answer: str | None = None,
+    max_sources: int | None = None,
 ) -> list[dict[str, Any]]:
     l10n = localizer_for(settings)
-    sources = []
+    hits: list[SourceHit] = []
     for index, raw in enumerate(extract_references(payload), start=1):
+        provider_citation_id = _provider_citation_id(raw, fallback=index - 1)
         source = _normalize_reference(
             raw,
             index=index,
+            provider_citation_id=provider_citation_id,
             settings=settings,
             dataset_id=dataset_id,
             dataset_name=dataset_name,
             files_by_document_id=files_by_document_id or {},
             l10n=l10n,
         )
-        sources.append(source.to_openwebui_source())
-    return sources
+        hits.append(source)
+    return [
+        source.to_openwebui_source()
+        for source in _rank_hits_for_audit(
+            hits,
+            question=question,
+            answer=answer,
+            max_sources=max_sources,
+        )
+    ]
+
+
+def audit_rank_sources(
+    sources: list[dict[str, Any]],
+    *,
+    question: str | None = None,
+    answer: str | None = None,
+    max_sources: int | None = None,
+) -> list[dict[str, Any]]:
+    """Re-rank and re-label already normalized source dictionaries for audit output."""
+    hits = [
+        _source_hit_from_event(source, index=index)
+        for index, source in enumerate(sources, start=1)
+    ]
+    return [
+        hit.to_openwebui_source()
+        for hit in _rank_hits_for_audit(
+            hits,
+            question=question,
+            answer=answer,
+            max_sources=max_sources,
+        )
+    ]
 
 
 def annotate_answer_citations(
@@ -322,14 +397,27 @@ def annotate_answer_citations(
     if not answer or not sources:
         return answer
 
+    by_provider_id: dict[int, dict[str, Any]] = {}
+    by_current_id: dict[int, dict[str, Any]] = {}
+    for index, source in enumerate(sources):
+        metadata = _source_metadata(source)
+        provider_id = _int_or_none(metadata.get("provider_citation_id"))
+        if provider_id is None:
+            provider_id = _int_or_none(metadata.get("reference_id"))
+        if provider_id is not None:
+            by_provider_id.setdefault(provider_id, source)
+        current_id = _int_or_none(metadata.get("citation_id"))
+        by_current_id.setdefault(current_id if current_id is not None else index, source)
+
     def replace(match: re.Match[str]) -> str:
         citation_id = int(match.group(1))
-        if citation_id < 0 or citation_id >= len(sources):
+        source = by_provider_id.get(citation_id) or by_current_id.get(citation_id)
+        if source is None:
             return match.group(0)
-        source = sources[citation_id]
         l10n = Localizer(language)
         label = str(
-            source.get("citation_label")
+            source.get("source_id")
+            or source.get("citation_label")
             or f"{l10n.text('sources.source')} {citation_id + 1}"
         )
         url = source.get("url") or source.get("preview_url")
@@ -437,24 +525,42 @@ def _render_sources_audit_markdown(
 
     lines.append(_audit_quality_sentence(sources, l10n))
     lines.append("")
-    lines.append("| ID | Gestützte Aussage | Dokument | Fundstelle | Relevanz | Öffnen |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append(f"**Audit-Status:** {_audit_status_label(sources, l10n)}")
+    lines.append(f"**Claim-Abdeckung:** {_claim_coverage_label(sources, l10n)}")
+    lines.append("")
+    lines.append("| ID | Rolle | Dokument | Fundstelle | Score | Match | Aussage | Öffnen |")
+    lines.append("|---|---|---|---|---|---|---|---|")
 
     for source in sources[:max_sources]:
         metadata = _source_metadata(source)
         source_id = _source_id(source, metadata)
+        role = _source_role_label(metadata, l10n)
         claim = _audit_claim(source, metadata, l10n)
         document = _audit_document(source, metadata)
         location = _source_location(metadata, l10n)
         if metadata.get("locator_quality") in {"unknown", "snippet_only", "document", "chunk"}:
             location = f"{location} ({l10n.text('sources.locator_coarse')})"
-        relevance = _audit_relevance(source, metadata, show_scores, l10n)
+        relevance = _audit_score_text(source, metadata, show_scores, l10n)
+        match_type = str(
+            metadata.get("match_type")
+            or source.get("match_type")
+            or l10n.text("sources.unknown")
+        )
         actions = _source_actions(source, l10n) or l10n.text("sources.no_direct_link")
         lines.append(
             "| "
             + " | ".join(
                 _escape_table_cell(value)
-                for value in (source_id, claim, document, location, relevance, actions)
+                for value in (
+                    source_id,
+                    role,
+                    document,
+                    location,
+                    relevance,
+                    match_type,
+                    claim,
+                    actions,
+                )
             )
             + " |"
         )
@@ -464,7 +570,7 @@ def _render_sources_audit_markdown(
         lines.append(
             "|  | "
             + _escape_table_cell(remaining_text)
-            + " |  |  |  |  |"
+            + " |  |  |  |  |  |  |"
         )
 
     if show_debug:
@@ -514,6 +620,58 @@ def _audit_quality(sources: list[dict[str, Any]]) -> str:
     if precise >= 1 or linked >= 1:
         return "medium"
     return "weak"
+
+
+def _audit_status_label(sources: list[dict[str, Any]], l10n: Localizer) -> str:
+    _ = l10n
+    if not sources:
+        return "keine belastbare Quelle"
+    supported = [
+        source
+        for source in sources
+        if bool(_source_metadata(source).get("used_in_answer"))
+        or str(_source_metadata(source).get("source_role") or "") == "primary"
+    ]
+    if supported:
+        return "belegt"
+    return "retrieval-only"
+
+
+def _claim_coverage_label(sources: list[dict[str, Any]], l10n: Localizer) -> str:
+    _ = l10n
+    if not sources:
+        return "0/0 Aussagen belegt"
+    supported = any(
+        bool(_source_metadata(source).get("used_in_answer"))
+        or str(_source_metadata(source).get("source_role") or "") == "primary"
+        for source in sources
+    )
+    return "1/1 Aussagen belegt" if supported else "0/1 Aussagen belegt"
+
+
+def _source_role_label(metadata: dict[str, Any], l10n: Localizer) -> str:
+    _ = l10n
+    role = str(metadata.get("source_role") or metadata.get("role") or "related")
+    return {
+        "primary": "Primärbeleg",
+        "supporting": "stützend",
+        "related": "verwandt",
+        "unused": "nicht verwendet",
+        "duplicate": "Dublette",
+        "rejected": "verworfen",
+    }.get(role, role)
+
+
+def _audit_score_text(
+    source: dict[str, Any],
+    metadata: dict[str, Any],
+    show_scores: bool,
+    l10n: Localizer,
+) -> str:
+    audit_score = _score_float(source.get("audit_score") or metadata.get("audit_score"))
+    if show_scores and audit_score is not None:
+        return f"{audit_score:.2f}"
+    return _audit_relevance(source, metadata, show_scores, l10n)
 
 
 def _audit_claim(source: dict[str, Any], metadata: dict[str, Any], l10n: Localizer) -> str:
@@ -590,6 +748,324 @@ def _source_basis_line(
     )
 
 
+def _rank_hits_for_audit(
+    hits: list[SourceHit],
+    *,
+    question: str | None,
+    answer: str | None,
+    max_sources: int | None,
+) -> list[SourceHit]:
+    exact_terms = _exact_query_terms(question)
+    cited_provider_ids = _answer_provider_citation_ids(answer)
+    cited_source_labels = _answer_source_labels(answer)
+    evaluated: list[SourceHit] = []
+
+    for hit in hits:
+        components = _audit_score_components(hit, exact_terms=exact_terms)
+        provider_used = (
+            hit.provider_citation_id is not None
+            and hit.provider_citation_id in cited_provider_ids
+        )
+        label_used = bool(hit.source_id and hit.source_id.upper() in cited_source_labels)
+        used_in_answer = provider_used or label_used
+        audit_score = _combined_audit_score(components, used_in_answer=used_in_answer)
+        match_type = _match_type_from_components(components)
+        role = _preliminary_source_role(
+            components,
+            audit_score=audit_score,
+            used_in_answer=used_in_answer,
+        )
+        evaluated.append(
+            replace(
+                hit,
+                source_role=role,
+                match_type=match_type,
+                audit_score=audit_score,
+                score_components=components,
+                used_in_answer=used_in_answer,
+                claim_ids=("C1",) if used_in_answer or components["exact_match"] >= 1.0 else (),
+                support_status=(
+                    "supported"
+                    if used_in_answer or components["exact_match"] >= 1.0
+                    else "related"
+                ),
+            )
+        )
+
+    evaluated.sort(key=_audit_hit_sort_key)
+
+    primary_assigned = False
+    final_hits: list[SourceHit] = []
+    for display_rank, hit in enumerate(evaluated, start=1):
+        role = hit.source_role
+        if role == "primary":
+            if primary_assigned:
+                role = "supporting"
+            else:
+                primary_assigned = True
+        final_hits.append(
+            replace(
+                hit,
+                rank=display_rank,
+                source_id=f"S{display_rank}",
+                citation_label=f"S{display_rank}",
+                source_role=role,
+            )
+        )
+
+    if max_sources is not None:
+        limit = max(1, int(max_sources))
+        return final_hits[:limit]
+    return final_hits
+
+
+def _source_hit_from_event(source: dict[str, Any], *, index: int) -> SourceHit:
+    metadata = _source_metadata(source)
+    rank = _int_or_none(source.get("rank") or metadata.get("rank")) or index
+    source_id = str(source.get("source_id") or metadata.get("source_id") or f"S{rank}")
+    provider_id = _int_or_none(metadata.get("provider_citation_id"))
+    if provider_id is None:
+        provider_id = _int_or_none(metadata.get("reference_id"))
+    title = str(
+        source.get("name")
+        or metadata.get("document_name")
+        or metadata.get("doc_name")
+        or f"Quelle {rank}"
+    )
+    return SourceHit(
+        rank=rank,
+        title=title,
+        snippet=str(source.get("snippet") or source.get("text") or ""),
+        source_id=source_id,
+        document_name=metadata.get("document_name") or title,
+        path=metadata.get("path"),
+        page=metadata.get("page"),
+        line=metadata.get("line"),
+        line_start=metadata.get("line_start"),
+        line_end=metadata.get("line_end"),
+        section=metadata.get("section"),
+        chunk_id=metadata.get("chunk_id"),
+        score=source.get("score") or metadata.get("score"),
+        preview_url=source.get("preview_url") or source.get("url") or metadata.get("preview_url"),
+        original_url=source.get("original_url") or metadata.get("original_url"),
+        dataset_id=metadata.get("dataset_id"),
+        dataset_name=metadata.get("dataset_name"),
+        document_id=metadata.get("document_id"),
+        repo_id=metadata.get("repo_id"),
+        file_id=metadata.get("file_id"),
+        seafile_library_id=metadata.get("seafile_library_id"),
+        seafile_library_name=metadata.get("seafile_library_name"),
+        file_type=metadata.get("file_type"),
+        mime_type=metadata.get("mime_type"),
+        position=metadata.get("position") or metadata.get("positions"),
+        locator_quality=str(metadata.get("locator_quality") or "unknown"),
+        citation_label=str(
+            source.get("citation_label")
+            or metadata.get("citation_label")
+            or source_id
+        ),
+        provider_citation_id=provider_id,
+        source_role=str(
+            metadata.get("source_role")
+            or metadata.get("role")
+            or source.get("source_role")
+            or "related"
+        ),
+        match_type=str(metadata.get("match_type") or source.get("match_type") or "semantic"),
+        audit_score=_score_float(source.get("audit_score") or metadata.get("audit_score")),
+        score_components=dict(
+            metadata.get("score_components") or source.get("score_components") or {}
+        ),
+        used_in_answer=bool(metadata.get("used_in_answer") or source.get("used_in_answer")),
+        claim_ids=tuple(metadata.get("claim_ids") or source.get("claim_ids") or ()),
+        support_status=str(
+            metadata.get("support_status")
+            or source.get("support_status")
+            or "not_evaluated"
+        ),
+        language="de",
+        raw=dict(source),
+    )
+
+
+def _provider_citation_id(raw: dict[str, Any], *, fallback: int) -> int:
+    for key in ("provider_citation_id", "citation_id", "reference_id", "ref_id"):
+        value = _int_or_none(raw.get(key))
+        if value is not None:
+            return value
+    return fallback
+
+
+def _exact_query_terms(question: str | None) -> tuple[str, ...]:
+    text = str(question or "")
+    terms: list[str] = []
+    terms.extend(match.group(0) for match in _EXACT_QUERY_TOKEN_RE.finditer(text))
+    for pattern in (r"`([^`]{4,160})`", r'"([^"]{4,160})"'):
+        terms.extend(match.group(1) for match in re.finditer(pattern, text))
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        clean = " ".join(str(term).split()).strip()
+        if len(clean) < 4:
+            continue
+        key = clean.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(clean)
+    return tuple(normalized[:12])
+
+
+def _answer_provider_citation_ids(answer: str | None) -> set[int]:
+    ids = {int(match.group(1)) for match in _RAGFLOW_INLINE_CITATION_RE.finditer(str(answer or ""))}
+    ids.update(
+        int(match.group(1))
+        for match in re.finditer(
+            r"\{\{\s*source\s*:\s*(\d+)\s*\}\}",
+            str(answer or ""),
+            flags=re.IGNORECASE,
+        )
+    )
+    ids.update(int(match.group(1)) for match in re.finditer(r"##(\d+)\$\$", str(answer or "")))
+    return ids
+
+
+def _answer_source_labels(answer: str | None) -> set[str]:
+    return {f"S{match.group(1)}".upper() for match in _SOURCE_LABEL_RE.finditer(str(answer or ""))}
+
+
+def _audit_score_components(
+    hit: SourceHit,
+    *,
+    exact_terms: tuple[str, ...],
+) -> dict[str, float]:
+    source_text = _source_match_text(hit).casefold()
+    exact_match = 0.0
+    keyword = 0.0
+    if exact_terms:
+        matches = sum(1 for term in exact_terms if term.casefold() in source_text)
+        keyword = matches / len(exact_terms)
+        exact_match = 1.0 if matches else 0.0
+    vector = _score_float(hit.score) or 0.0
+    reranker = _score_float(
+        hit.raw.get("reranker_score")
+        or hit.raw.get("rerank_score")
+        or hit.raw.get("relevance_score")
+        or hit.raw.get("score")
+        or hit.raw.get("similarity")
+    )
+    if reranker is None:
+        reranker = vector
+    locator = _locator_quality_score(hit.locator_quality)
+    authority = 1.0 if hit.original_url or hit.path or hit.document_id else 0.5
+    duplicate_penalty = 0.0
+    weak_locator_penalty = 0.1 if hit.locator_quality in {"unknown", "snippet_only"} else 0.0
+    return {
+        "exact_match": round(exact_match, 3),
+        "keyword": round(keyword, 3),
+        "vector": round(vector, 3),
+        "reranker": round(reranker, 3),
+        "locator_quality": round(locator, 3),
+        "source_authority": round(authority, 3),
+        "duplicate_penalty": duplicate_penalty,
+        "weak_locator_penalty": weak_locator_penalty,
+    }
+
+
+def _combined_audit_score(
+    components: dict[str, float],
+    *,
+    used_in_answer: bool,
+) -> float:
+    score = (
+        0.35 * components["exact_match"]
+        + 0.25 * components["reranker"]
+        + 0.15 * components["keyword"]
+        + 0.15 * components["vector"]
+        + 0.05 * components["locator_quality"]
+        + 0.05 * components["source_authority"]
+        - components["duplicate_penalty"]
+        - components["weak_locator_penalty"]
+    )
+    if used_in_answer:
+        score += 0.15
+    if components["exact_match"] >= 1.0:
+        score = max(score, 0.95)
+    return round(max(0.0, min(1.0, score)), 3)
+
+
+def _match_type_from_components(components: dict[str, float]) -> str:
+    if components["exact_match"] >= 1.0:
+        return "exact_string_match"
+    if components["keyword"] > 0:
+        return "keyword_match"
+    if components["reranker"] >= 0.7 and components["vector"] >= 0.5:
+        return "hybrid_reranked"
+    if components["vector"] > 0:
+        return "semantic"
+    return "unknown"
+
+
+def _preliminary_source_role(
+    components: dict[str, float],
+    *,
+    audit_score: float,
+    used_in_answer: bool,
+) -> str:
+    if used_in_answer or components["exact_match"] >= 1.0:
+        return "primary"
+    if audit_score >= 0.7:
+        return "supporting"
+    if audit_score < 0.25:
+        return "unused"
+    return "related"
+
+
+def _audit_hit_sort_key(hit: SourceHit) -> tuple[int, float, int]:
+    role_order = {
+        "primary": 0,
+        "supporting": 1,
+        "related": 2,
+        "unused": 3,
+        "duplicate": 4,
+        "rejected": 5,
+    }
+    return (
+        role_order.get(hit.source_role, 6),
+        -(hit.audit_score or 0.0),
+        hit.rank,
+    )
+
+
+def _source_match_text(hit: SourceHit) -> str:
+    parts = [
+        hit.title,
+        hit.document_name,
+        hit.path,
+        hit.snippet,
+        hit.chunk_id,
+        hit.document_id,
+    ]
+    for key in ("document_name", "doc_name", "path", "source_path", "title", "name"):
+        value = hit.raw.get(key)
+        if value not in (None, ""):
+            parts.append(str(value))
+    return "\n".join(str(part) for part in parts if part not in (None, ""))
+
+
+def _locator_quality_score(value: str) -> float:
+    return {
+        "line": 1.0,
+        "page": 0.9,
+        "section": 0.85,
+        "position": 0.8,
+        "chunk": 0.65,
+        "document": 0.45,
+        "snippet_only": 0.35,
+        "unknown": 0.2,
+    }.get(str(value or "unknown"), 0.2)
+
+
 def sign_preview_payload(payload: dict[str, Any], secret: str, *, now: int | None = None) -> str:
     body = dict(payload)
     raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -625,6 +1101,7 @@ def _normalize_reference(
     raw: dict[str, Any],
     *,
     index: int,
+    provider_citation_id: int,
     settings: Settings,
     dataset_id: str,
     dataset_name: str,
@@ -748,6 +1225,7 @@ def _normalize_reference(
         position=position,
         locator_quality=locator_quality,
         citation_label=citation_label,
+        provider_citation_id=provider_citation_id,
         language=l10n.language,
         raw=raw,
     )
@@ -910,6 +1388,18 @@ def _collect_references(
             "chunks",
         ):
             if key in value:
+                if key == "chunks" and isinstance(value[key], dict):
+                    for ref_id, item in _sorted_mapping_items(value[key]):
+                        if isinstance(item, dict):
+                            raw_item = dict(item)
+                            raw_item.setdefault("reference_id", str(ref_id))
+                            _collect_references(
+                                raw_item,
+                                references,
+                                seen=seen,
+                                source_container=True,
+                            )
+                    continue
                 _collect_references(
                     value[key],
                     references,
@@ -930,6 +1420,14 @@ def _collect_references(
     elif isinstance(value, list):
         for item in value:
             _collect_references(item, references, seen=seen, source_container=source_container)
+
+
+def _sorted_mapping_items(mapping: dict[Any, Any]) -> list[tuple[Any, Any]]:
+    def sort_key(item: tuple[Any, Any]) -> tuple[int, str]:
+        number = _int_or_none(item[0])
+        return (number if number is not None else 10**9, str(item[0]))
+
+    return sorted(mapping.items(), key=sort_key)
 
 
 def _looks_like_loose_source(value: dict[str, Any]) -> bool:
@@ -1146,6 +1644,13 @@ def _score_float(score: Any) -> float | None:
     if value > 1:
         value = value / 100
     return max(0.0, min(1.0, value))
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def _format_score(score: Any) -> str | None:
