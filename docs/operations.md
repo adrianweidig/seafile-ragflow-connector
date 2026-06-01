@@ -160,8 +160,8 @@ und Proxy-Werte ergänzt werden.
 
 Für den lokalen Windows-/WSL-Zugriff über `https://connector.top.secret` kann
 das Overlay `deploy/compose/connector-top-secret.compose.yml` ergänzt werden.
-Es aktiviert das lesende Dashboard im Controller und startet einen Nginx-Edge
-mit lokalem Zertifikat aus `CONNECTOR_CERTS_HOST_DIR`. Die vollständige
+Es aktiviert das Dashboard im Controller und startet einen Nginx-Edge mit
+lokalem Zertifikat aus `CONNECTOR_CERTS_HOST_DIR`. Die vollständige
 Runbook-Anleitung einschließlich Windows-Hosts-Eintrag, Root-CA-Import,
 Update-Test und Rollback steht in `docs/local-https-compose.md`.
 
@@ -209,12 +209,15 @@ gesetzt werden. Soll die Oberfläche nicht erreichbar sein, bleibt
 `CONNECTOR_DASHBOARD_ENABLED=false` gesetzt oder das Portmapping wird in
 Portainer entfernt.
 
-Die Oberfläche ist ausschließlich lesend und schützt UI sowie lesende API per
-HTTP Basic Auth, sobald `CONNECTOR_DASHBOARD_AUTH_USERNAME` und
+Die Oberfläche schützt UI, Status-API und Workflow-Steuerung per HTTP Basic
+Auth, sobald `CONNECTOR_DASHBOARD_AUTH_USERNAME` und
 `CONNECTOR_DASHBOARD_AUTH_PASSWORD` gesetzt sind. Sie zeigt keine Secrets, lädt
-keine CDN-Assets nach und führt keine Sync-Schreibaktionen aus. Der
-Dark-/Light-Modus und die Auto-Refresh-Auswahl laufen rein im Browser. Wählbar
-sind aus, 5 Sekunden, 10 Sekunden und 1 Minute.
+keine CDN-Assets nach und bietet keine destruktiven Steuerungsfunktionen. Im
+Tab **Prüfablauf** können die mit dem aktuellen Seafile-API-Key sichtbaren
+Bibliotheken ausgewählt und für RAGFlow-Dataset-/Dokument-Sync sowie optionalen
+OpenWebUI-Chat-/Tool-/Pipe-Sync gestartet werden. Der Dark-/Light-Modus und die
+Auto-Refresh-Auswahl laufen rein im Browser. Wählbar sind aus, 5 Sekunden, 10
+Sekunden und 1 Minute.
 Der Health-Bereich prüft Dashboard, Datenbank, Redis, Seafile-Admin-API,
 RAGFlow-API und Sync-Job-Zustand. Für Seafile, RAGFlow und OpenWebUI zeigt er
 zusätzlich den aktuell gewählten Transport (`https` oder `http`), die effektive

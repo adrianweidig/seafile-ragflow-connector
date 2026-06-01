@@ -325,7 +325,13 @@ def controller() -> None:
     if dashboard_required and runtime.dashboard_store is not None:
         try:
             dashboard_handle = start_dashboard_server(
-                DashboardContext(runtime.dashboard_store, settings, PROCESS_STARTED_AT)
+                DashboardContext(
+                    runtime.dashboard_store,
+                    settings,
+                    PROCESS_STARTED_AT,
+                    orchestrator=runtime.orchestrator,
+                    openwebui_sync_service=runtime.openwebui_sync_service,
+                )
             )
         except DashboardBindError as exc:
             log.error("dashboard.bind_failed", error=str(exc))

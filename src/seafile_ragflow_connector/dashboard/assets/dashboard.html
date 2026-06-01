@@ -565,6 +565,7 @@
     #log-table { min-width: 1120px; }
     #source-table, #target-table { min-width: 920px; }
     #openwebui-table { min-width: 1420px; }
+    #workflow-table { min-width: 1380px; }
     #log-table th:nth-child(1) { width: 17%; }
     #log-table th:nth-child(2) { width: 10%; }
     #log-table th:nth-child(3) { width: 15%; }
@@ -614,6 +615,47 @@
       box-shadow: inset var(--focus);
     }
     .compact-table table { min-width: 680px; }
+    .workflow-controls {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      align-items: end;
+      margin-bottom: 16px;
+    }
+    .workflow-controls label {
+      min-width: 0;
+    }
+    .workflow-controls .option {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      min-height: 40px;
+      padding: 9px 12px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.035);
+    }
+    .workflow-controls .option input,
+    .workflow-select input {
+      width: 18px;
+      height: 18px;
+      min-height: 18px;
+      flex: 0 0 auto;
+    }
+    .workflow-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .workflow-select {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .workflow-result {
+      margin-top: 16px;
+      min-height: 80px;
+    }
     .status {
       align-items: center;
       border: 1px solid var(--border);
@@ -914,6 +956,7 @@
       </div>
       <nav class="nav" aria-label="Dashboard Bereiche">
         <button class="tab" data-tab="overview" aria-selected="true"><span class="tab-dot"></span>Übersicht</button>
+        <button class="tab" data-tab="workflow" aria-selected="false"><span class="tab-dot"></span>Prüfablauf</button>
         <button class="tab" data-tab="syncs" aria-selected="false"><span class="tab-dot"></span>Sync-Läufe</button>
         <button class="tab" data-tab="changes" aria-selected="false"><span class="tab-dot"></span>Änderungen</button>
         <button class="tab" data-tab="logs" aria-selected="false"><span class="tab-dot"></span>Logs</button>
@@ -1010,6 +1053,25 @@
           <div class="panel compact-table">
             <div class="panel-header"><h3 data-i18n="overview.recentChanges">Neueste Änderungen</h3><small id="recent-change-count">0</small></div>
             <div class="table-wrap"><table id="recent-changes"></table></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="workflow" hidden>
+        <div class="panel">
+          <div class="panel-header"><h3 data-i18n="section.workflowControl">Prüfablauf starten</h3><small id="workflow-summary">-</small></div>
+          <div class="panel-body">
+            <div class="workflow-controls">
+              <label class="option"><input id="workflow-create-datasets" type="checkbox" checked><span data-i18n="workflow.createDatasets">RAGFlow-Dataset und Dokumente synchronisieren</span></label>
+              <label class="option"><input id="workflow-sync-openwebui" type="checkbox" checked><span data-i18n="workflow.syncOpenWebUI">RAGFlow-Chat und OpenWebUI-Tool/Pipe erzeugen</span></label>
+              <label><span data-i18n="workflow.scope">Seafile-Pfad</span><input id="workflow-scope" autocomplete="off" value="/"></label>
+              <div class="workflow-actions">
+                <button class="ghost" id="workflow-load" type="button" data-i18n="workflow.refreshLibraries">Bibliotheken prüfen</button>
+                <button class="primary" id="workflow-run" type="button" data-i18n="workflow.runSelected">Auswahl starten</button>
+              </div>
+            </div>
+            <div class="table-wrap"><table id="workflow-table"></table></div>
+            <pre id="workflow-result" class="detail workflow-result"></pre>
           </div>
         </div>
       </section>
@@ -1122,6 +1184,7 @@
         'brand.subtitle': 'Seafile zu RAGFlow',
         'nav.label': 'Dashboard Bereiche',
         'nav.overview': 'Übersicht',
+        'nav.workflow': 'Prüfablauf',
         'nav.syncs': 'Sync-Läufe',
         'nav.changes': 'Änderungen',
         'nav.logs': 'Logs',
@@ -1204,6 +1267,7 @@
         'overview.waitingJobs': 'wartende Jobs',
         'overview.logWarnings': 'Warnungen im Log',
         'overview.logErrors': 'Fehler im Log',
+        'section.workflowControl': 'Prüfablauf starten',
         'section.syncHistory': 'Synchronisationshistorie',
         'section.detectedChanges': 'Erkannte Änderungen',
         'section.logEvents': 'Logereignisse',
@@ -1215,6 +1279,8 @@
         'sync.detail': 'Detail',
         'titles.overview': 'Übersicht',
         'subtitles.overview': 'Live-Zustand, Durchsatz und Auffälligkeiten',
+        'titles.workflow': 'Prüfablauf',
+        'subtitles.workflow': 'Sichtbare Seafile-Bibliotheken auswählen und Sync starten',
         'titles.syncs': 'Sync-Läufe',
         'subtitles.syncs': 'Historie, Laufzeiten und Ergebnisdetails',
         'titles.changes': 'Änderungen',
@@ -1276,12 +1342,30 @@
         'openwebui.none': 'keine',
         'openwebui.model': 'Modell',
         'openwebui.lastSuccess': 'Letzter Erfolg',
+        'workflow.createDatasets': 'RAGFlow-Dataset und Dokumente synchronisieren',
+        'workflow.syncOpenWebUI': 'RAGFlow-Chat und OpenWebUI-Tool/Pipe erzeugen',
+        'workflow.scope': 'Seafile-Pfad',
+        'workflow.refreshLibraries': 'Bibliotheken prüfen',
+        'workflow.runSelected': 'Auswahl starten',
+        'workflow.visible': 'mit API-Key sichtbar',
+        'workflow.selectable': 'auswählbar',
+        'workflow.selected': 'ausgewählt',
+        'workflow.selection': 'Auswahl',
+        'workflow.dataset': 'Dataset',
+        'workflow.openwebui': 'Chat/Pipe',
+        'workflow.skipReason': 'Sperrgrund',
+        'workflow.noSelection': 'Bitte mindestens eine sichtbare Bibliothek auswählen.',
+        'workflow.running': 'Prüflauf läuft...',
+        'workflow.notAvailable': 'Dashboard-Steuerung ist in diesem Prozess nicht verfügbar.',
+        'workflow.lastResult': 'Letztes Ergebnis',
+        'workflow.repo': 'Bibliothek',
         'api.error': 'API-Fehler'
       },
       en: {
         'brand.subtitle': 'Seafile to RAGFlow',
         'nav.label': 'Dashboard sections',
         'nav.overview': 'Overview',
+        'nav.workflow': 'Workflow',
         'nav.syncs': 'Sync runs',
         'nav.changes': 'Changes',
         'nav.logs': 'Logs',
@@ -1364,6 +1448,7 @@
         'overview.waitingJobs': 'waiting jobs',
         'overview.logWarnings': 'log-level warnings',
         'overview.logErrors': 'log-level errors',
+        'section.workflowControl': 'Start workflow',
         'section.syncHistory': 'Synchronization history',
         'section.detectedChanges': 'Detected changes',
         'section.logEvents': 'Log events',
@@ -1375,6 +1460,8 @@
         'sync.detail': 'Detail',
         'titles.overview': 'Overview',
         'subtitles.overview': 'Live state, throughput, and anomalies',
+        'titles.workflow': 'Workflow',
+        'subtitles.workflow': 'Select API-visible Seafile libraries and start sync',
         'titles.syncs': 'Sync runs',
         'subtitles.syncs': 'History, runtimes, and result details',
         'titles.changes': 'Changes',
@@ -1436,6 +1523,23 @@
         'openwebui.none': 'none',
         'openwebui.model': 'Model',
         'openwebui.lastSuccess': 'Last success',
+        'workflow.createDatasets': 'Synchronize RAGFlow dataset and documents',
+        'workflow.syncOpenWebUI': 'Create RAGFlow chat and OpenWebUI tool/pipe',
+        'workflow.scope': 'Seafile path',
+        'workflow.refreshLibraries': 'Check libraries',
+        'workflow.runSelected': 'Start selection',
+        'workflow.visible': 'visible with API key',
+        'workflow.selectable': 'selectable',
+        'workflow.selected': 'selected',
+        'workflow.selection': 'Selection',
+        'workflow.dataset': 'Dataset',
+        'workflow.openwebui': 'Chat/Pipe',
+        'workflow.skipReason': 'Skip reason',
+        'workflow.noSelection': 'Select at least one visible library.',
+        'workflow.running': 'Workflow is running...',
+        'workflow.notAvailable': 'Dashboard control is not available in this process.',
+        'workflow.lastResult': 'Last result',
+        'workflow.repo': 'Library',
         'api.error': 'API error'
       }
     };
@@ -1485,7 +1589,10 @@
       sidebarUpdatedAt: null,
       titles: {},
       overviewData: null,
-      systemsData: null
+      systemsData: null,
+      workflowData: null,
+      workflowSelected: new Set(),
+      workflowRunning: false
     };
     const $ = (id) => document.getElementById(id);
     let disclosureId = 0;
@@ -1507,10 +1614,12 @@
       document.querySelector('.brand span').textContent = t('brand.subtitle');
       document.querySelector('.nav').setAttribute('aria-label', t('nav.label'));
       document.querySelector('[data-tab="overview"]').lastChild.textContent = t('nav.overview');
+      document.querySelector('[data-tab="workflow"]').lastChild.textContent = t('nav.workflow');
       document.querySelector('[data-tab="syncs"]').lastChild.textContent = t('nav.syncs');
       document.querySelector('[data-tab="changes"]').lastChild.textContent = t('nav.changes');
       document.querySelector('[data-tab="logs"]').lastChild.textContent = t('nav.logs');
       document.querySelector('[data-tab="systems"]').lastChild.textContent = t('nav.systems');
+      document.querySelector('[data-tab="openwebui"]').lastChild.textContent = t('nav.openwebui');
       document.querySelector('[data-tab="diagnostics"]').lastChild.textContent = t('nav.diagnostics');
       setText('refresh-label', t('action.autoRefresh'));
       setText('language-label', t('action.language'));
@@ -1524,6 +1633,7 @@
       });
       state.titles = {
         overview: [t('titles.overview'), t('subtitles.overview')],
+        workflow: [t('titles.workflow'), t('subtitles.workflow')],
         syncs: [t('titles.syncs'), t('subtitles.syncs')],
         changes: [t('titles.changes'), t('subtitles.changes')],
         logs: [t('titles.logs'), t('subtitles.logs')],
@@ -1576,6 +1686,16 @@
     }
     async function api(path) {
       const res = await fetch(path, { headers: { 'Accept': 'application/json' } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.error || t('api.error'));
+      return data;
+    }
+    async function apiPost(path, payload) {
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || data.error || t('api.error'));
       return data;
@@ -1877,6 +1997,9 @@
       if (state.activeTab === 'systems' && state.systemsData) {
         renderSystems(state.systemsData);
       }
+      if (state.activeTab === 'workflow' && state.workflowData) {
+        renderWorkflow(state.workflowData);
+      }
     }
     async function loadOverview() {
       const [statusData, metricsData, syncs, changes, errors, warnings, health] = await Promise.all([
@@ -1928,6 +2051,126 @@
         ...change,
         __cells: [fmtDate(change.occurred_at), change.change_type, status(change.status), compactText(change.object_name, { threshold: 36 }), compactText(change.target_path, { threshold: 44 })]
       })));
+    }
+    async function loadWorkflow() {
+      const data = await api('/api/workflow/libraries');
+      state.workflowData = data;
+      renderWorkflow(data);
+    }
+    function workflowSelectionCell(library) {
+      const wrapper = document.createElement('label');
+      wrapper.className = 'workflow-select';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.value = library.repo_id;
+      input.disabled = !library.selectable || !state.workflowData.enabled || state.workflowRunning;
+      input.checked = state.workflowSelected.has(library.repo_id);
+      input.setAttribute('aria-label', t('workflow.selection') + ' ' + (library.name || library.repo_id));
+      input.addEventListener('change', () => {
+        if (input.checked) state.workflowSelected.add(library.repo_id);
+        else state.workflowSelected.delete(library.repo_id);
+        renderWorkflowSummary(state.workflowData);
+      });
+      wrapper.appendChild(input);
+      return wrapper;
+    }
+    function workflowOpenWebUIState(item) {
+      const data = item.openwebui || {};
+      const parts = [
+        data.sync_status || 'not_created',
+        data.ragflow_chat_id ? 'chat' : '',
+        data.openwebui_pipe_id ? 'pipe' : '',
+        data.openwebui_tool_id ? 'tool' : ''
+      ].filter(Boolean);
+      return parts.join(' / ') || '-';
+    }
+    function renderWorkflowSummary(data) {
+      const summary = data.summary || {};
+      const selected = state.workflowSelected.size;
+      if (!data.enabled) {
+        setText('workflow-summary', t('workflow.notAvailable'));
+        return;
+      }
+      setText(
+        'workflow-summary',
+        fmtNumber(summary.visible) + ' ' + t('workflow.visible') + ' · '
+          + fmtNumber(summary.selectable) + ' ' + t('workflow.selectable') + ' · '
+          + fmtNumber(selected) + ' ' + t('workflow.selected')
+      );
+    }
+    function renderWorkflow(data) {
+      const knownRepoIds = new Set((data.libraries || []).map((item) => item.repo_id));
+      Array.from(state.workflowSelected).forEach((repoId) => {
+        if (!knownRepoIds.has(repoId)) state.workflowSelected.delete(repoId);
+      });
+      renderWorkflowSummary(data);
+      table('workflow-table', [
+        t('workflow.selection'),
+        'Repo-ID',
+        t('workflow.repo'),
+        t('table.status'),
+        t('workflow.dataset'),
+        t('workflow.openwebui'),
+        t('table.headCommit'),
+        t('workflow.skipReason'),
+        t('table.error')
+      ], (data.libraries || []).map((library) => ({
+        ...library,
+        __cells: [
+          workflowSelectionCell(library),
+          compactText(library.repo_id, { threshold: 34 }),
+          compactText(library.name, { threshold: 42 }),
+          status(library.status),
+          compactText(library.ragflow_dataset_id || library.ragflow_dataset_name, { threshold: 44 }),
+          compactText(workflowOpenWebUIState(library), { threshold: 52 }),
+          compactText(library.head_commit_id, { threshold: 34 }),
+          compactText(library.skip_reason, { threshold: 34 }),
+          compactText(library.last_error || (library.openwebui && library.openwebui.last_error), { threshold: 48 })
+        ]
+      })));
+      $('workflow-run').disabled = state.workflowRunning || !data.enabled;
+      $('workflow-load').disabled = state.workflowRunning;
+    }
+    function renderWorkflowResult(result) {
+      $('workflow-result').textContent = t('workflow.lastResult') + '\n' + JSON.stringify(result, null, 2);
+    }
+    async function runWorkflow() {
+      const repoIds = Array.from(state.workflowSelected);
+      if (!repoIds.length) {
+        showError(t('workflow.noSelection'));
+        return;
+      }
+      state.workflowRunning = true;
+      $('workflow-run').disabled = true;
+      $('workflow-load').disabled = true;
+      $('workflow-result').textContent = t('workflow.running');
+      showError('');
+      try {
+        const result = await apiPost('/api/workflow/run', {
+          repo_ids: repoIds,
+          create_dataset: $('workflow-create-datasets').checked,
+          sync_openwebui: $('workflow-sync-openwebui').checked,
+          scope: $('workflow-scope').value || '/'
+        });
+        renderWorkflowResult(result);
+        state.workflowData = {
+          enabled: true,
+          libraries: result.libraries || [],
+          summary: {
+            visible: (result.libraries || []).length,
+            selectable: (result.libraries || []).filter((item) => item.selectable).length,
+            with_dataset: (result.libraries || []).filter((item) => item.ragflow_dataset_id).length
+          }
+        };
+        renderWorkflow(state.workflowData);
+      } catch (err) {
+        showError(err.message || String(err));
+      } finally {
+        state.workflowRunning = false;
+        if (state.activeTab === 'workflow') {
+          await loadWorkflow().catch((err) => showError(err.message || String(err)));
+        }
+      }
     }
     async function loadSyncs() {
       const statusValue = $('sync-status').value;
@@ -2096,6 +2339,7 @@
       document.querySelectorAll('section:not([hidden]) .table-wrap').forEach((node) => node.setAttribute('aria-busy', 'true'));
       try {
         if (state.activeTab === 'overview') await loadOverview();
+        if (state.activeTab === 'workflow') await loadWorkflow();
         if (state.activeTab === 'syncs') await loadSyncs();
         if (state.activeTab === 'changes') await loadChanges();
         if (state.activeTab === 'logs') await loadLogs();
@@ -2178,6 +2422,8 @@
       button.addEventListener('click', () => activateTab(button.dataset.tab));
     });
     $('refresh-active').addEventListener('click', loadActive);
+    $('workflow-load').addEventListener('click', loadWorkflow);
+    $('workflow-run').addEventListener('click', runWorkflow);
     $('sync-refresh').addEventListener('click', () => { state.pages.syncs = 0; loadSyncs(); });
     $('change-refresh').addEventListener('click', () => { state.pages.changes = 0; loadChanges(); });
     $('log-refresh').addEventListener('click', () => { state.pages.logs = 0; loadLogs(); });

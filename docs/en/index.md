@@ -15,6 +15,7 @@ for later static documentation pages.
 - [Configuration](../configuration.md)
 - [Environment variables](../environment.md)
 - [Admin first-start checklist](admin-first-start-checklist.md)
+- [Manual Seafile-RAGFlow-OpenWebUI verification](manual-workflow-verification.md)
 - [Internationalization and Unicode](i18n.md)
 - [Testing model](../testing.md)
 - [Operations and deployment](../operations.md)

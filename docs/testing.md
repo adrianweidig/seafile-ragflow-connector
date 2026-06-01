@@ -83,6 +83,9 @@ PYTHONPATH=src uv run python -m unittest discover -s tests/unit
   Logik, Jobs, OpenWebUI-Artifact-Generierung und Sync-Orchestrierung.
 - `tests/integration/clients/`: lokale TLS-Szenarien mit temporären
   Zertifikaten und lokalem HTTPS-Testserver.
+- `tests/integration/test_manual_workflow.py`: lokaler Fake-basierter
+  End-to-End-Test für Seafile-Discovery, RAGFlow-Dataset-/Dokument-Sync und
+  OpenWebUI-Tool-/Pipe-Bindung.
 - `deploy/tls-lab/`: manuelles Docker-Compose-Lab für CA-Bundle- und
   Zertifikatsdiagnose.
 - `deploy/portainer/docker-compose.yml`: zentrale Compose-Konfiguration für
@@ -98,8 +101,8 @@ PYTHONPATH=src uv run python -m unittest discover -s tests/unit
 Das Dashboard-HTML liegt als paketierte Ressource unter
 `src/seafile_ragflow_connector/dashboard/assets/dashboard.html` und wird über
 `seafile_ragflow_connector.dashboard.ui.DASHBOARD_HTML` geladen. Unit-Tests
-prüfen die Ressource, Sprachwahl, Busy-/Empty-States, OpenWebUI-Tab und
-Touch-Zielgrößen.
+prüfen die Ressource, Sprachwahl, Busy-/Empty-States, Workflow- und
+OpenWebUI-Tab sowie Touch-Zielgrößen.
 
 Bei sichtbaren Dashboard-Änderungen zusätzlich den opt-in Browser-Smoke mit
 Playwright ausführen:

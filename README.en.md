@@ -47,7 +47,7 @@ The connector is an offline-ready sync control plane for environments where Seaf
 | Delta and delete | File changes, removed files, and deleted libraries are propagated to RAGFlow and optionally OpenWebUI. |
 | Drift repair | Missing RAGFlow datasets/documents and owned OpenWebUI artifacts can be rebuilt from state and Seafile. |
 | OpenWebUI | Auditable `Seafile · <dataset>` custom models with citation events, Markdown evidence tables, locators, and connector preview links. |
-| Operations | PostgreSQL state, Redis jobs, dashboard, health, metrics, Excel audit export, TLS/CA bundles, GHCR, Portainer, Compose, and Swarm. |
+| Operations | PostgreSQL state, Redis jobs, dashboard workflow control, health, metrics, Excel audit export, TLS/CA bundles, GHCR, Portainer, Compose, and Swarm. |
 | Quality | Ruff, strict mypy, pytest, unittest, CodeQL, Docker build workflow, and Dependabot. |
 
 ## Internationalization
@@ -167,7 +167,7 @@ The package exposes the `connector` command:
 | `connector sync-once` | Run one full discovery and sync pass |
 | `connector cleanup-orphans` | Plan or delete connector-owned orphan target artifacts |
 | `connector openwebui-sync-once` | Run one OpenWebUI sync pass |
-| `connector dashboard` | Start the read-only dashboard |
+| `connector dashboard` | Start the standalone status dashboard |
 | `connector controller`, `worker`, `reconciler` | Start runtime processes |
 
 ## Development
@@ -210,6 +210,7 @@ wsl -d Debian -- bash -lc 'cd /mnt/e/Codex_Workspace/repos/seafile-ragflow-conne
 - [Architecture](docs/architecture.md)
 - [Configuration](docs/configuration.md)
 - [Environment variables](docs/environment.md)
+- [Manual Seafile-RAGFlow-OpenWebUI verification](docs/en/manual-workflow-verification.md)
 - [Testing model](docs/testing.md)
 - [Operations](docs/operations.md)
 - [Local HTTPS Compose path with connector.top.secret](docs/local-https-compose.md)

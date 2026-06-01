@@ -262,6 +262,45 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
             mapping = session.query(OpenWebUIDatasetMapping).one()
             self.assertEqual(mapping.artifact_version, "19")
 
+    def test_sync_can_be_scoped_to_selected_repo_ids(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    Library(
+                        repo_id="repo-1",
+                        name="Alpha",
+                        name_slug="alpha",
+                        ragflow_dataset_id="dataset-1",
+                        ragflow_dataset_name="Alpha Dataset",
+                        status="active",
+                    ),
+                    Library(
+                        repo_id="repo-2",
+                        name="Beta",
+                        name_slug="beta",
+                        ragflow_dataset_id="dataset-2",
+                        ragflow_dataset_name="Beta Dataset",
+                        status="active",
+                    ),
+                ]
+            )
+            session.commit()
+        service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            openwebui_client=_FakeOpenWebUIClient(),  # type: ignore[arg-type]
+        )
+
+        summary = service.sync_once(repo_ids={"repo-2"})
+
+        self.assertEqual(summary.datasets_seen, 1)
+        with session_factory() as session:
+            mapping = session.query(OpenWebUIDatasetMapping).one()
+            self.assertEqual(mapping.repo_id, "repo-2")
+            self.assertEqual(mapping.ragflow_dataset_id, "dataset-2")
+
     def test_pipe_sync_can_inject_answer_synthesis_valves(self) -> None:
         session_factory = _session_factory(self)
         with session_factory() as session:

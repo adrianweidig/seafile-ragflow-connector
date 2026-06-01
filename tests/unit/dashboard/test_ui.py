@@ -26,12 +26,23 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("#change-table { min-width: 1360px; }", DASHBOARD_HTML)
         self.assertIn("#sync-table { min-width: 1180px; }", DASHBOARD_HTML)
         self.assertIn("#openwebui-table { min-width: 1420px; }", DASHBOARD_HTML)
+        self.assertIn("#workflow-table { min-width: 1380px; }", DASHBOARD_HTML)
         self.assertIn("#log-table th:nth-child(5) { width: 40%; }", DASHBOARD_HTML)
 
     def test_openwebui_tab_is_present(self) -> None:
         self.assertIn('data-tab="openwebui"', DASHBOARD_HTML)
         self.assertIn("/api/openwebui/status", DASHBOARD_HTML)
         self.assertIn("OpenWebUI-Integration", DASHBOARD_HTML)
+
+    def test_workflow_tab_can_start_selected_library_sync(self) -> None:
+        self.assertIn('data-tab="workflow"', DASHBOARD_HTML)
+        self.assertIn("/api/workflow/libraries", DASHBOARD_HTML)
+        self.assertIn("/api/workflow/run", DASHBOARD_HTML)
+        self.assertIn("workflowSelected: new Set()", DASHBOARD_HTML)
+        self.assertIn("function runWorkflow", DASHBOARD_HTML)
+        self.assertIn("RAGFlow-Dataset und Dokumente synchronisieren", DASHBOARD_HTML)
+        self.assertIn("RAGFlow-Chat und OpenWebUI-Tool/Pipe erzeugen", DASHBOARD_HTML)
+        self.assertIn("'workflow.runSelected': 'Start selection'", DASHBOARD_HTML)
 
     def test_health_cards_show_transport_scheme(self) -> None:
         self.assertIn("health-transport", DASHBOARD_HTML)
@@ -80,6 +91,7 @@ class DashboardUiTests(unittest.TestCase):
     def test_loaded_overview_data_is_rerendered_on_language_switch(self) -> None:
         self.assertIn("overviewData: null", DASHBOARD_HTML)
         self.assertIn("systemsData: null", DASHBOARD_HTML)
+        self.assertIn("workflowData: null", DASHBOARD_HTML)
         self.assertIn("function rerenderActiveData", DASHBOARD_HTML)
         self.assertIn("rerenderActiveData();", DASHBOARD_HTML)
         self.assertIn(
@@ -92,6 +104,8 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("renderOverview(state.overviewData)", DASHBOARD_HTML)
         self.assertIn("function renderSystems", DASHBOARD_HTML)
         self.assertIn("renderSystems(state.systemsData)", DASHBOARD_HTML)
+        self.assertIn("function renderWorkflow", DASHBOARD_HTML)
+        self.assertIn("renderWorkflow(state.workflowData)", DASHBOARD_HTML)
 
     def test_empty_first_paint_labels_are_localized(self) -> None:
         self.assertIn("function renderEmptyStateLabels", DASHBOARD_HTML)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import unittest
+from dataclasses import dataclass
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -178,6 +179,95 @@ class DashboardServerTests(unittest.TestCase):
             handle.stop()
 
         self.assertIn("state", status)
+
+    def test_workflow_libraries_lists_api_visible_libraries_with_control_state(self) -> None:
+        store = _store(self)
+        with store.session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    status="active",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Demo Dataset",
+                    head_commit_id="head-old",
+                    last_synced_commit_id="head-old",
+                )
+            )
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Demo Dataset",
+                    ragflow_chat_id="chat-1",
+                    openwebui_tool_id="tool-1",
+                    openwebui_pipe_id="pipe-1",
+                    sync_status="synced",
+                )
+            )
+            session.commit()
+        orchestrator = _FakeWorkflowOrchestrator(store.session_factory)
+        handle = start_dashboard_server(
+            DashboardContext(
+                store=store,
+                settings=_settings(0),
+                started_at=utcnow(),
+                orchestrator=orchestrator,
+                openwebui_sync_service=_FakeWorkflowOpenWebUI(),
+            )
+        )
+        port = handle.server.server_address[1]
+        try:
+            data = _get_json(port, "/api/workflow/libraries")
+        finally:
+            handle.stop()
+
+        self.assertTrue(data["enabled"])
+        self.assertEqual(data["summary"]["visible"], 2)
+        self.assertEqual(data["summary"]["selectable"], 1)
+        libraries = {str(item["repo_id"]): item for item in data["libraries"]}
+        self.assertEqual(libraries["repo-1"]["ragflow_dataset_id"], "dataset-1")
+        self.assertEqual(libraries["repo-1"]["openwebui"]["openwebui_pipe_id"], "pipe-1")
+        self.assertFalse(libraries["repo-2"]["selectable"])
+        self.assertEqual(libraries["repo-2"]["skip_reason"], "encrypted")
+
+    def test_workflow_run_syncs_selected_library_and_scopes_openwebui(self) -> None:
+        store = _store(self)
+        orchestrator = _FakeWorkflowOrchestrator(store.session_factory)
+        openwebui = _FakeWorkflowOpenWebUI()
+        handle = start_dashboard_server(
+            DashboardContext(
+                store=store,
+                settings=_settings(0),
+                started_at=utcnow(),
+                orchestrator=orchestrator,
+                openwebui_sync_service=openwebui,
+            )
+        )
+        port = handle.server.server_address[1]
+        try:
+            data = _post_json(
+                port,
+                "/api/workflow/run",
+                {
+                    "repo_ids": ["repo-1"],
+                    "create_dataset": True,
+                    "sync_openwebui": True,
+                    "scope": "/Admin",
+                },
+            )
+        finally:
+            handle.stop()
+
+        self.assertEqual(data["status"], "succeeded")
+        self.assertEqual(orchestrator.synced, [("repo-1", "/Admin")])
+        self.assertEqual(openwebui.repo_ids, [{"repo-1"}])
+        self.assertEqual(data["results"][0]["status"], "completed")
+        with store.session_factory() as session:
+            library = session.get(Library, "repo-1")
+            self.assertIsNotNone(library)
+            self.assertEqual(library.ragflow_dataset_id, "dataset-repo-1")
 
     def test_openwebui_preview_route_uses_signed_token_without_dashboard_auth(self) -> None:
         store = _store(self)
@@ -719,6 +809,98 @@ class DashboardServerTests(unittest.TestCase):
         self.assertNotIn("style", cleaned.lower())
 
 
+@dataclass
+class _FakeWorkflowSyncSummary:
+    libraries_synced: int = 1
+    files_seen: int = 2
+    files_uploaded: int = 2
+    files_deleted: int = 0
+    files_skipped: int = 0
+
+
+@dataclass
+class _FakeWorkflowOpenWebUISummary:
+    datasets_seen: int = 1
+    chats_created: int = 1
+    tools_created: int = 1
+    pipes_created: int = 1
+    failed: int = 0
+    dry_run: bool = False
+
+
+class _FakeWorkflowOrchestrator:
+    skip_encrypted_libraries = True
+    skip_virtual_repos = True
+
+    def __init__(self, session_factory: object) -> None:
+        self.session_factory = session_factory
+        self.admin_client = self
+        self.synced: list[tuple[str, str]] = []
+        self.raw_libraries = [
+            {
+                "id": "repo-1",
+                "name": "Demo",
+                "owner": "admin@example.invalid",
+                "head_commit_id": "head-new",
+            },
+            {
+                "id": "repo-2",
+                "name": "Secret",
+                "encrypted": True,
+                "head_commit_id": "head-secret",
+            },
+        ]
+
+    def iter_libraries(self) -> list[dict[str, object]]:
+        return list(self.raw_libraries)
+
+    def discover_libraries(self) -> list[dict[str, object]]:
+        with self.session_factory() as session:  # type: ignore[operator]
+            for raw in self.raw_libraries:
+                if raw.get("encrypted"):
+                    continue
+                repo_id = str(raw["id"])
+                library = session.get(Library, repo_id) or Library(
+                    repo_id=repo_id,
+                    name=str(raw["name"]),
+                    name_slug=str(raw["name"]).lower(),
+                    status="active",
+                )
+                library.name = str(raw["name"])
+                library.status = "active"
+                library.head_commit_id = str(raw.get("head_commit_id") or "")
+                session.merge(library)
+            session.commit()
+        return [raw for raw in self.raw_libraries if not raw.get("encrypted")]
+
+    def sync_library_full(self, repo_id: str, *, scope: str = "/") -> _FakeWorkflowSyncSummary:
+        self.synced.append((repo_id, scope))
+        with self.session_factory() as session:  # type: ignore[operator]
+            library = session.get(Library, repo_id)
+            if library is None:
+                library = Library(
+                    repo_id=repo_id,
+                    name="Demo",
+                    name_slug="demo",
+                    status="active",
+                )
+                session.add(library)
+            library.ragflow_dataset_id = f"dataset-{repo_id}"
+            library.ragflow_dataset_name = f"Dataset {repo_id}"
+            library.status = "active"
+            session.commit()
+        return _FakeWorkflowSyncSummary()
+
+
+class _FakeWorkflowOpenWebUI:
+    def __init__(self) -> None:
+        self.repo_ids: list[set[str]] = []
+
+    def sync_once(self, *, repo_ids: set[str] | None = None) -> _FakeWorkflowOpenWebUISummary:
+        self.repo_ids.append(set(repo_ids or set()))
+        return _FakeWorkflowOpenWebUISummary()
+
+
 class _FakeRAGFlowClient:
     last_model: str | None = None
     raise_chat_error = False
@@ -767,6 +949,18 @@ def _get_json(
         raw_credentials = f"{username}:{password}".encode()
         token = base64.b64encode(raw_credentials).decode("ascii")
         request.add_header("Authorization", f"Basic {token}")
+    with urlopen(request, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _post_json(port: int, path: str, payload: dict[str, object]) -> dict[str, object]:
+    request = Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+    )
+    request.add_header("Content-Type", "application/json")
+    request.add_header("Accept", "application/json")
     with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
 
