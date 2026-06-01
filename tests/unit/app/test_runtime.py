@@ -25,18 +25,33 @@ class _FakeConnection:
         _ = (exc_type, exc, traceback)
         return False
 
-    def execute(self, statement: object) -> None:
+    def execute(self, statement: object, parameters: object | None = None) -> None:
+        _ = parameters
         self.statements.append(str(statement))
         if self.fail:
             raise RuntimeError("database unavailable")
 
 
+class _FakeDialect:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
 class _FakeEngine:
-    def __init__(self, connection: _FakeConnection | None = None) -> None:
+    def __init__(
+        self,
+        connection: _FakeConnection | None = None,
+        *,
+        dialect_name: str = "sqlite",
+    ) -> None:
         self.connection = connection or _FakeConnection()
+        self.dialect = _FakeDialect(dialect_name)
         self.disposed = False
 
     def connect(self) -> _FakeConnection:
+        return self.connection
+
+    def begin(self) -> _FakeConnection:
         return self.connection
 
     def dispose(self) -> None:
@@ -100,7 +115,25 @@ class RuntimeDatabaseChecksTests(unittest.TestCase):
         ):
             db.init_database("sqlite://")
 
-        self.assertEqual(create_all_calls, [engine])
+        self.assertEqual(create_all_calls, [engine.connection])
+        self.assertTrue(engine.disposed)
+
+    def test_init_database_serializes_postgres_schema_creation(self) -> None:
+        engine = _FakeEngine(dialect_name="postgresql")
+        create_all_calls: list[object] = []
+
+        def create_all(target_engine: object) -> None:
+            create_all_calls.append(target_engine)
+
+        with (
+            patch.object(db, "get_engine", return_value=engine),
+            patch.object(db.Base.metadata, "create_all", side_effect=create_all),
+        ):
+            db.init_database("postgresql://")
+
+        self.assertEqual(create_all_calls, [engine.connection])
+        self.assertIn("pg_advisory_lock", engine.connection.statements[0])
+        self.assertIn("pg_advisory_unlock", engine.connection.statements[-1])
         self.assertTrue(engine.disposed)
 
 

@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -161,8 +162,12 @@ def run_mock_smoke() -> bool:
 
     env_overlay = {
         "COMPOSE_PROJECT_NAME": "seafile-ragflow-connector-mock-smoke",
+        "CONNECTOR_IMAGE": "seafile-ragflow-connector:mock-smoke",
+        "CONNECTOR_IMAGE_PULL_POLICY": "never",
         "CONNECTOR_CERTS_HOST_DIR": str(certs_dir),
         "CONNECTOR_DASHBOARD_ENABLED": "true",
+        "CONNECTOR_DASHBOARD_AUTH_USERNAME": "admin",
+        "CONNECTOR_DASHBOARD_AUTH_PASSWORD": "change-me-dashboard-password",
         "CONNECTOR_STARTUP_CHECK": "infra",
         "POSTGRES_PASSWORD": "mock-smoke-postgres",
         "SEAFILE_BASE_URL": "https://seafile.top.secret:8443",
@@ -187,8 +192,42 @@ def run_mock_smoke() -> bool:
     )
     try:
         if not run(
+            "Local HTTPS mock connector image build",
+            (
+                "docker",
+                "build",
+                "-t",
+                "seafile-ragflow-connector:mock-smoke",
+                "-f",
+                "deploy/docker/Dockerfile",
+                ".",
+            ),
+            env_overlay=env_overlay,
+        ):
+            return False
+        if not run(
+            "Local HTTPS mock Compose pre-clean",
+            (*compose_command, "down", "--remove-orphans", "--volumes"),
+            env_overlay=env_overlay,
+        ):
+            return False
+        if not run(
             "Local HTTPS mock Compose up",
-            (*compose_command, "up", "-d", "--wait"),
+            (*compose_command, "up", "-d"),
+            env_overlay=env_overlay,
+        ):
+            return False
+        if not wait_for_compose_services(
+            compose_command,
+            (
+                "connector-postgres",
+                "connector-redis",
+                "seafile-mock",
+                "ragflow-mock",
+                "connector-controller",
+                "connector-worker",
+                "connector-reconciler",
+            ),
             env_overlay=env_overlay,
         ):
             return False
@@ -216,8 +255,14 @@ def run_mock_smoke() -> bool:
                 "python",
                 "-c",
                 (
-                    "import urllib.request; "
-                    "print(urllib.request.urlopen('http://127.0.0.1:8080/health/tls', "
+                    "import base64, os, urllib.request; "
+                    "auth = base64.b64encode("
+                    "(os.environ['CONNECTOR_DASHBOARD_AUTH_USERNAME'] + ':' + "
+                    "os.environ['CONNECTOR_DASHBOARD_AUTH_PASSWORD']).encode()).decode(); "
+                    "request = urllib.request.Request("
+                    "'http://127.0.0.1:8080/health/tls', "
+                    "headers={'Authorization': 'Basic ' + auth}); "
+                    "print(urllib.request.urlopen(request, "
                     "timeout=10).read().decode())"
                 ),
             ),
@@ -226,13 +271,78 @@ def run_mock_smoke() -> bool:
     finally:
         run(
             "Local HTTPS mock Compose down",
-            (*compose_command, "down", "--remove-orphans"),
+            (*compose_command, "down", "--remove-orphans", "--volumes"),
             env_overlay=env_overlay,
         )
 
 
+def wait_for_compose_services(
+    compose_command: Sequence[str],
+    services: Sequence[str],
+    *,
+    env_overlay: dict[str, str],
+    timeout_seconds: int = 180,
+) -> bool:
+    print("\n==> Local HTTPS mock service health")
+    deadline = time.monotonic() + timeout_seconds
+    env = os.environ.copy()
+    env.update(env_overlay)
+    last_statuses: dict[str, str] = {}
+    while time.monotonic() < deadline:
+        statuses: dict[str, str] = {}
+        failed = False
+        for service in services:
+            container_id = _capture((*compose_command, "ps", "-q", service), env=env)
+            if not container_id:
+                statuses[service] = "missing"
+                failed = True
+                continue
+            status = _capture(
+                (
+                    "docker",
+                    "inspect",
+                    "-f",
+                    "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}",
+                    container_id,
+                ),
+                env=env,
+            )
+            statuses[service] = status or "unknown"
+            if status in {"exited", "dead", "removing", "unhealthy"}:
+                failed = True
+        if statuses != last_statuses:
+            print(format_statuses(statuses))
+            last_statuses = statuses
+        if statuses and all(status in {"healthy", "running"} for status in statuses.values()):
+            return True
+        if failed:
+            break
+        time.sleep(5)
+    print("FAILED: local HTTPS mock services did not become healthy", file=sys.stderr)
+    return False
+
+
+def _capture(command: Sequence[str], *, env: dict[str, str]) -> str:
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout.strip()
+
+
 def format_command(command: Sequence[str]) -> str:
     return " ".join(command)
+
+
+def format_statuses(statuses: dict[str, str]) -> str:
+    return ", ".join(f"{service}={status}" for service, status in statuses.items())
 
 
 if __name__ == "__main__":

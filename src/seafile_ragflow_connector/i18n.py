@@ -93,7 +93,8 @@ def detect_language(
 
 def language_from_settings(settings: object | None = None, *, explicit: str | None = None) -> str:
     configured = getattr(settings, "connector_language", None)
-    return detect_language(explicit=explicit, configured=configured)
+    language = normalize_language(explicit) or normalize_language(configured)
+    return language or DEFAULT_LANGUAGE
 
 
 @dataclass(frozen=True)
