@@ -79,6 +79,7 @@ class DashboardUiTests(unittest.TestCase):
 
     def test_loaded_overview_data_is_rerendered_on_language_switch(self) -> None:
         self.assertIn("overviewData: null", DASHBOARD_HTML)
+        self.assertIn("systemsData: null", DASHBOARD_HTML)
         self.assertIn("function rerenderActiveData", DASHBOARD_HTML)
         self.assertIn("rerenderActiveData();", DASHBOARD_HTML)
         self.assertIn(
@@ -89,6 +90,8 @@ class DashboardUiTests(unittest.TestCase):
         )
         self.assertIn("function renderOverview", DASHBOARD_HTML)
         self.assertIn("renderOverview(state.overviewData)", DASHBOARD_HTML)
+        self.assertIn("function renderSystems", DASHBOARD_HTML)
+        self.assertIn("renderSystems(state.systemsData)", DASHBOARD_HTML)
 
     def test_health_messages_are_localized_client_side(self) -> None:
         self.assertIn("function healthMessage", DASHBOARD_HTML)
@@ -134,6 +137,12 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("'counts.logs': 'logs'", DASHBOARD_HTML)
         self.assertIn("'table.level': 'Level'", DASHBOARD_HTML)
         self.assertIn("t('table.level')", DASHBOARD_HTML)
+        self.assertIn("'table.headCommit': 'Head-Commit'", DASHBOARD_HTML)
+        self.assertIn("'table.datasetId': 'Datensatz-ID'", DASHBOARD_HTML)
+        self.assertIn("'table.templateHash': 'Template-Hash'", DASHBOARD_HTML)
+        self.assertIn("t('table.headCommit')", DASHBOARD_HTML)
+        self.assertIn("t('table.datasetId')", DASHBOARD_HTML)
+        self.assertIn("t('table.templateHash')", DASHBOARD_HTML)
         self.assertIn("'openwebui.datasets': 'Datasets'", DASHBOARD_HTML)
         self.assertIn("'openwebui.dataset': 'Dataset'", DASHBOARD_HTML)
         self.assertIn("t('openwebui.datasets')", DASHBOARD_HTML)

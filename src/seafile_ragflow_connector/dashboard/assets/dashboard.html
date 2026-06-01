@@ -1244,6 +1244,10 @@
         'table.object': 'Objekt',
         'table.component': 'Komponente',
         'table.lastSync': 'Letzter Sync',
+        'table.headCommit': 'Head-Commit',
+        'table.datasetId': 'Datensatz-ID',
+        'table.datasetName': 'Datensatz-Name',
+        'table.templateHash': 'Template-Hash',
         'table.objects': 'Objekte',
         'table.duration': 'Dauer',
         'table.new': 'Neu',
@@ -1399,6 +1403,10 @@
         'table.object': 'Object',
         'table.component': 'Component',
         'table.lastSync': 'Last sync',
+        'table.headCommit': 'Head commit',
+        'table.datasetId': 'Dataset ID',
+        'table.datasetName': 'Dataset name',
+        'table.templateHash': 'Template hash',
         'table.objects': 'Objects',
         'table.duration': 'Duration',
         'table.new': 'New',
@@ -1474,7 +1482,8 @@
       sidebarStatus: null,
       sidebarUpdatedAt: null,
       titles: {},
-      overviewData: null
+      overviewData: null,
+      systemsData: null
     };
     const $ = (id) => document.getElementById(id);
     let disclosureId = 0;
@@ -1852,6 +1861,9 @@
       if (state.activeTab === 'overview' && state.overviewData) {
         renderOverview(state.overviewData);
       }
+      if (state.activeTab === 'systems' && state.systemsData) {
+        renderSystems(state.systemsData);
+      }
     }
     async function loadOverview() {
       const [statusData, metricsData, syncs, changes, errors, warnings, health] = await Promise.all([
@@ -2004,16 +2016,20 @@
       });
       renderPager('log-pager', data, (delta) => { state.pages.logs = Math.max(0, state.pages.logs + delta); loadLogs(); });
     }
-    async function loadSystems() {
-      const data = await api('/api/systems');
-      table('source-table', ['Repo-ID', 'Name', t('table.status'), 'Head Commit', t('table.lastSync'), t('table.error')], (data.source.libraries || []).map((library) => ({
+    function renderSystems(data) {
+      table('source-table', ['Repo-ID', 'Name', t('table.status'), t('table.headCommit'), t('table.lastSync'), t('table.error')], (data.source.libraries || []).map((library) => ({
         ...library,
         __cells: [compactText(library.repo_id, { threshold: 34 }), compactText(library.name, { threshold: 38 }), status(library.status), compactText(library.head_commit_id, { threshold: 34 }), compactText(library.last_synced_commit_id, { threshold: 34 }), compactText(library.last_error, { threshold: 48 })]
       })));
-      table('target-table', ['Repo-ID', 'Dataset-ID', 'Dataset-Name', 'Template Hash'], (data.target.datasets || []).map((dataset) => ({
+      table('target-table', ['Repo-ID', t('table.datasetId'), t('table.datasetName'), t('table.templateHash')], (data.target.datasets || []).map((dataset) => ({
         ...dataset,
         __cells: [compactText(dataset.repo_id, { threshold: 34 }), compactText(dataset.dataset_id, { threshold: 34 }), compactText(dataset.dataset_name, { threshold: 48 }), compactText(dataset.template_hash, { threshold: 34 })]
       })));
+    }
+    async function loadSystems() {
+      const data = await api('/api/systems');
+      state.systemsData = data;
+      renderSystems(data);
     }
     async function loadOpenWebUI() {
       const offset = state.pages.openwebui * PAGE_SIZE;

@@ -256,6 +256,10 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
         if tab == "logs":
             _wait_for_text(page, "#log-total", "Logeinträge", config.timeout_ms)
             _require_text(page, "#log-table", "STUFE")
+        if tab == "systems":
+            _wait_for_text(page, "#source-table", "HEAD-COMMIT", config.timeout_ms)
+            _require_text(page, "#target-table", "DATENSATZ-ID")
+            _require_text(page, "#target-table", "TEMPLATE-HASH")
         if tab == "openwebui":
             _wait_for_text(page, "#openwebui-metrics", "DATENSÄTZE", config.timeout_ms)
             _require_text(page, "#openwebui-metrics", "erkannte Zuordnungen")
@@ -290,6 +294,11 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
     page.wait_for_selector("#logs:not([hidden])", timeout=config.timeout_ms)
     _require_text(page, "#logs .filters", "Search")
     _require_attribute(page, "#log-query", "placeholder", "Message or component")
+    page.locator('[data-tab="systems"]').click(timeout=config.timeout_ms)
+    page.wait_for_selector("#systems:not([hidden])", timeout=config.timeout_ms)
+    _wait_for_text(page, "#source-table", "HEAD COMMIT", config.timeout_ms)
+    _require_text(page, "#target-table", "DATASET ID")
+    _require_text(page, "#target-table", "TEMPLATE HASH")
     page.locator('[data-tab="overview"]').click(timeout=config.timeout_ms)
 
     desktop_screenshot = config.output_dir / "dashboard-desktop.png"
