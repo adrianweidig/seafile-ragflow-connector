@@ -988,7 +988,7 @@
           </div>
           <div class="panel">
             <div class="panel-header">
-              <h3 data-i18n="overview.systemHealth">System Health</h3>
+              <h3 data-i18n="overview.systemHealth">Systemzustand</h3>
               <small id="health-summary">prüfe...</small>
             </div>
             <div class="panel-body"><div id="dependency-health" class="health-list"></div></div>
@@ -1095,7 +1095,7 @@
 
       <section id="openwebui" hidden>
         <div class="panel">
-          <div class="panel-header"><h3 data-i18n="section.openwebuiIntegration">OpenWebUI Integration</h3><small id="openwebui-summary">-</small></div>
+          <div class="panel-header"><h3 data-i18n="section.openwebuiIntegration">OpenWebUI-Integration</h3><small id="openwebui-summary">-</small></div>
           <div class="panel-body">
             <div class="metric-grid" id="openwebui-metrics"></div>
             <div class="table-wrap"><table id="openwebui-table"></table></div>
@@ -1148,7 +1148,7 @@
         'filter.syncId': 'Sync-ID',
         'filter.type': 'Typ',
         'filter.search': 'Suche',
-        'filter.level': 'Level',
+        'filter.level': 'Stufe',
         'placeholder.optional': 'optional',
         'placeholder.changeStatus': 'synced, failed, skipped',
         'placeholder.changeType': 'created, updated, deleted',
@@ -1187,26 +1187,28 @@
         'counts.entries': 'Einträge',
         'counts.runs': 'Läufe',
         'counts.events': 'Ereignisse',
-        'counts.logs': 'Logs',
-        'overview.connectorState': 'Connector Zustand',
-        'overview.systemHealth': 'System Health',
+        'counts.logs': 'Logeinträge',
+        'overview.connectorState': 'Connector-Zustand',
+        'overview.systemHealth': 'Systemzustand',
         'overview.problems': 'Fehler und Warnungen',
         'overview.recentSyncs': 'Letzte Sync-Läufe',
         'overview.recentChanges': 'Neueste Änderungen',
         'overview.lastSuccess': 'Letzter Erfolg',
         'overview.lastFailure': 'Letzter Fehler',
         'overview.seafileSources': 'Seafile-Quellen',
-        'overview.knownState': 'bekannter State',
+        'overview.knownState': 'bekannter Zustand',
         'overview.persistedHistory': 'persistierte Historie',
-        'overview.detectedEvents': 'erkannte Events',
+        'overview.detectedEvents': 'erkannte Ereignisse',
         'overview.sumAcrossRuns': 'Summe aller Läufe',
         'overview.waitingJobs': 'wartende Jobs',
+        'overview.logWarnings': 'Warnungen im Log',
+        'overview.logErrors': 'Fehler im Log',
         'section.syncHistory': 'Synchronisationshistorie',
         'section.detectedChanges': 'Erkannte Änderungen',
         'section.logEvents': 'Logereignisse',
         'section.sourceSystems': 'Quellsysteme',
         'section.targetSystems': 'Zielsysteme',
-        'section.openwebuiIntegration': 'OpenWebUI Integration',
+        'section.openwebuiIntegration': 'OpenWebUI-Integration',
         'section.technicalDiagnostics': 'Technische Diagnose',
         'diagnostics.maskedConfig': 'maskierte Konfiguration',
         'sync.detail': 'Detail',
@@ -1219,22 +1221,23 @@
         'titles.logs': 'Logs',
         'subtitles.logs': 'Filterbare Debug- und Audit-Ereignisse',
         'titles.systems': 'Systeme',
-        'subtitles.systems': 'Seafile-Libraries und RAGFlow-Datasets',
+        'subtitles.systems': 'Seafile-Bibliotheken und RAGFlow-Datensätze',
         'titles.openwebui': 'OpenWebUI',
-        'subtitles.openwebui': 'Tools, Pipes, Custom-Modelle und Fehlerstatus',
+        'subtitles.openwebui': 'Werkzeuge, Pipes, benutzerdefinierte Modelle und Fehlerstatus',
         'titles.diagnostics': 'Diagnose',
         'subtitles.diagnostics': 'Technische Werte ohne Secrets',
-        'metric.libraries': 'Libraries',
+        'metric.libraries': 'Bibliotheken',
         'metric.files': 'Dateien',
         'metric.syncRuns': 'Sync-Läufe',
         'metric.changes': 'Änderungen',
         'metric.checked': 'Objekte geprüft',
-        'metric.queue': 'Queue/Retry',
+        'metric.queue': 'Warteschlange/Wiederholung',
         'metric.warnings': 'Warnungen',
         'metric.errors': 'Fehler',
         'table.time': 'Zeit',
         'table.start': 'Start',
         'table.status': 'Status',
+        'table.level': 'Stufe',
         'table.checked': 'Geprüft',
         'table.source': 'Quelle',
         'table.target': 'Ziel',
@@ -1259,9 +1262,9 @@
         'openwebui.chat': 'Chat',
         'openwebui.tool': 'Tool',
         'openwebui.pipe': 'Pipe',
-        'openwebui.knownMappings': 'erkannte Mappings',
+        'openwebui.knownMappings': 'erkannte Zuordnungen',
         'openwebui.synchronized': 'Synchronisiert',
-        'openwebui.dryRunPlanned': 'inkl. Dry-Run geplant',
+        'openwebui.dryRunPlanned': 'inklusive geplanter Dry-Runs',
         'openwebui.libraryRemoved': 'Seafile-Library entfernt',
         'openwebui.manual': 'Manuell',
         'openwebui.apiFallback': 'API-Fallback',
@@ -1353,6 +1356,8 @@
         'overview.detectedEvents': 'detected events',
         'overview.sumAcrossRuns': 'sum across all runs',
         'overview.waitingJobs': 'waiting jobs',
+        'overview.logWarnings': 'log-level warnings',
+        'overview.logErrors': 'log-level errors',
         'section.syncHistory': 'Synchronization history',
         'section.detectedChanges': 'Detected changes',
         'section.logEvents': 'Log events',
@@ -1387,6 +1392,7 @@
         'table.time': 'Time',
         'table.start': 'Start',
         'table.status': 'Status',
+        'table.level': 'Level',
         'table.checked': 'Checked',
         'table.source': 'Source',
         'table.target': 'Target',
@@ -1883,8 +1889,8 @@
         metric(t('metric.changes'), fmtNumber(statusData.changes_detected), t('overview.detectedEvents'), 'info'),
         metric(t('metric.checked'), fmtNumber(statusData.objects_processed), t('overview.sumAcrossRuns')),
         metric(t('metric.queue'), fmtNumber(statusData.queued_or_retrying_jobs), t('overview.waitingJobs'), 'warn'),
-        metric(t('metric.warnings'), fmtNumber(statusData.warnings_count), 'Log-Level warning', 'warn'),
-        metric(t('metric.errors'), fmtNumber(statusData.errors_count), 'Log-Level error', statusData.errors_count ? 'bad' : '')
+        metric(t('metric.warnings'), fmtNumber(statusData.warnings_count), t('overview.logWarnings'), 'warn'),
+        metric(t('metric.errors'), fmtNumber(statusData.errors_count), t('overview.logErrors'), statusData.errors_count ? 'bad' : '')
       );
       renderProblems(errors, warnings);
       setText('recent-sync-count', syncs.items.length);
@@ -1982,7 +1988,7 @@
       if ($('log-query').value) params.set('q', $('log-query').value);
       const data = await api('/api/logs?' + params.toString());
       setText('log-total', fmtNumber(data.total) + ' ' + t('counts.logs'));
-      table('log-table', [t('table.time'), 'Level', t('table.component'), 'Sync-ID', t('table.message')], data.items.map((entry) => ({
+      table('log-table', [t('table.time'), t('table.level'), t('table.component'), 'Sync-ID', t('table.message')], data.items.map((entry) => ({
         ...entry,
         __cells: [
           fmtDate(entry.occurred_at),

@@ -235,6 +235,12 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
     _require_visible(page, "#audit-export", "audit export link")
     _require_text(page, "#recent-syncs", "succeeded")
     _require_text(page, "#recent-changes", "Installationshandbuch.pdf")
+    _require_text(page, "#overview", "Systemzustand")
+    _require_text(page, "#metrics", "BIBLIOTHEKEN")
+    _require_text(page, "#metrics", "bekannter Zustand")
+    _require_text(page, "#metrics", "erkannte Ereignisse")
+    _require_text(page, "#metrics", "Warnungen im Log")
+    _require_text(page, "#metrics", "Fehler im Log")
 
     page.select_option("#language-select", "en", timeout=config.timeout_ms)
     _require_text(page, "#state-value", "waiting")
@@ -248,9 +254,11 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
         page.locator(f'[data-tab="{tab}"]').click(timeout=config.timeout_ms)
         page.wait_for_selector(f"#{tab}:not([hidden])", timeout=config.timeout_ms)
         if tab == "logs":
-            _wait_for_text(page, "#log-total", "Logs", config.timeout_ms)
+            _wait_for_text(page, "#log-total", "Logeinträge", config.timeout_ms)
+            _require_text(page, "#log-table", "STUFE")
         if tab == "openwebui":
             _wait_for_text(page, "#openwebui-metrics", "DATENSÄTZE", config.timeout_ms)
+            _require_text(page, "#openwebui-metrics", "erkannte Zuordnungen")
             _require_text(page, "#openwebui-table", "DATENSATZ")
 
     page.select_option("#language-select", "en", timeout=config.timeout_ms)
@@ -266,6 +274,8 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
     _require_text(page, "#overview", "Errors and warnings")
     _require_text(page, "#overview", "Recent sync runs")
     _require_text(page, "#metrics", "detected events")
+    _require_text(page, "#metrics", "log-level warnings")
+    _require_text(page, "#metrics", "log-level errors")
     _wait_for_text(page, "#dependency-health", "Dashboard responded.", config.timeout_ms)
     _require_text(page, "#dependency-health", "Database")
     _require_text(page, "#dependency-health", "SQL ping succeeded.")
