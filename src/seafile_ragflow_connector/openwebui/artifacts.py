@@ -9,7 +9,7 @@ from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.i18n import SUPPORTED_LANGUAGES, Localizer
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "19"
+ARTIFACT_VERSION = "20"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 _PIPE_TEMPLATE_PACKAGE = "seafile_ragflow_connector.openwebui.templates.pipe"
 _PIPE_TEMPLATE_FRAGMENTS = (
@@ -101,6 +101,7 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "RAGFLOW_CHAT_ID": inputs.ragflow_chat_id or "",
         "MODEL_ID": model_name,
         "MODEL_NAME": display_model_name,
+        "RAGFLOW_MODEL_ID": "model",
         "TOP_K": 8,
         "INJECT_RAG_SYSTEM_PROMPT": True,
         "SEND_GENERATIVE_RAG_HINTS": True,
@@ -122,8 +123,9 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "MAX_SOURCE_EVENTS": 20,
         "SHOW_SOURCE_SCORES": False,
         "SHOW_SOURCE_DEBUG": False,
-        "SOURCE_MARKDOWN_MODE": "audit",
-        "APPEND_SOURCE_OVERVIEW": True,
+        "SOURCE_DISPLAY_MODE": "native",
+        "SOURCE_MARKDOWN_MODE": "none",
+        "APPEND_SOURCE_OVERVIEW": False,
         "SHOW_LOCATOR_QUALITY": True,
         "ALLOW_CONNECTOR_SOURCE_LINKS": False,
         "CLEAN_RAGFLOW_MARKERS": True,
@@ -209,7 +211,7 @@ def _tool_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.4.2
         owner: seafile-ragflow-connector
-        artifact_version: 19
+        artifact_version: 20
         """
 
         import httpx

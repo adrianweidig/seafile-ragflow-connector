@@ -16,6 +16,13 @@ def _configuration_error(valves: Pipe.Valves) -> str:
     if not _clean(valves.CONNECTOR_PROXY_SHARED_SECRET):
         return "Fehlender Wert: `CONNECTOR_PROXY_SHARED_SECRET`."
 
+    if not (_clean(valves.DATASET_ID) or _clean(valves.RAGFLOW_CHAT_ID)):
+        return "Fehlender Wert: `DATASET_ID` oder `RAGFLOW_CHAT_ID`."
+
+    source_display_mode = _source_display_mode(valves)
+    if source_display_mode not in VALID_SOURCE_DISPLAY_MODES:
+        return "Ungültiger Wert: `SOURCE_DISPLAY_MODE` muss `native`, `markdown_audit`, `both_debug` oder `none` sein."
+
     markdown_mode = _source_markdown_mode(valves.SOURCE_MARKDOWN_MODE)
     if markdown_mode not in {"none", "compact", "detailed", "audit"}:
         return "Ungültiger Wert: `SOURCE_MARKDOWN_MODE` muss `none`, `compact`, `detailed` oder `audit` sein."
@@ -72,11 +79,7 @@ def _build_payload(valves: Pipe.Valves, body: dict, user: Optional[dict]) -> dic
         enabled=bool(valves.INJECT_RAG_SYSTEM_PROMPT),
     )
 
-    model = (
-        _clean(request_body.get("model"))
-        or _clean(valves.MODEL_ID)
-        or DEFAULT_MODEL_ID
-    )
+    model = _clean(valves.RAGFLOW_MODEL_ID) or "model"
 
     user_payload: dict[str, Any] = {}
     if isinstance(user, Mapping):
@@ -89,6 +92,9 @@ def _build_payload(valves: Pipe.Valves, body: dict, user: Optional[dict]) -> dic
             }
         )
 
+    source_display_mode = _source_display_mode(valves)
+    source_markdown_mode = _effective_source_markdown_mode(valves)
+
     payload = {
         "artifact_id": valves.ARTIFACT_ID,
         "dataset_id": valves.DATASET_ID,
@@ -99,10 +105,10 @@ def _build_payload(valves: Pipe.Valves, body: dict, user: Optional[dict]) -> dic
         "stream": False,
         "user": user_payload,
         "openwebui": {
-            "source_events": bool(valves.EMIT_CITATION_EVENTS or valves.EMIT_LEGACY_SOURCE_EVENTS),
-            "source_markdown_mode": _source_markdown_mode(valves.SOURCE_MARKDOWN_MODE),
-            "source_display_mode": _source_markdown_mode(valves.SOURCE_MARKDOWN_MODE),
-            "audit_evidence": _source_markdown_mode(valves.SOURCE_MARKDOWN_MODE) == "audit",
+            "source_events": bool(_emit_citation_events(valves) or _emit_legacy_source_events(valves)),
+            "source_markdown_mode": source_markdown_mode,
+            "source_display_mode": source_display_mode,
+            "audit_evidence": source_markdown_mode == "audit",
             "expects_generated_answer": True,
         },
     }
@@ -122,10 +128,8 @@ def _build_payload(valves: Pipe.Valves, body: dict, user: Optional[dict]) -> dic
                 "extra_body": {
                     "reference": True,
                     "reference_metadata": {
-                        "chunks": True,
-                        "doc_aggs": True,
-                        "document": True,
-                        "positions": True,
+                        "include": True,
+                        "fields": REFERENCE_METADATA_FIELDS,
                     },
                 },
                 "ragflow": {

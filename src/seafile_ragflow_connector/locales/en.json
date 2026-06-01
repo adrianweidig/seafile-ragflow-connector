@@ -60,7 +60,7 @@
     "pipe_name": "RAGFlow model: {dataset}",
     "pipe_model_name": "Seafile · {dataset}",
     "tool_description": "Dataset-specific RAGFlow search for {dataset}.",
-    "pipe_description": "Auditable Seafile/RAGFlow knowledge model for {dataset} with evidence table, locators, and citations."
+    "pipe_description": "Auditable Seafile/RAGFlow knowledge model for {dataset} with native citations, locators, and optional evidence table."
   },
   "sources": {
     "unknown": "unknown",

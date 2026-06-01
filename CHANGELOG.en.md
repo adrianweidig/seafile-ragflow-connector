@@ -8,6 +8,22 @@ retroactively.
 
 ## Unreleased
 
+## 0.1.10 - 2026-06-01
+
+### Changed
+
+- OpenWebUI pipes now strictly separate generated chat answers from
+  retrieval-only results and only mark runs as generated when a trusted answer
+  path or the synthesis fallback was used.
+- Native OpenWebUI citations are the default source channel; Markdown evidence
+  tables are explicit audit or debug modes.
+- RAGFlow/OpenAI-compatible answer and reference paths, source deduplication,
+  score sorting, and redacted proxy diagnostics were tightened.
+
+### Fixed
+
+- Source or file titles can no longer be treated as generated answers.
+
 ## 0.1.9 - 2026-06-01
 
 ### Added

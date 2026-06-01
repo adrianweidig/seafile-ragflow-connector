@@ -52,7 +52,7 @@ def _completion_status(
     source_count: int,
     elapsed_seconds: float,
     *,
-    generated: bool = True,
+    answer_origin: str = "canonical_answer",
     hit_count: Optional[int] = None,
 ) -> str:
     if source_count == 0:
@@ -63,7 +63,12 @@ def _completion_status(
         source_text = f"{source_count} Quellen"
     if hit_count is not None and hit_count > source_count:
         source_text = f"{source_text} · {hit_count} Treffer"
-    answer_text = "Antwort generiert" if generated else "nur Quellen erhalten"
+    if answer_origin in ANSWER_GENERATED_ORIGINS:
+        answer_text = "Antwort generiert"
+    elif answer_origin == "retrieval_only":
+        answer_text = "Quellen gefunden, aber keine Antwort generiert"
+    else:
+        answer_text = "Keine Antwort und keine belastbaren Quellen"
     return f"{answer_text} · {source_text} · {elapsed_seconds:.1f}s"
 
 
@@ -129,138 +134,134 @@ def _compact_text(text: Any, max_length: int) -> str:
 # Proxy-/RAGFlow-Antworten können viele Formen haben. Dieser Abschnitt sucht
 # bewusst nach generiertem Assistant-Text und ignoriert Quellencontainer.
 def _extract_answer(data: Mapping[str, Any]) -> str:
-    """Extract generated assistant text without confusing source chunks for answers.
+    return extract_answer_result(data).answer
 
-    RAGFlow and proxy implementations differ widely: some return
-    data.answer, others OpenAI-compatible choices[0].message.content, and
-    some stream-like payloads are forwarded as text. This extractor prefers
-    high-confidence generated-answer paths and deliberately skips source,
-    metadata and message-history containers.
-    """
-    candidates: list[tuple[int, str]] = []
-    _collect_answer_candidates(data, candidates, path=(), depth=0)
 
-    cleaned: list[tuple[int, str]] = []
-    seen: set[str] = set()
-    for score, text in candidates:
+def extract_answer_result(data: Mapping[str, Any]) -> AnswerExtractionResult:
+    """Extract a generated answer from explicit answer paths only."""
+    warnings: list[str] = []
+    for path, value, origin in _canonical_answer_candidates(data):
+        text = _answer_value_to_text(value)
+        if not text:
+            continue
         answer = _clean_answer(text, clean_ragflow_markers=True)
-        if not _valid_answer_candidate(answer):
+        rejection = _answer_rejection_reason(answer)
+        if rejection:
+            warnings.append(f"{path}: {rejection}")
             continue
-        fingerprint = _clean(answer)[:500]
-        if fingerprint in seen:
-            continue
-        seen.add(fingerprint)
-        cleaned.append((score, answer))
+        return AnswerExtractionResult(answer=answer, origin=origin, path=path, warnings=warnings)
 
-    if not cleaned:
-        return ""
-
-    cleaned.sort(key=lambda item: (item[0], min(len(item[1]), 4000)), reverse=True)
-    return cleaned[0][1]
+    origin = "retrieval_only" if _extract_sources(data) else "none"
+    return AnswerExtractionResult(answer="", origin=origin, path="", warnings=warnings)
 
 
-def _collect_answer_candidates(
-    value: Any,
-    candidates: list[tuple[int, str]],
+def _canonical_answer_candidates(data: Mapping[str, Any]) -> list[tuple[str, Any, str]]:
+    candidates: list[tuple[str, Any, str]] = []
+
+    for key in CANONICAL_ANSWER_KEYS:
+        if key in data:
+            candidates.append((key, data.get(key), "canonical_answer"))
+
+    nested = data.get("data")
+    if isinstance(nested, Mapping) and "answer" in nested:
+        candidates.append(("data.answer", nested.get("answer"), "canonical_answer"))
+
+    candidates.extend(_openai_message_candidates(data, prefix=""))
+    if isinstance(nested, Mapping):
+        candidates.extend(_openai_message_candidates(nested, prefix="data."))
+
+    return candidates
+
+
+def _openai_message_candidates(
+    value: Mapping[str, Any],
     *,
-    path: tuple[str, ...],
-    depth: int,
-) -> None:
-    if depth > 10:
-        return
+    prefix: str,
+) -> list[tuple[str, Any, str]]:
+    candidates: list[tuple[str, Any, str]] = []
+    choices = value.get("choices")
+    if not isinstance(choices, Sequence) or isinstance(choices, (str, bytes)):
+        return candidates
 
+    for index, choice in enumerate(choices):
+        if not isinstance(choice, Mapping):
+            continue
+        message = choice.get("message")
+        if isinstance(message, Mapping) and "content" in message:
+            candidates.append(
+                (
+                    f"{prefix}choices[{index}].message.content",
+                    message.get("content"),
+                    "openai_message",
+                )
+            )
+    return candidates
+
+
+def _answer_value_to_text(value: Any) -> str:
     if isinstance(value, str):
         from_blob = _extract_answer_from_text_blob(value)
-        if from_blob:
-            candidates.append((55, from_blob))
-        return
-
-    if isinstance(value, Mapping):
-        role = _clean(value.get("role")).lower()
-
-        # OpenAI-compatible response shape.
-        choices = value.get("choices")
-        if isinstance(choices, Sequence) and not isinstance(choices, (str, bytes)):
-            for choice in choices:
-                if not isinstance(choice, Mapping):
-                    continue
-                message = choice.get("message")
-                if isinstance(message, Mapping):
-                    content = message.get("content")
-                    if isinstance(content, str):
-                        candidates.append((98, content))
-                    elif isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
-                        candidates.append((96, _content_parts_to_text(content)))
-                delta = choice.get("delta")
-                if isinstance(delta, Mapping) and isinstance(delta.get("content"), str):
-                    candidates.append((90, delta["content"]))
-                if isinstance(choice.get("text"), str):
-                    candidates.append((82, choice["text"]))
-
-        message = value.get("message")
-        if isinstance(message, Mapping):
-            content = message.get("content")
-            message_role = _clean(message.get("role")).lower()
-            if isinstance(content, str) and (message_role in {"", "assistant"}):
-                candidates.append((92, content))
-            elif isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
-                candidates.append((90, _content_parts_to_text(content)))
-        elif isinstance(message, str) and "error" not in _clean(value.get("status")).lower():
-            candidates.append((45, message))
-
-        # Direct generated-answer fields. High-confidence keys are preferred.
-        for key in ANSWER_KEYS:
-            if key not in value:
-                continue
-            if key in LOW_CONFIDENCE_ANSWER_KEYS and role not in {"", "assistant"} and path[-1:] != ("data",):
-                continue
-            score = 95 if key in HIGH_CONFIDENCE_ANSWER_KEYS else 62
-            if key == "answer":
-                score = 100
-            _append_answer_value(value.get(key), candidates, score=score, path=(*path, key), depth=depth + 1)
-
-        for key, child in value.items():
-            key_text = str(key)
-            if key_text in SKIP_RECURSIVE_ANSWER_KEYS:
-                continue
-            if key_text in ANSWER_KEYS:
-                continue
-            if isinstance(child, (Mapping, list, tuple, str)):
-                _collect_answer_candidates(child, candidates, path=(*path, key_text), depth=depth + 1)
-
-        return
-
+        return from_blob or value
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        for index, item in enumerate(value):
-            _collect_answer_candidates(item, candidates, path=(*path, str(index)), depth=depth + 1)
+        return _content_parts_to_text(value)
+    return ""
 
 
-def _append_answer_value(
-    value: Any,
-    candidates: list[tuple[int, str]],
-    *,
-    score: int,
-    path: tuple[str, ...],
-    depth: int,
-) -> None:
-    if isinstance(value, str):
-        from_blob = _extract_answer_from_text_blob(value)
-        candidates.append((score, from_blob or value))
-        return
+def _answer_rejection_reason(text: str) -> str:
+    clean = _clean(text)
+    lower = clean.lower()
+    if len(clean) < 2:
+        return "empty"
+    if clean in {"[]", "{}", "true", "false", "null", "ok", "OK"}:
+        return "non-answer scalar"
+    if _looks_like_source_markdown_only(text):
+        return "source markdown"
+    if re.fullmatch(r"\d+\s+treffer\s+im\s+dokument", lower):
+        return "document hit count"
+    if _looks_like_filename_or_path(clean):
+        return "filename or path"
+    if _looks_like_markdown_table_without_answer(text):
+        return "markdown table without answer"
+    if _looks_like_short_title(clean):
+        return "short title without sentence structure"
+    return ""
 
-    if isinstance(value, Mapping):
-        nested: list[tuple[int, str]] = []
-        _collect_answer_candidates(value, nested, path=path, depth=depth)
-        for nested_score, text in nested:
-            candidates.append((max(score - 5, nested_score), text))
-        return
 
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        text = _content_parts_to_text(value)
-        if text:
-            candidates.append((score - 10, text))
-        else:
-            _collect_answer_candidates(value, candidates, path=path, depth=depth)
+def _looks_like_filename_or_path(text: str) -> bool:
+    clean = _clean(text)
+    if not clean or "\n" in str(text):
+        return False
+    if re.fullmatch(r"[\w .@()+\-/\\]+?\.(md|txt|pdf|docx?|xlsx?|pptx?|csv|json|yaml|yml)", clean, flags=re.IGNORECASE):
+        return True
+    if re.search(r"(^|[A-Za-z]:|/|\\)[\w .@()+\-/\\]+\.(md|txt|pdf|docx?|xlsx?|pptx?|csv|json|yaml|yml)$", clean, flags=re.IGNORECASE):
+        return True
+    return False
+
+
+def _looks_like_markdown_table_without_answer(text: str) -> bool:
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if not lines:
+        return False
+    table_lines = [line for line in lines if line.startswith("|") and line.endswith("|")]
+    return len(table_lines) >= 2 and len(table_lines) / len(lines) >= 0.8
+
+
+def _looks_like_short_title(text: str) -> bool:
+    clean = _clean(text)
+    if len(clean) > 64:
+        return False
+    if re.search(r"[.!?;:]", clean):
+        return False
+    words = clean.split()
+    if len(words) <= 1:
+        return True
+    if len(words) <= 5 and not re.search(
+        r"\b(ist|sind|hat|haben|wird|werden|kann|können|muss|müssen|zeigt|beschreibt|regelt|enthält)\b",
+        clean,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    return False
 
 
 def _extract_answer_from_text_blob(text: str) -> str:
@@ -282,7 +283,7 @@ def _extract_answer_from_text_blob(text: str) -> str:
             if parsed is None:
                 continue
             if isinstance(parsed, Mapping):
-                piece = _stream_delta_text(parsed) or _extract_answer(parsed)
+                piece = _stream_delta_text(parsed) or extract_answer_result(parsed).answer
             elif isinstance(parsed, str):
                 piece = parsed
             else:
@@ -295,13 +296,14 @@ def _extract_answer_from_text_blob(text: str) -> str:
     if raw[:1] in {"{", "["}:
         parsed = _json_loads_safely(raw)
         if isinstance(parsed, Mapping):
-            return _extract_answer(parsed)
+            return extract_answer_result(parsed).answer
         if isinstance(parsed, Sequence) and not isinstance(parsed, (str, bytes)):
-            nested_candidates: list[tuple[int, str]] = []
-            _collect_answer_candidates(parsed, nested_candidates, path=("json",), depth=0)
-            if nested_candidates:
-                nested_candidates.sort(key=lambda item: (item[0], len(item[1])), reverse=True)
-                return nested_candidates[0][1]
+            pieces = [
+                extract_answer_result(item).answer
+                for item in parsed
+                if isinstance(item, Mapping)
+            ]
+            return _merge_stream_pieces(pieces)
 
     return ""
 
@@ -376,20 +378,6 @@ def _content_parts_to_text(content: Any) -> str:
     return "\n".join(part for part in parts if part).strip()
 
 
-def _valid_answer_candidate(text: str) -> bool:
-    clean = _clean(text)
-    if len(clean) < 2:
-        return False
-    if clean in {"[]", "{}", "true", "false", "null", "ok", "OK"}:
-        return False
-    if _looks_like_source_markdown_only(text):
-        return False
-    if clean.lower().startswith(("## gefundene quellen", "### quellen", "quellenüberblick")):
-        return False
-    if clean.startswith("[") and clean.endswith("]") and len(clean) < 200:
-        return False
-    return True
-
 # =============================================================================
 # QUELLEN-EXTRAKTION UND NORMALISIERUNG
 # =============================================================================
@@ -397,37 +385,85 @@ def _valid_answer_candidate(text: str) -> bool:
 # ein einheitliches Quellenmodell für Citation-Events und Markdown.
 def _extract_sources(data: Mapping[str, Any]) -> list[Any]:
     found: list[Any] = []
+    seen_containers: set[int] = set()
 
-    def walk(value: Any, depth: int = 0) -> None:
-        if depth > 8:
-            return
+    for reference in _choice_reference_values(data):
+        _extend_sources_once(found, reference, seen_containers, reference_container=True)
 
-        if isinstance(value, Mapping):
-            for key in SOURCE_LIST_KEYS:
-                raw = value.get(key)
-                if isinstance(raw, list):
-                    found.extend(raw)
-                elif key in REFERENCE_KEYS and isinstance(raw, Mapping):
-                    found.extend(_sources_from_reference(raw))
+    nested = data.get("data")
+    if isinstance(nested, Mapping):
+        for key in REFERENCE_KEYS:
+            if key in nested:
+                _extend_sources_once(
+                    found,
+                    nested.get(key),
+                    seen_containers,
+                    reference_container=True,
+                )
 
-            for key in REFERENCE_KEYS:
-                raw = value.get(key)
-                if isinstance(raw, Mapping):
-                    found.extend(_sources_from_reference(raw))
-                elif isinstance(raw, list):
-                    found.extend(raw)
+    for key in REFERENCE_KEYS:
+        if key in data:
+            _extend_sources_once(found, data.get(key), seen_containers, reference_container=True)
 
-            for child in value.values():
-                if isinstance(child, (Mapping, list, tuple)):
-                    walk(child, depth + 1)
+    for container in (data, nested if isinstance(nested, Mapping) else None):
+        if not isinstance(container, Mapping):
+            continue
+        for key in SOURCE_LIST_KEYS:
+            if key in container:
+                _extend_sources_once(
+                    found,
+                    container.get(key),
+                    seen_containers,
+                    reference_container=False,
+                )
 
-        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-            for child in value:
-                if isinstance(child, (Mapping, list, tuple)):
-                    walk(child, depth + 1)
-
-    walk(data)
     return found
+
+
+def _choice_reference_values(data: Mapping[str, Any]) -> list[Any]:
+    references: list[Any] = []
+    for container in (data, data.get("data") if isinstance(data.get("data"), Mapping) else None):
+        if not isinstance(container, Mapping):
+            continue
+        choices = container.get("choices")
+        if not isinstance(choices, Sequence) or isinstance(choices, (str, bytes)):
+            continue
+        for choice in choices:
+            if not isinstance(choice, Mapping):
+                continue
+            message = choice.get("message")
+            if isinstance(message, Mapping) and "reference" in message:
+                references.append(message.get("reference"))
+            delta = choice.get("delta")
+            if isinstance(delta, Mapping) and "reference" in delta:
+                references.append(delta.get("reference"))
+    return references
+
+
+def _extend_sources_once(
+    found: list[Any],
+    raw: Any,
+    seen_containers: set[int],
+    *,
+    reference_container: bool,
+) -> None:
+    if raw in (None, ""):
+        return
+    if isinstance(raw, (Mapping, list, tuple)):
+        container_id = id(raw)
+        if container_id in seen_containers:
+            return
+        seen_containers.add(container_id)
+
+    if isinstance(raw, Mapping):
+        if reference_container or "chunks" in raw or "doc_aggs" in raw:
+            found.extend(_sources_from_reference(raw))
+        else:
+            found.append(dict(raw))
+        return
+
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+        found.extend(raw)
 
 
 def _sources_from_reference(reference: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -522,11 +558,7 @@ def _normalize_sources(
             connector_base_url=connector_base_url,
             allow_connector_source_links=allow_connector_source_links,
         )
-        key = (
-            _clean(hit.path or hit.document_id or hit.title),
-            _clean(hit.chunk_id or hit.reference_id or ""),
-            _clean(hit.snippet)[:220],
-        )
+        key = _source_dedup_key(hit)
         if key in seen:
             continue
 
@@ -535,10 +567,16 @@ def _normalize_sources(
             _source_event_data(hit, show_scores=show_scores, show_debug=show_debug)
         )
 
-        if len(normalized) >= limit:
-            break
+    normalized.sort(key=lambda item: (_score_sort_key(item), _rank_sort(item)))
+    return normalized[:limit]
 
-    return normalized
+
+def _source_dedup_key(hit: SourceHit) -> tuple[str, str, str]:
+    document_key = _clean(hit.document_id or hit.path or hit.document_name or hit.title).lower()
+    reference_key = _clean(hit.chunk_id or hit.reference_id or "").lower()
+    snippet_key = sha256(_clean(hit.snippet).lower().encode("utf-8")).hexdigest()[:20] if hit.snippet else ""
+    position_key = _clean(hit.page or hit.line_start or hit.line or hit.positions or "").lower()
+    return (document_key, reference_key, f"{snippet_key}:{position_key}")
 
 
 def _source_mapping(source: Any) -> dict[str, Any]:

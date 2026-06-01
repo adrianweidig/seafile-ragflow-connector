@@ -155,28 +155,137 @@ class SourceHit:
         }
 
 
+@dataclass(frozen=True)
+class AnswerExtractionResult:
+    answer: str
+    origin: str
+    path: str
+    warnings: list[str] = field(default_factory=list)
+
+
 def extract_answer(payload: Any) -> str:
-    if isinstance(payload, dict):
-        nested = payload.get("data")
-        if isinstance(nested, dict):
-            answer = extract_answer(nested)
-            if answer:
-                return answer
-        choices = payload.get("choices")
-        if isinstance(choices, list) and choices:
-            message = choices[0].get("message") if isinstance(choices[0], dict) else None
-            if isinstance(message, dict):
-                return str(message.get("content") or "")
-        if "answer" in payload:
-            return str(payload.get("answer") or "")
-        if "content" in payload:
-            return str(payload.get("content") or "")
+    return extract_answer_result(payload).answer
+
+
+def extract_answer_result(payload: Any) -> AnswerExtractionResult:
+    warnings: list[str] = []
+    if not isinstance(payload, dict):
+        return AnswerExtractionResult("", "none", "", warnings)
+
+    for path, value, origin in _canonical_answer_candidates(payload):
+        text = _answer_value_to_text(value)
+        if not text:
+            continue
+        rejection = _answer_rejection_reason(text)
+        if rejection:
+            warnings.append(f"{path}: {rejection}")
+            continue
+        return AnswerExtractionResult(text.strip(), origin, path, warnings)
+
+    origin = "retrieval_only" if extract_references(payload) else "none"
+    return AnswerExtractionResult("", origin, "", warnings)
+
+
+def _canonical_answer_candidates(payload: dict[str, Any]) -> list[tuple[str, Any, str]]:
+    candidates: list[tuple[str, Any, str]] = []
+    for key in ("answer", "final_answer", "generated_answer"):
+        if key in payload:
+            candidates.append((key, payload.get(key), "canonical_answer"))
+    nested = payload.get("data")
+    if isinstance(nested, dict) and "answer" in nested:
+        candidates.append(("data.answer", nested.get("answer"), "canonical_answer"))
+    candidates.extend(_openai_message_candidates(payload, prefix=""))
+    if isinstance(nested, dict):
+        candidates.extend(_openai_message_candidates(nested, prefix="data."))
+    return candidates
+
+
+def _openai_message_candidates(
+    payload: dict[str, Any],
+    *,
+    prefix: str,
+) -> list[tuple[str, Any, str]]:
+    choices = payload.get("choices")
+    if not isinstance(choices, list):
+        return []
+    candidates: list[tuple[str, Any, str]] = []
+    for index, choice in enumerate(choices):
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message")
+        if isinstance(message, dict) and "content" in message:
+            candidates.append(
+                (
+                    f"{prefix}choices[{index}].message.content",
+                    message.get("content"),
+                    "openai_message",
+                )
+            )
+    return candidates
+
+
+def _answer_value_to_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts).strip()
     return ""
+
+
+def _answer_rejection_reason(text: str) -> str:
+    clean = _compact_plain(text)
+    lower = clean.lower()
+    if not clean:
+        return "empty"
+    if re.fullmatch(r"\d+\s+treffer\s+im\s+dokument", lower):
+        return "document hit count"
+    if _looks_like_filename_or_path(clean):
+        return "filename or path"
+    if _looks_like_markdown_source_table(text):
+        return "source table"
+    if len(clean) <= 64 and not re.search(r"[.!?;:]", clean) and len(clean.split()) <= 5:
+        return "short title"
+    return ""
+
+
+def _compact_plain(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _looks_like_filename_or_path(text: str) -> bool:
+    return bool(
+        re.fullmatch(
+            r"[\w .@()+\-/\\]+?\.(md|txt|pdf|docx?|xlsx?|pptx?|csv|json|yaml|yml)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _looks_like_markdown_source_table(text: str) -> bool:
+    lines = [line.strip().lower() for line in str(text or "").splitlines() if line.strip()]
+    if not lines:
+        return False
+    table_lines = [line for line in lines if line.startswith("|") and line.endswith("|")]
+    if len(table_lines) >= 2 and len(table_lines) / len(lines) >= 0.8:
+        return True
+    return any("nachweisqualität" in line for line in lines) and any(
+        "dokument" in line and "fundstelle" in line for line in table_lines
+    )
 
 
 def extract_references(payload: Any) -> list[dict[str, Any]]:
     references: list[dict[str, Any]] = []
-    _collect_references(payload, references)
+    seen: set[int] = set()
+    _collect_references(payload, references, seen=seen, root=True)
     return references
 
 
@@ -746,26 +855,88 @@ def _preview_snippet(snippet: str | None) -> str | None:
     return compact[:_PREVIEW_SNIPPET_MAX_CHARS].rstrip() + "..."
 
 
-def _collect_references(value: Any, references: list[dict[str, Any]]) -> None:
+def _collect_references(
+    value: Any,
+    references: list[dict[str, Any]],
+    *,
+    seen: set[int],
+    root: bool = False,
+    source_container: bool = False,
+) -> None:
+    if isinstance(value, (dict, list)):
+        value_id = id(value)
+        if value_id in seen:
+            return
+        seen.add(value_id)
+
     if isinstance(value, dict):
         if _looks_like_chunk(value):
             references.append(value)
             return
-        known_reference_key_found = False
-        for key in ("reference", "references", "sources", "chunks"):
+        if source_container and _looks_like_loose_source(value):
+            references.append(value)
+            return
+
+        choices = value.get("choices")
+        if isinstance(choices, list):
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    continue
+                message = choice.get("message")
+                if isinstance(message, dict) and "reference" in message:
+                    _collect_references(message["reference"], references, seen=seen)
+                delta = choice.get("delta")
+                if isinstance(delta, dict) and "reference" in delta:
+                    _collect_references(delta["reference"], references, seen=seen)
+
+        nested = value.get("data")
+        if isinstance(nested, dict):
+            for key in ("reference", "references", "sources", "source_documents", "citations"):
+                if key in nested:
+                    _collect_references(
+                        nested[key],
+                        references,
+                        seen=seen,
+                        source_container=key
+                        in {"sources", "source_documents", "citations"},
+                    )
+
+        for key in (
+            "reference",
+            "references",
+            "sources",
+            "source_documents",
+            "citations",
+            "chunks",
+        ):
             if key in value:
-                known_reference_key_found = True
-                _collect_references(value[key], references)
+                _collect_references(
+                    value[key],
+                    references,
+                    seen=seen,
+                    source_container=key
+                    in {"sources", "source_documents", "citations", "chunks"},
+                )
         if "doc_aggs" in value:
-            known_reference_key_found = True
-            _collect_references(value["doc_aggs"], references)
-        if not known_reference_key_found:
+            _collect_references(value["doc_aggs"], references, seen=seen, source_container=True)
+        if source_container:
             for item in value.values():
                 if isinstance(item, (dict, list)):
-                    _collect_references(item, references)
+                    _collect_references(item, references, seen=seen, source_container=True)
+        if root and not references:
+            for item in value.values():
+                if isinstance(item, (dict, list)):
+                    _collect_references(item, references, seen=seen)
     elif isinstance(value, list):
         for item in value:
-            _collect_references(item, references)
+            _collect_references(item, references, seen=seen, source_container=source_container)
+
+
+def _looks_like_loose_source(value: dict[str, Any]) -> bool:
+    return any(
+        key in value
+        for key in ("content", "text", "snippet", "content_with_weight", "name")
+    )
 
 
 def _looks_like_chunk(value: dict[str, Any]) -> bool:
@@ -1003,14 +1174,20 @@ def _group_sources_by_document(
         grouped.setdefault(key, []).append(source)
     groups = list(grouped.values())
     for group in groups:
-        group.sort(key=lambda item: (_sort_score(item), _source_rank(item)))
-    groups.sort(key=lambda group: (_sort_score(group[0]), _source_rank(group[0])))
+        group.sort(key=lambda item: (_sort_score_key(item), _source_rank(item)))
+    groups.sort(key=lambda group: (_sort_score_key(group[0]), _source_rank(group[0])))
     return groups
 
 
-def _sort_score(source: dict[str, Any]) -> float:
+def _sort_score_key(source: dict[str, Any]) -> tuple[int, float]:
     value = _score_float(source.get("score") or _source_metadata(source).get("score"))
-    return -1.0 if value is None else -value
+    if value is None:
+        return (1, 0.0)
+    return (0, -value)
+
+
+def _sort_score(source: dict[str, Any]) -> tuple[int, float]:
+    return _sort_score_key(source)
 
 
 def _source_rank(source: dict[str, Any]) -> int:

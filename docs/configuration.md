@@ -271,8 +271,8 @@ RAGFLOW_DOCUMENT_URL_TEMPLATE=
   müssen Reverse-Proxy- und OpenWebUI-Timeouts dazu passen.
 - `OPENWEBUI_SOURCE_PREVIEW_MODE`: `ragflow_link`, `connector_viewer`,
   `citation_only` oder `disabled`. Für auditierbare OpenWebUI-Antworten ist
-  `connector_viewer` empfohlen, weil Citation-Chips und Markdown-Nachweistabelle
-  dann auf denselben signierten Preview-Link zeigen.
+  `connector_viewer` empfohlen, weil Citation-Chips und optionale
+  Markdown-Nachweistabellen dann auf denselben signierten Preview-Link zeigen.
 - `OPENWEBUI_DATASET_ALLOWLIST`: optionale CSV aus Repo-IDs oder
   RAGFlow-Dataset-IDs für stufenweisen Rollout.
 - `SEAFILE_PUBLIC_BASE_URL`: optionale browserseitige Seafile-Basis-URL für
@@ -305,14 +305,15 @@ RAGFlow selbst stabile öffentliche Dokument-/Chunk-Links liefert oder
 `RAGFLOW_DOCUMENT_URL_TEMPLATE` gesetzt ist, kann `ragflow_link` stattdessen
 direkt auf RAGFlow zeigen.
 
-Die generierte Pipe nutzt standardmäßig `SOURCE_MARKDOWN_MODE=audit`,
-`APPEND_SOURCE_OVERVIEW=true` und eigene OpenWebUI-Citation-Events. Im
-Modellpicker erscheint sie mit dem Anzeigenamen `Seafile · <Dataset>`, während
-die technische Modell-ID stabil bleibt. In der Antwort markiert die Pipe
-Quellen als `[S1]`, `[S2]` usw. und ergänzt eine Nachweistabelle mit Dokument,
-Fundstelle, Relevanzlabel und Direktlink. Numerische Scores und technische IDs
-bleiben im Normalbetrieb ausgeblendet; `SHOW_SOURCE_DEBUG=true` ist nur für
-Admin-Debugging gedacht.
+Die generierte Pipe nutzt standardmäßig `SOURCE_DISPLAY_MODE=native`,
+`SOURCE_MARKDOWN_MODE=none`, `APPEND_SOURCE_OVERVIEW=false` und eigene
+OpenWebUI-Citation-Events. Im Modellpicker erscheint sie mit dem Anzeigenamen
+`Seafile · <Dataset>`, während die technische Modell-ID stabil bleibt. Für
+Audit- oder Admin-Tests kann `SOURCE_DISPLAY_MODE=markdown_audit` mit
+`SOURCE_MARKDOWN_MODE=audit` und `APPEND_SOURCE_OVERVIEW=true` eine
+Nachweistabelle mit Dokument, Fundstelle, Relevanzlabel und Direktlink
+ergänzen. Numerische Scores und technische IDs bleiben im Normalbetrieb
+ausgeblendet; `SHOW_SOURCE_DEBUG=true` ist nur für Admin-Debugging gedacht.
 
 Wenn OpenWebUI aktiviert ist, benötigt der Connector-Controller einen
 erreichbaren HTTP-Port für Proxy-Routen wie `/api/openwebui/proxy/chat` und
