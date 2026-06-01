@@ -8,6 +8,23 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+## 0.1.9 - 2026-06-01
+
+### Added
+
+- Dashboard-Tab `Prüfablauf`, der mit dem Seafile-API-Key sichtbare
+  Bibliotheken anzeigt und ausgewählte Bibliotheken für RAGFlow-Dataset-,
+  Dokument-, Chat- und OpenWebUI-Tool-/Pipe-Sync starten kann.
+- Fake-basierter Integrationstest und deutsch/englisches Runbook für den
+  manuell prüfbaren Seafile-RAGFlow-OpenWebUI-Ablauf.
+
+### Changed
+
+- OpenWebUI-Sync kann auf ausgewählte Repo-IDs begrenzt werden, damit
+  Dashboard-gesteuerte Prüfläufe keine ungewählten Bibliotheken anfassen.
+- Dashboard-, Betriebs- und Konfigurationsdokumentation beschreibt den
+  Controller-Workflow und grenzt ihn vom Standalone-Status-Dashboard ab.
+
 ## 0.1.8 - 2026-06-01
 
 ### Changed
