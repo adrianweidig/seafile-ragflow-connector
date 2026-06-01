@@ -93,6 +93,13 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("function renderSystems", DASHBOARD_HTML)
         self.assertIn("renderSystems(state.systemsData)", DASHBOARD_HTML)
 
+    def test_empty_first_paint_labels_are_localized(self) -> None:
+        self.assertIn("function renderEmptyStateLabels", DASHBOARD_HTML)
+        self.assertIn("'status.checking': 'checking...'", DASHBOARD_HTML)
+        self.assertIn("setText('last-success', t('overview.lastSuccess') + ': -')", DASHBOARD_HTML)
+        self.assertIn("setText('health-summary', t('status.checking'))", DASHBOARD_HTML)
+        self.assertIn("setText('problem-count', '0 ' + t('counts.entries'))", DASHBOARD_HTML)
+
     def test_health_messages_are_localized_client_side(self) -> None:
         self.assertIn("function healthMessage", DASHBOARD_HTML)
         self.assertIn("function healthName", DASHBOARD_HTML)

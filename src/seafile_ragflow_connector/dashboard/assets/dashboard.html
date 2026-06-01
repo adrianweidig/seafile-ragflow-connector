@@ -1160,6 +1160,7 @@
         'empty.title': 'Keine Einträge vorhanden',
         'empty.hint': 'Die Ansicht ist geladen und enthält aktuell keine passenden Daten.',
         'status.unknown': 'unbekannt',
+        'status.checking': 'prüfe...',
         'state.waiting': 'wartend',
         'state.syncing': 'synchronisiert gerade',
         'state.faulty': 'fehlerhaft',
@@ -1319,6 +1320,7 @@
         'empty.title': 'No entries available',
         'empty.hint': 'The view is loaded and currently has no matching data.',
         'status.unknown': 'unknown',
+        'status.checking': 'checking...',
         'state.waiting': 'waiting',
         'state.syncing': 'syncing now',
         'state.faulty': 'faulty',
@@ -1532,7 +1534,18 @@
       const title = state.titles[state.activeTab] || state.titles.overview;
       setText('view-title', title[0]);
       setText('view-subtitle', title[1]);
+      renderEmptyStateLabels();
       rerenderActiveData();
+    }
+
+    function renderEmptyStateLabels() {
+      if (!state.overviewData) {
+        setText('started-at', t('table.start') + ': -');
+        setText('last-success', t('overview.lastSuccess') + ': -');
+        setText('last-failure', t('overview.lastFailure') + ': -');
+        setText('health-summary', t('status.checking'));
+        setText('problem-count', '0 ' + t('counts.entries'));
+      }
     }
 
     function showError(message) {

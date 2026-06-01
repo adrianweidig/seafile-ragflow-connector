@@ -227,6 +227,16 @@ def _seed_dashboard_fixture(store: DashboardEventStore) -> None:
 
 
 def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> None:
+    page.goto(
+        url.replace("lang=de", "lang=en"),
+        wait_until="domcontentloaded",
+        timeout=config.timeout_ms,
+    )
+    page.wait_for_selector("#state-value", state="visible", timeout=config.timeout_ms)
+    _require_text(page, "#last-success", "Last success:")
+    _require_text(page, "#last-failure", "Last error:")
+    _require_text(page, "#problem-count", "entries")
+
     page.goto(url, wait_until="domcontentloaded", timeout=config.timeout_ms)
     page.wait_for_selector("#state-value", state="visible", timeout=config.timeout_ms)
     _wait_for_text_change(page, "#state-value", "-", config.timeout_ms)
