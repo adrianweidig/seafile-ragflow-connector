@@ -43,7 +43,7 @@ def _overview_sheet(snapshot: Mapping[str, Any]) -> SheetRows:
         ["Prozess gestartet", status.get("started_at")],
         ["Laufzeit Sekunden", status.get("uptime_seconds")],
         ["Laufende Jobs", status.get("running_jobs")],
-        ["Queue/Retry Jobs", status.get("queued_or_retrying_jobs")],
+        ["Wartende/erneute Jobs", status.get("queued_or_retrying_jobs")],
         ["Fehlgeschlagene Jobs", status.get("failed_jobs")],
         ["Letzter erfolgreicher Sync", _to_json(status.get("last_successful_sync"))],
         ["Letzter fehlgeschlagener Sync", _to_json(status.get("last_failed_sync"))],
@@ -51,7 +51,7 @@ def _overview_sheet(snapshot: Mapping[str, Any]) -> SheetRows:
         ["Erkannte Änderungen", status.get("changes_detected")],
         ["Fehler", status.get("errors_count")],
         ["Warnungen", status.get("warnings_count")],
-        ["Libraries", metrics.get("libraries")],
+        ["Bibliotheken", metrics.get("libraries")],
         ["Dateien", metrics.get("files")],
         ["Sync-Läufe gespeichert", metrics.get("sync_runs")],
         ["Änderungen gespeichert", metrics.get("changes")],
@@ -62,7 +62,7 @@ def _overview_sheet(snapshot: Mapping[str, Any]) -> SheetRows:
         ["Exportlimit Änderungen", export_limits.get("max_event_entries")],
         ["Exportlimit Logs", export_limits.get("max_log_entries")],
     ]
-    return ("Overview", ["Feld", "Wert"], rows)
+    return ("Übersicht", ["Feld", "Wert"], rows)
 
 
 def _sync_runs_sheet(runs: Sequence[Mapping[str, Any]]) -> SheetRows:
@@ -105,7 +105,7 @@ def _sync_runs_sheet(runs: Sequence[Mapping[str, Any]]) -> SheetRows:
         ]
         for run in runs
     ]
-    return ("Sync Runs", headers, rows)
+    return ("Sync-Läufe", headers, rows)
 
 
 def _changes_sheet(changes: Sequence[Mapping[str, Any]]) -> SheetRows:
@@ -144,11 +144,11 @@ def _changes_sheet(changes: Sequence[Mapping[str, Any]]) -> SheetRows:
         ]
         for change in changes
     ]
-    return ("Changes", headers, rows)
+    return ("Änderungen", headers, rows)
 
 
 def _logs_sheet(logs: Sequence[Mapping[str, Any]]) -> SheetRows:
-    headers = ["Zeitpunkt", "Level", "Komponente", "Sync-ID", "Nachricht", "Details"]
+    headers = ["Zeitpunkt", "Stufe", "Komponente", "Sync-ID", "Nachricht", "Details"]
     rows = [
         [
             entry.get("occurred_at"),
@@ -166,7 +166,7 @@ def _logs_sheet(logs: Sequence[Mapping[str, Any]]) -> SheetRows:
 def _sources_sheet(snapshot: Mapping[str, Any]) -> SheetRows:
     source = _as_mapping(_as_mapping(snapshot.get("systems")).get("source"))
     libraries = _as_list(source.get("libraries"))
-    headers = ["Repo-ID", "Name", "Status", "Head Commit", "Letzter Sync Commit", "Fehler"]
+    headers = ["Repo-ID", "Name", "Status", "Head-Commit", "Letzter Sync-Commit", "Fehler"]
     rows = [
         [
             item.get("repo_id"),
@@ -178,13 +178,13 @@ def _sources_sheet(snapshot: Mapping[str, Any]) -> SheetRows:
         ]
         for item in libraries
     ]
-    return ("Sources", headers, rows)
+    return ("Quellen", headers, rows)
 
 
 def _targets_sheet(snapshot: Mapping[str, Any]) -> SheetRows:
     target = _as_mapping(_as_mapping(snapshot.get("systems")).get("target"))
     datasets = _as_list(target.get("datasets"))
-    headers = ["Repo-ID", "Dataset-ID", "Dataset-Name", "Template Hash"]
+    headers = ["Repo-ID", "Datensatz-ID", "Datensatz-Name", "Template-Hash"]
     rows = [
         [
             item.get("repo_id"),
@@ -194,7 +194,7 @@ def _targets_sheet(snapshot: Mapping[str, Any]) -> SheetRows:
         ]
         for item in datasets
     ]
-    return ("Targets", headers, rows)
+    return ("Ziele", headers, rows)
 
 
 def _openwebui_sheet(snapshot: Mapping[str, Any]) -> SheetRows:
@@ -203,8 +203,8 @@ def _openwebui_sheet(snapshot: Mapping[str, Any]) -> SheetRows:
     mappings = _as_list(openwebui.get("mappings"))
     headers = [
         "Repo-ID",
-        "Dataset-ID",
-        "Dataset-Name",
+        "Datensatz-ID",
+        "Datensatz-Name",
         "Chat-ID",
         "Tool-ID",
         "Pipe-ID",
@@ -248,7 +248,7 @@ def _openwebui_sheet(snapshot: Mapping[str, Any]) -> SheetRows:
 def _diagnostics_sheet(snapshot: Mapping[str, Any]) -> SheetRows:
     diagnostics = _as_mapping(snapshot.get("diagnostics"))
     rows = [[key, _to_json(value)] for key, value in diagnostics.items()]
-    return ("Diagnostics", ["Bereich", "Wert"], rows)
+    return ("Diagnose", ["Bereich", "Wert"], rows)
 
 
 def _build_workbook(sheets: Sequence[SheetRows]) -> bytes:

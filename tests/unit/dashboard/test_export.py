@@ -56,11 +56,15 @@ class DashboardAuditExportTests(unittest.TestCase):
             workbook_xml = archive.read("xl/workbook.xml").decode("utf-8")
             first_sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
 
-        self.assertIn('name="Overview"', workbook_xml)
-        self.assertIn('name="Sync Runs"', workbook_xml)
-        self.assertIn('name="Changes"', workbook_xml)
+        self.assertIn('name="Übersicht"', workbook_xml)
+        self.assertIn('name="Sync-Läufe"', workbook_xml)
+        self.assertIn('name="Änderungen"', workbook_xml)
+        self.assertIn('name="Quellen"', workbook_xml)
+        self.assertIn('name="Ziele"', workbook_xml)
         self.assertIn('name="OpenWebUI"', workbook_xml)
         self.assertIn("Connector-Zustand", first_sheet)
+        self.assertIn("Wartende/erneute Jobs", first_sheet)
+        self.assertIn("Bibliotheken", first_sheet)
 
 
 if __name__ == "__main__":
