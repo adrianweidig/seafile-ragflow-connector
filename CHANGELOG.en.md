@@ -8,6 +8,23 @@ retroactively.
 
 ## Unreleased
 
+## 0.1.9 - 2026-06-01
+
+### Added
+
+- Dashboard tab `Workflow` that lists libraries visible to the Seafile API key
+  and can start selected libraries for RAGFlow dataset, document, chat, and
+  OpenWebUI tool/pipe sync.
+- Fake-based integration test and German/English runbook for the manually
+  verifiable Seafile-RAGFlow-OpenWebUI workflow.
+
+### Changed
+
+- OpenWebUI sync can be scoped to selected repo IDs so dashboard-triggered
+  verification runs do not touch unselected libraries.
+- Dashboard, operations, and configuration docs now describe the controller
+  workflow and distinguish it from the standalone status dashboard.
+
 ## 0.1.8 - 2026-06-01
 
 ### Changed
