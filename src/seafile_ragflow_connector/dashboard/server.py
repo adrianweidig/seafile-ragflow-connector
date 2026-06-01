@@ -6,8 +6,10 @@ import binascii
 import hmac
 import json
 import threading
+import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from hashlib import sha256
 from html import escape
 from html.parser import HTMLParser
 from http import HTTPStatus
@@ -30,6 +32,7 @@ from seafile_ragflow_connector.dashboard.ui import DASHBOARD_HTML
 from seafile_ragflow_connector.i18n import localizer_for
 from seafile_ragflow_connector.openwebui.sources import (
     annotate_answer_citations,
+    audit_rank_sources,
     extract_answer_result,
     normalize_sources,
     render_sources_markdown,
@@ -779,6 +782,8 @@ def _handle_openwebui_query(
         dataset_id=dataset_id,
         dataset_name=mapping.ragflow_dataset_name,
         files_by_document_id=_files_by_document_id(context.store, mapping.repo_id),
+        question=question,
+        answer="",
     )
     return {
         "answer": _sources_markdown(sources, context.settings),
@@ -800,6 +805,7 @@ def _handle_openwebui_chat(
     payload: dict[str, Any],
     authorization: str | None,
 ) -> dict[str, Any]:
+    started_at = time.perf_counter()
     _require_proxy_secret(context.settings, authorization)
     artifact_id = _required_text(payload, "artifact_id")
     dataset_id = _required_text(payload, "dataset_id")
@@ -855,12 +861,15 @@ def _handle_openwebui_chat(
                 "retrieval_only": True,
                 "citations_emitted": False,
             }
+        answer_result = extract_answer_result(result)
         sources = normalize_sources(
             result,
             settings=context.settings,
             dataset_id=dataset_id,
             dataset_name=mapping.ragflow_dataset_name,
             files_by_document_id=files_by_document_id,
+            question=question,
+            answer=answer_result.answer,
         )
         if question:
             try:
@@ -883,23 +892,32 @@ def _handle_openwebui_chat(
             else:
                 sources = _merge_sources(sources, retrieval_sources)
                 sources = _filter_sources_for_requested_document(sources, question)
+                sources = audit_rank_sources(
+                    sources,
+                    question=question,
+                    answer=answer_result.answer,
+                )
     finally:
         ragflow.close()
     l10n = localizer_for(context.settings)
-    answer_result = extract_answer_result(result)
     answer = annotate_answer_citations(_clean_answer_text(answer_result.answer), sources, language=l10n.language)
+    diagnostics = _openwebui_audit_diagnostics(
+        question=question,
+        top_k=top_k,
+        answer=answer,
+        answer_origin=answer_result.origin if answer else "retrieval_only",
+        answer_path=answer_result.path,
+        reference_path=_reference_path_detected(result),
+        sources=sources,
+        latency_ms=int((time.perf_counter() - started_at) * 1000),
+    )
     return {
         "answer": answer,
         "sources": sources,
         "source_markdown": _sources_markdown(sources, context.settings),
         "retrieval_only": not bool(answer.strip()),
         "citations_emitted": False,
-        "diagnostics": {
-            "answer_path": answer_result.path,
-            "reference_path": _reference_path_detected(result),
-            "provider": "ragflow",
-            "source_count_after_dedup": len(sources),
-        },
+        "diagnostics": diagnostics,
     }
 
 
@@ -1027,6 +1045,8 @@ def _retrieve_openwebui_sources(
         dataset_id=dataset_id,
         dataset_name=mapping.ragflow_dataset_name,
         files_by_document_id=files_by_document_id,
+        question=question,
+        answer="",
     )
 
 
@@ -1098,6 +1118,105 @@ def _files_by_document_id(store: DashboardEventStore, repo_id: str) -> dict[str,
             for row in rows
             if row.ragflow_document_id
         }
+
+
+def _openwebui_audit_diagnostics(
+    *,
+    question: str | None,
+    top_k: int,
+    answer: str,
+    answer_origin: str,
+    answer_path: str,
+    reference_path: str,
+    sources: list[dict[str, Any]],
+    latency_ms: int,
+) -> dict[str, Any]:
+    selected_sources = [_audit_source_summary(source) for source in sources[:10]]
+    used_sources = [
+        item
+        for item in selected_sources
+        if item.get("used_in_answer") or f"[{item.get('source_id')}]" in answer
+    ]
+    coverage = _openwebui_claim_coverage(answer, sources)
+    supported_claims = coverage.get("supported_claims")
+    total_claims = coverage.get("total_claims")
+    unsupported_claims = (
+        max(0, total_claims - supported_claims)
+        if isinstance(total_claims, int) and isinstance(supported_claims, int)
+        else 0
+    )
+    return {
+        "query_id": _query_id(question),
+        "timestamp": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "provider": "ragflow",
+        "retrieval_mode": "chat+reference+audit_rerank",
+        "top_k": top_k,
+        "answer_origin": answer_origin,
+        "answer_path": answer_path,
+        "reference_path": reference_path,
+        "source_count_before_dedup": len(sources),
+        "source_count_after_dedup": len(sources),
+        "selected_sources": selected_sources,
+        "used_sources": used_sources,
+        "claim_coverage": coverage,
+        "unsupported_claims": unsupported_claims,
+        "latency_ms": latency_ms,
+    }
+
+
+def _query_id(question: str | None) -> str:
+    clean = " ".join(str(question or "").split())
+    if not clean:
+        return ""
+    return sha256(clean.encode("utf-8")).hexdigest()[:16]
+
+
+def _audit_source_summary(source: dict[str, Any]) -> dict[str, Any]:
+    metadata = source.get("source_metadata")
+    if not isinstance(metadata, dict):
+        metadata_items = source.get("metadata")
+        metadata = metadata_items[0] if isinstance(metadata_items, list) and metadata_items else {}
+    return {
+        key: value
+        for key, value in {
+            "source_id": source.get("source_id") or metadata.get("source_id"),
+            "title": source.get("name") or metadata.get("document_name"),
+            "document_id": metadata.get("document_id"),
+            "chunk_id": metadata.get("chunk_id"),
+            "role": metadata.get("source_role") or metadata.get("role"),
+            "match_type": metadata.get("match_type"),
+            "audit_score": source.get("audit_score") or metadata.get("audit_score"),
+            "used_in_answer": bool(metadata.get("used_in_answer") or source.get("used_in_answer")),
+            "claim_ids": metadata.get("claim_ids") or source.get("claim_ids"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _openwebui_claim_coverage(answer: str, sources: list[dict[str, Any]]) -> dict[str, int | str]:
+    claims = [
+        part.strip()
+        for part in str(answer or "").replace("?", ".").replace("!", ".").split(".")
+        if len(part.strip()) >= 12
+    ]
+    if not claims:
+        return {"supported_claims": 0, "total_claims": 0, "status": "retrieval-only"}
+    source_ids = {
+        str(source.get("source_id") or (source.get("source_metadata") or {}).get("source_id"))
+        for source in sources
+    }
+    supported = 0
+    for claim in claims:
+        if any(f"[{source_id}]" in claim for source_id in source_ids if source_id):
+            supported += 1
+    status = (
+        "vollständig belegt"
+        if supported == len(claims)
+        else "teilweise belegt"
+        if supported
+        else "nicht ausreichend belegt"
+    )
+    return {"supported_claims": supported, "total_claims": len(claims), "status": status}
 
 
 def _sources_markdown(sources: list[dict[str, Any]], settings: Settings) -> str:

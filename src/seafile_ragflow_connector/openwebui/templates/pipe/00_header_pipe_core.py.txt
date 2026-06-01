@@ -1,9 +1,9 @@
 """
 title: RAGFlow Dataset Pipe
 author: Seafile RAGFlow Connector
-version: 3.8.0
+version: 3.9.0
 owner: seafile-ragflow-connector
-artifact_version: 20
+artifact_version: 21
 """
 
 # =============================================================================
@@ -17,9 +17,9 @@ artifact_version: 20
 # Wichtig: Die Pipe ist als Audit-RAG-Pipe gebaut. Retrieval-Treffer sind
 # nicht nur Anhang, sondern die Beweiskette der Antwort. Die finale
 # Chat-Nachricht soll zuerst eine echte KI-Antwort sein und jede wesentliche
-# Aussage mit Quellenmarken wie [S1] belegen, danach folgen standardmäßig
-# native Citation-Events. Eine sichtbare Markdown-Nachweistabelle ist ein
-# expliziter Audit-/Debug-Modus.
+# Aussage mit Quellenmarken wie [S1] belegen. Standardmäßig folgt genau eine
+# sichtbare deutsche Audit-Nachweistabelle; native Citation-Events bleiben ein
+# optionaler Kompakt-/Debug-Pfad.
 #
 # Typische Datenflusskette:
 #
@@ -48,11 +48,11 @@ artifact_version: 20
 #   INJECT_RAG_SYSTEM_PROMPT=true
 #   SEND_GENERATIVE_RAG_HINTS=true
 #   RETRIEVAL_ONLY_FALLBACK=brief
-#   EMIT_CITATION_EVENTS=true
-#   SOURCE_DISPLAY_MODE=native
-#   APPEND_SOURCE_OVERVIEW=false
-#   SOURCE_MARKDOWN_MODE=none
-#   SHOW_SOURCE_SCORES=false
+#   EMIT_CITATION_EVENTS=false
+#   SOURCE_DISPLAY_MODE=audit
+#   APPEND_SOURCE_OVERVIEW=true
+#   SOURCE_MARKDOWN_MODE=audit
+#   SHOW_SOURCE_SCORES=true
 #   SHOW_SOURCE_DEBUG=false
 #
 # Wann wird ENABLE_ANSWER_SYNTHESIS_FALLBACK benötigt?
@@ -93,7 +93,7 @@ import re
 import ssl
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from hashlib import sha256
 from html.parser import HTMLParser
@@ -117,7 +117,17 @@ MAX_SOURCE_GROUPS_DETAILED = 12
 COMPACT_SNIPPET_CHARS = 380
 DETAILED_SNIPPET_CHARS = 900
 VALID_SOURCE_MARKDOWN_MODES = {"none", "off", "disabled", "compact", "detailed", "audit"}
-VALID_SOURCE_DISPLAY_MODES = {"native", "markdown_audit", "both_debug", "none"}
+VALID_SOURCE_DISPLAY_MODES = {
+    "compact",
+    "audit",
+    "debug",
+    "retrieval_only",
+    "error",
+    "native",
+    "markdown_audit",
+    "both_debug",
+    "none",
+}
 VALID_ERROR_VERBOSITY = {"safe", "debug"}
 VALID_RETRIEVAL_ONLY_FALLBACK = {"diagnostic", "brief", "sources_only"}
 VALID_STATUS_MODES = {"off", "minimal", "verbose"}
@@ -239,6 +249,14 @@ class SourceHit:
     file_type: Optional[str] = None
     positions: Any = None
     locator_quality: str = "unknown"
+    provider_citation_id: Optional[int] = None
+    source_role: str = "related"
+    match_type: str = "semantic"
+    audit_score: Optional[float] = None
+    score_components: dict[str, Any] = field(default_factory=dict)
+    used_in_answer: bool = False
+    claim_ids: tuple[str, ...] = ()
+    support_status: str = "not_evaluated"
     source_metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -513,11 +531,12 @@ class Pipe:
         # ------------------------------------------------------------------
         # 6) Quellen-UX in OpenWebUI
         # ------------------------------------------------------------------
-        # Native Citation-Events erzeugen klickbare Quellen-/Citation-Elemente in
-        # OpenWebUI. Das ist die professionellste UX und sollte aktiv sein.
+        # Native Citation-Events erzeugen zusätzliche OpenWebUI-Quellenbereiche.
+        # Im Audit-Standard bleiben sie deaktiviert, damit die sichtbare Antwort
+        # nur eine Quellen-ID-Systematik und eine deutsche Nachweistabelle zeigt.
         EMIT_CITATION_EVENTS: bool = Field(
-            default=True,
-            description="Sendet Quellen als native OpenWebUI-Citation-Events.",
+            default=False,
+            description="Sendet Quellen zusätzlich als native OpenWebUI-Citation-Events.",
         )
 
         # Legacy-Source-Events nur aktivieren, wenn deine OpenWebUI-Version oder
@@ -541,7 +560,7 @@ class Pipe:
         # Der Audit-Standard zeigt auch bei False ein grobes Relevanzlabel, aber
         # keine Prozentwerte.
         SHOW_SOURCE_SCORES: bool = Field(
-            default=False,
+            default=True,
             description="Zeigt numerische Relevanzwerte in Metadaten und Quellenübersicht.",
         )
 
@@ -553,13 +572,13 @@ class Pipe:
         )
 
         # Primärer Quellenkanal:
-        #   native         nur native OpenWebUI-Citation-Events
-        #   markdown_audit eine sichtbare Markdown-Nachweistabelle
-        #   both_debug     native Events plus Markdown, nur für Admin-Tests
+        #   compact        nur native OpenWebUI-Citation-Events
+        #   audit          sichtbare Markdown-Nachweistabelle, Standard
+        #   debug          native Events plus Markdown, nur für Admin-Tests
         #   none           keine Quellenanzeige im Chat
         SOURCE_DISPLAY_MODE: str = Field(
-            default="native",
-            description="Quellenanzeige: native, markdown_audit, both_debug oder none.",
+            default="audit",
+            description="Quellenanzeige: compact, audit, debug oder none.",
         )
 
         # Zusätzlicher Quellenblock im Antworttext, nur aktiv bei
@@ -569,7 +588,7 @@ class Pipe:
         #   compact  kurze Tabelle
         #   detailed ausführliche Quellen mit Snippets; gut für Reviews/Tests
         SOURCE_MARKDOWN_MODE: str = Field(
-            default="none",
+            default="audit",
             description="Zusätzliche Quellenübersicht im Antworttext: none, compact, detailed oder audit.",
         )
 
@@ -577,7 +596,7 @@ class Pipe:
         # Citations optisch sehr gut darstellt, kann man das auf False setzen, um
         # den Chat noch cleaner zu machen.
         APPEND_SOURCE_OVERVIEW: bool = Field(
-            default=False,
+            default=True,
             description="Hängt eine auditierbare Nachweistabelle an die Antwort an.",
         )
 
@@ -692,6 +711,8 @@ class Pipe:
             done=False,
         )
 
+        question = _last_user_text((body if isinstance(body, Mapping) else {}).get("messages") or [])
+        answer_result = extract_answer_result(data)
         raw_sources = _extract_sources(data)
         sources = _normalize_sources(
             raw_sources,
@@ -700,9 +721,10 @@ class Pipe:
             limit=self.valves.MAX_SOURCE_EVENTS,
             connector_base_url=self.valves.CONNECTOR_PROXY_BASE_URL,
             allow_connector_source_links=self.valves.ALLOW_CONNECTOR_SOURCE_LINKS,
+            question=question,
+            answer=answer_result.answer,
         )
 
-        answer_result = extract_answer_result(data)
         raw_answer = _strip_appended_source_markdown(answer_result.answer)
         raw_answer = _annotate_answer_source_markers(raw_answer, sources)
         answer = _clean_answer(
@@ -710,8 +732,6 @@ class Pipe:
             clean_ragflow_markers=self.valves.CLEAN_RAGFLOW_MARKERS,
         )
         answer_origin = answer_result.origin if answer else "none"
-
-        question = _last_user_text((body if isinstance(body, Mapping) else {}).get("messages") or [])
 
         if not answer and sources and _is_source_inventory_question(question):
             answer = _source_inventory_answer(sources)
@@ -767,4 +787,10 @@ class Pipe:
             hidden=self.valves.HIDE_FINAL_STATUS,
         )
 
-        return _compose_final_answer(answer, sources, self.valves, answer_origin=answer_origin)
+        return _compose_final_answer(
+            answer,
+            sources,
+            self.valves,
+            answer_origin=answer_origin,
+            diagnostics=data.get("diagnostics") if isinstance(data, Mapping) else None,
+        )

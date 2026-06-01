@@ -305,15 +305,16 @@ RAGFlow selbst stabile öffentliche Dokument-/Chunk-Links liefert oder
 `RAGFLOW_DOCUMENT_URL_TEMPLATE` gesetzt ist, kann `ragflow_link` stattdessen
 direkt auf RAGFlow zeigen.
 
-Die generierte Pipe nutzt standardmäßig `SOURCE_DISPLAY_MODE=native`,
-`SOURCE_MARKDOWN_MODE=none`, `APPEND_SOURCE_OVERVIEW=false` und eigene
-OpenWebUI-Citation-Events. Im Modellpicker erscheint sie mit dem Anzeigenamen
-`Seafile · <Dataset>`, während die technische Modell-ID stabil bleibt. Für
-Audit- oder Admin-Tests kann `SOURCE_DISPLAY_MODE=markdown_audit` mit
-`SOURCE_MARKDOWN_MODE=audit` und `APPEND_SOURCE_OVERVIEW=true` eine
-Nachweistabelle mit Dokument, Fundstelle, Relevanzlabel und Direktlink
-ergänzen. Numerische Scores und technische IDs bleiben im Normalbetrieb
-ausgeblendet; `SHOW_SOURCE_DEBUG=true` ist nur für Admin-Debugging gedacht.
+Die generierte Pipe nutzt standardmäßig `SOURCE_DISPLAY_MODE=audit`,
+`SOURCE_MARKDOWN_MODE=audit`, `APPEND_SOURCE_OVERVIEW=true` und keine
+zusätzlichen OpenWebUI-Citation-Events. Im Modellpicker erscheint sie mit dem
+Anzeigenamen `Seafile · <Dataset>`, während die technische Modell-ID stabil
+bleibt. Der Auditmodus zeigt Antwort, Audit-Status, Claim-Abdeckung,
+Quellenrollen, Match-Typ, Audit-Score, Fundstelle und Direktlink in einer
+deutschen Nachweistabelle. Für eine kompaktere UI kann
+`SOURCE_DISPLAY_MODE=compact` native Citation-Events nutzen; `debug` kombiniert
+Audit-Ausgabe und technische Diagnoseinformationen. `SHOW_SOURCE_DEBUG=true`
+ist nur für Admin-Debugging gedacht.
 
 Wenn OpenWebUI aktiviert ist, benötigt der Connector-Controller einen
 erreichbaren HTTP-Port für Proxy-Routen wie `/api/openwebui/proxy/chat` und

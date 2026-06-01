@@ -229,10 +229,11 @@ Welches System bleibt laut Testdatei die Quelle der Wahrheit?
 ```
 
 Erwartet wird eine Antwort mit Bezug auf Seafile als Quelle der Wahrheit sowie
-mindestens eine Quelle oder Citation zur Datei
+mindestens eine Quelle im deutschen Abschnitt `Nachweise` zur Datei
 `seafile-ragflow-openwebui-check.md`. Wenn die Antwort keine Quelle zeigt,
-prüfen, ob die Pipe-Valves `SOURCE_DISPLAY_MODE`, `EMIT_CITATION_EVENTS`
-und die Connector-Proxy-URL korrekt gesetzt sind.
+prüfen, ob die Pipe-Valves `SOURCE_DISPLAY_MODE=audit`,
+`SOURCE_MARKDOWN_MODE=audit`, `APPEND_SOURCE_OVERVIEW=true` und die
+Connector-Proxy-URL korrekt gesetzt sind.
 
 ## Typische Fehlerbilder
 

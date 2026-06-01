@@ -21,7 +21,7 @@ def _configuration_error(valves: Pipe.Valves) -> str:
 
     source_display_mode = _source_display_mode(valves)
     if source_display_mode not in VALID_SOURCE_DISPLAY_MODES:
-        return "Ungültiger Wert: `SOURCE_DISPLAY_MODE` muss `native`, `markdown_audit`, `both_debug` oder `none` sein."
+        return "Ungültiger Wert: `SOURCE_DISPLAY_MODE` muss `compact`, `audit`, `debug` oder `none` sein."
 
     markdown_mode = _source_markdown_mode(valves.SOURCE_MARKDOWN_MODE)
     if markdown_mode not in {"none", "compact", "detailed", "audit"}:

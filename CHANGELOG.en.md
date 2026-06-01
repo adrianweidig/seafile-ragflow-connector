@@ -8,6 +8,30 @@ retroactively.
 
 ## Unreleased
 
+## 0.1.12 - 2026-06-02
+
+### Added
+
+- OpenWebUI pipe audit mode is now the default: answers start with the user
+  answer and then show a German evidence register with audit status, claim
+  coverage, source roles, match type, audit score, and safe run metadata.
+- Source normalization now carries `source_role`, `match_type`, `audit_score`,
+  `score_components`, `used_in_answer`, claim IDs, and the original RAGFlow
+  provider citation.
+
+### Changed
+
+- RAGFlow references are ranked by audit relevance and then re-labelled
+  consistently as `S1`, `S2`, and so on. Exact marker, ID, hash, ticket, and
+  filename questions prioritize exact matches over semantically similar hits.
+- OpenWebUI pipe defaults changed from native citation events to visible audit
+  mode so OpenWebUI does not render a second, differently numbered source list.
+
+### Fixed
+
+- Answer markers such as `[ID:3]` are resolved against the original RAGFlow
+  reference ID after audit sorting and rendered consistently as `[S1]`/`[S2]`.
+
 ## 0.1.11 - 2026-06-02
 
 ### Added
