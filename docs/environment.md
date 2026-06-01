@@ -67,7 +67,7 @@ Proxy-Secret und keine Preview-URL.
 | `OPENWEBUI_PIPE_ANSWER_LLM_BASE_URL` | optional | Base-URL des Fallback-Modells, z. B. `http://litellm:4000/v1`. |
 | `OPENWEBUI_PIPE_ANSWER_LLM_MODEL` | optional | Modellname für die Antwortsynthese. |
 | `OPENWEBUI_PIPE_ANSWER_LLM_API_KEY` | optional | Runtime-Secret für den Fallback; nicht in Repository-Dateien speichern. |
-| `OPENWEBUI_SYNC_INTERVAL_SECONDS` | optional | Periodischer OpenWebUI-Sync im Controller. |
+| `OPENWEBUI_SYNC_INTERVAL_SECONDS` | optional | Periodischer OpenWebUI-Sync im Controller. Default `1800` Sekunden, also 30 Minuten. Werte unter 60 Sekunden werden abgelehnt. |
 | `OPENWEBUI_DATASET_ALLOWLIST` | optional | CSV aus Repo-IDs oder Dataset-IDs für stufenweisen Rollout. |
 
 ## TLS/CA
@@ -108,7 +108,7 @@ installierten System-CAs.
 | `RAGFLOW_TEMPLATE_AUTO_CREATE` | optional | Default `true`; fehlende Dataset-Templates werden beim Provisioning automatisch angelegt. |
 | `RAGFLOW_TEMPLATE_REQUIRED` | optional | Default `true`; Healthcheck warnt nur noch, wenn Auto-Create deaktiviert ist und das Template fehlt. |
 | `RAGFLOW_TEMPLATE_CHAT_NAME` | optional | Default `connector_template_chat`; Template-Chat für die OpenWebUI/RAGFlow-Chat-Defaults. |
-| `RAGFLOW_TEMPLATE_REFRESH_SECONDS` | optional | Intervall für Aktualisierung der Dataset-Einstellungen. |
+| `RAGFLOW_TEMPLATE_REFRESH_SECONDS` | optional | Intervall für Aktualisierung der Dataset-Einstellungen. Default `1800` Sekunden, also 30 Minuten. Werte unter 60 Sekunden werden abgelehnt. |
 | `RAGFLOW_PUBLIC_BASE_URL`, `RAGFLOW_DOCUMENT_URL_TEMPLATE` | optional | öffentliche RAGFlow-Links in Quellen. |
 | `CONNECTOR_DASHBOARD_ENABLED` | optional | Dashboard starten; für OpenWebUI-Proxy nötig. |
 | `CONNECTOR_DASHBOARD_HOST`, `CONNECTOR_DASHBOARD_PORT` | optional | Bind-Adresse und Port im Container. |
@@ -134,6 +134,14 @@ Diese Variablen sind nicht für den ersten Start erforderlich:
 | Retry | `JOB_MAX_ATTEMPTS`, `JOB_RETRY_BASE_SECONDS`, `JOB_RETRY_MAX_SECONDS` |
 | Runtime | `CACHE_DIR`, `TEMP_DIR`, `ALLOW_OUTBOUND_INTERNET`, `DISABLE_TELEMETRY` |
 | Startup | `CONNECTOR_AUTO_INIT_DB`, `CONNECTOR_STARTUP_CHECK`, `CONNECTOR_STARTUP_MAX_WAIT_SECONDS`, `CONNECTOR_STARTUP_SLEEP_SECONDS`, `CONNECTOR_BOOTSTRAP_CHECK_LIVE`, `CONNECTOR_FALLBACK_CACHE_DIR`, `CONNECTOR_FALLBACK_TEMP_DIR` |
+
+Die Controller-Automationen `DISCOVERY_INTERVAL_SECONDS` und
+`DELTA_SYNC_INTERVAL_SECONDS` sowie der Reconciler
+`RECONCILE_INTERVAL_SECONDS` verwenden als sicheren Standard ebenfalls
+`1800` Sekunden. Der aktive Intervall wird beim Start von Controller und
+Reconciler geloggt. Manuelle Läufe sind unabhängig davon über
+`connector sync-once`, `connector check-live` und
+`connector openwebui-sync-once` möglich.
 
 Für produktive Starts ist die kleinste robuste Konfiguration meistens besser:
 erst Minimalpflicht setzen, `connector check-config` ausführen, dann gezielt

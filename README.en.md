@@ -119,6 +119,27 @@ docker compose \
 curl http://127.0.0.1:18080/api/health
 ```
 
+## Automations
+
+`connector-controller` schedules discovery, delta sync, RAGFlow template
+refresh, and optional OpenWebUI sync. `connector-reconciler` runs the
+reconciliation loop. All periodic runtime automations default to `1800`
+seconds, or 30 minutes, and values below 60 seconds are rejected. The active
+intervals are logged when the processes start.
+
+Manual checks and syncs remain independent of the schedule:
+
+```bash
+connector check-live
+connector sync-once
+connector openwebui-sync-once
+```
+
+For Compose and Portainer, tune the schedule with
+`DISCOVERY_INTERVAL_SECONDS`, `DELTA_SYNC_INTERVAL_SECONDS`,
+`RECONCILE_INTERVAL_SECONDS`, `RAGFLOW_TEMPLATE_REFRESH_SECONDS`, and
+`OPENWEBUI_SYNC_INTERVAL_SECONDS`.
+
 ## Portainer Start
 
 1. Create a new stack in Portainer.

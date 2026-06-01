@@ -374,7 +374,10 @@ def controller() -> None:
     if settings.openwebui_effective_sync_mode != "disabled":
         tasks.append(PeriodicTask("openwebui", settings.openwebui_sync_interval_seconds, openwebui))
     scheduler = SimpleScheduler(tasks)
-    log.info("controller.started")
+    log.info(
+        "controller.started",
+        intervals_seconds={task.name: task.interval_seconds for task in tasks},
+    )
     try:
         scheduler.run_forever()
     finally:
@@ -415,7 +418,7 @@ def reconciler() -> None:
     scheduler = SimpleScheduler(
         [PeriodicTask("reconcile", settings.reconcile_interval_seconds, reconcile)]
     )
-    log.info("reconciler.started")
+    log.info("reconciler.started", interval_seconds=settings.reconcile_interval_seconds)
     try:
         scheduler.run_forever()
     finally:

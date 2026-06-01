@@ -187,3 +187,10 @@ ausgeführt.
 Danach Dashboard, RAGFlow-Datasets, OpenWebUI-Artefakte und Audit-Export
 prüfen. Erst wenn dieser Lauf stabil ist, größere Libraries oder automatische
 Zeitpläne freigeben.
+
+Der Standard für periodische Controller-, Reconciler-, Template-Refresh- und
+OpenWebUI-Sync-Läufe beträgt 30 Minuten (`1800` Sekunden). Die Intervalle sind
+über `DISCOVERY_INTERVAL_SECONDS`, `DELTA_SYNC_INTERVAL_SECONDS`,
+`RECONCILE_INTERVAL_SECONDS`, `RAGFLOW_TEMPLATE_REFRESH_SECONDS` und
+`OPENWEBUI_SYNC_INTERVAL_SECONDS` konfigurierbar; Werte unter 60 Sekunden
+werden abgelehnt. Manuelle Checks und Syncs bleiben unabhängig davon möglich.

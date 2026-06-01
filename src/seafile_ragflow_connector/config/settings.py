@@ -15,6 +15,9 @@ from seafile_ragflow_connector.clients.tls import (
 )
 from seafile_ragflow_connector.i18n import normalize_language
 
+DEFAULT_AUTOMATION_INTERVAL_SECONDS = 1800
+MIN_AUTOMATION_INTERVAL_SECONDS = 60
+
 
 def _split_csv(value: str | list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
     if value is None:
@@ -85,7 +88,7 @@ class Settings(BaseSettings):
     ragflow_template_chat_name: str = "connector_template_chat"
     ragflow_verify_ssl: bool = True
     ragflow_ca_bundle: str | None = None
-    ragflow_template_refresh_seconds: int = 300
+    ragflow_template_refresh_seconds: int = DEFAULT_AUTOMATION_INTERVAL_SECONDS
     ragflow_refresh_dataset_settings: bool = True
     ragflow_validate_created_dataset: bool = True
     ragflow_public_base_url: str | None = None
@@ -129,7 +132,7 @@ class Settings(BaseSettings):
     seafile_client_key_file: str | None = None
     connector_proxy_client_cert_file: str | None = None
     connector_proxy_client_key_file: str | None = None
-    openwebui_sync_interval_seconds: int = 300
+    openwebui_sync_interval_seconds: int = DEFAULT_AUTOMATION_INTERVAL_SECONDS
     openwebui_dataset_allowlist_csv: str = Field(
         default="",
         validation_alias="OPENWEBUI_DATASET_ALLOWLIST",
@@ -172,9 +175,9 @@ class Settings(BaseSettings):
     dataset_settings_source: Literal["ragflow_current"] = "ragflow_current"
     reparse_on_dataset_settings_change: bool = False
 
-    discovery_interval_seconds: int = 300
-    delta_sync_interval_seconds: int = 300
-    reconcile_interval_seconds: int = 21600
+    discovery_interval_seconds: int = DEFAULT_AUTOMATION_INTERVAL_SECONDS
+    delta_sync_interval_seconds: int = DEFAULT_AUTOMATION_INTERVAL_SECONDS
+    reconcile_interval_seconds: int = DEFAULT_AUTOMATION_INTERVAL_SECONDS
     full_sync_on_missing_commit: bool = True
 
     delete_ragflow_docs_on_seafile_delete: bool = True
@@ -264,11 +267,28 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return value
 
-    @field_validator("openwebui_request_timeout_seconds", "openwebui_sync_interval_seconds")
+    @field_validator("openwebui_request_timeout_seconds")
     @classmethod
     def validate_openwebui_positive_int(cls, value: int) -> int:
         if value <= 0:
             msg = "openwebui numeric settings must be positive"
+            raise ValueError(msg)
+        return value
+
+    @field_validator(
+        "ragflow_template_refresh_seconds",
+        "openwebui_sync_interval_seconds",
+        "discovery_interval_seconds",
+        "delta_sync_interval_seconds",
+        "reconcile_interval_seconds",
+    )
+    @classmethod
+    def validate_automation_interval(cls, value: int) -> int:
+        if value < MIN_AUTOMATION_INTERVAL_SECONDS:
+            msg = (
+                "automation interval settings must be at least "
+                f"{MIN_AUTOMATION_INTERVAL_SECONDS} seconds"
+            )
             raise ValueError(msg)
         return value
 
