@@ -18,7 +18,7 @@
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml"><img alt="Docker image" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml/badge.svg?branch=master"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml/badge.svg?branch=master"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="pyproject.toml"><img alt="Version 0.1.9" src="https://img.shields.io/badge/version-0.1.9-informational.svg"></a>
+  <a href="pyproject.toml"><img alt="Version 0.1.10" src="https://img.shields.io/badge/version-0.1.10-informational.svg"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/issues"><img alt="GitHub issues" src="https://img.shields.io/github/issues/adrianweidig/seafile-ragflow-connector"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/pulls"><img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/adrianweidig/seafile-ragflow-connector"></a>
 </p>
@@ -287,11 +287,11 @@ der Name auf das bereits vorhandene gemeinsame Docker-Netz zeigen.
 
 Der Online-Start kann das veröffentlichte GHCR-Image nutzen. Für
 produktionsnahe Rollouts sollte nach Veröffentlichung ein fester Release-Tag
-wie `0.1.9` gepinnt werden; `latest` ist eine Komfortoption für Smoke-Tests und
+wie `0.1.10` gepinnt werden; `latest` ist eine Komfortoption für Smoke-Tests und
 frische Testumgebungen.
 
 ```bash
-docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.9
+docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.10
 ```
 
 Für Offline-Umgebungen können die benötigten Images vorab exportiert und auf dem
@@ -299,7 +299,7 @@ Zielhost importiert werden:
 
 ```bash
 docker save \
-  ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.9 \
+  ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.10 \
   postgres:16 \
   redis:7 \
   -o images/seafile-ragflow-portainer-images.tar
@@ -311,7 +311,7 @@ Wenn interne Registry- oder lokale Image-Namen genutzt werden, trage sie in
 `connector.env` ein:
 
 ```env
-CONNECTOR_IMAGE=seafile-ragflow-connector:0.1.9
+CONNECTOR_IMAGE=seafile-ragflow-connector:0.1.10
 POSTGRES_IMAGE=postgres:16
 REDIS_IMAGE=redis:7
 ```
@@ -384,9 +384,10 @@ OPENWEBUI_PIPE_ANSWER_SYNTHESIS_ENABLED=false
 Für `sync` und `repair` sind `OPENWEBUI_ADMIN_API_KEY`,
 `OPENWEBUI_PROXY_SHARED_SECRET` und eine Proxy-Base-URL erforderlich, wenn Tools
 oder Pipes erzeugt werden. Für eine reine Vorprüfung kann `dry-run` gesetzt
-werden. Quellen werden als OpenWebUI-Citations und im Audit-Modus zusätzlich
-als Markdown-Nachweistabelle mit Quellenmarken wie `[S1]`, Fundstelle,
-Relevanzlabel und Direktlink bereitgestellt. Für stabile Sprunglinks zur
+werden. Quellen werden standardmäßig als native OpenWebUI-Citations
+bereitgestellt; bei `SOURCE_DISPLAY_MODE=markdown_audit` ergänzt die Pipe
+zusätzlich eine Markdown-Nachweistabelle mit Quellenmarken wie `[S1]`,
+Fundstelle, Relevanzlabel und Direktlink. Für stabile Sprunglinks zur
 Fundstelle ist `OPENWEBUI_SOURCE_PREVIEW_MODE=connector_viewer` empfohlen; die
 Pipe erscheint im Modellpicker als `Seafile · <Dataset>`.
 Falls der RAGFlow-Chat in einer Umgebung nur Retrieval-Treffer zurückliefert,

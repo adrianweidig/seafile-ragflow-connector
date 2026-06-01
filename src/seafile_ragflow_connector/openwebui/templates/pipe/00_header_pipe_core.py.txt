@@ -1,9 +1,9 @@
 """
 title: RAGFlow Dataset Pipe
 author: Seafile RAGFlow Connector
-version: 3.7.0
+version: 3.8.0
 owner: seafile-ragflow-connector
-artifact_version: 19
+artifact_version: 20
 """
 
 # =============================================================================
@@ -17,8 +17,9 @@ artifact_version: 19
 # Wichtig: Die Pipe ist als Audit-RAG-Pipe gebaut. Retrieval-Treffer sind
 # nicht nur Anhang, sondern die Beweiskette der Antwort. Die finale
 # Chat-Nachricht soll zuerst eine echte KI-Antwort sein und jede wesentliche
-# Aussage mit Quellenmarken wie [S1] belegen, danach folgt eine sichtbare
-# Nachweistabelle plus native Citation-Events.
+# Aussage mit Quellenmarken wie [S1] belegen, danach folgen standardmäßig
+# native Citation-Events. Eine sichtbare Markdown-Nachweistabelle ist ein
+# expliziter Audit-/Debug-Modus.
 #
 # Typische Datenflusskette:
 #
@@ -48,8 +49,9 @@ artifact_version: 19
 #   SEND_GENERATIVE_RAG_HINTS=true
 #   RETRIEVAL_ONLY_FALLBACK=brief
 #   EMIT_CITATION_EVENTS=true
-#   APPEND_SOURCE_OVERVIEW=true
-#   SOURCE_MARKDOWN_MODE=audit
+#   SOURCE_DISPLAY_MODE=native
+#   APPEND_SOURCE_OVERVIEW=false
+#   SOURCE_MARKDOWN_MODE=none
 #   SHOW_SOURCE_SCORES=false
 #   SHOW_SOURCE_DEBUG=false
 #
@@ -93,6 +95,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from hashlib import sha256
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Optional
@@ -114,6 +117,7 @@ MAX_SOURCE_GROUPS_DETAILED = 12
 COMPACT_SNIPPET_CHARS = 380
 DETAILED_SNIPPET_CHARS = 900
 VALID_SOURCE_MARKDOWN_MODES = {"none", "off", "disabled", "compact", "detailed", "audit"}
+VALID_SOURCE_DISPLAY_MODES = {"native", "markdown_audit", "both_debug", "none"}
 VALID_ERROR_VERBOSITY = {"safe", "debug"}
 VALID_RETRIEVAL_ONLY_FALLBACK = {"diagnostic", "brief", "sources_only"}
 VALID_STATUS_MODES = {"off", "minimal", "verbose"}
@@ -179,51 +183,24 @@ SOURCE_LIST_KEYS = (
     "source_documents",
     "sourceDocuments",
     "citations",
-    "references",
     "chunks",
 )
 REFERENCE_KEYS = ("reference", "references")
-ANSWER_KEYS = (
+CANONICAL_ANSWER_KEYS = (
     "answer",
     "final_answer",
     "generated_answer",
-    "assistant_answer",
-    "assistant_response",
-    "response",
-    "output",
-    "result",
-    "generated_text",
-    "generation",
-    "completion",
-    "content",
-    "text",
 )
-HIGH_CONFIDENCE_ANSWER_KEYS = {
-    "answer",
-    "final_answer",
-    "generated_answer",
-    "assistant_answer",
-    "assistant_response",
-    "response",
-    "output",
-    "generated_text",
-    "generation",
-    "completion",
-}
-LOW_CONFIDENCE_ANSWER_KEYS = {"content", "text", "result"}
-SKIP_RECURSIVE_ANSWER_KEYS = set(SOURCE_LIST_KEYS) | set(REFERENCE_KEYS) | {
-    "chunks",
-    "doc_aggs",
+ANSWER_GENERATED_ORIGINS = {"canonical_answer", "openai_message", "synthesis_fallback"}
+REFERENCE_METADATA_FIELDS = [
+    "document_id",
+    "document_name",
+    "positions",
+    "page",
     "source",
-    "source_metadata",
-    "metadata",
-    "documents",
-    "document",
-    "messages",
-    "prompt",
-    "query",
-    "user",
-}
+    "path",
+    "url",
+]
 
 
 class PipeError(Exception):
@@ -263,6 +240,14 @@ class SourceHit:
     positions: Any = None
     locator_quality: str = "unknown"
     source_metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class AnswerExtractionResult:
+    answer: str
+    origin: str
+    path: str
+    warnings: list[str] = field(default_factory=list)
 
 
 class Pipe:
@@ -368,6 +353,15 @@ class Pipe:
         MODEL_NAME: str = Field(
             default="",
             description="Anzeigename im OpenWebUI-Modellmenü.",
+        )
+
+        # Backend-Modell für RAGFlows OpenAI-kompatiblen Chat-Pfad. Der
+        # Platzhalter "model" nutzt das im RAGFlow-Chat konfigurierte Modell.
+        # Dieser Wert ist absichtlich von MODEL_ID getrennt, damit OpenWebUIs
+        # interne Modell-ID nicht versehentlich als Backend-Modell weiterläuft.
+        RAGFLOW_MODEL_ID: str = Field(
+            default="model",
+            description="Backend-Modell für RAGFlow; `model` nutzt die Chat-Konfiguration.",
         )
 
         # Anzahl angeforderter Retrieval-Treffer. Höher ist nicht automatisch
@@ -558,13 +552,24 @@ class Pipe:
             description="Zeigt technische IDs wie Chunk-, Dokument- und Dataset-ID in Debug-Ausgaben.",
         )
 
-        # Zusätzlicher Quellenblock im Antworttext:
-        #   none     keine Markdown-Quellenübersicht; nur native Citations
+        # Primärer Quellenkanal:
+        #   native         nur native OpenWebUI-Citation-Events
+        #   markdown_audit eine sichtbare Markdown-Nachweistabelle
+        #   both_debug     native Events plus Markdown, nur für Admin-Tests
+        #   none           keine Quellenanzeige im Chat
+        SOURCE_DISPLAY_MODE: str = Field(
+            default="native",
+            description="Quellenanzeige: native, markdown_audit, both_debug oder none.",
+        )
+
+        # Zusätzlicher Quellenblock im Antworttext, nur aktiv bei
+        # SOURCE_DISPLAY_MODE=markdown_audit oder both_debug:
+        #   none     keine Markdown-Quellenübersicht
         #   audit    Nachweistabelle mit Quellen-ID, Fundstelle, Relevanz und Link
         #   compact  kurze Tabelle
         #   detailed ausführliche Quellen mit Snippets; gut für Reviews/Tests
         SOURCE_MARKDOWN_MODE: str = Field(
-            default="audit",
+            default="none",
             description="Zusätzliche Quellenübersicht im Antworttext: none, compact, detailed oder audit.",
         )
 
@@ -572,7 +577,7 @@ class Pipe:
         # Citations optisch sehr gut darstellt, kann man das auf False setzen, um
         # den Chat noch cleaner zu machen.
         APPEND_SOURCE_OVERVIEW: bool = Field(
-            default=True,
+            default=False,
             description="Hängt eine auditierbare Nachweistabelle an die Antwort an.",
         )
 
@@ -687,8 +692,9 @@ class Pipe:
             done=False,
         )
 
+        raw_sources = _extract_sources(data)
         sources = _normalize_sources(
-            _extract_sources(data),
+            raw_sources,
             show_scores=self.valves.SHOW_SOURCE_SCORES,
             show_debug=self.valves.SHOW_SOURCE_DEBUG,
             limit=self.valves.MAX_SOURCE_EVENTS,
@@ -696,21 +702,20 @@ class Pipe:
             allow_connector_source_links=self.valves.ALLOW_CONNECTOR_SOURCE_LINKS,
         )
 
-        raw_answer = _extract_answer(data)
-        if _looks_like_source_markdown_only(raw_answer):
-            raw_answer = ""
-        else:
-            raw_answer = _strip_appended_source_markdown(raw_answer)
+        answer_result = extract_answer_result(data)
+        raw_answer = _strip_appended_source_markdown(answer_result.answer)
         raw_answer = _annotate_answer_source_markers(raw_answer, sources)
         answer = _clean_answer(
             raw_answer,
             clean_ragflow_markers=self.valves.CLEAN_RAGFLOW_MARKERS,
         )
+        answer_origin = answer_result.origin if answer else "none"
 
         question = _last_user_text((body if isinstance(body, Mapping) else {}).get("messages") or [])
 
         if not answer and sources and _is_source_inventory_question(question):
             answer = _source_inventory_answer(sources)
+            answer_origin = "canonical_answer"
 
         if not answer and sources and bool(self.valves.ENABLE_ANSWER_SYNTHESIS_FALLBACK):
             await _emit_status(
@@ -731,14 +736,19 @@ class Pipe:
                     error_verbosity=self.valves.ERROR_VERBOSITY,
                 )
                 answer = _postprocess_synthesized_answer(answer, sources, question)
+                if answer:
+                    answer_origin = "synthesis_fallback"
             except PipeError as exc:
                 LOGGER.warning("Answer synthesis fallback failed: %s", exc.status)
 
-        if self.valves.EMIT_CITATION_EVENTS:
+        if not answer:
+            answer_origin = "retrieval_only" if sources else "none"
+
+        if _emit_citation_events(self.valves):
             for source in sources:
                 await _emit_event(__event_emitter__, _citation_event(source))
 
-        if self.valves.EMIT_LEGACY_SOURCE_EVENTS:
+        if _emit_legacy_source_events(self.valves):
             for source in sources:
                 await _emit_event(__event_emitter__, {"type": "source", "data": source})
 
@@ -750,11 +760,11 @@ class Pipe:
             _completion_status(
                 source_group_count,
                 elapsed,
-                generated=bool(answer),
+                answer_origin=answer_origin,
                 hit_count=len(sources),
             ),
             done=True,
             hidden=self.valves.HIDE_FINAL_STATUS,
         )
 
-        return _compose_final_answer(answer, sources, self.valves)
+        return _compose_final_answer(answer, sources, self.valves, answer_origin=answer_origin)

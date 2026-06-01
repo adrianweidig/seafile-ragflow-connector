@@ -5,6 +5,7 @@ import unittest
 from seafile_ragflow_connector.openwebui.sources import (
     annotate_answer_citations,
     extract_answer,
+    extract_answer_result,
     normalize_sources,
     render_sources_markdown,
     sign_preview_payload,
@@ -549,14 +550,71 @@ class OpenWebUISourceTests(unittest.TestCase):
             {
                 "code": 0,
                 "data": {
-                    "answer": "Antwort aus RAGFlow",
+                    "answer": "RAGFlow liefert eine echte Antwort mit Satzstruktur.",
                     "reference": {"chunks": []},
                 },
                 "message": "success",
             }
         )
 
-        self.assertEqual(answer, "Antwort aus RAGFlow")
+        self.assertEqual(answer, "RAGFlow liefert eine echte Antwort mit Satzstruktur.")
+
+    def test_extract_answer_rejects_generic_message_and_data_content(self) -> None:
+        for payload in (
+            {"message": "dateiname.md", "sources": [{"content": "Ein Quellenchunk."}]},
+            {"data": {"content": "dateiname.md"}, "sources": [{"content": "Ein Quellenchunk."}]},
+        ):
+            with self.subTest(payload=payload):
+                result = extract_answer_result(payload)
+
+                self.assertEqual(result.answer, "")
+                self.assertEqual(result.origin, "retrieval_only")
+
+    def test_extract_references_does_not_duplicate_shared_references(self) -> None:
+        reference = {
+            "chunks": [
+                {
+                    "id": "chunk-1",
+                    "document_id": "doc-1",
+                    "document_name": "quelle.md",
+                    "content": "Der relevante Satz steht hier.",
+                }
+            ]
+        }
+
+        sources = normalize_sources(
+            {
+                "choices": [{"message": {"content": "Antwort.", "reference": reference}}],
+                "data": {"references": reference},
+                "references": reference,
+            },
+            settings=self._settings(),
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+        )
+
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0]["source_metadata"]["document_id"], "doc-1")
+
+    def test_source_group_sort_puts_unknown_scores_after_scored_sources(self) -> None:
+        markdown = render_sources_markdown(
+            [
+                {
+                    "name": "unknown.md",
+                    "text": "Quelle ohne Score.",
+                    "source_metadata": {"path": "/unknown.md"},
+                },
+                {
+                    "name": "high.md",
+                    "text": "Quelle mit Score.",
+                    "score": 0.9,
+                    "source_metadata": {"path": "/high.md", "score": 0.9},
+                },
+            ],
+            mode="compact",
+        )
+
+        self.assertLess(markdown.index("high.md"), markdown.index("unknown.md"))
 
 
 if __name__ == "__main__":

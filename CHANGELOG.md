@@ -8,6 +8,23 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+## 0.1.10 - 2026-06-01
+
+### Changed
+
+- OpenWebUI-Pipes trennen echte Chat-Antworten strikt von Retrieval-only-
+  Ergebnissen und markieren Läufe nur noch dann als generiert, wenn ein
+  belastbarer Antwortpfad oder der Synthese-Fallback genutzt wurde.
+- Native OpenWebUI-Citations sind der Standard-Quellenkanal; Markdown-
+  Nachweistabellen sind expliziter Audit- oder Debug-Modus.
+- RAGFlow-/OpenAI-kompatible Antwort- und Referenzpfade, Quellen-Dedup,
+  Score-Sortierung und redigierte Proxy-Diagnosen wurden präzisiert.
+
+### Fixed
+
+- Quellen- oder Dateititel können nicht mehr als generierte Antwort
+  durchrutschen.
+
 ## 0.1.9 - 2026-06-01
 
 ### Added

@@ -61,17 +61,19 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertTrue(tool.valves["CONNECTOR_PROXY_VERIFY_SSL"])
         self.assertEqual(tool.valves["CONNECTOR_PROXY_CA_BUNDLE"], "")
         self.assertIn("owner: seafile-ragflow-connector", tool.content)
-        self.assertIn("artifact_version: 19", tool.content)
-        self.assertIn("artifact_version: 19", pipe.content)
+        self.assertIn("artifact_version: 20", tool.content)
+        self.assertIn("artifact_version: 20", pipe.content)
         self.assertFalse(tool.valves["TLS_DEBUG"])
         self.assertEqual(tool.valves["SHOW_SOURCE_SCORES"], True)
         self.assertEqual(tool.valves["LANGUAGE"], "de")
         self.assertEqual(pipe.name, "Seafile · Demo Library")
         self.assertEqual(pipe.valves["MODEL_NAME"], "Seafile · Demo Library")
-        self.assertEqual(pipe.valves["SOURCE_MARKDOWN_MODE"], "audit")
+        self.assertEqual(pipe.valves["RAGFLOW_MODEL_ID"], "model")
+        self.assertEqual(pipe.valves["SOURCE_DISPLAY_MODE"], "native")
+        self.assertEqual(pipe.valves["SOURCE_MARKDOWN_MODE"], "none")
         self.assertEqual(pipe.valves["RETRIEVAL_ONLY_FALLBACK"], "brief")
         self.assertEqual(pipe.valves["EMIT_CITATION_EVENTS"], True)
-        self.assertEqual(pipe.valves["APPEND_SOURCE_OVERVIEW"], True)
+        self.assertEqual(pipe.valves["APPEND_SOURCE_OVERVIEW"], False)
         self.assertEqual(pipe.valves["SHOW_SOURCE_SCORES"], False)
         self.assertEqual(pipe.valves["SHOW_LOCATOR_QUALITY"], True)
         self.assertEqual(pipe.valves["REQUEST_TIMEOUT_SECONDS"], 180.0)
@@ -90,7 +92,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("_normalize_sources(", pipe.content)
         self.assertIn("DEFAULT_RAG_SYSTEM_PROMPT", pipe.content)
         self.assertIn("generate_answer", pipe.content)
-        self.assertIn("version: 3.7.0", pipe.content)
+        self.assertIn("version: 3.8.0", pipe.content)
         self.assertIn("ANSWER_SYNTHESIS_MAX_TOKENS", pipe.content)
         self.assertIn('"max_tokens": int(valves.ANSWER_SYNTHESIS_MAX_TOKENS)', pipe.content)
         self.assertIn("EMIT_CITATION_EVENTS", pipe.content)
@@ -168,7 +170,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("__task__: Optional[str] = None", pipe.content)
         self.assertIn("if task:", pipe.content)
         self.assertIn("return _task_response(task, __task_body__ or body)", pipe.content)
-        self.assertIn("or _clean(valves.MODEL_ID)", pipe.content)
+        self.assertIn('_clean(valves.RAGFLOW_MODEL_ID) or "model"', pipe.content)
         self.assertIn("RAG_ASSISTANT_BEHAVIOR", pipe.content)
         self.assertIn("except httpx.TimeoutException as exc:", pipe.content)
         self.assertIn('"title" in task', pipe.content)
@@ -196,6 +198,8 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         pipe_instance.valves.DATASET_ID = "dataset-1234567890"
         pipe_instance.valves.RAGFLOW_CHAT_ID = "chat-1"
         pipe_instance.valves.MODEL_ID = "ragflow/demo_library"
+        pipe_instance.valves.RAGFLOW_MODEL_ID = "ragflow-chat-model"
+        pipe_instance.valves.SOURCE_DISPLAY_MODE = str(pipe.valves["SOURCE_DISPLAY_MODE"])
         pipe_instance.valves.SOURCE_MARKDOWN_MODE = str(pipe.valves["SOURCE_MARKDOWN_MODE"])
 
         self.assertEqual(namespace["_configuration_error"](pipe_instance.valves), "")
@@ -210,11 +214,17 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertEqual(payload["response_mode"], "chat")
         self.assertTrue(payload["generate_answer"])
         self.assertTrue(payload["return_sources"])
+        self.assertEqual(payload["model"], "ragflow-chat-model")
         self.assertEqual(payload["ragflow"]["mode"], "chat")
         self.assertTrue(payload["openwebui"]["expects_generated_answer"])
-        self.assertEqual(payload["openwebui"]["source_markdown_mode"], "audit")
-        self.assertEqual(payload["openwebui"]["source_display_mode"], "audit")
-        self.assertTrue(payload["openwebui"]["audit_evidence"])
+        self.assertEqual(payload["openwebui"]["source_markdown_mode"], "none")
+        self.assertEqual(payload["openwebui"]["source_display_mode"], "native")
+        self.assertFalse(payload["openwebui"]["audit_evidence"])
+        self.assertEqual(
+            payload["extra_body"]["reference_metadata"]["fields"][:3],
+            ["document_id", "document_name", "positions"],
+        )
+        self.assertTrue(payload["extra_body"]["reference_metadata"]["include"])
         self.assertEqual(payload["messages"][0]["role"], "system")
         self.assertIn("RAG_ASSISTANT_BEHAVIOR", payload["messages"][0]["content"])
 
@@ -271,7 +281,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
 
         self.assertEqual(answer, "")
 
-    def test_pipe_final_answer_uses_audit_table_and_native_citations_by_default(self) -> None:
+    def test_pipe_final_answer_uses_native_citations_without_markdown_by_default(self) -> None:
         inputs = DatasetArtifactInputs(
             namespace="ragflow",
             repo_id="repo-1",
@@ -302,18 +312,15 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         )
 
         self.assertTrue(final_answer.startswith("Mobiles Arbeiten ist"))
-        self.assertIn("[S1]", final_answer)
-        self.assertIn("## Nachweise", final_answer)
-        self.assertIn(
-            "| ID | Gestützte Aussage | Dokument | Fundstelle | Relevanz | Öffnen |",
-            final_answer,
-        )
+        self.assertNotIn("[S1]", final_answer)
+        self.assertNotIn("## Nachweise", final_answer)
         self.assertNotIn("chunk_id", final_answer)
         self.assertNotIn("document_id", final_answer)
 
     def test_pipe_strips_legacy_appended_source_block_before_rendering_once(self) -> None:
         namespace = _pipe_namespace()
         pipe_instance = namespace["Pipe"]()
+        pipe_instance.valves.SOURCE_DISPLAY_MODE = "markdown_audit"
         pipe_instance.valves.SOURCE_MARKDOWN_MODE = "audit"
         pipe_instance.valves.APPEND_SOURCE_OVERVIEW = True
         sources = [
@@ -346,6 +353,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
     def test_pipe_treats_source_markdown_only_as_retrieval_only(self) -> None:
         namespace = _pipe_namespace()
         pipe_instance = namespace["Pipe"]()
+        pipe_instance.valves.SOURCE_DISPLAY_MODE = "markdown_audit"
         pipe_instance.valves.SOURCE_MARKDOWN_MODE = "audit"
         pipe_instance.valves.APPEND_SOURCE_OVERVIEW = True
         pipe_instance.valves.RETRIEVAL_ONLY_FALLBACK = "brief"
@@ -378,6 +386,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
     ) -> None:
         namespace = _pipe_namespace()
         pipe_instance = namespace["Pipe"]()
+        pipe_instance.valves.SOURCE_DISPLAY_MODE = "markdown_audit"
         pipe_instance.valves.SOURCE_MARKDOWN_MODE = "audit"
         pipe_instance.valves.APPEND_SOURCE_OVERVIEW = True
         sources = [
@@ -398,6 +407,124 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("folgende Dokumente", final_answer)
         self.assertIn("marker-a.md", final_answer)
         self.assertEqual(final_answer.count("## Nachweise"), 1)
+
+    def test_pipe_extract_answer_result_uses_only_canonical_paths(self) -> None:
+        namespace = _pipe_namespace()
+
+        openai_result = namespace["extract_answer_result"](
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Das Dokument regelt mobiles Arbeiten verbindlich. [S1]",
+                        }
+                    }
+                ]
+            }
+        )
+        self.assertEqual(
+            openai_result.answer,
+            "Das Dokument regelt mobiles Arbeiten verbindlich. [S1]",
+        )
+        self.assertEqual(openai_result.origin, "openai_message")
+        self.assertEqual(openai_result.path, "choices[0].message.content")
+
+        canonical_result = namespace["extract_answer_result"](
+            {"data": {"answer": "RAGFlow liefert eine echte Antwort mit Satzstruktur."}}
+        )
+        self.assertEqual(canonical_result.origin, "canonical_answer")
+        self.assertEqual(canonical_result.path, "data.answer")
+
+        for payload in (
+            {"message": "dateiname.md", "sources": [{"content": "Ein Quellenchunk."}]},
+            {"data": {"content": "dateiname.md"}, "sources": [{"content": "Ein Quellenchunk."}]},
+        ):
+            with self.subTest(payload=payload):
+                result = namespace["extract_answer_result"](payload)
+                self.assertEqual(result.answer, "")
+                self.assertEqual(result.origin, "retrieval_only")
+
+    def test_pipe_extract_answer_result_rejects_source_markdown_only(self) -> None:
+        namespace = _pipe_namespace()
+        result = namespace["extract_answer_result"](
+            {
+                "answer": (
+                    "## Nachweise\n\n"
+                    "| ID | Gestützte Aussage | Dokument | Fundstelle | Relevanz | Öffnen |\n"
+                    "|---|---|---|---|---|---|\n"
+                    "| S1 | Treffer | quelle.md | Seite 1 | hoch | Preview öffnen |"
+                ),
+                "sources": [{"name": "quelle.md", "text": "Ein echter Quellenchunk."}],
+            }
+        )
+
+        self.assertEqual(result.answer, "")
+        self.assertEqual(result.origin, "retrieval_only")
+        self.assertTrue(any("source markdown" in warning for warning in result.warnings))
+
+    def test_pipe_extract_sources_uses_prioritized_references_once(self) -> None:
+        namespace = _pipe_namespace()
+        reference = {
+            "chunks": {
+                "1": {
+                    "id": "chunk-1",
+                    "document_id": "doc-1",
+                    "document_name": "quelle.md",
+                    "content": "Der relevante Satz steht hier.",
+                    "score": 0.91,
+                }
+            }
+        }
+
+        extracted = namespace["_extract_sources"](
+            {
+                "choices": [{"message": {"content": "Antwort.", "reference": reference}}],
+                "data": {"references": reference},
+                "references": reference,
+            }
+        )
+        normalized = namespace["_normalize_sources"](extracted, limit=20, show_debug=True)
+
+        self.assertEqual(len(extracted), 1)
+        self.assertEqual(len(normalized), 1)
+        self.assertEqual(normalized[0]["source_metadata"]["document_id"], "doc-1")
+
+    def test_pipe_normalize_sources_sorts_unknown_scores_after_scored_sources(self) -> None:
+        namespace = _pipe_namespace()
+        normalized = namespace["_normalize_sources"](
+            [
+                {"name": "unknown.md", "text": "Quelle ohne Score."},
+                {"name": "high.md", "text": "Quelle mit Score.", "score": 0.9},
+            ],
+            limit=20,
+        )
+
+        self.assertEqual([item["name"] for item in normalized], ["high.md", "unknown.md"])
+
+    def test_pipe_audit_mode_warns_without_adding_fake_source_marker(self) -> None:
+        namespace = _pipe_namespace()
+        pipe_instance = namespace["Pipe"]()
+        pipe_instance.valves.SOURCE_DISPLAY_MODE = "markdown_audit"
+        pipe_instance.valves.SOURCE_MARKDOWN_MODE = "audit"
+        pipe_instance.valves.APPEND_SOURCE_OVERVIEW = True
+        sources = [
+            {
+                "name": "audit.md",
+                "text": "Der Auszug belegt die Antwort.",
+                "source_metadata": {"page": 2},
+            }
+        ]
+
+        final_answer = namespace["_compose_final_answer"](
+            "Dies ist eine inhaltliche Antwort ohne explizite Quellenmarke.",
+            sources,
+            pipe_instance.valves,
+        )
+
+        self.assertNotIn("_ensure_audit_marker", namespace)
+        self.assertNotRegex(final_answer.split("\n\n", 1)[0], r"\[S1\]$")
+        self.assertIn("keine expliziten Quellenmarken", final_answer)
 
     def test_pipe_emits_citation_event_payload_for_audit_sources(self) -> None:
         namespace = _pipe_namespace()
@@ -461,6 +588,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
     def test_pipe_audit_mode_handles_conflicting_and_empty_sources(self) -> None:
         namespace = _pipe_namespace()
         pipe_instance = namespace["Pipe"]()
+        pipe_instance.valves.SOURCE_DISPLAY_MODE = "markdown_audit"
         pipe_instance.valves.SOURCE_MARKDOWN_MODE = "audit"
         pipe_instance.valves.APPEND_SOURCE_OVERVIEW = True
 
@@ -511,16 +639,29 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         status = namespace["_completion_status"](
             group_count,
             1.2,
-            generated=True,
+            answer_origin="canonical_answer",
             hit_count=len(sources),
         )
 
         self.assertIn("2 Quellen", status)
         self.assertIn("3 Treffer", status)
 
-        single_status = namespace["_completion_status"](1, 0.4, generated=True, hit_count=4)
+        single_status = namespace["_completion_status"](
+            1,
+            0.4,
+            answer_origin="canonical_answer",
+            hit_count=4,
+        )
         self.assertIn("1 Quelle", single_status)
         self.assertIn("4 Treffer", single_status)
+
+        retrieval_status = namespace["_completion_status"](
+            1,
+            0.4,
+            answer_origin="retrieval_only",
+            hit_count=1,
+        )
+        self.assertIn("keine Antwort generiert", retrieval_status)
 
     def test_artifact_metadata_can_be_generated_in_english(self) -> None:
         inputs = DatasetArtifactInputs(

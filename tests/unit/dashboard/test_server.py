@@ -406,7 +406,9 @@ class DashboardServerTests(unittest.TestCase):
         finally:
             dashboard_server.RAGFlowClient = original_client  # type: ignore[assignment]
 
-        self.assertEqual(result["answer"], "answer")
+        self.assertEqual(result["answer"], "RAGFlow liefert eine echte Antwort.")
+        self.assertEqual(result["diagnostics"]["answer_path"], "choices[0].message.content")
+        self.assertEqual(result["diagnostics"]["reference_path"], "choices[0].message.reference")
         self.assertEqual(_FakeRAGFlowClient.last_model, "ragflow/openwebui-model-id")
 
     def test_openwebui_chat_proxy_falls_back_to_retrieval_when_chat_fails(self) -> None:
@@ -598,7 +600,7 @@ class DashboardServerTests(unittest.TestCase):
 
         self.assertEqual(_FakeRAGFlowClient.retrieve_calls, 1)
         self.assertEqual(len(result["sources"]), 2)
-        self.assertIn("answer", result["answer"])
+        self.assertIn("echte Antwort", result["answer"])
         self.assertNotIn("## Nachweise", result["answer"])
         self.assertFalse(result["retrieval_only"])
         self.assertFalse(result["citations_emitted"])
@@ -645,7 +647,7 @@ class DashboardServerTests(unittest.TestCase):
             )
         finally:
             dashboard_server.RAGFlowClient = original_client  # type: ignore[assignment]
-            _FakeRAGFlowClient.answer_content = "answer"
+            _FakeRAGFlowClient.answer_content = "RAGFlow liefert eine echte Antwort."
 
         self.assertIn("Alpha | Über", result["answer"])
         self.assertNotIn("<table", result["answer"])
@@ -907,7 +909,7 @@ class _FakeRAGFlowClient:
     chat_exception: Exception | None = None
     retrieve_calls = 0
     retrieval_result: dict[str, object] = {"chunks": []}
-    answer_content = "answer"
+    answer_content = "RAGFlow liefert eine echte Antwort."
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         pass

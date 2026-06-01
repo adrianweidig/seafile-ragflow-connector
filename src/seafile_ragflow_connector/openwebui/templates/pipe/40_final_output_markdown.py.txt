@@ -3,9 +3,15 @@
 # =============================================================================
 # Antworttext und Quellen werden hier zur sichtbaren Assistant-Nachricht
 # zusammengesetzt. UX-Regel: Antwort zuerst, Quellen danach.
-def _compose_final_answer(answer: str, sources: list[dict[str, Any]], valves: Pipe.Valves) -> str:
+def _compose_final_answer(
+    answer: str,
+    sources: list[dict[str, Any]],
+    valves: Pipe.Valves,
+    *,
+    answer_origin: str = "canonical_answer",
+) -> str:
     """Compose the final visible assistant message for OpenWebUI."""
-    markdown_mode = _source_markdown_mode(valves.SOURCE_MARKDOWN_MODE)
+    markdown_mode = _effective_source_markdown_mode(valves)
     if _looks_like_source_markdown_only(answer):
         answer = ""
     else:
@@ -13,31 +19,28 @@ def _compose_final_answer(answer: str, sources: list[dict[str, Any]], valves: Pi
 
     if not answer:
         answer = _retrieval_only_fallback_message(sources, valves)
-    elif markdown_mode == "audit":
-        answer = _ensure_audit_marker(answer, sources)
+        answer_origin = "retrieval_only" if sources else "none"
+    elif sources and _append_source_markdown(valves) and not re.search(r"\[S\d+\]", answer):
+        answer = (
+            f"{answer.rstrip()}\n\n"
+            "> Hinweis: Die Antwort enthält keine expliziten Quellenmarken."
+        )
 
     source_block = ""
-    if bool(valves.APPEND_SOURCE_OVERVIEW) and not _contains_source_markdown(answer):
+    if _append_source_markdown(valves) and not _contains_source_markdown(answer):
         source_block = _source_markdown(
             sources,
             show_scores=valves.SHOW_SOURCE_SCORES,
             show_debug=valves.SHOW_SOURCE_DEBUG,
             mode=markdown_mode,
             show_locator_quality=valves.SHOW_LOCATOR_QUALITY,
+            answer_origin=answer_origin,
         )
 
     if source_block:
         return f"{answer.rstrip()}\n\n{source_block}".strip()
 
     return answer.strip()
-
-
-def _ensure_audit_marker(answer: str, sources: list[dict[str, Any]]) -> str:
-    if not answer or not sources or re.search(r"\[S\d+\]", answer):
-        return answer
-    first = sources[0]
-    marker = _source_id(first, _metadata(first))
-    return f"{answer.rstrip()} [{marker}]"
 
 
 def _retrieval_only_fallback_message(sources: list[dict[str, Any]], valves: Pipe.Valves) -> str:
@@ -77,6 +80,7 @@ def _source_markdown(
     show_debug: bool = False,
     mode: str = "compact",
     show_locator_quality: bool = True,
+    answer_origin: str = "canonical_answer",
 ) -> str:
     """Render the optional Markdown source overview appended to the answer."""
     mode = _source_markdown_mode(mode)
@@ -89,6 +93,7 @@ def _source_markdown(
             show_scores=show_scores,
             show_debug=show_debug,
             show_locator_quality=show_locator_quality,
+            answer_origin=answer_origin,
         )
 
     if not sources:
@@ -106,6 +111,7 @@ def _source_markdown_audit(
     show_scores: bool,
     show_debug: bool,
     show_locator_quality: bool,
+    answer_origin: str,
 ) -> str:
     lines = ["---", "## Nachweise", ""]
     if not sources:
@@ -118,7 +124,7 @@ def _source_markdown_audit(
         )
         return "\n".join(lines).rstrip()
 
-    lines.append(_audit_quality_sentence(sources))
+    lines.append(_audit_quality_sentence(sources, answer_origin=answer_origin))
     lines.append("")
     lines.append("| ID | Gestützte Aussage | Dokument | Fundstelle | Relevanz | Öffnen |")
     lines.append("|---|---|---|---|---|---|")
@@ -156,7 +162,13 @@ def _source_markdown_audit(
             ]
         )
     else:
-        lines.extend(["", "## Hinweis zur Belastbarkeit", _audit_reliability_note(sources)])
+        lines.extend(
+            [
+                "",
+                "## Hinweis zur Belastbarkeit",
+                _audit_reliability_note(sources, answer_origin=answer_origin),
+            ]
+        )
 
     if show_debug:
         debug_lines = []
@@ -240,6 +252,46 @@ def _source_markdown_mode(value: Any) -> str:
     return "compact"
 
 
+def _source_display_mode(valves: Pipe.Valves) -> str:
+    mode = _clean(getattr(valves, "SOURCE_DISPLAY_MODE", "")).lower()
+    if mode in VALID_SOURCE_DISPLAY_MODES:
+        return mode
+    if bool(getattr(valves, "EMIT_CITATION_EVENTS", False)):
+        return "native"
+    if bool(getattr(valves, "APPEND_SOURCE_OVERVIEW", False)):
+        return "markdown_audit"
+    return "none"
+
+
+def _effective_source_markdown_mode(valves: Pipe.Valves) -> str:
+    display_mode = _source_display_mode(valves)
+    if display_mode not in {"markdown_audit", "both_debug"}:
+        return "none"
+    mode = _source_markdown_mode(getattr(valves, "SOURCE_MARKDOWN_MODE", "audit"))
+    return "audit" if mode == "none" and display_mode == "markdown_audit" else mode
+
+
+def _emit_citation_events(valves: Pipe.Valves) -> bool:
+    return bool(getattr(valves, "EMIT_CITATION_EVENTS", False)) and _source_display_mode(valves) in {
+        "native",
+        "both_debug",
+    }
+
+
+def _emit_legacy_source_events(valves: Pipe.Valves) -> bool:
+    return bool(getattr(valves, "EMIT_LEGACY_SOURCE_EVENTS", False)) and _source_display_mode(valves) in {
+        "native",
+        "both_debug",
+    }
+
+
+def _append_source_markdown(valves: Pipe.Valves) -> bool:
+    return bool(getattr(valves, "APPEND_SOURCE_OVERVIEW", False)) and _source_display_mode(valves) in {
+        "markdown_audit",
+        "both_debug",
+    }
+
+
 def _source_summary(
     metadata: Mapping[str, Any],
     source: Mapping[str, Any],
@@ -258,8 +310,12 @@ def _source_summary(
     return " · ".join(part for part in parts if part)
 
 
-def _audit_quality_sentence(sources: list[dict[str, Any]]) -> str:
-    quality = _audit_quality(sources)
+def _audit_quality_sentence(
+    sources: list[dict[str, Any]],
+    *,
+    answer_origin: str = "canonical_answer",
+) -> str:
+    quality = _audit_quality(sources, answer_origin=answer_origin)
     precise = 0
     linked = 0
     for source in sources:
@@ -269,17 +325,23 @@ def _audit_quality_sentence(sources: list[dict[str, Any]]) -> str:
         if source.get("preview_url") or source.get("url") or source.get("original_url"):
             linked += 1
     labels = {
-        "strong": f"stark - {len(sources)} Quellen, {precise} konkrete Fundstellen, {linked} Direktlinks.",
-        "medium": f"mittel - {len(sources)} Quellen, {precise} konkrete Fundstellen, {linked} Direktlinks.",
-        "weak": f"schwach - {len(sources)} Quellen, aber nur grobe Dokument-/Chunk-Hinweise.",
-        "none": "keine belastbare Quelle.",
+        "answer_with_precise_sources": f"Antwort mit präzisen Quellen - {len(sources)} Quellen, {precise} konkrete Fundstellen, {linked} Direktlinks.",
+        "answer_with_rough_sources": f"Antwort mit groben Quellen - {len(sources)} Quellen, {precise} konkrete Fundstellen, {linked} Direktlinks.",
+        "retrieval_only": "Quellen gefunden, aber keine generierte Antwort.",
+        "no_sources": "keine belastbare Quelle.",
     }
     return f"**Nachweisqualität:** {labels[quality]}"
 
 
-def _audit_quality(sources: list[dict[str, Any]]) -> str:
+def _audit_quality(
+    sources: list[dict[str, Any]],
+    *,
+    answer_origin: str = "canonical_answer",
+) -> str:
     if not sources:
-        return "none"
+        return "no_sources"
+    if answer_origin not in ANSWER_GENERATED_ORIGINS:
+        return "retrieval_only"
     precise = 0
     linked = 0
     for source in sources:
@@ -288,11 +350,9 @@ def _audit_quality(sources: list[dict[str, Any]]) -> str:
             precise += 1
         if source.get("preview_url") or source.get("url") or source.get("original_url"):
             linked += 1
-    if len(sources) >= 2 and precise >= 2 and linked >= 1:
-        return "strong"
     if precise >= 1 or linked >= 1:
-        return "medium"
-    return "weak"
+        return "answer_with_precise_sources"
+    return "answer_with_rough_sources"
 
 
 def _audit_claim(source: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
@@ -342,12 +402,16 @@ def _audit_relevance(
     )
 
 
-def _audit_reliability_note(sources: list[dict[str, Any]]) -> str:
-    quality = _audit_quality(sources)
-    if quality == "strong":
+def _audit_reliability_note(
+    sources: list[dict[str, Any]],
+    *,
+    answer_origin: str = "canonical_answer",
+) -> str:
+    quality = _audit_quality(sources, answer_origin=answer_origin)
+    if quality == "retrieval_only":
+        return "Es wurden Quellen gefunden, aber keine generierte Antwort. Die Nachweise belegen deshalb nur Retrieval-Treffer."
+    if quality == "answer_with_precise_sources":
         return "Die Antwort basiert auf mehreren Quellen mit konkreten Fundstellen und Direktlinks."
-    if quality == "medium":
-        return "Die Antwort basiert auf Quellen, deren Fundstellen teilweise konkret bestimmbar sind."
     return "Die Antwort basiert auf Quellen mit grober Fundstelle; prüfe die Preview, bevor du daraus eine Entscheidung ableitest."
 
 
@@ -385,15 +449,21 @@ def _group_sources(sources: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
 
     groups = list(grouped.values())
     for group in groups:
-        group.sort(key=lambda item: (_score_sort(item), _rank_sort(item)))
+        group.sort(key=lambda item: (_score_sort_key(item), _rank_sort(item)))
 
-    groups.sort(key=lambda group: (_score_sort(group[0]), _rank_sort(group[0])))
+    groups.sort(key=lambda group: (_score_sort_key(group[0]), _rank_sort(group[0])))
     return groups
 
 
-def _score_sort(source: Mapping[str, Any]) -> float:
+def _score_sort_key(source: Mapping[str, Any]) -> tuple[int, float]:
     score = _score_float(source.get("score") or _metadata(source).get("score"))
-    return -1.0 if score is None else -score
+    if score is None:
+        return (1, 0.0)
+    return (0, -score)
+
+
+def _score_sort(source: Mapping[str, Any]) -> tuple[int, float]:
+    return _score_sort_key(source)
 
 
 def _rank_sort(source: Mapping[str, Any]) -> int:

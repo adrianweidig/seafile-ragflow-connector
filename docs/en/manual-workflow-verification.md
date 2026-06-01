@@ -228,8 +228,8 @@ Which system remains the source of truth according to the test file?
 
 Expected: an answer referring to Seafile as the source of truth, with at least
 one source or citation for `seafile-ragflow-openwebui-check.md`. If no source is
-shown, check the pipe valves `EMIT_CITATION_EVENTS`,
-`APPEND_SOURCE_OVERVIEW`, and the connector proxy URL.
+shown, check the pipe valves `SOURCE_DISPLAY_MODE`, `EMIT_CITATION_EVENTS`,
+and the connector proxy URL.
 
 ## Common Failure Modes
 

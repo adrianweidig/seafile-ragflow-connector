@@ -30,7 +30,7 @@ from seafile_ragflow_connector.dashboard.ui import DASHBOARD_HTML
 from seafile_ragflow_connector.i18n import localizer_for
 from seafile_ragflow_connector.openwebui.sources import (
     annotate_answer_citations,
-    extract_answer,
+    extract_answer_result,
     normalize_sources,
     render_sources_markdown,
     verify_preview_token,
@@ -773,6 +773,12 @@ def _handle_openwebui_query(
         "source_markdown": _sources_markdown(sources, context.settings),
         "retrieval_only": True,
         "citations_emitted": True,
+        "diagnostics": {
+            "answer_path": "",
+            "reference_path": "retrieval.chunks",
+            "provider": "ragflow",
+            "source_count_after_dedup": len(sources),
+        },
     }
 
 
@@ -867,17 +873,20 @@ def _handle_openwebui_chat(
     finally:
         ragflow.close()
     l10n = localizer_for(context.settings)
-    answer = annotate_answer_citations(
-        _clean_answer_text(extract_answer(result)),
-        sources,
-        language=l10n.language,
-    )
+    answer_result = extract_answer_result(result)
+    answer = annotate_answer_citations(_clean_answer_text(answer_result.answer), sources, language=l10n.language)
     return {
         "answer": answer,
         "sources": sources,
         "source_markdown": _sources_markdown(sources, context.settings),
         "retrieval_only": not bool(answer.strip()),
         "citations_emitted": False,
+        "diagnostics": {
+            "answer_path": answer_result.path,
+            "reference_path": _reference_path_detected(result),
+            "provider": "ragflow",
+            "source_count_after_dedup": len(sources),
+        },
     }
 
 
@@ -909,6 +918,29 @@ def _proxy_error_response(
         hint="RAGFLOW_CA_BUNDLE prüfen, wenn dies ein TLS- oder Zertifikatsfehler ist.",
     )
     return {"error": "proxy request failed", "message": message}, status
+
+
+def _reference_path_detected(result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    for container_prefix, container in (("", result), ("data.", result.get("data"))):
+        if not isinstance(container, dict):
+            continue
+        choices = container.get("choices")
+        if isinstance(choices, list):
+            for index, choice in enumerate(choices):
+                if not isinstance(choice, dict):
+                    continue
+                message = choice.get("message")
+                if isinstance(message, dict) and "reference" in message:
+                    return f"{container_prefix}choices[{index}].message.reference"
+                delta = choice.get("delta")
+                if isinstance(delta, dict) and "reference" in delta:
+                    return f"{container_prefix}choices[{index}].delta.reference"
+        for key in ("reference", "references", "sources", "source_documents", "citations"):
+            if key in container:
+                return f"{container_prefix}{key}"
+    return ""
 
 
 def _proxy_error_type(exc: Exception) -> str:
