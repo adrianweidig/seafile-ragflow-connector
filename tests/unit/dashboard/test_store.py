@@ -11,9 +11,11 @@ try:
         DashboardEventStore,
         DashboardLimits,
         safe_json,
+        utcnow,
     )
+    from seafile_ragflow_connector.jobs.types import JobStatus, JobType
     from seafile_ragflow_connector.persistence.db import Base
-    from seafile_ragflow_connector.persistence.models import DashboardLogEntry
+    from seafile_ragflow_connector.persistence.models import DashboardLogEntry, SyncJob
 except ModuleNotFoundError as exc:
     if exc.name != "sqlalchemy":
         raise
@@ -142,6 +144,38 @@ class DashboardEventStoreTests(unittest.TestCase):
         self.assertEqual(data["api_key"], "***")
         self.assertEqual(data["nested"]["password"], "***")
         self.assertEqual(data["message"], "abcd…")
+
+    def test_dead_job_cleanup_marks_jobs_cancelled_and_clears_maintenance_state(self) -> None:
+        session_factory = _session_factory(self)
+        store = DashboardEventStore(session_factory, DashboardLimits())
+        with session_factory() as session:
+            session.add(
+                SyncJob(
+                    job_type=JobType.SYNC_LIBRARY_FULL.value,
+                    repo_id="repo-1",
+                    payload={},
+                    status=JobStatus.DEAD.value,
+                    error_message="old failure",
+                )
+            )
+            session.commit()
+
+        before = store.connector_status(started_at=utcnow())
+        result = store.cleanup_dead_jobs()
+        after = store.connector_status(started_at=utcnow())
+
+        self.assertEqual(before["state"], "wartung erforderlich")
+        self.assertEqual(before["failed_jobs"], 1)
+        self.assertEqual(result["cleaned_jobs"], 1)
+        self.assertEqual(result["remaining_dead_jobs"], 0)
+        self.assertEqual(after["state"], "wartend")
+        self.assertEqual(after["failed_jobs"], 0)
+        with session_factory() as session:
+            job = session.query(SyncJob).one()
+            self.assertEqual(job.status, JobStatus.CANCELLED.value)
+            log = session.query(DashboardLogEntry).one()
+            self.assertEqual(log.message, "dead_jobs.cleaned")
+            self.assertEqual(log.details["cleaned_jobs"], 1)
 
 
 if __name__ == "__main__":

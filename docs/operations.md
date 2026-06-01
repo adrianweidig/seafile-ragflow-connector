@@ -454,6 +454,11 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
   Datenbank, Redis, Seafile-Admin-Token, RAGFlow-API-Key sowie Template-Dataset
   prüfen. Einzelne externe Checks haben kurze Timeouts und blockieren die UI
   nicht dauerhaft.
+- Sync-Jobs zeigen tote Jobs: Wenn die Systemchecks ansonsten gesund sind,
+  bedeutet das Wartungsbedarf aus alten fehlgeschlagenen Jobs, nicht zwingend
+  einen aktuell defekten Connector. Im Health-Eintrag `Sync-Jobs` können tote
+  Jobs über `Tote Jobs bereinigen` auf `cancelled` gesetzt werden; die
+  Audit-Historie bleibt erhalten.
 - OpenWebUI-Anbindung prüfen: Die manuell testbaren Vorlagen nutzen
   `OPENWEBUI_SYNC_MODE=sync`, damit Chats, Tools und Pipes wirklich erzeugt
   werden. Für eine reine Vorprüfung `OPENWEBUI_SYNC_MODE=dry-run` setzen und

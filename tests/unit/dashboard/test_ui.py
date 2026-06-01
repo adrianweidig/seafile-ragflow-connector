@@ -123,6 +123,20 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("name.textContent = healthName(check)", DASHBOARD_HTML)
         self.assertIn("message.textContent = healthMessage(check)", DASHBOARD_HTML)
 
+    def test_dead_jobs_can_be_cleaned_from_health_card(self) -> None:
+        self.assertIn("/api/jobs/dead/cleanup", DASHBOARD_HTML)
+        self.assertIn("function cleanupDeadJobs", DASHBOARD_HTML)
+        self.assertIn("jobsCleanupRunning: false", DASHBOARD_HTML)
+        self.assertIn("'state.maintenance': 'maintenance required'", DASHBOARD_HTML)
+        self.assertIn("'wartung erforderlich': 'state.maintenance'", DASHBOARD_HTML)
+        self.assertIn("'health.cleanupDeadJobs': 'Tote Jobs bereinigen'", DASHBOARD_HTML)
+        self.assertIn("'health.cleanupDeadJobs': 'Clean dead jobs'", DASHBOARD_HTML)
+        self.assertIn(
+            "check.name === 'sync_jobs' && Number(check.failed_jobs || 0) > 0",
+            DASHBOARD_HTML,
+        )
+        self.assertIn("cleanupDeadJobs();", DASHBOARD_HTML)
+
     def test_dashboard_qol_labels_are_localized(self) -> None:
         self.assertIn('id="refresh-label"', DASHBOARD_HTML)
         self.assertIn('id="language-label"', DASHBOARD_HTML)

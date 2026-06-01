@@ -8,6 +8,19 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+## 0.1.11 - 2026-06-02
+
+### Added
+
+- Dashboard-Aktion zum Bereinigen toter Sync-Jobs direkt im `Sync-Jobs`-
+  Health-Eintrag. Die Jobs werden auf `cancelled` gesetzt, damit die
+  Historie erhalten bleibt und der aktive Dead-Job-Zähler zurück auf 0 fällt.
+
+### Changed
+
+- Tote Sync-Jobs gelten im Dashboard als Wartungsbedarf und nicht mehr als
+  harter Connector-Fehler, solange die übrigen Systemchecks gesund sind.
+
 ## 0.1.10 - 2026-06-01
 
 ### Changed
