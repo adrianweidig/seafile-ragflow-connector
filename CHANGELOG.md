@@ -8,6 +8,20 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+## 0.1.8 - 2026-06-01
+
+### Changed
+
+- Runtime-Abhängigkeiten aktualisiert: `python-multipart` auf `0.0.30` und
+  `typer` auf `0.26.4`.
+- Entwicklungs- und Testabhängigkeiten aktualisiert: `pytest-asyncio` auf
+  `1.4.0` und `ruff` auf `0.15.15`.
+
+### Fixed
+
+- Dependabot-Lockfile-Aktualisierungen wurden auf dem aktuellen `master`
+  zusammengeführt und gegen den Verify-Runner geprüft.
+
 ## 0.1.7 - 2026-06-01
 
 ### Added

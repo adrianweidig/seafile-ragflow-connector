@@ -8,6 +8,20 @@ retroactively.
 
 ## Unreleased
 
+## 0.1.8 - 2026-06-01
+
+### Changed
+
+- Updated runtime dependencies: `python-multipart` to `0.0.30` and `typer` to
+  `0.26.4`.
+- Updated development and test dependencies: `pytest-asyncio` to `1.4.0` and
+  `ruff` to `0.15.15`.
+
+### Fixed
+
+- Dependabot lockfile updates were merged on top of the current `master` and
+  verified with the repository verify runner.
+
 ## 0.1.7 - 2026-06-01
 
 ### Added
