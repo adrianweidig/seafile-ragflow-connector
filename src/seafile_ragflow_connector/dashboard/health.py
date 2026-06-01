@@ -260,7 +260,7 @@ def _check_sync_jobs(status: dict[str, Any]) -> dict[str, Any]:
     queued = int(status.get("queued_or_retrying_jobs") or 0)
     running = int(status.get("running_jobs") or 0)
     if failed:
-        state = "error"
+        state = "warning"
         message = f"{failed} tote Jobs vorhanden."
     elif queued:
         state = "warning"
@@ -277,6 +277,7 @@ def _check_sync_jobs(status: dict[str, Any]) -> dict[str, Any]:
         "running_jobs": running,
         "queued_or_retrying_jobs": queued,
         "failed_jobs": failed,
+        "maintenance_action": "cleanup_dead_jobs" if failed else None,
     }
 
 

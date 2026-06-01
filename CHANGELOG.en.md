@@ -8,6 +8,19 @@ retroactively.
 
 ## Unreleased
 
+## 0.1.11 - 2026-06-02
+
+### Added
+
+- Dashboard action to clean dead sync jobs directly from the `Sync jobs` health
+  card. Jobs are marked as `cancelled` so history is preserved while the active
+  dead-job counter returns to 0.
+
+### Changed
+
+- Dead sync jobs are now shown as dashboard maintenance work instead of a hard
+  connector failure when the other system checks are healthy.
+
 ## 0.1.10 - 2026-06-01
 
 ### Changed

@@ -252,6 +252,12 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                     payload, status = _handle_workflow_run(context, self._json_body())
                     self._send_json(payload, status=status)
                     return
+                if parsed.path == "/api/jobs/dead/cleanup":
+                    if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
+                        self._send_auth_required()
+                        return
+                    self._send_json(_handle_dead_jobs_cleanup(context))
+                    return
                 self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
             except PermissionError:
                 self._send_json({"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
@@ -462,6 +468,13 @@ def _safe_config(settings: Settings) -> dict[str, Any]:
         "ragflow_document_url_template": settings.ragflow_document_url_template,
     }
     return dict(redact_mapping(safe))
+
+
+def _handle_dead_jobs_cleanup(context: DashboardContext) -> dict[str, Any]:
+    result = context.store.cleanup_dead_jobs()
+    cleaned = int(result.get("cleaned_jobs") or 0)
+    message = f"{cleaned} tote Jobs bereinigt." if cleaned else "Keine toten Jobs vorhanden."
+    return {**result, "message": message}
 
 
 def _handle_workflow_libraries(context: DashboardContext) -> dict[str, Any]:

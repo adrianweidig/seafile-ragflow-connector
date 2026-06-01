@@ -287,9 +287,12 @@ class DashboardEventStore:
                 processed = self._sum_runs(session, "objects_checked")
                 last_success = self._last_run(session, "succeeded")
                 last_failed = self._last_run(session, "failed")
-                state = "synchronisiert gerade" if running_jobs else "wartend"
-                if failed_jobs:
-                    state = "fehlerhaft"
+                if running_jobs:
+                    state = "synchronisiert gerade"
+                elif failed_jobs:
+                    state = "wartung erforderlich"
+                else:
+                    state = "wartend"
                 return {
                     "state": state,
                     "started_at": isoformat(started_at),
@@ -611,6 +614,39 @@ class DashboardEventStore:
                     "openwebui_sync_state": self._count(session, OpenWebUISyncState),
                 },
             }
+
+    def cleanup_dead_jobs(self) -> dict[str, Any]:
+        cleaned_at = utcnow()
+        with self._session() as session:
+            jobs = session.scalars(
+                select(SyncJob)
+                .where(SyncJob.status == JobStatus.DEAD.value)
+                .order_by(SyncJob.created_at.asc())
+            ).all()
+            for job in jobs:
+                job.status = JobStatus.CANCELLED.value
+                job.locked_by = None
+                job.locked_at = None
+                job.run_after = cleaned_at
+            cleaned = len(jobs)
+            if cleaned:
+                session.add(
+                    DashboardLogEntry(
+                        occurred_at=cleaned_at,
+                        level="info",
+                        component="dashboard.jobs",
+                        message="dead_jobs.cleaned",
+                        details={"cleaned_jobs": cleaned},
+                    )
+                )
+            session.commit()
+            remaining = self._count(session, SyncJob, SyncJob.status == JobStatus.DEAD.value)
+        return {
+            "status": "completed",
+            "cleaned_jobs": cleaned,
+            "remaining_dead_jobs": remaining,
+            "cleaned_at": isoformat(cleaned_at),
+        }
 
     def ping_database(self) -> None:
         with self._session() as session:

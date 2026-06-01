@@ -681,12 +681,12 @@
     .status.ok::before, .status.succeeded::before, .status.synced::before, .status.done::before, .status.running::before, .status.wartend::before {
       background: var(--ok);
     }
-    .status.warning, .status.warn, .status.retrying, .status.skipped, .status.übersprungen, .status.manual_required, .status.partial, .status.planned, .status.deleted {
+    .status.warning, .status.warn, .status.retrying, .status.skipped, .status.übersprungen, .status.manual_required, .status.partial, .status.planned, .status.deleted, .status.wartung-erforderlich, .status.maintenance-required {
       color: var(--warn);
       border-color: color-mix(in srgb, var(--warn) 42%, var(--border));
       background: color-mix(in srgb, var(--warn) 10%, transparent);
     }
-    .status.warning::before, .status.warn::before, .status.retrying::before, .status.skipped::before, .status.übersprungen::before, .status.manual_required::before, .status.partial::before, .status.planned::before, .status.deleted::before {
+    .status.warning::before, .status.warn::before, .status.retrying::before, .status.skipped::before, .status.übersprungen::before, .status.manual_required::before, .status.partial::before, .status.planned::before, .status.deleted::before, .status.wartung-erforderlich::before, .status.maintenance-required::before {
       background: var(--warn);
     }
     .status.error, .status.failed, .status.dead, .status.fehlgeschlagen, .status.fehlerhaft {
@@ -803,6 +803,24 @@
       font-size: 12px;
       margin-top: 6px;
       overflow-wrap: anywhere;
+    }
+    .health-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .health-actions button {
+      background: color-mix(in srgb, var(--warn) 10%, var(--surface));
+      border-color: color-mix(in srgb, var(--warn) 42%, var(--border));
+      color: var(--text);
+      min-height: 34px;
+      padding: 6px 10px;
+    }
+    .health-actions button:disabled {
+      cursor: wait;
+      opacity: 0.64;
+      transform: none;
     }
     .transport-badge {
       border: 1px solid var(--border);
@@ -1227,6 +1245,7 @@
         'state.waiting': 'wartend',
         'state.syncing': 'synchronisiert gerade',
         'state.faulty': 'fehlerhaft',
+        'state.maintenance': 'Wartung erforderlich',
         'health.encrypted': 'verschlüsselt',
         'health.unencrypted': 'unverschlüsselt',
         'health.fallback': 'Fallback nach HTTPS-Fehler',
@@ -1238,6 +1257,9 @@
         'health.openwebuiMissingKey': 'Admin-API-Key fehlt.',
         'health.openwebuiFunctionsOk': 'Functions-API erreichbar.',
         'health.deadJobs': 'tote Jobs vorhanden.',
+        'health.deadJobsHint': 'Der Connector läuft, aber alte fehlgeschlagene Jobs brauchen Bereinigung.',
+        'health.cleanupDeadJobs': 'Tote Jobs bereinigen',
+        'health.cleanupRunning': 'Bereinige...',
         'health.jobsWaiting': 'Jobs warten oder retryen.',
         'health.runningJobsNoneDead': 'laufende Jobs, keine toten Jobs.',
         'health.name.dashboard': 'Dashboard HTTP',
@@ -1408,6 +1430,7 @@
         'state.waiting': 'waiting',
         'state.syncing': 'syncing now',
         'state.faulty': 'faulty',
+        'state.maintenance': 'maintenance required',
         'health.encrypted': 'encrypted',
         'health.unencrypted': 'unencrypted',
         'health.fallback': 'fallback after HTTPS error',
@@ -1419,6 +1442,9 @@
         'health.openwebuiMissingKey': 'Admin API key missing.',
         'health.openwebuiFunctionsOk': 'Functions API reachable.',
         'health.deadJobs': 'dead jobs present.',
+        'health.deadJobsHint': 'The connector is running, but old failed jobs need cleanup.',
+        'health.cleanupDeadJobs': 'Clean dead jobs',
+        'health.cleanupRunning': 'Cleaning...',
         'health.jobsWaiting': 'jobs waiting or retrying.',
         'health.runningJobsNoneDead': 'running jobs, no dead jobs.',
         'health.name.dashboard': 'Dashboard HTTP',
@@ -1592,7 +1618,8 @@
       systemsData: null,
       workflowData: null,
       workflowSelected: new Set(),
-      workflowRunning: false
+      workflowRunning: false,
+      jobsCleanupRunning: false
     };
     const $ = (id) => document.getElementById(id);
     let disclosureId = 0;
@@ -1728,6 +1755,9 @@
       'fehlerhaft': 'state.faulty',
       'failed': 'state.faulty',
       'error': 'state.faulty',
+      'wartung erforderlich': 'state.maintenance',
+      'maintenance required': 'state.maintenance',
+      'maintenance_required': 'state.maintenance',
       'unbekannt': 'status.unknown',
       'unknown': 'status.unknown'
     };
@@ -1899,7 +1929,7 @@
         const failed = Number(check.failed_jobs || 0);
         const queued = Number(check.queued_or_retrying_jobs || 0);
         const running = Number(check.running_jobs || 0);
-        if (failed) return fmtNumber(failed) + ' ' + t('health.deadJobs');
+        if (failed) return fmtNumber(failed) + ' ' + t('health.deadJobs') + ' ' + t('health.deadJobsHint');
         if (queued) return fmtNumber(queued) + ' ' + t('health.jobsWaiting');
         return fmtNumber(running) + ' ' + t('health.runningJobsNoneDead');
       }
@@ -1977,6 +2007,20 @@
           transportNode.append(badge, detail);
           copy.appendChild(transportNode);
         }
+        if (check.name === 'sync_jobs' && Number(check.failed_jobs || 0) > 0) {
+          const actions = document.createElement('div');
+          actions.className = 'health-actions';
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = state.jobsCleanupRunning ? t('health.cleanupRunning') : t('health.cleanupDeadJobs');
+          button.disabled = state.jobsCleanupRunning;
+          button.addEventListener('click', (event) => {
+            event.stopPropagation();
+            cleanupDeadJobs();
+          });
+          actions.appendChild(button);
+          copy.appendChild(actions);
+        }
         const latency = document.createElement('div');
         latency.className = 'health-latency';
         latency.textContent = check.latency_ms == null ? '-' : check.latency_ms + ' ms';
@@ -2013,6 +2057,21 @@
       ]);
       state.overviewData = { statusData, metricsData, syncs, changes, errors, warnings, health };
       renderOverview(state.overviewData);
+    }
+    async function cleanupDeadJobs() {
+      if (state.jobsCleanupRunning) return;
+      state.jobsCleanupRunning = true;
+      showError('');
+      if (state.overviewData) renderDependencyHealth(state.overviewData.health);
+      try {
+        await apiPost('/api/jobs/dead/cleanup', {});
+        await loadOverview();
+      } catch (error) {
+        showError(error.message || t('api.error'));
+      } finally {
+        state.jobsCleanupRunning = false;
+        if (state.overviewData) renderDependencyHealth(state.overviewData.health);
+      }
     }
     function renderOverview(data) {
       const { statusData, metricsData, syncs, changes, errors, warnings, health } = data;

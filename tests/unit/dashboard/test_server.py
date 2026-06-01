@@ -28,9 +28,11 @@ try:
         DashboardLimits,
         utcnow,
     )
+    from seafile_ragflow_connector.jobs.types import JobStatus, JobType
     from seafile_ragflow_connector.openwebui.sources import sign_preview_payload
     from seafile_ragflow_connector.persistence.db import Base
     from seafile_ragflow_connector.persistence.models.file import File
+    from seafile_ragflow_connector.persistence.models.job import SyncJob
     from seafile_ragflow_connector.persistence.models.library import Library
     from seafile_ragflow_connector.persistence.models.openwebui import OpenWebUIDatasetMapping
 except ModuleNotFoundError as exc:
@@ -268,6 +270,46 @@ class DashboardServerTests(unittest.TestCase):
             library = session.get(Library, "repo-1")
             self.assertIsNotNone(library)
             self.assertEqual(library.ragflow_dataset_id, "dataset-repo-1")
+
+    def test_dead_job_cleanup_endpoint_requires_dashboard_auth_and_clears_dead_jobs(self) -> None:
+        store = _store(self)
+        with store.session_factory() as session:
+            session.add(
+                SyncJob(
+                    job_type=JobType.SYNC_LIBRARY_FULL.value,
+                    repo_id="repo-1",
+                    payload={},
+                    status=JobStatus.DEAD.value,
+                    error_message="old failure",
+                )
+            )
+            session.commit()
+        settings = _settings(0)
+        settings.connector_dashboard_auth_username = "admin"
+        settings.connector_dashboard_auth_password = "secret"
+        handle = start_dashboard_server(
+            DashboardContext(store=store, settings=settings, started_at=utcnow())
+        )
+        port = handle.server.server_address[1]
+        try:
+            with self.assertRaises(HTTPError) as missing_auth:
+                _post_json(port, "/api/jobs/dead/cleanup", {})
+            self.assertEqual(missing_auth.exception.code, 401)
+            data = _post_json(
+                port,
+                "/api/jobs/dead/cleanup",
+                {},
+                username="admin",
+                password="secret",
+            )
+        finally:
+            handle.stop()
+
+        self.assertEqual(data["cleaned_jobs"], 1)
+        self.assertEqual(data["remaining_dead_jobs"], 0)
+        with store.session_factory() as session:
+            job = session.query(SyncJob).one()
+            self.assertEqual(job.status, JobStatus.CANCELLED.value)
 
     def test_openwebui_preview_route_uses_signed_token_without_dashboard_auth(self) -> None:
         store = _store(self)
@@ -955,7 +997,14 @@ def _get_json(
         return json.loads(response.read().decode("utf-8"))
 
 
-def _post_json(port: int, path: str, payload: dict[str, object]) -> dict[str, object]:
+def _post_json(
+    port: int,
+    path: str,
+    payload: dict[str, object],
+    *,
+    username: str | None = None,
+    password: str | None = None,
+) -> dict[str, object]:
     request = Request(
         f"http://127.0.0.1:{port}{path}",
         data=json.dumps(payload).encode("utf-8"),
@@ -963,6 +1012,10 @@ def _post_json(port: int, path: str, payload: dict[str, object]) -> dict[str, ob
     )
     request.add_header("Content-Type", "application/json")
     request.add_header("Accept", "application/json")
+    if username is not None and password is not None:
+        raw_credentials = f"{username}:{password}".encode()
+        token = base64.b64encode(raw_credentials).decode("ascii")
+        request.add_header("Authorization", f"Basic {token}")
     with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
 
