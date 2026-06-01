@@ -106,6 +106,8 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn('data-i18n="section.syncHistory"', DASHBOARD_HTML)
         self.assertIn("'action.autoRefresh': 'Auto-refresh'", DASHBOARD_HTML)
         self.assertIn("'action.language': 'Language'", DASHBOARD_HTML)
+        self.assertIn("'action.audit': 'Audit-Excel'", DASHBOARD_HTML)
+        self.assertIn("'action.audit': 'Audit Excel'", DASHBOARD_HTML)
         self.assertIn("'overview.connectorState': 'Connector state'", DASHBOARD_HTML)
         self.assertIn("'overview.recentChanges': 'Newest changes'", DASHBOARD_HTML)
         self.assertIn("'overview.systemHealth': 'Systemzustand'", DASHBOARD_HTML)
