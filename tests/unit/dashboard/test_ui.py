@@ -25,7 +25,7 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("#log-table { min-width: 1120px; }", DASHBOARD_HTML)
         self.assertIn("#change-table { min-width: 1360px; }", DASHBOARD_HTML)
         self.assertIn("#sync-table { min-width: 1180px; }", DASHBOARD_HTML)
-        self.assertIn("#openwebui-table { min-width: 1420px; }", DASHBOARD_HTML)
+        self.assertIn("#openwebui-table { min-width: 1640px; }", DASHBOARD_HTML)
         self.assertIn("#workflow-table { min-width: 1380px; }", DASHBOARD_HTML)
         self.assertIn("#log-table th:nth-child(5) { width: 40%; }", DASHBOARD_HTML)
 
@@ -33,6 +33,19 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn('data-tab="openwebui"', DASHBOARD_HTML)
         self.assertIn("/api/openwebui/status", DASHBOARD_HTML)
         self.assertIn("OpenWebUI-Integration", DASHBOARD_HTML)
+
+    def test_openwebui_tab_can_delete_target_artifacts(self) -> None:
+        self.assertIn("/api/openwebui/artifacts/delete", DASHBOARD_HTML)
+        self.assertIn("function openwebuiActionCell", DASHBOARD_HTML)
+        self.assertIn("function runOpenWebUIDelete", DASHBOARD_HTML)
+        self.assertIn("openwebuiActionRunning: null", DASHBOARD_HTML)
+        self.assertIn("'table.actions': 'Aktionen'", DASHBOARD_HTML)
+        self.assertIn("'table.actions': 'Actions'", DASHBOARD_HTML)
+        self.assertIn("'openwebui.deletePipe': 'Pipe löschen'", DASHBOARD_HTML)
+        self.assertIn("'openwebui.deleteDataset': 'Dataset löschen'", DASHBOARD_HTML)
+        self.assertIn("'openwebui.deleteChat': 'Chat löschen'", DASHBOARD_HTML)
+        self.assertIn("'openwebui.deletePipe': 'Delete pipe'", DASHBOARD_HTML)
+        self.assertIn("library stays untouched", DASHBOARD_HTML)
 
     def test_workflow_tab_can_start_selected_library_sync(self) -> None:
         self.assertIn('data-tab="workflow"', DASHBOARD_HTML)

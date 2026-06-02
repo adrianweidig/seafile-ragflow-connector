@@ -8,6 +8,19 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+### Added
+
+- Der Dashboard-OpenWebUI-Tab kann connector-eigene Pipes, RAGFlow-Chats und
+  RAGFlow-Datasets gezielt löschen, ohne die zugehörige Seafile-Bibliothek zu
+  löschen.
+
+### Changed
+
+- Normale OpenWebUI-/RAGFlow-Chatantworten kuratieren sichtbare Quellen auf
+  zitierte Dokumente, damit irrelevante Treffer nicht mehr als scheinbare
+  Antwortbelege erscheinen. Die OpenWebUI-Pipe-Artefaktversion wurde dafür auf
+  24 erhöht.
+
 ## 0.1.13 - 2026-06-02
 
 ### Changed

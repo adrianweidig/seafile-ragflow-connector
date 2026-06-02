@@ -47,7 +47,7 @@ The connector is an offline-ready sync control plane for environments where Seaf
 | Delta and delete | File changes, removed files, and deleted libraries are propagated to RAGFlow and optionally OpenWebUI. |
 | Drift repair | Missing RAGFlow datasets/documents and owned OpenWebUI artifacts can be rebuilt from state and Seafile. |
 | OpenWebUI | Auditable `Seafile · <dataset>` custom models with German evidence tables by default, stable `[S1]` source IDs, claim coverage, source roles, scores, locators, and connector preview links. |
-| Operations | PostgreSQL state, Redis jobs, dashboard workflow control, health, metrics, Excel audit export, TLS/CA bundles, GHCR, Portainer, Compose, and Swarm. |
+| Operations | PostgreSQL state, Redis jobs, dashboard workflow control, targeted connector-owned artifact deletion, health, metrics, Excel audit export, TLS/CA bundles, GHCR, Portainer, Compose, and Swarm. |
 | Quality | Ruff, strict mypy, pytest, unittest, CodeQL, Docker build workflow, and Dependabot. |
 
 ## Internationalization

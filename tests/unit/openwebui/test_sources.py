@@ -5,6 +5,7 @@ import unittest
 from seafile_ragflow_connector.openwebui.sources import (
     annotate_answer_citations,
     audit_rank_sources,
+    curate_sources_for_answer,
     extract_answer,
     extract_answer_result,
     normalize_sources,
@@ -287,6 +288,38 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual([source["source_id"] for source in ranked], ["S1", "S2"])
         self.assertTrue(ranked[0]["source_metadata"]["used_in_answer"])
         self.assertFalse(ranked[1]["source_metadata"]["used_in_answer"])
+
+    def test_curate_sources_for_answer_hides_uncited_documents(self) -> None:
+        sources = [
+            {
+                "source_id": "S1",
+                "name": "mobile-work.pdf",
+                "text": "Samstags sind maximal sechs Stunden mobiles Arbeiten möglich.",
+                "source_metadata": {"document_id": "doc-mobile", "citation_id": 0},
+            },
+            {
+                "source_id": "S2",
+                "name": "mobile-work.pdf",
+                "text": "Die Arbeitszeit muss zwischen 06:00 und 19:00 Uhr liegen.",
+                "source_metadata": {"document_id": "doc-mobile", "citation_id": 1},
+            },
+            {
+                "source_id": "S3",
+                "name": "audit.md",
+                "text": "Codex-Audit-Marker ohne Bezug zur Frage.",
+                "source_metadata": {"document_id": "doc-audit", "citation_id": 2},
+            },
+        ]
+
+        curated = curate_sources_for_answer(
+            sources,
+            answer="Samstags gilt eine Sechs-Stunden-Grenze. [S1]",
+        )
+
+        self.assertEqual(
+            [source["name"] for source in curated],
+            ["mobile-work.pdf", "mobile-work.pdf"],
+        )
 
     def test_exact_marker_source_becomes_s1_and_rewrites_provider_id(self) -> None:
         marker = "ENTERPRISE_CA_RAGFLOW_E2E_20260528T000130Z"

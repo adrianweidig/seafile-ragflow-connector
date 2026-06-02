@@ -1,9 +1,9 @@
 """
 title: RAGFlow Dataset Pipe
 author: Seafile RAGFlow Connector
-version: 3.9.2
+version: 3.9.3
 owner: seafile-ragflow-connector
-artifact_version: 23
+artifact_version: 24
 """
 
 # =============================================================================
@@ -779,6 +779,9 @@ class Pipe:
 
         if not answer:
             answer_origin = "retrieval_only" if sources else "none"
+
+        if answer_origin not in NON_GENERATED_ORIGINS:
+            sources = _curate_sources_for_answer(sources, answer)
 
         if _emit_citation_events(self.valves):
             for source in sources:

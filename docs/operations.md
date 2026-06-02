@@ -212,12 +212,14 @@ Portainer entfernt.
 Die Oberfläche schützt UI, Status-API und Workflow-Steuerung per HTTP Basic
 Auth, sobald `CONNECTOR_DASHBOARD_AUTH_USERNAME` und
 `CONNECTOR_DASHBOARD_AUTH_PASSWORD` gesetzt sind. Sie zeigt keine Secrets, lädt
-keine CDN-Assets nach und bietet keine destruktiven Steuerungsfunktionen. Im
-Tab **Prüfablauf** können die mit dem aktuellen Seafile-API-Key sichtbaren
+keine CDN-Assets nach und löscht keine Seafile-Bibliotheken. Im Tab
+**Prüfablauf** können die mit dem aktuellen Seafile-API-Key sichtbaren
 Bibliotheken ausgewählt und für RAGFlow-Dataset-/Dokument-Sync sowie optionalen
-OpenWebUI-Chat-/Tool-/Pipe-Sync gestartet werden. Der Dark-/Light-Modus und die
-Auto-Refresh-Auswahl laufen rein im Browser. Wählbar sind aus, 5 Sekunden, 10
-Sekunden und 1 Minute.
+OpenWebUI-Chat-/Tool-/Pipe-Sync gestartet werden. Im OpenWebUI-Tab können
+connector-eigene Pipes, RAGFlow-Chats und RAGFlow-Datasets gezielt entfernt
+werden, damit ein Folgesync sie sauber neu anlegen kann. Der Dark-/Light-Modus
+und die Auto-Refresh-Auswahl laufen rein im Browser. Wählbar sind aus, 5
+Sekunden, 10 Sekunden und 1 Minute.
 Der Health-Bereich prüft Dashboard, Datenbank, Redis, Seafile-Admin-API,
 RAGFlow-API und Sync-Job-Zustand. Für Seafile, RAGFlow und OpenWebUI zeigt er
 zusätzlich den aktuell gewählten Transport (`https` oder `http`), die effektive

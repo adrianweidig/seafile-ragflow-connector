@@ -22,6 +22,7 @@ import structlog
 from sqlalchemy import select
 
 from seafile_ragflow_connector.clients.http import ApiError
+from seafile_ragflow_connector.clients.openwebui import OpenWebUIClient
 from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
 from seafile_ragflow_connector.clients.tls import classify_httpx_error, safe_url_for_logs
 from seafile_ragflow_connector.config.settings import Settings
@@ -33,6 +34,7 @@ from seafile_ragflow_connector.i18n import localizer_for
 from seafile_ragflow_connector.openwebui.sources import (
     annotate_answer_citations,
     audit_rank_sources,
+    curate_sources_for_answer,
     extract_answer_result,
     normalize_sources,
     render_sources_markdown,
@@ -261,6 +263,12 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                         return
                     self._send_json(_handle_dead_jobs_cleanup(context))
                     return
+                if parsed.path == "/api/openwebui/artifacts/delete":
+                    if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
+                        self._send_auth_required()
+                        return
+                    self._send_json(_handle_openwebui_artifact_delete(context, self._json_body()))
+                    return
                 self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
             except PermissionError:
                 self._send_json({"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
@@ -478,6 +486,137 @@ def _handle_dead_jobs_cleanup(context: DashboardContext) -> dict[str, Any]:
     cleaned = int(result.get("cleaned_jobs") or 0)
     message = f"{cleaned} tote Jobs bereinigt." if cleaned else "Keine toten Jobs vorhanden."
     return {**result, "message": message}
+
+
+def _handle_openwebui_artifact_delete(
+    context: DashboardContext,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    target = _required_text(payload, "target").strip().lower()
+    if target not in {"pipe", "chat", "dataset"}:
+        raise ValueError("target muss pipe, chat oder dataset sein.")
+    mapping_id = _required_int(payload, "mapping_id")
+    if target == "pipe":
+        return _delete_openwebui_pipe_artifact(context, mapping_id)
+    if target == "chat":
+        return _delete_ragflow_chat_artifact(context, mapping_id)
+    return _delete_ragflow_dataset_artifact(context, mapping_id)
+
+
+def _delete_openwebui_pipe_artifact(context: DashboardContext, mapping_id: int) -> dict[str, Any]:
+    mapping, _library = _load_dashboard_mapping(context, mapping_id)
+    pipe_id = mapping.openwebui_pipe_id
+    if not pipe_id:
+        return _artifact_delete_response("pipe", None, "missing", "Keine Pipe hinterlegt.")
+
+    client = _openwebui_admin_client(context.settings)
+    try:
+        existing = client.get_function(pipe_id)
+        if existing is not None and not _is_owned_openwebui_artifact(
+            existing,
+            expected_kind="pipe",
+            dataset_id=mapping.ragflow_dataset_id,
+        ):
+            raise ValueError("OpenWebUI-Pipe ist nicht vom Connector erzeugt.")
+        deleted = client.delete_function(pipe_id) if existing is not None else False
+    finally:
+        client.close()
+
+    with context.store.session_factory() as session:
+        stored = session.get(OpenWebUIDatasetMapping, mapping_id)
+        if stored:
+            stored.openwebui_pipe_id = None
+            stored.openwebui_model_name = None
+            stored.pipe_definition_hash = None
+            stored.openwebui_pipe_payload = {}
+            stored.sync_status = "pending"
+            stored.last_error = None
+            session.commit()
+    _record_dashboard_artifact_delete(
+        context,
+        target="pipe",
+        artifact_id=pipe_id,
+        mapping=mapping,
+        status="deleted" if deleted else "missing",
+    )
+    return _artifact_delete_response(
+        "pipe",
+        pipe_id,
+        "deleted" if deleted else "missing",
+        "Pipe gelöscht; die Seafile-Bibliothek bleibt bestehen.",
+    )
+
+
+def _delete_ragflow_chat_artifact(context: DashboardContext, mapping_id: int) -> dict[str, Any]:
+    mapping, _library = _load_dashboard_mapping(context, mapping_id)
+    chat_id = mapping.ragflow_chat_id
+    if not chat_id:
+        return _artifact_delete_response("chat", None, "missing", "Kein RAGFlow-Chat hinterlegt.")
+
+    ragflow = _ragflow_client(context.settings)
+    try:
+        ragflow.delete_chats([chat_id])
+    finally:
+        ragflow.close()
+
+    with context.store.session_factory() as session:
+        stored = session.get(OpenWebUIDatasetMapping, mapping_id)
+        if stored:
+            stored.ragflow_chat_id = None
+            stored.pipe_definition_hash = None
+            stored.sync_status = "pending"
+            stored.last_error = None
+            session.commit()
+    _record_dashboard_artifact_delete(
+        context,
+        target="chat",
+        artifact_id=chat_id,
+        mapping=mapping,
+        status="deleted",
+    )
+    return _artifact_delete_response(
+        "chat",
+        chat_id,
+        "deleted",
+        "RAGFlow-Chat gelöscht; die Seafile-Bibliothek bleibt bestehen.",
+    )
+
+
+def _delete_ragflow_dataset_artifact(context: DashboardContext, mapping_id: int) -> dict[str, Any]:
+    mapping, library = _load_dashboard_mapping(context, mapping_id)
+    dataset_id = mapping.ragflow_dataset_id
+    ragflow = _ragflow_client(context.settings)
+    try:
+        ragflow.delete_datasets([dataset_id])
+    finally:
+        ragflow.close()
+
+    with context.store.session_factory() as session:
+        stored_library = session.get(Library, library.repo_id)
+        if stored_library and stored_library.ragflow_dataset_id == dataset_id:
+            stored_library.ragflow_dataset_id = None
+            stored_library.ragflow_dataset_name = None
+            stored_library.template_hash = None
+            stored_library.last_synced_commit_id = None
+            stored_library.last_error = None
+        stored_mapping = session.get(OpenWebUIDatasetMapping, mapping_id)
+        if stored_mapping:
+            stored_mapping.sync_status = "dataset_deleted"
+            stored_mapping.last_error = None
+        session.commit()
+    _record_dashboard_artifact_delete(
+        context,
+        target="dataset",
+        artifact_id=dataset_id,
+        mapping=mapping,
+        status="deleted",
+    )
+    return _artifact_delete_response(
+        "dataset",
+        dataset_id,
+        "deleted",
+        "RAGFlow-Dataset gelöscht; die Seafile-Bibliothek bleibt bestehen.",
+    )
 
 
 def _handle_workflow_libraries(context: DashboardContext) -> dict[str, Any]:
@@ -908,6 +1047,7 @@ def _handle_openwebui_chat(
                     question=question,
                     answer=answer_result.answer,
                 )
+                sources = curate_sources_for_answer(sources, answer=answer_result.answer)
     finally:
         ragflow.close()
     l10n = localizer_for(context.settings)
@@ -1073,6 +1213,19 @@ def _required_text(payload: dict[str, Any], key: str) -> str:
     return str(value)
 
 
+def _required_int(payload: dict[str, Any], key: str) -> int:
+    raw = payload.get(key)
+    if raw is None:
+        raise ValueError(f"{key} is required")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} is required") from exc
+    if value <= 0:
+        raise ValueError(f"{key} is required")
+    return value
+
+
 def _last_user_message(messages: list[Any]) -> str | None:
     for message in reversed(messages):
         if not isinstance(message, dict) or message.get("role") != "user":
@@ -1180,6 +1333,101 @@ def _load_mapping(
             raise ValueError("pipe is not assigned to dataset")
         session.expunge(mapping)
         return mapping
+
+
+def _load_dashboard_mapping(
+    context: DashboardContext,
+    mapping_id: int,
+) -> tuple[OpenWebUIDatasetMapping, Library]:
+    with context.store.session_factory() as session:
+        mapping = session.get(OpenWebUIDatasetMapping, mapping_id)
+        if mapping is None:
+            raise ValueError("OpenWebUI-Zuordnung nicht gefunden.")
+        library = session.get(Library, mapping.repo_id)
+        if library is None or library.status != "active":
+            raise ValueError("Seafile-Bibliothek ist nicht aktiv.")
+        session.expunge(mapping)
+        session.expunge(library)
+        return mapping, library
+
+
+def _openwebui_admin_client(settings: Settings) -> OpenWebUIClient:
+    if not settings.openwebui_admin_api_key:
+        raise ValueError("OpenWebUI Admin-API-Key fehlt.")
+    return OpenWebUIClient(
+        settings.openwebui_base_url,
+        settings.openwebui_admin_api_key,
+        timeout=settings.openwebui_request_timeout_seconds,
+        verify=settings.openwebui_httpx_verify,
+    )
+
+
+def _ragflow_client(settings: Settings) -> RAGFlowClient:
+    return RAGFlowClient(
+        settings.ragflow_internal_url or settings.ragflow_base_url,
+        settings.ragflow_api_key,
+        timeout=settings.openwebui_request_timeout_seconds,
+        verify=settings.ragflow_httpx_verify,
+    )
+
+
+def _is_owned_openwebui_artifact(
+    artifact: dict[str, Any],
+    *,
+    expected_kind: str,
+    dataset_id: str,
+) -> bool:
+    meta = artifact.get("meta")
+    manifest = meta.get("manifest") if isinstance(meta, dict) else None
+    if not isinstance(manifest, dict):
+        return False
+    return (
+        manifest.get("owner") == "seafile-ragflow-connector"
+        and manifest.get("kind") == expected_kind
+        and str(manifest.get("ragflow_dataset_id") or "") == dataset_id
+    )
+
+
+def _record_dashboard_artifact_delete(
+    context: DashboardContext,
+    *,
+    target: str,
+    artifact_id: str,
+    mapping: OpenWebUIDatasetMapping,
+    status: str,
+) -> None:
+    context.store.record_change(
+        sync_id=None,
+        action=f"dashboard.openwebui.{target}.delete",
+        change_type=f"openwebui_{target}",
+        status=status,
+        object_name=artifact_id,
+        source_path=f"dashboard:{mapping.repo_id}",
+        target_path=f"{'openwebui' if target == 'pipe' else 'ragflow'}:{artifact_id}",
+        source_system="dashboard",
+        target_system="openwebui" if target == "pipe" else "ragflow",
+        details={
+            "mapping_id": mapping.id,
+            "repo_id": mapping.repo_id,
+            "ragflow_dataset_id": mapping.ragflow_dataset_id,
+            "target": target,
+        },
+    )
+
+
+def _artifact_delete_response(
+    target: str,
+    artifact_id: str | None,
+    status: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "target": target,
+        "artifact_id": artifact_id,
+        "library_deleted": False,
+        "message": message,
+    }
 
 
 def _files_by_document_id(store: DashboardEventStore, repo_id: str) -> dict[str, dict[str, Any]]:
