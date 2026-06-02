@@ -972,15 +972,15 @@
         <h1>Connector Dashboard</h1>
         <span>Seafile zu RAGFlow</span>
       </div>
-      <nav class="nav" aria-label="Dashboard Bereiche">
-        <button class="tab" data-tab="overview" aria-selected="true"><span class="tab-dot"></span>Übersicht</button>
-        <button class="tab" data-tab="workflow" aria-selected="false"><span class="tab-dot"></span>Prüfablauf</button>
-        <button class="tab" data-tab="syncs" aria-selected="false"><span class="tab-dot"></span>Sync-Läufe</button>
-        <button class="tab" data-tab="changes" aria-selected="false"><span class="tab-dot"></span>Änderungen</button>
-        <button class="tab" data-tab="logs" aria-selected="false"><span class="tab-dot"></span>Logs</button>
-        <button class="tab" data-tab="systems" aria-selected="false"><span class="tab-dot"></span>Systeme</button>
-        <button class="tab" data-tab="openwebui" aria-selected="false"><span class="tab-dot"></span>OpenWebUI</button>
-        <button class="tab" data-tab="diagnostics" aria-selected="false"><span class="tab-dot"></span>Diagnose</button>
+      <nav class="nav" aria-label="Dashboard Bereiche" role="tablist">
+        <button class="tab" id="tab-overview" data-tab="overview" role="tab" aria-controls="overview" aria-selected="true"><span class="tab-dot"></span>Übersicht</button>
+        <button class="tab" id="tab-workflow" data-tab="workflow" role="tab" aria-controls="workflow" aria-selected="false" tabindex="-1"><span class="tab-dot"></span>Prüfablauf</button>
+        <button class="tab" id="tab-syncs" data-tab="syncs" role="tab" aria-controls="syncs" aria-selected="false" tabindex="-1"><span class="tab-dot"></span>Sync-Läufe</button>
+        <button class="tab" id="tab-changes" data-tab="changes" role="tab" aria-controls="changes" aria-selected="false" tabindex="-1"><span class="tab-dot"></span>Änderungen</button>
+        <button class="tab" id="tab-logs" data-tab="logs" role="tab" aria-controls="logs" aria-selected="false" tabindex="-1"><span class="tab-dot"></span>Logs</button>
+        <button class="tab" id="tab-systems" data-tab="systems" role="tab" aria-controls="systems" aria-selected="false" tabindex="-1"><span class="tab-dot"></span>Systeme</button>
+        <button class="tab" id="tab-openwebui" data-tab="openwebui" role="tab" aria-controls="openwebui" aria-selected="false" tabindex="-1"><span class="tab-dot"></span>OpenWebUI</button>
+        <button class="tab" id="tab-diagnostics" data-tab="diagnostics" role="tab" aria-controls="diagnostics" aria-selected="false" tabindex="-1"><span class="tab-dot"></span>Diagnose</button>
       </nav>
       <div class="sidebar-footer">
         <div id="sidebar-state">Lade Status...</div>
@@ -1030,7 +1030,7 @@
       </div>
       <div id="error" class="error-box" role="alert"></div>
 
-      <section id="overview">
+      <section id="overview" role="tabpanel" aria-labelledby="tab-overview">
         <div class="overview-grid">
           <div class="status-stage">
             <div class="status-line">
@@ -1075,7 +1075,7 @@
         </div>
       </section>
 
-      <section id="workflow" hidden>
+      <section id="workflow" role="tabpanel" aria-labelledby="tab-workflow" hidden>
         <div class="panel">
           <div class="panel-header"><h3 data-i18n="section.workflowControl">Prüfablauf starten</h3><small id="workflow-summary">-</small></div>
           <div class="panel-body">
@@ -1094,7 +1094,7 @@
         </div>
       </section>
 
-      <section id="syncs" hidden>
+      <section id="syncs" role="tabpanel" aria-labelledby="tab-syncs" hidden>
         <div class="panel">
           <div class="panel-header"><h3 data-i18n="section.syncHistory">Synchronisationshistorie</h3><small id="sync-total">0 Läufe</small></div>
           <div class="panel-body">
@@ -1118,7 +1118,7 @@
         </div>
       </section>
 
-      <section id="changes" hidden>
+      <section id="changes" role="tabpanel" aria-labelledby="tab-changes" hidden>
         <div class="panel">
           <div class="panel-header"><h3 data-i18n="section.detectedChanges">Erkannte Änderungen</h3><small id="change-total">0 Ereignisse</small></div>
           <div class="panel-body">
@@ -1135,7 +1135,7 @@
         </div>
       </section>
 
-      <section id="logs" hidden>
+      <section id="logs" role="tabpanel" aria-labelledby="tab-logs" hidden>
         <div class="panel">
           <div class="panel-header"><h3 data-i18n="section.logEvents">Logereignisse</h3><small id="log-total">0 Logs</small></div>
           <div class="panel-body">
@@ -1160,7 +1160,7 @@
         </div>
       </section>
 
-      <section id="systems" hidden>
+      <section id="systems" role="tabpanel" aria-labelledby="tab-systems" hidden>
         <div class="split">
           <div class="panel">
             <div class="panel-header"><h3 data-i18n="section.sourceSystems">Quellsysteme</h3><small>Seafile</small></div>
@@ -1173,7 +1173,7 @@
         </div>
       </section>
 
-      <section id="openwebui" hidden>
+      <section id="openwebui" role="tabpanel" aria-labelledby="tab-openwebui" hidden>
         <div class="panel">
           <div class="panel-header"><h3 data-i18n="section.openwebuiIntegration">OpenWebUI-Integration</h3><small id="openwebui-summary">-</small></div>
           <div class="panel-body">
@@ -1185,7 +1185,7 @@
         </div>
       </section>
 
-      <section id="diagnostics" hidden>
+      <section id="diagnostics" role="tabpanel" aria-labelledby="tab-diagnostics" hidden>
         <div class="panel">
           <div class="panel-header"><h3 data-i18n="section.technicalDiagnostics">Technische Diagnose</h3><small data-i18n="diagnostics.maskedConfig">maskierte Konfiguration</small></div>
           <div class="panel-body"><pre id="diagnostics-json" class="detail"></pre></div>
@@ -1861,6 +1861,17 @@
       });
       target.appendChild(tbody);
     }
+    function dashboardTabs() {
+      return Array.from(document.querySelectorAll('.tab'));
+    }
+    function focusAdjacentTab(current, direction) {
+      const tabs = dashboardTabs();
+      const index = tabs.indexOf(current);
+      if (index < 0) return;
+      const next = tabs[(index + direction + tabs.length) % tabs.length];
+      next.focus();
+      activateTab(next.dataset.tab);
+    }
     function metric(label, value, sub, tone) {
       const node = document.createElement('div');
       node.className = 'metric ' + (tone || '');
@@ -2419,7 +2430,9 @@
     }
     function activateTab(name) {
       document.querySelectorAll('.tab').forEach((button) => {
-        button.setAttribute('aria-selected', String(button.dataset.tab === name));
+        const selected = button.dataset.tab === name;
+        button.setAttribute('aria-selected', String(selected));
+        button.tabIndex = selected ? 0 : -1;
       });
       document.querySelectorAll('main > section').forEach((section) => { section.hidden = true; });
       state.activeTab = name;
@@ -2479,6 +2492,26 @@
     }
     document.querySelectorAll('.tab').forEach((button) => {
       button.addEventListener('click', () => activateTab(button.dataset.tab));
+      button.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+          event.preventDefault();
+          focusAdjacentTab(button, 1);
+        } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+          event.preventDefault();
+          focusAdjacentTab(button, -1);
+        } else if (event.key === 'Home') {
+          event.preventDefault();
+          const first = dashboardTabs()[0];
+          first.focus();
+          activateTab(first.dataset.tab);
+        } else if (event.key === 'End') {
+          event.preventDefault();
+          const tabs = dashboardTabs();
+          const last = tabs[tabs.length - 1];
+          last.focus();
+          activateTab(last.dataset.tab);
+        }
+      });
     });
     $('refresh-active').addEventListener('click', loadActive);
     $('workflow-load').addEventListener('click', loadWorkflow);

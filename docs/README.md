@@ -14,6 +14,8 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
   ersten Start, Erfolgskriterien und Nutzerfreigabe.
 - `manual-workflow-verification.md` beschreibt den manuell prüfbaren
   Seafile-Upload-zu-RAGFlow-Dataset-zu-OpenWebUI-Pipe-Ablauf.
+- `demo-recording.md` beschreibt die vorbereitete OBS-Demoaufnahme mit
+  Dry-Run-Plan, Webhook-Konfiguration und späterem `--execute --record`-Lauf.
 - `operations.md` enthält Portainer-Betrieb, Docker-Compose-Varianten,
   Docker-Swarm-Betrieb, GHCR-/Offline-Hinweise, Recovery, Troubleshooting und
   lokale WSL-/Docker-Prüfungen.
