@@ -699,6 +699,60 @@ def _answer_source_labels(answer: Any) -> set[str]:
     }
 
 
+def _curate_sources_for_answer(sources: list[dict[str, Any]], answer: Any) -> list[dict[str, Any]]:
+    if not sources or not answer:
+        return sources
+    cited_labels = _answer_source_labels(answer)
+    cited_provider_ids = _answer_provider_citation_ids(answer)
+    if not cited_labels and not cited_provider_ids:
+        return sources
+
+    cited_document_keys: set[str] = set()
+    for source in sources:
+        metadata = _metadata(source)
+        source_label = _source_label_for_curation(source, metadata)
+        provider_id = _int_or_none(metadata.get("provider_citation_id") or metadata.get("reference_id"))
+        if source_label in cited_labels or (
+            provider_id is not None and provider_id in cited_provider_ids
+        ):
+            document_key = _source_document_key_for_curation(source, metadata)
+            if document_key:
+                cited_document_keys.add(document_key)
+
+    if not cited_document_keys:
+        return sources
+    curated = [
+        source
+        for source in sources
+        if _source_document_key_for_curation(source, _metadata(source)) in cited_document_keys
+    ]
+    return curated or sources
+
+
+def _source_label_for_curation(source: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
+    return str(
+        source.get("source_id")
+        or source.get("citation_label")
+        or metadata.get("source_id")
+        or metadata.get("citation_label")
+        or ""
+    ).upper()
+
+
+def _source_document_key_for_curation(source: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
+    for value in (
+        metadata.get("document_id"),
+        metadata.get("path"),
+        metadata.get("document_name"),
+        metadata.get("doc_name"),
+        source.get("name"),
+    ):
+        text = _clean(value).casefold()
+        if text:
+            return text
+    return ""
+
+
 def _audit_score_components(hit: SourceHit, *, exact_terms: tuple[str, ...]) -> dict[str, float]:
     source_text = _source_match_text(hit).casefold()
     exact_match = 0.0

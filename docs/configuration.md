@@ -195,13 +195,15 @@ CONNECTOR_DASHBOARD_AUTH_PASSWORD=change-me-dashboard-password
   das separate `OPENWEBUI_PROXY_SHARED_SECRET`.
 
 Sensible Felder wie Tokens, API-Keys, Passwörter und Secrets werden maskiert.
-Das Dashboard bietet keine Downloads von synchronisierten Dateien und keine
-destruktiven Steuerungsfunktionen. Workflow-Aktionen starten nur explizit
-ausgewählte Syncs für Bibliotheken, die der aktuelle Seafile-API-Key sieht. Der
-einzige Download ist der Audit-Export unter `/api/audit.xlsx`. Diese Excel-Datei
-enthält mehrere Tabellenblätter für Übersicht, Sync-Läufe, Änderungen, Logs,
-Quellen, Ziele und Diagnose. Sie basiert auf den begrenzten Dashboard-Historien
-und enthält keine Seafile-/RAGFlow-Dateiinhalte.
+Das Dashboard bietet keine Downloads von synchronisierten Dateien. Workflow-
+Aktionen starten nur explizit ausgewählte Syncs für Bibliotheken, die der
+aktuelle Seafile-API-Key sieht. Im OpenWebUI-Tab können nur eindeutig
+connector-eigene Pipes, RAGFlow-Chats und RAGFlow-Datasets gelöscht werden; die
+Seafile-Bibliothek und Seafile-Dateien bleiben dabei unangetastet. Der einzige
+Download ist der Audit-Export unter `/api/audit.xlsx`. Diese Excel-Datei enthält
+mehrere Tabellenblätter für Übersicht, Sync-Läufe, Änderungen, Logs, Quellen,
+Ziele und Diagnose. Sie basiert auf den begrenzten Dashboard-Historien und
+enthält keine Seafile-/RAGFlow-Dateiinhalte.
 
 Der Health-Endpunkt `/api/health` liefert begrenzte Statusdaten für Dashboard,
 Datenbank, Redis, Seafile-Admin-API, RAGFlow-API und Sync-Job-Zustand. Externe

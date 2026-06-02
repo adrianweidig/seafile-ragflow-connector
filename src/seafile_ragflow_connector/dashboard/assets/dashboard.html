@@ -564,7 +564,7 @@
     #change-table { min-width: 1360px; }
     #log-table { min-width: 1120px; }
     #source-table, #target-table { min-width: 920px; }
-    #openwebui-table { min-width: 1420px; }
+    #openwebui-table { min-width: 1640px; }
     #workflow-table { min-width: 1380px; }
     #log-table th:nth-child(1) { width: 17%; }
     #log-table th:nth-child(2) { width: 10%; }
@@ -681,12 +681,12 @@
     .status.ok::before, .status.succeeded::before, .status.synced::before, .status.done::before, .status.running::before, .status.wartend::before {
       background: var(--ok);
     }
-    .status.warning, .status.warn, .status.retrying, .status.skipped, .status.übersprungen, .status.manual_required, .status.partial, .status.planned, .status.deleted, .status.wartung-erforderlich, .status.maintenance-required {
+    .status.warning, .status.warn, .status.retrying, .status.skipped, .status.übersprungen, .status.manual_required, .status.partial, .status.planned, .status.deleted, .status.dataset_deleted, .status.wartung-erforderlich, .status.maintenance-required {
       color: var(--warn);
       border-color: color-mix(in srgb, var(--warn) 42%, var(--border));
       background: color-mix(in srgb, var(--warn) 10%, transparent);
     }
-    .status.warning::before, .status.warn::before, .status.retrying::before, .status.skipped::before, .status.übersprungen::before, .status.manual_required::before, .status.partial::before, .status.planned::before, .status.deleted::before, .status.wartung-erforderlich::before, .status.maintenance-required::before {
+    .status.warning::before, .status.warn::before, .status.retrying::before, .status.skipped::before, .status.übersprungen::before, .status.manual_required::before, .status.partial::before, .status.planned::before, .status.deleted::before, .status.dataset_deleted::before, .status.wartung-erforderlich::before, .status.maintenance-required::before {
       background: var(--warn);
     }
     .status.error, .status.failed, .status.dead, .status.fehlgeschlagen, .status.fehlerhaft {
@@ -820,6 +820,25 @@
     .health-actions button:disabled {
       cursor: wait;
       opacity: 0.64;
+      transform: none;
+    }
+    .row-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .row-actions button {
+      font-size: 12px;
+      min-height: 32px;
+      padding: 5px 8px;
+    }
+    .row-actions button.danger {
+      background: color-mix(in srgb, var(--bad) 10%, var(--surface));
+      border-color: color-mix(in srgb, var(--bad) 38%, var(--border));
+    }
+    .row-actions button:disabled {
+      cursor: not-allowed;
+      opacity: 0.56;
       transform: none;
     }
     .transport-badge {
@@ -1344,6 +1363,7 @@
         'table.deleted': 'Gelöscht',
         'table.skipped': 'Übersprungen',
         'table.action': 'Aktion',
+        'table.actions': 'Aktionen',
         'table.type': 'Typ',
         'table.error': 'Fehler',
         'table.message': 'Nachricht',
@@ -1364,6 +1384,12 @@
         'openwebui.none': 'keine',
         'openwebui.model': 'Modell',
         'openwebui.lastSuccess': 'Letzter Erfolg',
+        'openwebui.deletePipe': 'Pipe löschen',
+        'openwebui.deleteDataset': 'Dataset löschen',
+        'openwebui.deleteChat': 'Chat löschen',
+        'openwebui.confirmDeletePipe': 'OpenWebUI-Pipe löschen? Die Seafile-Bibliothek bleibt bestehen.',
+        'openwebui.confirmDeleteDataset': 'RAGFlow-Dataset löschen? Die Seafile-Bibliothek bleibt bestehen und der nächste Sync kann ein neues Dataset anlegen.',
+        'openwebui.confirmDeleteChat': 'RAGFlow-Chat löschen? Die Seafile-Bibliothek bleibt bestehen und der nächste OpenWebUI-Sync kann einen neuen Chat anlegen.',
         'workflow.createDatasets': 'RAGFlow-Dataset und Dokumente synchronisieren',
         'workflow.syncOpenWebUI': 'RAGFlow-Chat und OpenWebUI-Tool/Pipe erzeugen',
         'workflow.scope': 'Seafile-Pfad',
@@ -1529,6 +1555,7 @@
         'table.deleted': 'Deleted',
         'table.skipped': 'Skipped',
         'table.action': 'Action',
+        'table.actions': 'Actions',
         'table.type': 'Type',
         'table.error': 'Error',
         'table.message': 'Message',
@@ -1549,6 +1576,12 @@
         'openwebui.none': 'none',
         'openwebui.model': 'Model',
         'openwebui.lastSuccess': 'Last success',
+        'openwebui.deletePipe': 'Delete pipe',
+        'openwebui.deleteDataset': 'Delete dataset',
+        'openwebui.deleteChat': 'Delete chat',
+        'openwebui.confirmDeletePipe': 'Delete the OpenWebUI pipe? The Seafile library stays untouched.',
+        'openwebui.confirmDeleteDataset': 'Delete the RAGFlow dataset? The Seafile library stays untouched and the next sync can create a new dataset.',
+        'openwebui.confirmDeleteChat': 'Delete the RAGFlow chat? The Seafile library stays untouched and the next OpenWebUI sync can create a new chat.',
         'workflow.createDatasets': 'Synchronize RAGFlow dataset and documents',
         'workflow.syncOpenWebUI': 'Create RAGFlow chat and OpenWebUI tool/pipe',
         'workflow.scope': 'Seafile path',
@@ -1619,7 +1652,8 @@
       workflowData: null,
       workflowSelected: new Set(),
       workflowRunning: false,
-      jobsCleanupRunning: false
+      jobsCleanupRunning: false,
+      openwebuiActionRunning: null
     };
     const $ = (id) => document.getElementById(id);
     let disclosureId = 0;
@@ -2357,6 +2391,51 @@
       state.systemsData = data;
       renderSystems(data);
     }
+    function openwebuiActionCell(item) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'row-actions';
+      [
+        ['pipe', 'openwebui.deletePipe', item.openwebui_pipe_id],
+        ['dataset', 'openwebui.deleteDataset', item.ragflow_dataset_id],
+        ['chat', 'openwebui.deleteChat', item.ragflow_chat_id]
+      ].forEach(([target, labelKey, artifactId]) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = target === 'dataset' ? 'danger' : 'ghost';
+        button.textContent = t(labelKey);
+        button.disabled = !artifactId || state.openwebuiActionRunning !== null;
+        button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          runOpenWebUIDelete(item, target);
+        });
+        wrapper.appendChild(button);
+      });
+      return wrapper;
+    }
+    async function runOpenWebUIDelete(item, target) {
+      const label = target.charAt(0).toUpperCase() + target.slice(1);
+      if (!window.confirm(t('openwebui.confirmDelete' + label))) return;
+      state.openwebuiActionRunning = String(item.id) + ':' + target;
+      showError('');
+      try {
+        const result = await apiPost('/api/openwebui/artifacts/delete', {
+          mapping_id: item.id,
+          target
+        });
+        $('openwebui-detail').textContent = JSON.stringify(result, null, 2);
+        await loadOpenWebUI();
+        if (state.workflowData) {
+          await loadWorkflow().catch(() => {});
+        }
+      } catch (err) {
+        showError(err.message || String(err));
+      } finally {
+        state.openwebuiActionRunning = null;
+        if (state.activeTab === 'openwebui') {
+          await loadOpenWebUI().catch((err) => showError(err.message || String(err)));
+        }
+      }
+    }
     async function loadOpenWebUI() {
       const offset = state.pages.openwebui * PAGE_SIZE;
       const [statusData, mappings, capabilities, dryRun] = await Promise.all([
@@ -2377,7 +2456,7 @@
         metric(t('openwebui.manual'), fmtNumber(counts.manual_required), t('openwebui.apiFallback'), counts.manual_required ? 'warn' : ''),
         metric(t('metric.errors'), fmtNumber(counts.failed), statusData.last_error || t('openwebui.none'), counts.failed ? 'bad' : '')
       );
-      table('openwebui-table', [t('openwebui.dataset'), t('table.status'), t('openwebui.chat'), t('openwebui.tool'), t('openwebui.pipe'), t('openwebui.model'), t('openwebui.lastSuccess'), t('table.error')], (mappings.items || []).map((item) => ({
+      table('openwebui-table', [t('openwebui.dataset'), t('table.status'), t('openwebui.chat'), t('openwebui.tool'), t('openwebui.pipe'), t('openwebui.model'), t('openwebui.lastSuccess'), t('table.error'), t('table.actions')], (mappings.items || []).map((item) => ({
         ...item,
         __cells: [
           compactText(item.ragflow_dataset_name, { threshold: 42 }),
@@ -2387,7 +2466,8 @@
           compactText(item.openwebui_pipe_id, { threshold: 34 }),
           compactText(item.openwebui_model_name, { threshold: 42 }),
           fmtDate(item.last_successful_sync_at),
-          compactText(item.last_error, { threshold: 56 })
+          compactText(item.last_error, { threshold: 56 }),
+          openwebuiActionCell(item)
         ]
       })));
       renderPager('openwebui-pager', mappings, (delta) => { state.pages.openwebui = Math.max(0, state.pages.openwebui + delta); loadOpenWebUI(); });

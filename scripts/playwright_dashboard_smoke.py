@@ -277,6 +277,7 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
             _wait_for_text(page, "#openwebui-metrics", "DATENSÄTZE", config.timeout_ms)
             _require_text(page, "#openwebui-metrics", "erkannte Zuordnungen")
             _require_text(page, "#openwebui-table", "DATENSATZ")
+            _require_text(page, "#openwebui-table", "AKTIONEN")
 
     page.select_option("#language-select", "en", timeout=config.timeout_ms)
     page.locator('[data-tab="overview"]').click(timeout=config.timeout_ms)
@@ -325,6 +326,7 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
     _require_text(page, "#openwebui-metrics", "DATASETS")
     _require_text(page, "#openwebui-metrics", "known mappings")
     _require_text(page, "#openwebui-table", "DATASET")
+    _require_text(page, "#openwebui-table", "ACTIONS")
     _require_text(page, "#openwebui-metrics", "including dry-run planned")
     _require_text(page, "#openwebui-metrics", "API fallback")
     _require_text(page, "#openwebui-metrics", "none")

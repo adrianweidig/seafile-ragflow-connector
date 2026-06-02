@@ -311,6 +311,207 @@ class DashboardServerTests(unittest.TestCase):
             job = session.query(SyncJob).one()
             self.assertEqual(job.status, JobStatus.CANCELLED.value)
 
+    def test_openwebui_delete_pipe_endpoint_requires_auth_and_resets_mapping(self) -> None:
+        store = _store(self)
+        with store.session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    status="active",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                )
+            )
+            mapping = OpenWebUIDatasetMapping(
+                repo_id="repo-1",
+                ragflow_dataset_id="dataset-1",
+                ragflow_dataset_name="Dataset",
+                ragflow_chat_id="chat-1",
+                openwebui_pipe_id="pipe-1",
+                openwebui_model_name="ragflow/demo",
+                pipe_definition_hash="hash",
+                openwebui_pipe_payload={"id": "pipe-1"},
+                sync_status="synced",
+            )
+            session.add(mapping)
+            session.commit()
+            mapping_id = int(mapping.id)
+
+        settings = _settings(0)
+        settings.connector_dashboard_auth_username = "admin"
+        settings.connector_dashboard_auth_password = "secret"
+        settings.openwebui_admin_api_key = "admin-key"
+        original_openwebui = dashboard_server.OpenWebUIClient
+        dashboard_server.OpenWebUIClient = _FakeOpenWebUIAdminClient  # type: ignore[assignment]
+        _FakeOpenWebUIAdminClient.functions = {
+            "pipe-1": {
+                "id": "pipe-1",
+                "meta": {
+                    "manifest": {
+                        "owner": "seafile-ragflow-connector",
+                        "kind": "pipe",
+                        "ragflow_dataset_id": "dataset-1",
+                    }
+                },
+            }
+        }
+        _FakeOpenWebUIAdminClient.deleted_functions = []
+        handle = start_dashboard_server(
+            DashboardContext(store=store, settings=settings, started_at=utcnow())
+        )
+        port = handle.server.server_address[1]
+        try:
+            with self.assertRaises(HTTPError) as missing_auth:
+                _post_json(
+                    port,
+                    "/api/openwebui/artifacts/delete",
+                    {"mapping_id": mapping_id, "target": "pipe"},
+                )
+            self.assertEqual(missing_auth.exception.code, 401)
+            data = _post_json(
+                port,
+                "/api/openwebui/artifacts/delete",
+                {"mapping_id": mapping_id, "target": "pipe"},
+                username="admin",
+                password="secret",
+            )
+        finally:
+            handle.stop()
+            dashboard_server.OpenWebUIClient = original_openwebui  # type: ignore[assignment]
+
+        self.assertEqual(data["status"], "deleted")
+        self.assertFalse(data["library_deleted"])
+        self.assertEqual(_FakeOpenWebUIAdminClient.deleted_functions, ["pipe-1"])
+        with store.session_factory() as session:
+            stored = session.get(OpenWebUIDatasetMapping, mapping_id)
+            self.assertIsNotNone(stored)
+            self.assertIsNone(stored.openwebui_pipe_id)
+            self.assertIsNone(stored.openwebui_model_name)
+            self.assertIsNone(stored.pipe_definition_hash)
+            self.assertEqual(stored.openwebui_pipe_payload, {})
+            self.assertEqual(stored.sync_status, "pending")
+
+    def test_openwebui_delete_chat_endpoint_clears_chat_without_library_delete(self) -> None:
+        store = _store(self)
+        with store.session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    status="active",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                )
+            )
+            mapping = OpenWebUIDatasetMapping(
+                repo_id="repo-1",
+                ragflow_dataset_id="dataset-1",
+                ragflow_dataset_name="Dataset",
+                ragflow_chat_id="chat-1",
+                openwebui_pipe_id="pipe-1",
+                pipe_definition_hash="hash",
+                sync_status="synced",
+            )
+            session.add(mapping)
+            session.commit()
+            mapping_id = int(mapping.id)
+
+        original_client = dashboard_server.RAGFlowClient
+        dashboard_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        _FakeRAGFlowClient.deleted_chats = []
+        try:
+            handle = start_dashboard_server(
+                DashboardContext(store=store, settings=_settings(0), started_at=utcnow())
+            )
+            port = handle.server.server_address[1]
+            try:
+                data = _post_json(
+                    port,
+                    "/api/openwebui/artifacts/delete",
+                    {"mapping_id": mapping_id, "target": "chat"},
+                )
+            finally:
+                handle.stop()
+        finally:
+            dashboard_server.RAGFlowClient = original_client  # type: ignore[assignment]
+
+        self.assertEqual(data["status"], "deleted")
+        self.assertFalse(data["library_deleted"])
+        self.assertEqual(_FakeRAGFlowClient.deleted_chats, [["chat-1"]])
+        with store.session_factory() as session:
+            library = session.get(Library, "repo-1")
+            stored = session.get(OpenWebUIDatasetMapping, mapping_id)
+            self.assertEqual(library.status, "active")
+            self.assertEqual(library.ragflow_dataset_id, "dataset-1")
+            self.assertIsNone(stored.ragflow_chat_id)
+            self.assertIsNone(stored.pipe_definition_hash)
+            self.assertEqual(stored.sync_status, "pending")
+
+    def test_openwebui_delete_dataset_endpoint_clears_dataset_binding_not_library(self) -> None:
+        store = _store(self)
+        with store.session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    status="active",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                    last_synced_commit_id="head-1",
+                    template_hash="template",
+                )
+            )
+            mapping = OpenWebUIDatasetMapping(
+                repo_id="repo-1",
+                ragflow_dataset_id="dataset-1",
+                ragflow_dataset_name="Dataset",
+                ragflow_chat_id="chat-1",
+                openwebui_pipe_id="pipe-1",
+                sync_status="synced",
+            )
+            session.add(mapping)
+            session.commit()
+            mapping_id = int(mapping.id)
+
+        original_client = dashboard_server.RAGFlowClient
+        dashboard_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        _FakeRAGFlowClient.deleted_datasets = []
+        try:
+            handle = start_dashboard_server(
+                DashboardContext(store=store, settings=_settings(0), started_at=utcnow())
+            )
+            port = handle.server.server_address[1]
+            try:
+                data = _post_json(
+                    port,
+                    "/api/openwebui/artifacts/delete",
+                    {"mapping_id": mapping_id, "target": "dataset"},
+                )
+            finally:
+                handle.stop()
+        finally:
+            dashboard_server.RAGFlowClient = original_client  # type: ignore[assignment]
+
+        self.assertEqual(data["status"], "deleted")
+        self.assertFalse(data["library_deleted"])
+        self.assertEqual(_FakeRAGFlowClient.deleted_datasets, [["dataset-1"]])
+        with store.session_factory() as session:
+            library = session.get(Library, "repo-1")
+            stored = session.get(OpenWebUIDatasetMapping, mapping_id)
+            self.assertEqual(library.status, "active")
+            self.assertIsNone(library.ragflow_dataset_id)
+            self.assertIsNone(library.ragflow_dataset_name)
+            self.assertIsNone(library.template_hash)
+            self.assertIsNone(library.last_synced_commit_id)
+            self.assertEqual(stored.ragflow_dataset_id, "dataset-1")
+            self.assertEqual(stored.ragflow_chat_id, "chat-1")
+            self.assertEqual(stored.openwebui_pipe_id, "pipe-1")
+            self.assertEqual(stored.sync_status, "dataset_deleted")
+
     def test_openwebui_preview_route_uses_signed_token_without_dashboard_auth(self) -> None:
         store = _store(self)
         settings = _settings(0)
@@ -961,6 +1162,25 @@ class _FakeWorkflowOpenWebUI:
         return _FakeWorkflowOpenWebUISummary()
 
 
+class _FakeOpenWebUIAdminClient:
+    functions: dict[str, dict[str, object]] = {}
+    deleted_functions: list[str] = []
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def get_function(self, function_id: str) -> dict[str, object] | None:
+        return self.__class__.functions.get(function_id)
+
+    def delete_function(self, function_id: str) -> bool:
+        self.__class__.deleted_functions.append(function_id)
+        self.__class__.functions.pop(function_id, None)
+        return True
+
+    def close(self) -> None:
+        pass
+
+
 class _FakeRAGFlowClient:
     last_model: str | None = None
     raise_chat_error = False
@@ -968,6 +1188,8 @@ class _FakeRAGFlowClient:
     retrieve_calls = 0
     retrieval_result: dict[str, object] = {"chunks": []}
     answer_content = "RAGFlow liefert eine echte Antwort."
+    deleted_chats: list[list[str]] = []
+    deleted_datasets: list[list[str]] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         pass
@@ -992,6 +1214,14 @@ class _FakeRAGFlowClient:
     def retrieve_chunks(self, **kwargs: object) -> dict[str, object]:
         self.__class__.retrieve_calls += 1
         return self.__class__.retrieval_result
+
+    def delete_chats(self, chat_ids: list[str]) -> bool:
+        self.__class__.deleted_chats.append(list(chat_ids))
+        return True
+
+    def delete_datasets(self, dataset_ids: list[str]) -> bool:
+        self.__class__.deleted_datasets.append(list(dataset_ids))
+        return True
 
     def close(self) -> None:
         pass

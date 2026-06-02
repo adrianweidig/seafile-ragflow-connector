@@ -112,7 +112,9 @@ Mehr Details stehen in [docs/architecture.md](docs/architecture.md).
 - RAGFlow-Dataset-Einstellungen bleiben nach der Erstellung live; das Template wird nur für neue Datasets genutzt.
 - OpenWebUI-Funktionen bekommen keine RAGFlow-Admin-Secrets, sondern sprechen mit dem Connector-Proxy.
 - Der Runtime-Betrieb ist offline-fähig: keine Telemetrie und keine externen Service-Abhängigkeiten außerhalb der konfigurierten Zielsysteme.
-- Das Dashboard startet nur explizit ausgewählte Prüfläufe; Löschaktionen bleiben CLI-/Runtime-Pfaden vorbehalten.
+- Das Dashboard startet nur explizit ausgewählte Prüfläufe und kann
+  connector-eigene Pipe-, Chat- oder Dataset-Artefakte löschen; Seafile-
+  Bibliotheken bleiben dabei unangetastet.
 
 ## Internationalisierung
 
@@ -346,7 +348,9 @@ Die Oberfläche nutzt keine CDN- oder Internet-Assets, bietet einen Dark-/Light-
 Modus und enthält Auto-Refresh für 5 Sekunden, 10 Sekunden oder 1 Minute. Der
 Excel-Audit-Export enthält mehrere Tabellenblätter und exportiert nur Status-,
 Sync-, Änderungs-, Log- und Diagnosemetadaten. Datei-Inhalte aus Seafile oder
-RAGFlow werden nicht heruntergeladen. Löschaktionen werden nicht angeboten.
+RAGFlow werden nicht heruntergeladen. Im OpenWebUI-Tab können connector-eigene
+Pipes, RAGFlow-Chats und RAGFlow-Datasets gezielt gelöscht werden; Seafile-
+Bibliotheken und Dateien werden dabei nicht gelöscht.
 
 ```env
 CONNECTOR_DASHBOARD_ENABLED=true

@@ -432,6 +432,49 @@ def annotate_answer_citations(
     return _RAGFLOW_SOURCE_DOLLAR_RE.sub(replace, text)
 
 
+def curate_sources_for_answer(
+    sources: list[dict[str, Any]],
+    *,
+    answer: str | None,
+    max_sources: int | None = None,
+) -> list[dict[str, Any]]:
+    """Keep answer-cited evidence and same-document support, hiding weaker noise."""
+    if not sources or not answer:
+        return sources
+    cited_labels = _answer_source_labels(answer)
+    cited_provider_ids = _answer_provider_citation_ids(answer)
+    if not cited_labels and not cited_provider_ids:
+        return sources
+
+    cited_document_keys: set[str] = set()
+    for source in sources:
+        metadata = _source_metadata(source)
+        source_label = _source_label(source, metadata)
+        provider_id = _int_or_none(metadata.get("provider_citation_id"))
+        if provider_id is None:
+            provider_id = _int_or_none(metadata.get("reference_id"))
+        if source_label in cited_labels or (
+            provider_id is not None and provider_id in cited_provider_ids
+        ):
+            document_key = _source_document_key(source, metadata)
+            if document_key:
+                cited_document_keys.add(document_key)
+
+    if not cited_document_keys:
+        return sources
+
+    curated = [
+        source
+        for source in sources
+        if _source_document_key(source, _source_metadata(source)) in cited_document_keys
+    ]
+    if not curated:
+        return sources
+    if max_sources is not None:
+        return curated[: max(1, int(max_sources))]
+    return curated
+
+
 def render_sources_markdown(
     sources: list[dict[str, Any]],
     *,
@@ -939,6 +982,30 @@ def _answer_provider_citation_ids(answer: str | None) -> set[int]:
 
 def _answer_source_labels(answer: str | None) -> set[str]:
     return {f"S{match.group(1)}".upper() for match in _SOURCE_LABEL_RE.finditer(str(answer or ""))}
+
+
+def _source_label(source: dict[str, Any], metadata: dict[str, Any]) -> str:
+    return str(
+        source.get("source_id")
+        or source.get("citation_label")
+        or metadata.get("source_id")
+        or metadata.get("citation_label")
+        or ""
+    ).upper()
+
+
+def _source_document_key(source: dict[str, Any], metadata: dict[str, Any]) -> str:
+    for value in (
+        metadata.get("document_id"),
+        metadata.get("path"),
+        metadata.get("document_name"),
+        metadata.get("doc_name"),
+        source.get("name"),
+    ):
+        text = " ".join(str(value or "").split()).casefold()
+        if text:
+            return text
+    return ""
 
 
 def _audit_score_components(

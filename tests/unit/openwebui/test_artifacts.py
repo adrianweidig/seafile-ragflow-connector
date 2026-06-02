@@ -61,8 +61,8 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertTrue(tool.valves["CONNECTOR_PROXY_VERIFY_SSL"])
         self.assertEqual(tool.valves["CONNECTOR_PROXY_CA_BUNDLE"], "")
         self.assertIn("owner: seafile-ragflow-connector", tool.content)
-        self.assertIn("artifact_version: 23", tool.content)
-        self.assertIn("artifact_version: 23", pipe.content)
+        self.assertIn("artifact_version: 24", tool.content)
+        self.assertIn("artifact_version: 24", pipe.content)
         self.assertFalse(tool.valves["TLS_DEBUG"])
         self.assertEqual(tool.valves["SHOW_SOURCE_SCORES"], True)
         self.assertEqual(tool.valves["LANGUAGE"], "de")
@@ -92,7 +92,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("_normalize_sources(", pipe.content)
         self.assertIn("DEFAULT_RAG_SYSTEM_PROMPT", pipe.content)
         self.assertIn("generate_answer", pipe.content)
-        self.assertIn("version: 3.9.2", pipe.content)
+        self.assertIn("version: 3.9.3", pipe.content)
         self.assertIn("ANSWER_SYNTHESIS_MAX_TOKENS", pipe.content)
         self.assertIn('"max_tokens": int(valves.ANSWER_SYNTHESIS_MAX_TOKENS)', pipe.content)
         self.assertIn("EMIT_CITATION_EVENTS", pipe.content)
@@ -340,6 +340,39 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("- **Öffnen:**", final_answer)
         self.assertNotIn("chunk_id", final_answer)
         self.assertNotIn("document_id", final_answer)
+
+    def test_pipe_curates_uncited_documents_for_normal_answers(self) -> None:
+        namespace = _pipe_namespace()
+        sources = [
+            {
+                "source_id": "S1",
+                "name": "mobiles-arbeiten.pdf",
+                "text": "Samstags sind maximal sechs Stunden mobiles Arbeiten möglich.",
+                "source_metadata": {"document_id": "doc-mobile", "citation_id": 0},
+            },
+            {
+                "source_id": "S2",
+                "name": "mobiles-arbeiten.pdf",
+                "text": "Mobile Arbeit am Samstag muss zwischen 06:00 und 19:00 Uhr liegen.",
+                "source_metadata": {"document_id": "doc-mobile", "citation_id": 1},
+            },
+            {
+                "source_id": "S3",
+                "name": "codex-audit-e2e.md",
+                "text": "Interner Audit-Marker ohne Bezug zu mobilem Arbeiten.",
+                "source_metadata": {"document_id": "doc-audit", "citation_id": 2},
+            },
+        ]
+
+        curated = namespace["_curate_sources_for_answer"](
+            sources,
+            "Samstags gilt eine Sechs-Stunden-Grenze. [S1]",
+        )
+
+        self.assertEqual(
+            [source["name"] for source in curated],
+            ["mobiles-arbeiten.pdf", "mobiles-arbeiten.pdf"],
+        )
 
     def test_pipe_compact_mode_keeps_answer_without_markdown_block(self) -> None:
         namespace = _pipe_namespace()

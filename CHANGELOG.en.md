@@ -8,6 +8,17 @@ retroactively.
 
 ## Unreleased
 
+### Added
+
+- The Dashboard OpenWebUI tab can delete connector-owned pipes, RAGFlow chats,
+  and RAGFlow datasets without deleting the related Seafile library.
+
+### Changed
+
+- Normal OpenWebUI/RAGFlow chat answers now curate visible sources to cited
+  documents so irrelevant hits no longer appear as answer evidence. The
+  OpenWebUI pipe artifact version was bumped to 24 for this change.
+
 ## 0.1.13 - 2026-06-02
 
 ### Changed
