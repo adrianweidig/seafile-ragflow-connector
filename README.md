@@ -41,6 +41,7 @@ RAGFlow-Secrets in OpenWebUI-Funktionen abzulegen.
 
 | Ziel | Einstieg |
 | --- | --- |
+| Demo | [OpenWebUI-RAG-Antwort als Video](#demo) |
 | Schnellstart | [Docker Compose](#schnellstart-mit-docker-compose) oder [Portainer](#portainer-start) |
 | Admin-Erststart | [Checkliste für den ersten produktionsnahen Start](docs/admin-first-start-checklist.md) |
 | Konfiguration | [`connector.env.example`](connector.env.example), [Environment-Referenz](docs/environment.md) |
@@ -50,6 +51,17 @@ RAGFlow-Secrets in OpenWebUI-Funktionen abzulegen.
 | TLS | [TLS-Topologie](docs/tls-topology.md), [TLS-Zertifikate](docs/tls-certificates.md), [Troubleshooting](docs/troubleshooting-ssl.md) |
 | Entwicklung | [Entwicklungschecks](#entwicklung) und [Tests](docs/testing.md) |
 | Mitarbeit | [CONTRIBUTING.md](CONTRIBUTING.md), [Security Policy](SECURITY.md), [Support](SUPPORT.md) |
+
+## Demo
+
+Die Aufnahme zeigt eine normale OpenWebUI-Frage an das vom Connector erzeugte
+RAGFlow-Modell. Die Antwort fasst Inhalte gruppiert zusammen und hängt die
+auditierbaren Nachweise darunter an.
+
+<video src="docs/assets/demo/seafile-ragflow-openwebui-normal-content-chat.webm" controls width="100%"></video>
+
+Falls der Markdown-Renderer keinen Player anzeigt:
+[Demo-Video öffnen](docs/assets/demo/seafile-ragflow-openwebui-normal-content-chat.webm).
 
 ## Was dieses Repository besonders macht
 
