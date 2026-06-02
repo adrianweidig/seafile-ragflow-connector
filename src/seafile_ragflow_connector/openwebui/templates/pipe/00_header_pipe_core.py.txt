@@ -1,9 +1,9 @@
 """
 title: RAGFlow Dataset Pipe
 author: Seafile RAGFlow Connector
-version: 3.9.0
+version: 3.9.1
 owner: seafile-ragflow-connector
-artifact_version: 21
+artifact_version: 22
 """
 
 # =============================================================================

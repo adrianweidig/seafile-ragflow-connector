@@ -139,8 +139,6 @@ def _source_markdown_audit(
     lines.append(f"**Audit-Status:** {audit['status_label']}")
     lines.append(f"**Claim-Abdeckung:** {audit['coverage_label']}")
     lines.append("")
-    lines.append("| ID | Rolle | Dokument | Fundstelle | Score | Match | Aussage | Öffnen |")
-    lines.append("|---|---|---|---|---|---|---|---|")
 
     for source in sources[:MAX_SOURCE_GROUPS_DETAILED]:
         metadata = _metadata(source)
@@ -155,18 +153,21 @@ def _source_markdown_audit(
         relevance = _audit_score_text(source, metadata, show_scores=show_scores)
         match_type = str(metadata.get("match_type") or source.get("match_type") or "unbekannt")
         actions = _actions(source, metadata) or "kein Direktlink"
-        lines.append(
-            "| "
-            + " | ".join(
-                _escape_table_cell(value)
-                for value in (source_id, role, document, location, relevance, match_type, claim, actions)
-            )
-            + " |"
+        lines.extend(
+            [
+                f"### {source_id} - {role}",
+                f"- **Dokument:** {document}",
+                f"- **Fundstelle:** {location}",
+                f"- **Score/Match:** {relevance} / {match_type}",
+                f"- **Aussage:** {claim}",
+                f"- **Öffnen:** {actions}",
+                "",
+            ]
         )
 
     if len(sources) > MAX_SOURCE_GROUPS_DETAILED:
         remaining = len(sources) - MAX_SOURCE_GROUPS_DETAILED
-        lines.append(f"|  | weitere Quellen ausgeblendet | {remaining} zusätzliche Treffer |  |  |  |  |  |")
+        lines.append(f"- {remaining} zusätzliche Treffer ausgeblendet.")
 
     if _has_conflicting_sources(sources):
         lines.extend(
