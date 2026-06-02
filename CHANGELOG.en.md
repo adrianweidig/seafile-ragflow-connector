@@ -19,6 +19,11 @@ retroactively.
   documents so irrelevant hits no longer appear as answer evidence. The
   OpenWebUI pipe artifact version was bumped to 24 for this change.
 
+### Fixed
+
+- Dashboard deletion of OpenWebUI pipes now also recognizes OpenWebUI's compact
+  persisted function metadata shape as connector-owned.
+
 ## 0.1.13 - 2026-06-02
 
 ### Changed

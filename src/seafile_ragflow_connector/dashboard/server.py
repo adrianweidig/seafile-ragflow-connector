@@ -1378,14 +1378,44 @@ def _is_owned_openwebui_artifact(
     dataset_id: str,
 ) -> bool:
     meta = artifact.get("meta")
-    manifest = meta.get("manifest") if isinstance(meta, dict) else None
-    if not isinstance(manifest, dict):
-        return False
-    return (
+    manifest_value = meta.get("manifest") if isinstance(meta, dict) else None
+    manifest = manifest_value if isinstance(manifest_value, dict) else {}
+    content = str(artifact.get("content") or "")
+    owner_matches = (
         manifest.get("owner") == "seafile-ragflow-connector"
-        and manifest.get("kind") == expected_kind
-        and str(manifest.get("ragflow_dataset_id") or "") == dataset_id
+        or "owner: seafile-ragflow-connector" in content
+        or "author: Seafile RAGFlow Connector" in content
     )
+    if not owner_matches:
+        return False
+    artifact_id = str(artifact.get("id") or "").lower()
+    artifact_type = str(artifact.get("type") or "").lower()
+    manifest_kind = str(manifest.get("kind") or "").lower()
+    kind_matches = (
+        manifest_kind == expected_kind
+        or artifact_type == expected_kind
+        or f"_{expected_kind}_" in artifact_id
+    )
+    if not kind_matches:
+        return False
+    manifest_dataset_id = str(manifest.get("ragflow_dataset_id") or "")
+    if manifest_dataset_id:
+        return manifest_dataset_id == dataset_id
+    if dataset_id and dataset_id in content:
+        return True
+    short_id = _openwebui_dataset_short_id(dataset_id)
+    return bool(short_id and artifact_id.endswith(short_id) and f"_{expected_kind}_" in artifact_id)
+
+
+def _openwebui_dataset_short_id(dataset_id: str) -> str:
+    clean = "".join(
+        char
+        for char in dataset_id.lower()
+        if ("a" <= char <= "z") or ("0" <= char <= "9") or char == "_"
+    )
+    if len(clean) >= 8:
+        return clean[:12]
+    return sha256(dataset_id.encode("utf-8")).hexdigest()[:12]
 
 
 def _record_dashboard_artifact_delete(
