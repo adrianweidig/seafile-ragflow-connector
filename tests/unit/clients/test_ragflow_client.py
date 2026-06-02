@@ -135,7 +135,8 @@ class _ChatHttpClient:
                 content=(
                     b'data:{"code":0,"data":{"answer":"part 1 ","reference":{"chunks":[]}}}\n\n'
                     b'data:{"choices":[{"delta":{"content":"part 2"}}]}\n\n'
-                    b'data:{"code":0,"data":{"choices":[{"delta":{"content":" part 3"}}]}}\n\n'
+                    b'data:{"code":0,"data":{"choices":[{"delta":{"content":" part 3",'
+                    b'"reference":{"chunks":{"2":{"id":"chunk-ref"}}}}}]}}\n\n'
                     b'data:{"code":0,"data":true}\n\n'
                 ),
                 request=request,
@@ -235,6 +236,7 @@ class RAGFlowClientTests(unittest.TestCase):
             stream=True,
         )
         self.assertEqual(streamed["data"]["answer"], "part 1 part 2 part 3")
+        self.assertEqual(streamed["data"]["reference"]["chunks"]["2"]["id"], "chunk-ref")
         self.assertIn("/api/v1/openai/chat-1/chat/completions", http_client.post_paths)
         self.assertTrue(client.delete_chats(["chat-1"]))
         self.assertTrue(client.delete_datasets(["ds-1"]))

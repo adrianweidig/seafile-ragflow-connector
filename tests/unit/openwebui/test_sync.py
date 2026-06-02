@@ -243,7 +243,7 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         dataset_chat = next(
             payload
             for payload in ragflow.created_chats
-            if str(payload["name"]).startswith("owui__ragflow__demo_dataset__")
+            if str(payload["name"]).startswith("RAG_demo_dataset_")
         )
         self.assertNotIn("dataset_ids", template_chat)
         self.assertEqual(dataset_chat["dataset_ids"], ["dataset-1"])
@@ -260,7 +260,7 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         self.assertEqual(ragflow.updated_chats, [])
         with session_factory() as session:
             mapping = session.query(OpenWebUIDatasetMapping).one()
-            self.assertEqual(mapping.artifact_version, "22")
+            self.assertEqual(mapping.artifact_version, "23")
 
     def test_sync_can_be_scoped_to_selected_repo_ids(self) -> None:
         session_factory = _session_factory(self)

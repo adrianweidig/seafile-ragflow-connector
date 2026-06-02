@@ -4,6 +4,7 @@ import unittest
 
 from seafile_ragflow_connector.openwebui.sources import (
     annotate_answer_citations,
+    audit_rank_sources,
     extract_answer,
     extract_answer_result,
     normalize_sources,
@@ -235,6 +236,57 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertIn("[S1](https://connector.example", answer)
         self.assertNotIn("[ID:0]", answer)
         self.assertIn("[ID:9]", answer)
+
+    def test_annotate_answer_citations_maps_provider_marker_variants(self) -> None:
+        sources = [
+            {
+                "source_id": "S1",
+                "name": "report.md",
+                "preview_url": "https://connector.example/preview",
+                "source_metadata": {
+                    "provider_citation_id": 0,
+                    "citation_id": 0,
+                },
+            }
+        ]
+
+        answer = annotate_answer_citations(
+            "Siehe [ID:0], {{source:0}} und ##0$$.",
+            sources,
+        )
+
+        self.assertEqual(answer.count("[S1](https://connector.example/preview)"), 3)
+        self.assertNotIn("[ID:0]", answer)
+        self.assertNotIn("{{source:0}}", answer)
+        self.assertNotIn("##0$$", answer)
+
+    def test_audit_rank_sources_preserves_existing_source_labels(self) -> None:
+        ranked = audit_rank_sources(
+            [
+                {
+                    "source_id": "S1",
+                    "rank": 1,
+                    "name": "first.md",
+                    "text": "Niedrig bewerteter, aber in der Antwort genannter Treffer.",
+                    "score": 0.2,
+                    "source_metadata": {"rank": 1, "citation_id": 0},
+                },
+                {
+                    "source_id": "S2",
+                    "rank": 2,
+                    "name": "second.md",
+                    "text": "Höher bewerteter Treffer.",
+                    "score": 0.95,
+                    "source_metadata": {"rank": 2, "citation_id": 1},
+                },
+            ],
+            question="Was steht im ersten Dokument?",
+            answer="Der relevante Inhalt steht im ersten Dokument. [S1]",
+        )
+
+        self.assertEqual([source["source_id"] for source in ranked], ["S1", "S2"])
+        self.assertTrue(ranked[0]["source_metadata"]["used_in_answer"])
+        self.assertFalse(ranked[1]["source_metadata"]["used_in_answer"])
 
     def test_exact_marker_source_becomes_s1_and_rewrites_provider_id(self) -> None:
         marker = "ENTERPRISE_CA_RAGFLOW_E2E_20260528T000130Z"

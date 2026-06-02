@@ -1,9 +1,9 @@
 """
 title: RAGFlow Dataset Pipe
 author: Seafile RAGFlow Connector
-version: 3.9.1
+version: 3.9.2
 owner: seafile-ragflow-connector
-artifact_version: 22
+artifact_version: 23
 """
 
 # =============================================================================
@@ -201,7 +201,18 @@ CANONICAL_ANSWER_KEYS = (
     "final_answer",
     "generated_answer",
 )
-ANSWER_GENERATED_ORIGINS = {"canonical_answer", "openai_message", "synthesis_fallback"}
+ANSWER_GENERATED_ORIGINS = {
+    "ragflow_chat",
+    "canonical_answer",
+    "openai_message",
+    "synthesis_fallback",
+}
+NON_GENERATED_ORIGINS = {
+    "retrieval_only",
+    "source_inventory",
+    "none",
+    "error",
+}
 REFERENCE_METADATA_FIELDS = [
     "document_id",
     "document_name",
@@ -735,9 +746,14 @@ class Pipe:
 
         if not answer and sources and _is_source_inventory_question(question):
             answer = _source_inventory_answer(sources)
-            answer_origin = "canonical_answer"
+            answer_origin = "source_inventory"
 
-        if not answer and sources and bool(self.valves.ENABLE_ANSWER_SYNTHESIS_FALLBACK):
+        if (
+            not answer
+            and sources
+            and not _is_source_inventory_question(question)
+            and bool(self.valves.ENABLE_ANSWER_SYNTHESIS_FALLBACK)
+        ):
             await _emit_status(
                 self.valves,
                 __event_emitter__,

@@ -345,7 +345,7 @@ class ManualWorkflowIntegrationTests(unittest.TestCase):
             self.assertIsNotNone(library)
             self.assertEqual(library.status, "active")
             self.assertEqual(library.ragflow_dataset_id, "dataset-workflow")
-            self.assertTrue(str(library.ragflow_dataset_name).startswith("seafile__"))
+            self.assertTrue(str(library.ragflow_dataset_name).startswith("RAG_"))
             stored_file = session.query(File).one()
             self.assertEqual(stored_file.normalized_path, WORKFLOW_FILE)
             self.assertEqual(stored_file.sync_status, "uploaded")
@@ -417,7 +417,7 @@ class ManualWorkflowIntegrationTests(unittest.TestCase):
                     name=WORKFLOW_LIBRARY_NAME,
                     name_slug="codex-workflow-check",
                     ragflow_dataset_id="dataset-workflow",
-                    ragflow_dataset_name="seafile__codex-workflow-check__manualw",
+                    ragflow_dataset_name="RAG_codex_workflow_check_manualw",
                     status="active",
                 )
             )

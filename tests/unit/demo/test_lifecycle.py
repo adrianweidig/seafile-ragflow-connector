@@ -20,10 +20,11 @@ class DemoLifecycleTests(unittest.TestCase):
         self.assertTrue(is_safe_demo_library_name("Connector Demo Wissen"))
         self.assertTrue(is_safe_demo_library_name("Demo RAGFlow OpenWebUI Bibliothek 20260602"))
         self.assertTrue(is_safe_demo_library_name("RAG Demo Bibliothek 20260522_110601"))
-        self.assertTrue(is_safe_demo_dataset_name("seafile__connector-demo-wissen__repo"))
+        self.assertTrue(is_safe_demo_dataset_name("RAG_connector_demo_wissen_repo"))
         self.assertTrue(
-            is_safe_demo_dataset_name("seafile__demo-ragflow-openwebui-bibliothek-20260602__repo")
+            is_safe_demo_dataset_name("RAG_demo_ragflow_openwebui_bibliothek_20260602_repo")
         )
+        self.assertTrue(is_safe_demo_dataset_name("seafile__connector-demo-wissen__repo"))
         self.assertTrue(
             is_safe_demo_openwebui_artifact(
                 "ragflow_pipe_seafile_demo_ragflow_openwebui_bibliothek_20260602"
@@ -34,6 +35,7 @@ class DemoLifecycleTests(unittest.TestCase):
         self.assertFalse(is_safe_demo_library_name("Meine Bibliothek"))
         self.assertFalse(is_safe_demo_library_name("testbibliothek"))
         self.assertFalse(is_safe_demo_dataset_name("connector_template"))
+        self.assertFalse(is_safe_demo_dataset_name("RAG_meine_bibliothek_repo"))
         self.assertFalse(is_safe_demo_dataset_name("seafile__meine-bibliothek__repo"))
         self.assertFalse(is_safe_demo_openwebui_artifact("ragflow_tool_seafile_meine_bibliothek"))
 

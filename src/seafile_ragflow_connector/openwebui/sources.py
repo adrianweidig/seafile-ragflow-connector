@@ -18,7 +18,9 @@ from seafile_ragflow_connector.i18n import Localizer, localizer_for
 if TYPE_CHECKING:
     from seafile_ragflow_connector.config.settings import Settings
 
-_RAGFLOW_INLINE_CITATION_RE = re.compile(r"\[ID:(\d+)\]")
+_RAGFLOW_INLINE_CITATION_RE = re.compile(r"\[\s*ID\s*:\s*(\d+)\s*\]", re.IGNORECASE)
+_RAGFLOW_SOURCE_CURLY_RE = re.compile(r"\{\{\s*source\s*:\s*(\d+)\s*\}\}", re.IGNORECASE)
+_RAGFLOW_SOURCE_DOLLAR_RE = re.compile(r"##(\d+)\$\$")
 _SOURCE_LABEL_RE = re.compile(r"\[S(\d+)\]", re.IGNORECASE)
 _EXACT_QUERY_TOKEN_RE = re.compile(
     r"\b(?:"
@@ -425,7 +427,9 @@ def annotate_answer_citations(
             return f"[{label}]({url})"
         return f"[{label}]"
 
-    return _RAGFLOW_INLINE_CITATION_RE.sub(replace, answer)
+    text = _RAGFLOW_INLINE_CITATION_RE.sub(replace, answer)
+    text = _RAGFLOW_SOURCE_CURLY_RE.sub(replace, text)
+    return _RAGFLOW_SOURCE_DOLLAR_RE.sub(replace, text)
 
 
 def render_sources_markdown(
@@ -746,6 +750,7 @@ def _rank_hits_for_audit(
     exact_terms = _exact_query_terms(question)
     cited_provider_ids = _answer_provider_citation_ids(answer)
     cited_source_labels = _answer_source_labels(answer)
+    preserve_source_labels = bool(cited_source_labels) and not cited_provider_ids
     evaluated: list[SourceHit] = []
 
     for hit in hits:
@@ -780,7 +785,10 @@ def _rank_hits_for_audit(
             )
         )
 
-    evaluated.sort(key=_audit_hit_sort_key)
+    if preserve_source_labels:
+        evaluated.sort(key=lambda hit: hit.rank)
+    else:
+        evaluated.sort(key=_audit_hit_sort_key)
 
     primary_assigned = False
     final_hits: list[SourceHit] = []
@@ -791,12 +799,23 @@ def _rank_hits_for_audit(
                 role = "supporting"
             else:
                 primary_assigned = True
+        rank = hit.rank if preserve_source_labels else display_rank
+        source_id = (
+            hit.source_id
+            if preserve_source_labels and hit.source_id
+            else f"S{display_rank}"
+        )
+        citation_label = (
+            hit.citation_label
+            if preserve_source_labels and hit.citation_label
+            else source_id
+        )
         final_hits.append(
             replace(
                 hit,
-                rank=display_rank,
-                source_id=f"S{display_rank}",
-                citation_label=f"S{display_rank}",
+                rank=rank,
+                source_id=source_id,
+                citation_label=citation_label,
                 source_role=role,
             )
         )

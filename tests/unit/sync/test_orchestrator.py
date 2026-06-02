@@ -276,7 +276,7 @@ class OrchestratorUploadTests(unittest.TestCase):
         self.assertEqual(parser_config["auto_questions"], 0)
         self.assertEqual(parser_config["auto_keywords"], 0)
         self.assertEqual(parser_config["pages"], [[1, 1000000]])
-        self.assertTrue(str(generated_payload["name"]).startswith("seafile__demo__"))
+        self.assertTrue(str(generated_payload["name"]).startswith("RAG_demo_"))
 
     def test_existing_generated_dataset_still_ensures_template_dataset(self) -> None:
         session_factory = _session_factory(self)

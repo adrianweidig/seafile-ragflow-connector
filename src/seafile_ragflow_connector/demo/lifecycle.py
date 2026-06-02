@@ -38,6 +38,11 @@ SAFE_SEAFILE_LIBRARY_PREFIXES = (
     "Codex GIF Demo ",
 )
 SAFE_RAGFLOW_DATASET_PREFIXES = (
+    "RAG_connector_demo_",
+    "RAG_demo_ragflow_openwebui_bibliothek_",
+    "RAG_rag_demo_bibliothek_",
+    "RAG_offline_demo_bibliothek_",
+    "RAG_codex_gif_demo_",
     "seafile__connector-demo-",
     "seafile__demo-ragflow-openwebui-bibliothek-",
     "seafile__rag-demo-bibliothek-",

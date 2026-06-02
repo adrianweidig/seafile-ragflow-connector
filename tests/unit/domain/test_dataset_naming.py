@@ -14,12 +14,20 @@ class DatasetNamingTests(unittest.TestCase):
             "Kunden & Verträge / 2026",
             "2deffbac-d7be-4ace-b406-efb799083ee9",
         )
-        self.assertEqual(name, "seafile__kunden-vertrage-2026__2deffbac")
+        self.assertEqual(name, "RAG_kunden_vertrage_2026_2deffbac")
 
     def test_dataset_name_is_truncated(self) -> None:
         name = build_dataset_name("x" * 200, "2deffbac-d7be-4ace-b406-efb799083ee9")
         self.assertLessEqual(len(name), 128)
-        self.assertTrue(name.endswith("__2deffbac"))
+        self.assertTrue(name.endswith("_2deffbac"))
+
+    def test_legacy_seafile_prefix_keeps_old_separator_style(self) -> None:
+        name = build_dataset_name(
+            "Kunden & Verträge / 2026",
+            "2deffbac-d7be-4ace-b406-efb799083ee9",
+            prefix="seafile__",
+        )
+        self.assertEqual(name, "seafile__kunden-vertrage-2026__2deffbac")
 
 
 if __name__ == "__main__":

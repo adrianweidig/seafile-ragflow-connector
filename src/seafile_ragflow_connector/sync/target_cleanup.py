@@ -17,7 +17,7 @@ from seafile_ragflow_connector.openwebui.artifacts import (
 from seafile_ragflow_connector.openwebui.sync import _chat_name, _is_connector_owned
 from seafile_ragflow_connector.persistence.models.library import Library
 
-CONNECTOR_DATASET_PREFIX = "seafile__"
+CONNECTOR_DATASET_PREFIXES = ("RAG_", "seafile__")
 
 
 @dataclass(frozen=True)
@@ -79,7 +79,12 @@ class TargetCleanupService:
             expected_dataset_names,
             expected_dataset_ids_by_name,
         )
-        ragflow_chat_ids = self._orphan_ragflow_chat_ids(expected_dataset_ids, expected_chat_names)
+        connector_dataset_ids = _connector_dataset_ids(ragflow_datasets)
+        ragflow_chat_ids = self._orphan_ragflow_chat_ids(
+            expected_dataset_ids,
+            expected_chat_names,
+            connector_dataset_ids,
+        )
         openwebui_tool_ids: list[str] = []
         openwebui_function_ids: list[str] = []
         warnings: list[str] = []
@@ -171,7 +176,8 @@ class TargetCleanupService:
             ).all()
             for library in rows:
                 dataset_name = str(library.ragflow_dataset_name or library.name)
-                if dataset_name in expected_dataset_names and library.ragflow_dataset_id:
+                if library.ragflow_dataset_id:
+                    expected_dataset_names.add(dataset_name)
                     expected[dataset_name] = str(library.ragflow_dataset_id)
         for dataset in ragflow_datasets:
             ragflow_dataset_name = _string_or_none(dataset.get("name"))
@@ -220,7 +226,7 @@ class TargetCleanupService:
             dataset_name = _string_or_none(dataset.get("name"))
             if not dataset_id or not dataset_name:
                 continue
-            if not dataset_name.startswith(CONNECTOR_DATASET_PREFIX):
+            if not _is_connector_dataset_name(dataset_name):
                 continue
             bound_dataset_id = expected_dataset_ids_by_name.get(dataset_name)
             if dataset_name not in expected_dataset_names or (
@@ -233,15 +239,22 @@ class TargetCleanupService:
         self,
         expected_dataset_ids: set[str],
         expected_chat_names: set[str],
+        connector_dataset_ids: set[str],
     ) -> list[str]:
         orphan_ids: list[str] = []
-        chat_prefix = f"owui__{self.openwebui_namespace}__"
+        legacy_chat_prefix = f"owui__{self.openwebui_namespace}__"
         for chat in self.ragflow_client.list_chats():
             chat_id = _string_or_none(chat.get("id"))
             chat_name = _string_or_none(chat.get("name"))
-            if not chat_id or not chat_name or not chat_name.startswith(chat_prefix):
+            if not chat_id or not chat_name:
                 continue
             chat_dataset_ids = _chat_dataset_ids(chat)
+            is_legacy_connector_chat = chat_name.startswith(legacy_chat_prefix)
+            is_rag_connector_chat = chat_name.startswith("RAG_") and bool(
+                chat_dataset_ids.intersection(connector_dataset_ids)
+            )
+            if not (is_legacy_connector_chat or is_rag_connector_chat):
+                continue
             if chat_name not in expected_chat_names or not chat_dataset_ids.intersection(
                 expected_dataset_ids
             ):
@@ -282,6 +295,20 @@ def _string_or_none(value: Any) -> str | None:
     if value in (None, ""):
         return None
     return str(value)
+
+
+def _is_connector_dataset_name(name: str) -> bool:
+    return any(name.startswith(prefix) for prefix in CONNECTOR_DATASET_PREFIXES)
+
+
+def _connector_dataset_ids(ragflow_datasets: list[dict[str, Any]]) -> set[str]:
+    result: set[str] = set()
+    for dataset in ragflow_datasets:
+        dataset_id = _string_or_none(dataset.get("id"))
+        dataset_name = _string_or_none(dataset.get("name"))
+        if dataset_id and dataset_name and _is_connector_dataset_name(dataset_name):
+            result.add(dataset_id)
+    return result
 
 
 def _chat_dataset_ids(chat: dict[str, Any]) -> set[str]:

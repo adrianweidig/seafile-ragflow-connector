@@ -83,10 +83,10 @@ korrelierbar sind:
 | Seafile-Bibliothek | `Codex Workflow Check` |
 | Seafile-Ordner | `/manual-workflow-check` |
 | Seafile-Datei | `seafile-ragflow-openwebui-check.md` |
-| Erwartetes Dataset-Muster | `seafile__codex-workflow-check__...` |
-| Erwartetes OpenWebUI-Modell | `Seafile · seafile__codex-workflow-check__...` |
-| Erwartete Tool-ID | `ragflow_tool_seafile__codex_workflow_check__...` |
-| Erwartete Pipe-ID | `ragflow_pipe_seafile__codex_workflow_check__...` |
+| Erwartetes Dataset-Muster | `RAG_codex_workflow_check_...` |
+| Erwartetes OpenWebUI-Modell | `Seafile · RAG_codex_workflow_check_...` |
+| Erwartete Tool-ID | `ragflow_tool_rag_codex_workflow_check_...` |
+| Erwartete Pipe-ID | `ragflow_pipe_rag_codex_workflow_check_...` |
 
 Der Dataset-Suffix wird aus der echten Seafile-Repo-ID abgeleitet und ist daher
 umgebungsspezifisch.
@@ -183,7 +183,7 @@ Im Connector-Log müssen Einträge mit `library.sync_started`,
 
 In RAGFlow prüfen:
 
-1. Ein Dataset mit dem Muster `seafile__codex-workflow-check__...` existiert.
+1. Ein Dataset mit dem Muster `RAG_codex_workflow_check_...` existiert.
 2. Das Dataset enthält ein Dokument für die hochgeladene Markdown-Datei. Bei
    Text-Projektion endet der Dokumentname auf `.md.txt`.
 3. Die Dokument-Metadaten enthalten `repo_id`, `source_path`,
@@ -206,15 +206,15 @@ uv run connector openwebui-sync-once --json
 In OpenWebUI prüfen:
 
 1. Es gibt ein Tool mit dem Präfix
-   `ragflow_tool_seafile__codex_workflow_check__`.
+   `ragflow_tool_rag_codex_workflow_check_`.
 2. Es gibt eine Pipe beziehungsweise Function mit dem Präfix
-   `ragflow_pipe_seafile__codex_workflow_check__`.
+   `ragflow_pipe_rag_codex_workflow_check_`.
 3. Die Pipe ist aktiv.
 4. Die Pipe-Valves enthalten die richtige `DATASET_ID`, eine `RAGFLOW_CHAT_ID`,
    `CONNECTOR_PROXY_BASE_URL` und das Runtime-Proxy-Secret. Secret-Werte nicht
    in Tickets, Logs oder Dokumentation kopieren.
 5. Im Modellpicker erscheint ein Modell nach dem Muster
-   `Seafile · seafile__codex-workflow-check__...`.
+   `Seafile · RAG_codex_workflow_check_...`.
 
 Der Connector-State ist zusätzlich im Dashboard unter Systeme/OpenWebUI
 prüfbar. Erwartet ist eine Mapping-Zeile mit `sync_status=synced` oder bei
