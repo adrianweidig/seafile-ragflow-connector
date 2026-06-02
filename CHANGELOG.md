@@ -23,6 +23,8 @@ werden keine historischen Releases nachträglich erfunden.
 
 ### Fixed
 
+- RAGFlow-Template-Datasets mit `graphrag.batch_chunk_token_size` aus RAGFlow
+  0.25.4 können wieder als Vorlage für neu angelegte Connector-Datasets dienen.
 - Die Dashboard-Löschung von OpenWebUI-Pipes erkennt auch die von OpenWebUI
   gespeicherte kompakte Function-Metadatenform sicher als connector-eigen.
 

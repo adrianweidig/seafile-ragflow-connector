@@ -55,6 +55,10 @@ class TemplatePayloadBuilderTests(unittest.TestCase):
                     "pages": [[1, 1000000]],
                     "table_context_size": 0,
                     "topn_tags": 3,
+                    "graphrag": {
+                        "use_graphrag": False,
+                        "batch_chunk_token_size": 4096,
+                    },
                     "parent_child": {"use_parent_child": False, "children_delimiter": "\n"},
                 },
             },
@@ -68,6 +72,7 @@ class TemplatePayloadBuilderTests(unittest.TestCase):
                 "filename_embd_weight": 0.1,
                 "pages": [[1, 1000000]],
                 "topn_tags": 3,
+                "graphrag": {"use_graphrag": False},
                 "parent_child": {"use_parent_child": False, "children_delimiter": "\n"},
             },
         )
