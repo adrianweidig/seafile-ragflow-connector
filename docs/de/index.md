@@ -15,6 +15,7 @@ GitHub Pages oder andere statische Dokumentationsansichten.
 - [Environment-Variablen](../environment.md)
 - [Admin-Erststart-Checkliste](../admin-first-start-checklist.md)
 - [Manueller Seafile-RAGFlow-OpenWebUI-Prüfablauf](../manual-workflow-verification.md)
+- [OBS-Demoaufnahme](../demo-recording.md)
 - [Internationalisierung und Unicode](../i18n.md)
 - [Test- und Ausführungsmodell](../testing.md)
 - [Betrieb und Deployment](../operations.md)
