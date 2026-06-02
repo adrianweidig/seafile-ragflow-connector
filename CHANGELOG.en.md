@@ -21,6 +21,9 @@ retroactively.
 
 ### Fixed
 
+- RAGFlow template datasets containing `graphrag.batch_chunk_token_size` from
+  RAGFlow 0.25.4 can again be used as templates for newly created connector
+  datasets.
 - Dashboard deletion of OpenWebUI pipes now also recognizes OpenWebUI's compact
   persisted function metadata shape as connector-owned.
 

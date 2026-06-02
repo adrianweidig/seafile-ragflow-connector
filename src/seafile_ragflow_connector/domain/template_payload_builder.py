@@ -45,6 +45,10 @@ NAIVE_PARSER_CONFIG_CREATE_FIELDS = {
     "parent_child",
 }
 
+GRAPHRAG_RUNTIME_ONLY_FIELDS = {
+    "batch_chunk_token_size",
+}
+
 RAPTOR_ONLY_CHUNK_METHODS = {"qa", "manual", "paper", "book", "laws", "presentation"}
 EMPTY_CONFIG_CHUNK_METHODS = {"table", "picture", "one", "email"}
 
@@ -119,7 +123,7 @@ def sanitize_parser_config_for_create(chunk_method: Any, parser_config: Any) -> 
         return parser_config
     if chunk_method == "naive":
         return {
-            key: value
+            key: _sanitize_naive_parser_config_value(key, value)
             for key, value in parser_config.items()
             if key in NAIVE_PARSER_CONFIG_CREATE_FIELDS
         }
@@ -128,3 +132,13 @@ def sanitize_parser_config_for_create(chunk_method: Any, parser_config: Any) -> 
     if chunk_method in EMPTY_CONFIG_CHUNK_METHODS:
         return {}
     return parser_config
+
+
+def _sanitize_naive_parser_config_value(key: str, value: Any) -> Any:
+    if key == "graphrag" and isinstance(value, dict):
+        return {
+            child_key: child_value
+            for child_key, child_value in value.items()
+            if child_key not in GRAPHRAG_RUNTIME_ONLY_FIELDS
+        }
+    return value
