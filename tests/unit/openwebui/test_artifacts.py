@@ -61,8 +61,8 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertTrue(tool.valves["CONNECTOR_PROXY_VERIFY_SSL"])
         self.assertEqual(tool.valves["CONNECTOR_PROXY_CA_BUNDLE"], "")
         self.assertIn("owner: seafile-ragflow-connector", tool.content)
-        self.assertIn("artifact_version: 22", tool.content)
-        self.assertIn("artifact_version: 22", pipe.content)
+        self.assertIn("artifact_version: 23", tool.content)
+        self.assertIn("artifact_version: 23", pipe.content)
         self.assertFalse(tool.valves["TLS_DEBUG"])
         self.assertEqual(tool.valves["SHOW_SOURCE_SCORES"], True)
         self.assertEqual(tool.valves["LANGUAGE"], "de")
@@ -92,7 +92,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("_normalize_sources(", pipe.content)
         self.assertIn("DEFAULT_RAG_SYSTEM_PROMPT", pipe.content)
         self.assertIn("generate_answer", pipe.content)
-        self.assertIn("version: 3.9.1", pipe.content)
+        self.assertIn("version: 3.9.2", pipe.content)
         self.assertIn("ANSWER_SYNTHESIS_MAX_TOKENS", pipe.content)
         self.assertIn('"max_tokens": int(valves.ANSWER_SYNTHESIS_MAX_TOKENS)', pipe.content)
         self.assertIn("EMIT_CITATION_EVENTS", pipe.content)
@@ -281,6 +281,25 @@ class OpenWebUIArtifactTests(unittest.TestCase):
 
         self.assertEqual(answer, "")
 
+    def test_pipe_treats_file_content_questions_as_content_intent(self) -> None:
+        namespace = _pipe_namespace()
+
+        self.assertTrue(
+            namespace["_is_content_question"]("Was sind die Inhalte der verschiedenen Dateien?")
+        )
+        self.assertTrue(namespace["_is_content_question"]("Du sollst mir die Inhalte geben."))
+        self.assertFalse(
+            namespace["_is_source_inventory_question"](
+                "Was sind die Inhalte der verschiedenen Dateien?"
+            )
+        )
+        self.assertFalse(
+            namespace["_is_source_inventory_question"]("Du sollst mir die Inhalte geben.")
+        )
+        self.assertTrue(
+            namespace["_is_source_inventory_question"]("Welche Quellen wurden gefunden?")
+        )
+
     def test_pipe_final_answer_uses_audit_markdown_by_default(self) -> None:
         inputs = DatasetArtifactInputs(
             namespace="ragflow",
@@ -431,11 +450,28 @@ class OpenWebUIArtifactTests(unittest.TestCase):
             answer,
             sources,
             pipe_instance.valves,
+            answer_origin="source_inventory",
         )
 
         self.assertIn("folgende Dokumente", final_answer)
         self.assertIn("marker-a.md", final_answer)
+        self.assertIn("Quellen gefunden, aber keine generierte Antwort", final_answer)
         self.assertEqual(final_answer.count("## Nachweise"), 1)
+
+    def test_pipe_source_inventory_origin_is_not_generated(self) -> None:
+        namespace = _pipe_namespace()
+
+        self.assertNotIn("source_inventory", namespace["ANSWER_GENERATED_ORIGINS"])
+        self.assertIn("source_inventory", namespace["NON_GENERATED_ORIGINS"])
+        self.assertIn(
+            "Quellen gefunden, aber keine Antwort generiert",
+            namespace["_completion_status"](
+                2,
+                0.1,
+                answer_origin="source_inventory",
+                hit_count=2,
+            ),
+        )
 
     def test_pipe_extract_answer_result_uses_only_canonical_paths(self) -> None:
         namespace = _pipe_namespace()
@@ -464,6 +500,25 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         )
         self.assertEqual(canonical_result.origin, "canonical_answer")
         self.assertEqual(canonical_result.path, "data.answer")
+
+        provider_marker_result = namespace["extract_answer_result"](
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": (
+                                "Der Marker steht in der Testdatei [ID:3]. "
+                                "{{source:1}} ##2$$"
+                            ),
+                        }
+                    }
+                ]
+            }
+        )
+        self.assertIn("[ID:3]", provider_marker_result.answer)
+        self.assertIn("{{source:1}}", provider_marker_result.answer)
+        self.assertIn("##2$$", provider_marker_result.answer)
 
         for payload in (
             {"message": "dateiname.md", "sources": [{"content": "Ein Quellenchunk."}]},

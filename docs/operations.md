@@ -480,7 +480,7 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
 - Alte connector-eigene Zielartefakte bereinigen: erst
   `connector cleanup-orphans` ausführen und den Plan prüfen. Mit
   `connector cleanup-orphans --execute --run-sync --wait-parse-seconds 240`
-  werden nur connector-eigene RAGFlow-Datasets mit `seafile__`-Präfix,
+  werden nur connector-eigene RAGFlow-Datasets mit `RAG_`- oder Legacy-`seafile__`-Präfix,
   connector-eigene RAGFlow-Chats sowie OpenWebUI-Tools/Functions mit
   Connector-Marker gelöscht; anschließend werden aktuelle Seafile-Libraries
   wieder synchronisiert.

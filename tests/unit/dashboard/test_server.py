@@ -515,6 +515,19 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("Nachweise", result["source_markdown"])
         self.assertIn("Fallbacktext aus RAGFlow Retrieval", result["source_markdown"])
         self.assertEqual(len(result["sources"]), 1)
+        self.assertEqual(result["diagnostics"]["provider"], "ragflow")
+        self.assertEqual(
+            result["diagnostics"]["endpoint"],
+            "/api/v1/openai/{chat_id}/chat/completions",
+        )
+        self.assertEqual(result["diagnostics"]["fallback"], "retrieval")
+        self.assertEqual(result["diagnostics"]["fallback_reason"], "chat_completion_failed")
+        self.assertEqual(result["diagnostics"]["answer_path"], "")
+        self.assertEqual(result["diagnostics"]["reference_path"], "retrieval.chunks")
+        self.assertEqual(result["diagnostics"]["http_status"], 200)
+        self.assertTrue(result["diagnostics"]["chat_id_present"])
+        self.assertTrue(result["diagnostics"]["dataset_id_present"])
+        self.assertIn("code", result["diagnostics"]["redacted_response_hint"])
 
     def test_openwebui_chat_proxy_falls_back_to_retrieval_when_chat_times_out(self) -> None:
         store = _store(self)
@@ -576,6 +589,8 @@ class DashboardServerTests(unittest.TestCase):
         self.assertTrue(result["retrieval_only"])
         self.assertIn("Fallback nach Chat-Timeout", result["source_markdown"])
         self.assertEqual(len(result["sources"]), 1)
+        self.assertEqual(result["diagnostics"]["error_class"], "ReadTimeout")
+        self.assertEqual(result["diagnostics"]["redacted_response_hint"], "request timed out")
 
     def test_openwebui_chat_proxy_enriches_answer_with_multiple_retrieval_chunks(self) -> None:
         store = _store(self)

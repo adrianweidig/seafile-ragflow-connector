@@ -19,16 +19,18 @@ def build_dataset_name(
     library_name: str,
     repo_id: str,
     *,
-    prefix: str = "seafile__",
+    prefix: str = "RAG_",
     max_length: int = 128,
     repo_prefix_length: int = 8,
 ) -> str:
     repo_prefix = repo_id.replace("-", "")[:repo_prefix_length].lower()
-    suffix = f"__{repo_prefix}"
+    legacy_separator = "__" if prefix == "seafile__" else "_"
+    suffix = f"{legacy_separator}{repo_prefix}"
     available_slug_length = max_length - len(prefix) - len(suffix)
     if available_slug_length < 8:
         msg = "dataset name max_length is too small for prefix and repo suffix"
         raise ValueError(msg)
     slug = slugify(library_name)[:available_slug_length].strip("-") or "library"
+    if legacy_separator == "_":
+        slug = slug.replace("-", "_").strip("_") or "library"
     return f"{prefix}{slug}{suffix}"
-

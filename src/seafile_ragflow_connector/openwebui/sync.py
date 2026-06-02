@@ -950,9 +950,11 @@ class OpenWebUISyncService:
         )
 
 
-def _chat_name(namespace: str, dataset_name: str, dataset_id: str) -> str:
+def _chat_name(_namespace: str, dataset_name: str, dataset_id: str) -> str:
     slug = slugify(dataset_name, fallback="dataset").replace("-", "_")
-    return f"owui__{namespace}__{slug}__{sha256_text(dataset_id)[:8]}"
+    if slug.startswith("rag_"):
+        slug = slug[4:] or "dataset"
+    return f"RAG_{slug}_{sha256_text(dataset_id)[:8]}"
 
 
 def _chat_has_dataset(chat: dict[str, Any], dataset_id: str) -> bool:

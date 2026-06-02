@@ -75,7 +75,7 @@ def _completion_status(
         source_text = f"{source_text} · {hit_count} Treffer"
     if answer_origin in ANSWER_GENERATED_ORIGINS:
         answer_text = "Antwort generiert"
-    elif answer_origin == "retrieval_only":
+    elif answer_origin in {"retrieval_only", "source_inventory"}:
         answer_text = "Quellen gefunden, aber keine Antwort generiert"
     else:
         answer_text = "Keine Antwort und keine belastbaren Quellen"
@@ -154,7 +154,7 @@ def extract_answer_result(data: Mapping[str, Any]) -> AnswerExtractionResult:
         text = _answer_value_to_text(value)
         if not text:
             continue
-        answer = _clean_answer(text, clean_ragflow_markers=True)
+        answer = _clean_answer(text, clean_ragflow_markers=False)
         rejection = _answer_rejection_reason(answer)
         if rejection:
             warnings.append(f"{path}: {rejection}")
@@ -346,7 +346,7 @@ def _json_loads_safely(value: str) -> Any:
 
 def _merge_stream_pieces(pieces: list[str]) -> str:
     raw_pieces = [str(piece) for piece in pieces if str(piece or "")]
-    cleaned = [_clean_answer(piece, clean_ragflow_markers=True) for piece in raw_pieces if _clean(piece)]
+    cleaned = [_clean_answer(piece, clean_ragflow_markers=False) for piece in raw_pieces if _clean(piece)]
     cleaned = [piece for piece in cleaned if piece]
     if not cleaned:
         return ""
@@ -361,7 +361,7 @@ def _merge_stream_pieces(pieces: list[str]) -> str:
 
     # OpenAI-style streams usually send deltas. Preserve spaces between deltas.
     if all(len(piece) < 240 for piece in cleaned):
-        return _clean_answer("".join(raw_pieces), clean_ragflow_markers=True)
+        return _clean_answer("".join(raw_pieces), clean_ragflow_markers=False)
 
     return cleaned[-1]
 
@@ -601,6 +601,7 @@ def _rank_hits_for_audit(
     exact_terms = _exact_query_terms(question)
     cited_provider_ids = _answer_provider_citation_ids(answer)
     cited_source_labels = _answer_source_labels(answer)
+    preserve_source_labels = bool(cited_source_labels) and not cited_provider_ids
     evaluated: list[SourceHit] = []
 
     for hit in hits:
@@ -631,7 +632,10 @@ def _rank_hits_for_audit(
             )
         )
 
-    evaluated.sort(key=_audit_hit_sort_key)
+    if preserve_source_labels:
+        evaluated.sort(key=lambda hit: hit.rank)
+    else:
+        evaluated.sort(key=_audit_hit_sort_key)
     primary_assigned = False
     final_hits: list[SourceHit] = []
     for display_rank, hit in enumerate(evaluated, start=1):
@@ -641,11 +645,13 @@ def _rank_hits_for_audit(
                 role = "supporting"
             else:
                 primary_assigned = True
+        rank = hit.rank if preserve_source_labels else display_rank
+        source_id = hit.source_id if preserve_source_labels and hit.source_id else f"S{display_rank}"
         final_hits.append(
             replace(
                 hit,
-                rank=display_rank,
-                source_id=f"S{display_rank}",
+                rank=rank,
+                source_id=source_id,
                 source_role=role,
             )
         )

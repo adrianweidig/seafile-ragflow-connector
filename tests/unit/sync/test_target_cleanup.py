@@ -24,7 +24,8 @@ class _FakeRAGFlowClient:
         active_chat_name = _chat_name("ragflow", ACTIVE_DATASET_NAME, "active-ds")
         self.datasets = [
             {"id": "active-ds", "name": ACTIVE_DATASET_NAME},
-            {"id": "orphan-ds", "name": "seafile__old__repoorph"},
+            {"id": "orphan-ds", "name": "RAG_old_repoorph"},
+            {"id": "legacy-orphan-ds", "name": "seafile__old__repoorph"},
             {"id": "manual-ds", "name": "manual"},
         ]
         self.chats = [
@@ -35,10 +36,16 @@ class _FakeRAGFlowClient:
             },
             {
                 "id": "orphan-chat",
-                "name": "owui__ragflow__old__825ad33a",
+                "name": "RAG_old_825ad33a",
                 "dataset_ids": ["orphan-ds"],
             },
+            {
+                "id": "legacy-orphan-chat",
+                "name": "owui__ragflow__old__825ad33a",
+                "dataset_ids": ["legacy-orphan-ds"],
+            },
             {"id": "manual-chat", "name": "manual", "dataset_ids": ["manual-ds"]},
+            {"id": "manual-rag-chat", "name": "RAG_manual_825ad33a", "dataset_ids": ["manual-ds"]},
         ]
         self.deleted_datasets: list[list[str]] = []
         self.deleted_chats: list[list[str]] = []
@@ -103,7 +110,7 @@ def _session_factory(test_case: unittest.TestCase):
     return sessionmaker(bind=engine, expire_on_commit=False)
 
 
-ACTIVE_DATASET_NAME = "seafile__active__repoacti"
+ACTIVE_DATASET_NAME = "RAG_active_repoacti"
 
 
 @unittest.skipIf(create_engine is None, "sqlalchemy is not installed in this Python environment")
@@ -118,7 +125,7 @@ class TargetCleanupServiceTests(unittest.TestCase):
                     name_slug="active",
                     status="active",
                     ragflow_dataset_id="active-ds",
-                    ragflow_dataset_name="seafile__active__repoacti",
+                    ragflow_dataset_name=ACTIVE_DATASET_NAME,
                 )
             )
             session.commit()
@@ -134,8 +141,11 @@ class TargetCleanupServiceTests(unittest.TestCase):
         )
 
         self.assertTrue(summary.dry_run)
-        self.assertEqual(summary.planned["ragflow_datasets"], ["orphan-ds"])
-        self.assertEqual(summary.planned["ragflow_chats"], ["orphan-chat"])
+        self.assertEqual(summary.planned["ragflow_datasets"], ["orphan-ds", "legacy-orphan-ds"])
+        self.assertEqual(
+            summary.planned["ragflow_chats"],
+            ["orphan-chat", "legacy-orphan-chat"],
+        )
         self.assertEqual(summary.planned["openwebui_tools"], ["ragflow_tool_old_orphan_ds"])
         self.assertEqual(
             summary.planned["openwebui_functions"],
@@ -152,7 +162,7 @@ class TargetCleanupServiceTests(unittest.TestCase):
                     name_slug="active",
                     status="active",
                     ragflow_dataset_id="active-ds",
-                    ragflow_dataset_name="seafile__active__repoacti",
+                    ragflow_dataset_name=ACTIVE_DATASET_NAME,
                 )
             )
             session.commit()
@@ -170,8 +180,8 @@ class TargetCleanupServiceTests(unittest.TestCase):
         )
 
         self.assertFalse(summary.dry_run)
-        self.assertEqual(ragflow.deleted_datasets, [["orphan-ds"]])
-        self.assertEqual(ragflow.deleted_chats, [["orphan-chat"]])
+        self.assertEqual(ragflow.deleted_datasets, [["orphan-ds", "legacy-orphan-ds"]])
+        self.assertEqual(ragflow.deleted_chats, [["orphan-chat", "legacy-orphan-chat"]])
         self.assertEqual(openwebui.deleted_tools, ["ragflow_tool_old_orphan_ds"])
         self.assertEqual(openwebui.deleted_functions, ["ragflow_pipe_old_orphan_ds"])
 

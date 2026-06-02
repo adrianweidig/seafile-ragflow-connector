@@ -350,8 +350,8 @@ class RAGFlowClient:
                 last_data.update(data)
                 if answer := _streaming_answer_fragment(data):
                     _merge_streamed_answer(answer_parts, answer)
-                if isinstance(data.get("reference"), dict):
-                    reference = data["reference"]
+                if streaming_reference := _streaming_reference(data):
+                    reference = streaming_reference
         if answer_parts:
             last_data["answer"] = "".join(answer_parts)
         if reference is not None:
@@ -392,6 +392,26 @@ def _streaming_answer_fragment(data: dict[str, Any]) -> str:
         if choice.get("text"):
             parts.append(str(choice["text"]))
     return "".join(parts)
+
+
+def _streaming_reference(data: dict[str, Any]) -> dict[str, Any] | None:
+    reference = data.get("reference")
+    if isinstance(reference, dict):
+        return dict(reference)
+    choices = data.get("choices")
+    if not isinstance(choices, list):
+        return None
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        for key in ("delta", "message"):
+            container = choice.get(key)
+            if not isinstance(container, dict):
+                continue
+            reference = container.get("reference")
+            if isinstance(reference, dict):
+                return dict(reference)
+    return None
 
 
 def _is_missing_dataset_name_response(payload: Any, name: str) -> bool:

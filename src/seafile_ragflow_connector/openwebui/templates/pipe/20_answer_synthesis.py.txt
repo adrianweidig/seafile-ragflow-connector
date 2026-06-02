@@ -193,10 +193,37 @@ def _is_source_inventory_question(question: Any) -> bool:
     text = _clean(question).lower()
     if not text:
         return False
+    if _is_content_question(text):
+        return False
     return bool(
-        re.search(r"\b(welche|welche\s+dateien|zeige|liste|nenn[e]?)\b.*\b(quellen|dokumente|dateien)\b", text)
-        or re.search(r"\b(quellen|dokumente|dateien)\b.*\b(verfügbar|vorhanden|gefunden|angebunden|indexiert)\b", text)
-        or re.search(r"\bwas\s+(ist|sind)\s+.*\b(quellen|dokumente|dateien)\b", text)
+        re.search(
+            r"\b(welche|zeige|liste|nenn[e]?)\b.*\b(quellen|dokumente|dateien)\b"
+            r".*\b(gefunden|verwendet|verfügbar|vorhanden|angebunden|indexiert|enthalten)\b",
+            text,
+        )
+        or re.search(
+            r"\b(quellen|dokumente|dateien)\b.*"
+            r"\b(verfügbar|vorhanden|gefunden|angebunden|indexiert|verwendet)\b",
+            text,
+        )
+    )
+
+
+def _is_content_question(question: Any) -> bool:
+    text = _clean(question).lower()
+    if not text:
+        return False
+    return bool(
+        re.search(
+            r"\b("
+            r"inhalt|inhalte|steht|zusammenfass|fasse|worum\s+geht|"
+            r"erklär|erklaer|analysier|bewert|vergleiche|vergleich|unterschied|"
+            r"was\s+sagen|was\s+steht|welche\s+aussagen|details|"
+            r"du\s+sollst.*inhalt"
+            r")\b",
+            text,
+            flags=re.IGNORECASE,
+        )
     )
 
 

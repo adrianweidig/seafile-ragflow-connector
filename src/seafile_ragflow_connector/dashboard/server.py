@@ -839,11 +839,17 @@ def _handle_openwebui_chat(
         except (ApiError, httpx.RequestError) as exc:
             if not question:
                 raise
-            structlog.get_logger(__name__).warning(
-                "openwebui.chat_completion_failed_fallback_retrieval",
+            diagnostics = _chat_completion_fallback_diagnostics(
+                exc,
                 dataset_id=dataset_id,
                 chat_id=chat_id,
-                error=str(exc),
+                question=question,
+                top_k=top_k,
+                started_at=started_at,
+            )
+            structlog.get_logger(__name__).warning(
+                "openwebui.chat_completion_failed_fallback_retrieval",
+                **diagnostics,
             )
             sources = _retrieve_openwebui_sources(
                 ragflow,
@@ -854,12 +860,17 @@ def _handle_openwebui_chat(
                 top_k=top_k,
                 files_by_document_id=files_by_document_id,
             )
+            diagnostics["reference_path"] = "retrieval.chunks" if sources else ""
+            diagnostics["reference_path_detected"] = "retrieval.chunks" if sources else None
+            diagnostics["source_count_after_dedup"] = len(sources)
+            diagnostics["latency_ms"] = int((time.perf_counter() - started_at) * 1000)
             return {
                 "answer": "",
                 "sources": sources,
                 "source_markdown": _sources_markdown(sources, context.settings),
                 "retrieval_only": True,
                 "citations_emitted": False,
+                "diagnostics": diagnostics,
             }
         answer_result = extract_answer_result(result)
         sources = normalize_sources(
@@ -978,6 +989,73 @@ def _proxy_error_type(exc: Exception) -> str:
     if isinstance(exc, ApiError):
         return f"HTTP_{exc.status_code or 'API_ERROR'}"
     return classify_httpx_error(exc)
+
+
+def _chat_completion_fallback_diagnostics(
+    exc: Exception,
+    *,
+    dataset_id: str,
+    chat_id: str,
+    question: str | None,
+    top_k: int,
+    started_at: float,
+) -> dict[str, Any]:
+    http_status = exc.status_code if isinstance(exc, ApiError) else None
+    return {
+        "query_id": _query_id(question),
+        "timestamp": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "provider": "ragflow",
+        "endpoint": "/api/v1/openai/{chat_id}/chat/completions",
+        "http_status": http_status,
+        "error_class": exc.__class__.__name__,
+        "fallback": "retrieval",
+        "fallback_reason": "chat_completion_failed",
+        "chat_id_present": bool(chat_id),
+        "dataset_id_present": bool(dataset_id),
+        "answer_path": "",
+        "reference_path": "",
+        "answer_path_detected": None,
+        "reference_path_detected": None,
+        "retrieval_mode": "chat_failed_retrieval_fallback",
+        "top_k": top_k,
+        "latency_ms": int((time.perf_counter() - started_at) * 1000),
+        "redacted_response_hint": _redacted_error_hint(exc),
+    }
+
+
+def _redacted_error_hint(exc: Exception) -> str:
+    payload = exc.payload if isinstance(exc, ApiError) else None
+    if isinstance(payload, dict):
+        safe = {
+            key: value
+            for key, value in payload.items()
+            if key in {"code", "message", "error", "detail", "status", "reason"}
+            and isinstance(value, (str, int, float, bool))
+        }
+        if safe:
+            return json.dumps(redact_mapping(safe), ensure_ascii=False)[:300]
+    if isinstance(payload, str):
+        parsed = _json_loads(payload)
+        if isinstance(parsed, dict):
+            status_code = exc.status_code if isinstance(exc, ApiError) else None
+            return _redacted_error_hint(
+                ApiError(str(exc), status_code=status_code, payload=parsed)
+            )
+        clean = " ".join(payload.split())
+        if clean and len(clean) <= 180:
+            return clean
+    if isinstance(exc, httpx.TimeoutException):
+        return "request timed out"
+    if isinstance(exc, httpx.RequestError):
+        return classify_httpx_error(exc)
+    return ""
+
+
+def _json_loads(value: str) -> Any:
+    try:
+        return json.loads(value)
+    except ValueError:
+        return None
 
 
 def _require_proxy_secret(settings: Settings, authorization: str | None) -> None:

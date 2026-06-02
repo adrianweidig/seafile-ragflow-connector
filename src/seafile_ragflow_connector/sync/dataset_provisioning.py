@@ -67,7 +67,7 @@ class DatasetProvisioner:
         template_dataset_name: str = "connector_template",
         template_auto_create: bool = True,
         template_required: bool = True,
-        dataset_prefix: str = "seafile__",
+        dataset_prefix: str = "RAG_",
         dataset_name_max_length: int = 128,
     ) -> None:
         self.ragflow_client = ragflow_client
