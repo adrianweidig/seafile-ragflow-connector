@@ -8,6 +8,16 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+## 0.1.13 - 2026-06-02
+
+### Changed
+
+- Auditierte OpenWebUI-Nachweise werden als schmale Quellenblöcke statt als
+  breite Markdown-Tabelle gerendert, damit das Evidenzregister in OpenWebUI ohne
+  horizontales Abschneiden lesbar bleibt.
+- Die OpenWebUI-Artefaktversion wurde auf 22 erhöht, damit vorhandene Pipes das
+  korrigierte Audit-Rendering sicher übernehmen.
+
 ## 0.1.12 - 2026-06-02
 
 ### Added

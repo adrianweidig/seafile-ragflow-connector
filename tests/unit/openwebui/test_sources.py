@@ -490,13 +490,11 @@ class OpenWebUISourceTests(unittest.TestCase):
         )
 
         self.assertIn("## Nachweise", markdown)
-        self.assertIn(
-            "| ID | Rolle | Dokument | Fundstelle | Score | Match | Aussage | Öffnen |",
-            markdown,
-        )
         self.assertIn("**Audit-Status:** retrieval-only", markdown)
         self.assertIn("**Claim-Abdeckung:** 0/1 Aussagen belegt", markdown)
-        self.assertIn("| S1 |", markdown)
+        self.assertIn("### S1 -", markdown)
+        self.assertIn("- **Dokument:**", markdown)
+        self.assertIn("- **Öffnen:**", markdown)
         self.assertIn("dienstleister.pdf", markdown)
         self.assertIn("Seite 4", markdown)
         self.assertIn("Zeile 88-104", markdown)

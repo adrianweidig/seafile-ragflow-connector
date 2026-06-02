@@ -528,8 +528,6 @@ def _render_sources_audit_markdown(
     lines.append(f"**Audit-Status:** {_audit_status_label(sources, l10n)}")
     lines.append(f"**Claim-Abdeckung:** {_claim_coverage_label(sources, l10n)}")
     lines.append("")
-    lines.append("| ID | Rolle | Dokument | Fundstelle | Score | Match | Aussage | Öffnen |")
-    lines.append("|---|---|---|---|---|---|---|---|")
 
     for source in sources[:max_sources]:
         metadata = _source_metadata(source)
@@ -547,31 +545,21 @@ def _render_sources_audit_markdown(
             or l10n.text("sources.unknown")
         )
         actions = _source_actions(source, l10n) or l10n.text("sources.no_direct_link")
-        lines.append(
-            "| "
-            + " | ".join(
-                _escape_table_cell(value)
-                for value in (
-                    source_id,
-                    role,
-                    document,
-                    location,
-                    relevance,
-                    match_type,
-                    claim,
-                    actions,
-                )
-            )
-            + " |"
+        lines.extend(
+            [
+                f"### {source_id} - {role}",
+                f"- **Dokument:** {document}",
+                f"- **Fundstelle:** {location}",
+                f"- **Score/Match:** {relevance} / {match_type}",
+                f"- **Aussage:** {claim}",
+                f"- **Öffnen:** {actions}",
+                "",
+            ]
         )
 
     if len(sources) > max_sources:
         remaining_text = l10n.text("sources.more_documents", count=len(sources) - max_sources)
-        lines.append(
-            "|  | "
-            + _escape_table_cell(remaining_text)
-            + " |  |  |  |  |  |  |"
-        )
+        lines.append(f"- {remaining_text}")
 
     if show_debug:
         debug_lines = []

@@ -61,8 +61,8 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertTrue(tool.valves["CONNECTOR_PROXY_VERIFY_SSL"])
         self.assertEqual(tool.valves["CONNECTOR_PROXY_CA_BUNDLE"], "")
         self.assertIn("owner: seafile-ragflow-connector", tool.content)
-        self.assertIn("artifact_version: 21", tool.content)
-        self.assertIn("artifact_version: 21", pipe.content)
+        self.assertIn("artifact_version: 22", tool.content)
+        self.assertIn("artifact_version: 22", pipe.content)
         self.assertFalse(tool.valves["TLS_DEBUG"])
         self.assertEqual(tool.valves["SHOW_SOURCE_SCORES"], True)
         self.assertEqual(tool.valves["LANGUAGE"], "de")
@@ -92,7 +92,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("_normalize_sources(", pipe.content)
         self.assertIn("DEFAULT_RAG_SYSTEM_PROMPT", pipe.content)
         self.assertIn("generate_answer", pipe.content)
-        self.assertIn("version: 3.9.0", pipe.content)
+        self.assertIn("version: 3.9.1", pipe.content)
         self.assertIn("ANSWER_SYNTHESIS_MAX_TOKENS", pipe.content)
         self.assertIn('"max_tokens": int(valves.ANSWER_SYNTHESIS_MAX_TOKENS)', pipe.content)
         self.assertIn("EMIT_CITATION_EVENTS", pipe.content)
@@ -316,10 +316,9 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("## Nachweise", final_answer)
         self.assertIn("**Audit-Status:** nicht ausreichend belegt", final_answer)
         self.assertIn("**Claim-Abdeckung:** 0/1 Aussagen belegt", final_answer)
-        self.assertIn(
-            "| ID | Rolle | Dokument | Fundstelle | Score | Match | Aussage | Öffnen |",
-            final_answer,
-        )
+        self.assertIn("### S1 -", final_answer)
+        self.assertIn("- **Dokument:**", final_answer)
+        self.assertIn("- **Öffnen:**", final_answer)
         self.assertNotIn("chunk_id", final_answer)
         self.assertNotIn("document_id", final_answer)
 

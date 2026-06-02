@@ -8,6 +8,16 @@ retroactively.
 
 ## Unreleased
 
+## 0.1.13 - 2026-06-02
+
+### Changed
+
+- Audited OpenWebUI evidence is rendered as narrow source blocks instead of a
+  wide Markdown table so the evidence register remains readable in OpenWebUI
+  without horizontal clipping.
+- The OpenWebUI artifact version was bumped to 22 so existing pipes reliably
+  receive the corrected audit rendering.
+
 ## 0.1.12 - 2026-06-02
 
 ### Added
