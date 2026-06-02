@@ -75,7 +75,7 @@ jobs:
 
           echo "artifact_name=release-artifact-${ref_slug}-${short_sha}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.package.outputs.artifact_name }}
           path: release-artifacts/
