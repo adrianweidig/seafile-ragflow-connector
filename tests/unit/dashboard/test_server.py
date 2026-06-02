@@ -329,10 +329,10 @@ class DashboardServerTests(unittest.TestCase):
                 ragflow_dataset_id="dataset-1",
                 ragflow_dataset_name="Dataset",
                 ragflow_chat_id="chat-1",
-                openwebui_pipe_id="pipe-1",
+                openwebui_pipe_id="ragflow_pipe_demo_dataset1",
                 openwebui_model_name="ragflow/demo",
                 pipe_definition_hash="hash",
-                openwebui_pipe_payload={"id": "pipe-1"},
+                openwebui_pipe_payload={"id": "ragflow_pipe_demo_dataset1"},
                 sync_status="synced",
             )
             session.add(mapping)
@@ -346,13 +346,13 @@ class DashboardServerTests(unittest.TestCase):
         original_openwebui = dashboard_server.OpenWebUIClient
         dashboard_server.OpenWebUIClient = _FakeOpenWebUIAdminClient  # type: ignore[assignment]
         _FakeOpenWebUIAdminClient.functions = {
-            "pipe-1": {
-                "id": "pipe-1",
+            "ragflow_pipe_demo_dataset1": {
+                "id": "ragflow_pipe_demo_dataset1",
+                "type": "pipe",
                 "meta": {
                     "manifest": {
                         "owner": "seafile-ragflow-connector",
-                        "kind": "pipe",
-                        "ragflow_dataset_id": "dataset-1",
+                        "artifact_version": "24",
                     }
                 },
             }
@@ -383,7 +383,10 @@ class DashboardServerTests(unittest.TestCase):
 
         self.assertEqual(data["status"], "deleted")
         self.assertFalse(data["library_deleted"])
-        self.assertEqual(_FakeOpenWebUIAdminClient.deleted_functions, ["pipe-1"])
+        self.assertEqual(
+            _FakeOpenWebUIAdminClient.deleted_functions,
+            ["ragflow_pipe_demo_dataset1"],
+        )
         with store.session_factory() as session:
             stored = session.get(OpenWebUIDatasetMapping, mapping_id)
             self.assertIsNotNone(stored)
@@ -392,6 +395,25 @@ class DashboardServerTests(unittest.TestCase):
             self.assertIsNone(stored.pipe_definition_hash)
             self.assertEqual(stored.openwebui_pipe_payload, {})
             self.assertEqual(stored.sync_status, "pending")
+
+    def test_openwebui_delete_pipe_ownership_rejects_dataset_mismatch(self) -> None:
+        artifact = {
+            "id": "ragflow_pipe_demo_otherdataset",
+            "type": "pipe",
+            "meta": {
+                "manifest": {
+                    "owner": "seafile-ragflow-connector",
+                    "artifact_version": "24",
+                }
+            },
+        }
+        self.assertFalse(
+            dashboard_server._is_owned_openwebui_artifact(  # type: ignore[attr-defined]
+                artifact,
+                expected_kind="pipe",
+                dataset_id="dataset-1",
+            )
+        )
 
     def test_openwebui_delete_chat_endpoint_clears_chat_without_library_delete(self) -> None:
         store = _store(self)

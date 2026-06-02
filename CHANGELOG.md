@@ -21,6 +21,11 @@ werden keine historischen Releases nachträglich erfunden.
   Antwortbelege erscheinen. Die OpenWebUI-Pipe-Artefaktversion wurde dafür auf
   24 erhöht.
 
+### Fixed
+
+- Die Dashboard-Löschung von OpenWebUI-Pipes erkennt auch die von OpenWebUI
+  gespeicherte kompakte Function-Metadatenform sicher als connector-eigen.
+
 ## 0.1.13 - 2026-06-02
 
 ### Changed
