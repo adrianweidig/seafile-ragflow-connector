@@ -24,7 +24,11 @@ from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.persistence.models.template import DatasetSettingsSnapshot
-from seafile_ragflow_connector.sync.dataset_provisioning import DatasetProvisioner, LibrarySource
+from seafile_ragflow_connector.sync.dataset_provisioning import (
+    DatasetProvisioner,
+    DatasetProvisioningResult,
+    LibrarySource,
+)
 from seafile_ragflow_connector.sync.dataset_settings import DatasetSettingsService
 from seafile_ragflow_connector.sync.discovery import (
     DiscoveredLibrary,
@@ -159,12 +163,19 @@ class SyncOrchestrator:
         with self.session_factory() as session:
             db_library = self._get_library(session, repo_id)
             previous_dataset_id = db_library.ragflow_dataset_id
+            previous_dataset_name = db_library.ragflow_dataset_name
             source = LibrarySource(
                 repo_id=db_library.repo_id,
                 name=db_library.name,
                 owner_email=db_library.owner_email,
             )
-        result = self.dataset_provisioner.ensure_dataset(source)
+        result = self._reuse_bound_dataset(
+            source,
+            dataset_id=previous_dataset_id,
+            dataset_name=previous_dataset_name,
+        )
+        if result is None:
+            result = self.dataset_provisioner.ensure_dataset(source)
         with self.session_factory() as session:
             db_library = self._get_library(session, repo_id)
             dataset_replaced = (
@@ -199,6 +210,41 @@ class SyncOrchestrator:
                 dataset_id=result.dataset_id,
             )
         return result.dataset_id
+
+    def _reuse_bound_dataset(
+        self,
+        source: LibrarySource,
+        *,
+        dataset_id: str | None,
+        dataset_name: str | None,
+    ) -> DatasetProvisioningResult | None:
+        if not dataset_id:
+            return None
+        try:
+            dataset = self.ragflow_client.get_dataset(dataset_id)
+        except ApiError as exc:
+            self.log.info(
+                "ragflow.dataset_bound_reuse_skipped",
+                repo_id=source.repo_id,
+                dataset_id=dataset_id,
+                status_code=exc.status_code,
+            )
+            return None
+        if (
+            self.dataset_provisioner.template_auto_create
+            or self.dataset_provisioner.template_required
+        ):
+            self.dataset_provisioner.ensure_template_dataset()
+        resolved = dict(dataset)
+        resolved["id"] = str(resolved.get("id") or dataset_id)
+        resolved["name"] = str(resolved.get("name") or dataset_name or resolved["id"])
+        self.log.info(
+            "ragflow.dataset_bound_reused",
+            repo_id=source.repo_id,
+            dataset_id=resolved["id"],
+            dataset_name=resolved["name"],
+        )
+        return self.dataset_provisioner.result_from_existing_dataset(source, resolved)
 
     def sync_library_full(self, repo_id: str, *, scope: str = "/") -> SyncSummary:
         sync_id = new_sync_id(repo_id)

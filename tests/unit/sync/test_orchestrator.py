@@ -6,6 +6,7 @@ try:
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
+    from seafile_ragflow_connector.clients.http import ApiError
     from seafile_ragflow_connector.domain.file_classification import FilePolicy
     from seafile_ragflow_connector.persistence.db import Base
     from seafile_ragflow_connector.persistence.models.file import File
@@ -54,6 +55,7 @@ class _FakeRAGFlowClient:
         self.dataset_id = "dataset"
         self.generated_dataset_exists = True
         self.template_exists = True
+        self.datasets_by_id: dict[str, dict[str, object]] = {}
 
     def list_documents(
         self,
@@ -74,6 +76,11 @@ class _FakeRAGFlowClient:
         if self.generated_dataset_exists:
             return [{"id": self.dataset_id, "name": name or "Dataset"}]
         return []
+
+    def get_dataset(self, dataset_id: str) -> dict[str, object]:
+        if dataset_id in self.datasets_by_id:
+            return self.datasets_by_id[dataset_id]
+        raise ApiError("dataset not found", status_code=404)
 
     def create_dataset(self, payload: dict[str, object]) -> dict[str, object]:
         self.created_datasets.append(payload)
@@ -243,6 +250,50 @@ class OrchestratorUploadTests(unittest.TestCase):
             db_file = session.query(File).one()
             self.assertIsNone(db_file.ragflow_document_id)
             self.assertEqual(db_file.sync_status, "pending")
+
+    def test_existing_bound_legacy_dataset_is_reused_before_new_name_creation(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo",
+                    name="Demo",
+                    name_slug="demo",
+                    status="error",
+                    last_error="previous failure",
+                    ragflow_dataset_id="dataset-old",
+                    ragflow_dataset_name="seafile__demo__repo",
+                )
+            )
+            session.commit()
+
+        ragflow_client = _FakeRAGFlowClient()
+        ragflow_client.generated_dataset_exists = False
+        ragflow_client.datasets_by_id["dataset-old"] = {
+            "id": "dataset-old",
+            "name": "seafile__demo__repo",
+        }
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"%PDF-1.4\ncontent"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        dataset_id = orchestrator.ensure_dataset_for_repo("repo")
+
+        self.assertEqual(dataset_id, "dataset-old")
+        self.assertEqual(ragflow_client.created_datasets, [])
+        with session_factory() as session:
+            library = session.get(Library, "repo")
+            self.assertIsNotNone(library)
+            assert library is not None
+            self.assertEqual(library.ragflow_dataset_name, "seafile__demo__repo")
+            self.assertEqual(library.status, "active")
+            self.assertIsNone(library.last_error)
 
     def test_missing_template_dataset_is_created_with_rag_defaults(self) -> None:
         session_factory = _session_factory(self)

@@ -90,16 +90,7 @@ class DatasetProvisioner:
             if self.template_auto_create or self.template_required:
                 self.ensure_template_dataset()
             dataset = existing[0]
-            settings_hash = dataset_settings_fingerprint(dataset)
-            return DatasetProvisioningResult(
-                repo_id=library.repo_id,
-                dataset_id=str(dataset["id"]),
-                dataset_name=str(dataset["name"]),
-                created=False,
-                template_hash=None,
-                settings_hash=settings_hash,
-                settings_payload=dataset,
-            )
+            return self.result_from_existing_dataset(library, dataset)
 
         template = self.ensure_template_dataset()
         try:
@@ -121,6 +112,22 @@ class DatasetProvisioner:
             template_hash=dataset_settings_fingerprint(template),
             settings_hash=settings_hash,
             settings_payload=created,
+        )
+
+    def result_from_existing_dataset(
+        self,
+        library: LibrarySource,
+        dataset: dict[str, Any],
+    ) -> DatasetProvisioningResult:
+        settings_hash = dataset_settings_fingerprint(dataset)
+        return DatasetProvisioningResult(
+            repo_id=library.repo_id,
+            dataset_id=str(dataset["id"]),
+            dataset_name=str(dataset["name"]),
+            created=False,
+            template_hash=None,
+            settings_hash=settings_hash,
+            settings_payload=dataset,
         )
 
     def ensure_template_dataset(self) -> dict[str, Any]:
