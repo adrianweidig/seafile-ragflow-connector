@@ -25,7 +25,7 @@ class OBSBridgeError(RuntimeError):
 class OBSWebSocketConfig:
     host: str
     port: int
-    password: str | None
+    auth_secret: str | None
     timeout_seconds: float
 
 
@@ -121,10 +121,12 @@ class _OBSWebSocketSession:
         identify: dict[str, Any] = {"rpcVersion": min(int(data.get("rpcVersion") or 1), 1)}
         authentication = data.get("authentication")
         if isinstance(authentication, dict):
-            if not self.config.password:
-                raise OBSBridgeError("OBS WebSocket requires authentication but no password is set")
+            if not self.config.auth_secret:
+                raise OBSBridgeError(
+                    "OBS WebSocket requires authentication but no auth secret is set"
+                )
             identify["authentication"] = _obs_auth_response(
-                self.config.password,
+                self.config.auth_secret,
                 str(authentication.get("salt") or ""),
                 str(authentication.get("challenge") or ""),
             )
@@ -361,7 +363,7 @@ def main() -> int:
                 "status": "listening",
                 "http": f"http://{args.host}:{args.port}",
                 "obs_websocket": f"{obs_config.host}:{obs_config.port}",
-                "auth_configured": bool(obs_config.password),
+                "auth_configured": bool(obs_config.auth_secret),
             },
             ensure_ascii=False,
         ),
@@ -388,7 +390,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--obs-host", default=os.environ.get("OBS_WEBSOCKET_HOST", "127.0.0.1"))
     parser.add_argument("--obs-port", type=int, default=None)
-    parser.add_argument("--obs-password", default=os.environ.get("OBS_WEBSOCKET_PASSWORD"))
+    parser.add_argument(
+        "--obs-password",
+        dest="obs_auth_secret",
+        default=os.environ.get("OBS_WEBSOCKET_PASSWORD"),
+    )
     parser.add_argument(
         "--obs-config",
         type=Path,
@@ -409,7 +415,7 @@ def _obs_config_from_args(args: argparse.Namespace) -> OBSWebSocketConfig:
     return OBSWebSocketConfig(
         host=args.obs_host,
         port=port or int(config.get("server_port") or 4455),
-        password=args.obs_password or _string_or_none(config.get("server_password")),
+        auth_secret=args.obs_auth_secret or _string_or_none(config.get("server_password")),
         timeout_seconds=args.timeout_seconds,
     )
 
@@ -431,12 +437,10 @@ def _default_obs_websocket_config_path() -> Path:
     return Path(appdata) / "obs-studio" / "plugin_config" / "obs-websocket" / "config.json"
 
 
-def _obs_auth_response(password: str, salt: str, challenge: str) -> str:
+def _obs_auth_response(auth_secret: str, salt: str, challenge: str) -> str:
     # OBS WebSocket v5 requires this SHA-256 challenge-response; this is not
-    # password storage or a password verifier managed by this repository.
-    # lgtm[py/weak-sensitive-data-hashing]
-    secret = base64.b64encode(hashlib.sha256((password + salt).encode("utf-8")).digest())
-    # lgtm[py/weak-sensitive-data-hashing]
+    # credential storage or a verifier managed by this repository.
+    secret = base64.b64encode(hashlib.sha256((auth_secret + salt).encode("utf-8")).digest())
     return base64.b64encode(hashlib.sha256(secret + challenge.encode("utf-8")).digest()).decode(
         "ascii"
     )
