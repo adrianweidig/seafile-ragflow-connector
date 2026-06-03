@@ -46,6 +46,7 @@ worktree.
 | `OBS_RECORDING_FORMAT` | alternative format hint, `mkv` becomes `.mkv` |
 | `OBS_SCENE_NAME` | optional OBS scene for the run |
 | `OBS_SCREENSHOT_WIDTH` / `OBS_SCREENSHOT_HEIGHT` | screenshot size for marker validation, default `1920x1080` |
+| `OBS_WEBHOOK_SCREENSHOT_ROOT` | allowed base directory for screenshot files written by the local bridge script |
 
 If the webhook does not accept JSON payloads, set
 `OBS_WEBHOOK_PAYLOAD_MODE=none`.

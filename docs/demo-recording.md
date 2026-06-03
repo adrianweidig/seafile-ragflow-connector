@@ -47,6 +47,7 @@ Arbeitsbaum.
 | `OBS_RECORDING_FORMAT` | alternative Formatangabe, `mkv` wird zu `.mkv` |
 | `OBS_SCENE_NAME` | optionale OBS-Szene für den Lauf |
 | `OBS_SCREENSHOT_WIDTH` / `OBS_SCREENSHOT_HEIGHT` | Screenshot-Größe für Markerprüfung, Default `1920x1080` |
+| `OBS_WEBHOOK_SCREENSHOT_ROOT` | erlaubter Basisordner für Screenshot-Dateien des lokalen Bridge-Skripts |
 
 Wenn der Webhook keine JSON-Payload akzeptiert, setze
 `OBS_WEBHOOK_PAYLOAD_MODE=none`.

@@ -331,10 +331,21 @@ class OBSWebhookHandler(BaseHTTPRequestHandler):
             "written": False,
         }
         if output_path:
-            path = Path(output_path)
-            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                path = self.server.safe_screenshot_path(output_path)
+            except OBSBridgeError as exc:
+                self._send_json(
+                    {
+                        **result,
+                        "path": output_path,
+                        "error": str(exc),
+                    },
+                    status=400,
+                )
+                return
             raw = image_data.split(",", 1)[-1]
             data = base64.b64decode(raw)
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
             result.update(
                 {
@@ -377,9 +388,16 @@ class OBSWebhookHandler(BaseHTTPRequestHandler):
 
 
 class OBSWebhookServer(ThreadingHTTPServer):
-    def __init__(self, address: tuple[str, int], obs_config: OBSWebSocketConfig) -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        obs_config: OBSWebSocketConfig,
+        *,
+        screenshot_root: Path,
+    ) -> None:
         super().__init__(address, OBSWebhookHandler)
         self.obs_client = OBSWebSocketClient(obs_config)
+        self.screenshot_root = screenshot_root.resolve()
 
     def obs_request(
         self,
@@ -407,6 +425,19 @@ class OBSWebhookServer(ThreadingHTTPServer):
             raise OBSBridgeError("OBS did not return a current program scene name")
         return scene_name
 
+    def safe_screenshot_path(self, output_path: str) -> Path:
+        requested = Path(output_path)
+        if not requested.is_absolute():
+            requested = self.screenshot_root / requested
+        resolved = requested.resolve()
+        try:
+            resolved.relative_to(self.screenshot_root)
+        except ValueError as exc:
+            raise OBSBridgeError(
+                "screenshot output_path must stay below screenshot_root"
+            ) from exc
+        return resolved
+
     def wait_for_recording(self, expected: bool) -> dict[str, Any]:
         deadline = time.monotonic() + 10.0
         latest = self.obs_status()
@@ -419,7 +450,12 @@ class OBSWebhookServer(ThreadingHTTPServer):
 def main() -> int:
     args = _parser().parse_args()
     obs_config = _obs_config_from_args(args)
-    server = OBSWebhookServer((args.host, args.port), obs_config)
+    screenshot_root = args.screenshot_root.resolve()
+    server = OBSWebhookServer(
+        (args.host, args.port),
+        obs_config,
+        screenshot_root=screenshot_root,
+    )
     print(
         json.dumps(
             {
@@ -427,6 +463,7 @@ def main() -> int:
                 "http": f"http://{args.host}:{args.port}",
                 "obs_websocket": f"{obs_config.host}:{obs_config.port}",
                 "auth_configured": bool(obs_config.auth_secret),
+                "screenshot_root": str(screenshot_root),
             },
             ensure_ascii=False,
         ),
@@ -468,6 +505,12 @@ def _parser() -> argparse.ArgumentParser:
         "--timeout-seconds",
         type=float,
         default=float(os.environ.get("OBS_WEBSOCKET_TIMEOUT_SECONDS", "20")),
+    )
+    parser.add_argument(
+        "--screenshot-root",
+        type=Path,
+        default=Path(os.environ.get("OBS_WEBHOOK_SCREENSHOT_ROOT", os.getcwd())),
+        help="Directory boundary for /screenshot output_path writes.",
     )
     return parser
 
