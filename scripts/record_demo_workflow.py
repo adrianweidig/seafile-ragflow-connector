@@ -4,6 +4,7 @@ import argparse
 import copy
 import json
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -98,6 +99,35 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--headed", action="store_true", help="Show browser windows.")
     parser.add_argument(
+        "--browser-window-x",
+        type=int,
+        default=int(os.environ.get("DEMO_BROWSER_WINDOW_X", "0")),
+        help="Left position for the headed demo browser window.",
+    )
+    parser.add_argument(
+        "--browser-window-y",
+        type=int,
+        default=int(os.environ.get("DEMO_BROWSER_WINDOW_Y", "0")),
+        help="Top position for the headed demo browser window.",
+    )
+    parser.add_argument(
+        "--browser-window-width",
+        type=int,
+        default=int(os.environ.get("DEMO_BROWSER_WINDOW_WIDTH", "1920")),
+        help="Width for the headed demo browser window.",
+    )
+    parser.add_argument(
+        "--browser-window-height",
+        type=int,
+        default=int(os.environ.get("DEMO_BROWSER_WINDOW_HEIGHT", "1080")),
+        help="Height for the headed demo browser window.",
+    )
+    parser.add_argument(
+        "--minimize-other-windows",
+        action="store_true",
+        help="On Windows, minimize existing windows before the visible recording run.",
+    )
+    parser.add_argument(
         "--profile-dir",
         type=Path,
         help="Persistent Playwright profile directory with existing test logins.",
@@ -128,6 +158,18 @@ def _parser() -> argparse.ArgumentParser:
             else None
         ),
         help="Local OBS recording output directory used to locate the generated MKV.",
+    )
+    parser.add_argument(
+        "--obs-screenshot-width",
+        type=int,
+        default=int(os.environ.get("OBS_SCREENSHOT_WIDTH", "1920")),
+        help="Width for OBS source screenshots captured during marker validation.",
+    )
+    parser.add_argument(
+        "--obs-screenshot-height",
+        type=int,
+        default=int(os.environ.get("OBS_SCREENSHOT_HEIGHT", "1080")),
+        help="Height for OBS source screenshots captured during marker validation.",
     )
     parser.add_argument(
         "--skip-browser",
@@ -169,8 +211,7 @@ def _run(
 
     configure_logging("INFO", "console")
     recorder: OBSWebhookClient | None = None
-    recording_started = False
-    recording_started_at: datetime | None = None
+    recording_state: dict[str, Any] = {"started": False, "started_at": None}
     webhook_payloads: list[Any] = []
     workflow_error: Exception | None = None
     recording_error: Exception | None = None
@@ -179,27 +220,20 @@ def _run(
         if args.record:
             recorder = OBSWebhookClient(obs_config)
             recorder.validate()
-            recording_started_at = datetime.now(UTC)
-            start_payload = recorder.start_recording(
-                recording_name=names.recording_name,
-                scene_name=args.scene_name,
-                demo_id=names.demo_id,
-            )
-            webhook_payloads.append(start_payload)
-            checks["obs_recording"] = {
-                "start": "erfüllt",
-                "start_response": start_payload,
-            }
-            status_after_start = recorder.status()
-            if status_after_start is not None:
-                webhook_payloads.append(status_after_start)
-                checks["obs_recording"]["status_after_start"] = status_after_start
-                checks["obs_recording"]["recording_after_start"] = recorder.is_recording()
-            recording_started = True
-            recorder.add_marker("demo-start", demo_id=names.demo_id)
 
         try:
-            checks.update(_execute_workflow(args, names, paths, recorder, checks["workflow"]))
+            checks.update(
+                _execute_workflow(
+                    args,
+                    names,
+                    paths,
+                    recorder,
+                    checks["workflow"],
+                    checks,
+                    webhook_payloads,
+                    recording_state,
+                )
+            )
         except Exception as exc:
             workflow_error = exc
             checks["error"] = {
@@ -210,7 +244,7 @@ def _run(
     finally:
         if recorder is not None:
             try:
-                if recording_started:
+                if recording_state.get("started"):
                     try:
                         recorder.add_marker("demo-stop", demo_id=names.demo_id)
                         stop_payload = recorder.stop_recording(demo_id=names.demo_id)
@@ -234,7 +268,7 @@ def _run(
             finally:
                 recorder.close()
 
-    if args.record and recording_started:
+    if args.record and recording_state.get("started"):
         output_dir = args.obs_output_dir or obs_config.recording_output_dir
         artifact = validate_recording_artifact(
             recording_name=names.recording_name,
@@ -242,7 +276,7 @@ def _run(
             expected_extension=obs_config.expected_extension,
             output_dir=output_dir,
             webhook_payloads=webhook_payloads,
-            started_at=recording_started_at,
+            started_at=recording_state.get("started_at"),
         )
         checks.setdefault("obs_recording", {})["artifact"] = artifact
         if not artifact["valid"]:
@@ -275,10 +309,15 @@ def _execute_workflow(
     paths: DemoRunPaths,
     recorder: OBSWebhookClient | None,
     workflow: dict[str, dict[str, Any]],
+    checks: dict[str, Any],
+    webhook_payloads: list[Any],
+    recording_state: dict[str, Any],
 ) -> dict[str, Any]:
     settings = get_settings()
     runtime = build_runtime(settings)
     try:
+        if args.headed and args.minimize_other_windows:
+            _minimize_other_windows()
         pages = _open_browser_pages(args, settings) if not args.skip_browser else None
         try:
             seafile_url = settings.seafile_public_base_url or settings.seafile_base_url
@@ -289,7 +328,17 @@ def _execute_workflow(
                 username=os.environ.get("SEAFILE_UI_EMAIL") or settings.seafile_sync_user_email,
                 password=os.environ.get("SEAFILE_UI_PASSWORD"),
             )
+            _capture_obs_checkpoint(recorder, "00-preflight-browser", names, paths, args, checks)
+            _start_obs_recording(
+                recorder,
+                args,
+                names,
+                checks,
+                webhook_payloads,
+                recording_state,
+            )
             _record_marker(recorder, "seafile-opened", names.demo_id)
+            _capture_obs_checkpoint(recorder, "01-seafile-opened", names, paths, args, checks)
             _pause(args.pause_seconds)
 
             library = _ensure_seafile_library(settings, names.library_name)
@@ -324,6 +373,14 @@ def _execute_workflow(
                 automatic=True,
                 visual=pages is not None,
             )
+            _capture_obs_checkpoint(
+                recorder,
+                "02-seafile-empty-library",
+                names,
+                paths,
+                args,
+                checks,
+            )
             _pause(args.pause_seconds)
 
             runtime.orchestrator.discover_libraries()
@@ -347,7 +404,15 @@ def _execute_workflow(
                 username=os.environ.get("RAGFLOW_UI_EMAIL"),
                 password=os.environ.get("RAGFLOW_UI_PASSWORD"),
             )
+            if (
+                pages is not None
+                and os.environ.get("RAGFLOW_UI_EMAIL")
+                and os.environ.get("RAGFLOW_UI_PASSWORD")
+                and "/login" in str(pages["ragflow"].url)
+            ):
+                raise RuntimeError("RAGFlow UI login failed; still on login page")
             _show_pages(pages, "ragflow", _ragflow_dataset_url(ragflow_url, dataset_id))
+            _capture_obs_checkpoint(recorder, "03-ragflow-dataset", names, paths, args, checks)
             _pause(args.pause_seconds)
 
             agent = _ensure_ragflow_agent_for_dataset(settings, names, dataset_id)
@@ -363,6 +428,14 @@ def _execute_workflow(
                 f"ragflow_agent_id={agent_id}; dataset_id={dataset_id}",
                 automatic=True,
                 visual=pages is not None,
+            )
+            _capture_obs_checkpoint(
+                recorder,
+                "04-ragflow-agent-before-upload",
+                names,
+                paths,
+                args,
+                checks,
             )
             _pause(args.pause_seconds)
 
@@ -384,6 +457,7 @@ def _execute_workflow(
                 automatic=True,
                 visual=pages is not None,
             )
+            _capture_obs_checkpoint(recorder, "05-seafile-uploaded", names, paths, args, checks)
             _pause(args.pause_seconds)
 
             sync_summary = runtime.orchestrator.sync_library_full(repo_id)
@@ -413,6 +487,14 @@ def _execute_workflow(
                 visual=pages is not None,
             )
             _record_marker(recorder, "ragflow-file-synced-and-parsed", names.demo_id)
+            _capture_obs_checkpoint(
+                recorder,
+                "06-ragflow-synced-parsed",
+                names,
+                paths,
+                args,
+                checks,
+            )
             _pause(args.pause_seconds)
 
             retrieval = runtime.ragflow_client.retrieve_chunks(
@@ -424,15 +506,25 @@ def _execute_workflow(
             chunks = _extract_chunks(retrieval)
             if not chunks:
                 raise RuntimeError("RAGFlow retrieval did not return chunks for the demo document")
+            chunk_document = _select_demo_document(documents, names.file_name)
+            chunk_document_id = _document_id(chunk_document)
+            if not chunk_document_id:
+                raise RuntimeError("RAGFlow document id is missing; cannot open chunk UI")
+            chunk_ui_url = _ragflow_dataflow_url(ragflow_url, dataset_id, chunk_document_id)
+            if not chunk_ui_url:
+                raise RuntimeError("RAGFlow public URL is missing; cannot open chunk UI")
+            _show_pages(pages, "ragflow", chunk_ui_url)
+            _select_ragflow_chunk_stage(pages)
             _mark_workflow(
                 workflow,
                 "ragflow_chunks_shown",
                 "erfüllt",
-                f"retrieval_chunks={len(chunks)}",
+                f"retrieval_chunks={len(chunks)}; chunk_ui_url={chunk_ui_url}",
                 automatic=True,
                 visual=pages is not None,
             )
             _record_marker(recorder, "ragflow-chunks-opened", names.demo_id)
+            _capture_obs_checkpoint(recorder, "07-ragflow-chunks", names, paths, args, checks)
             _pause(args.pause_seconds)
 
             if runtime.openwebui_sync_service is not None:
@@ -450,6 +542,7 @@ def _execute_workflow(
             _pause(args.pause_seconds)
 
             _show_pages(pages, "openwebui", settings.openwebui_base_url)
+            _capture_obs_checkpoint(recorder, "08-openwebui-pipe", names, paths, args, checks)
             _mark_workflow(
                 workflow,
                 "openwebui_pipe_shown",
@@ -467,6 +560,9 @@ def _execute_workflow(
                 names,
                 mapping,
                 paths,
+                recorder,
+                checks,
+                args,
                 pause_seconds=args.pause_seconds,
             )
             _merge_openwebui_workflow(workflow, openwebui_result, pages is not None)
@@ -480,6 +576,7 @@ def _execute_workflow(
                 "openwebui_pipe_id": mapping.openwebui_pipe_id if mapping else None,
                 "ragflow_chat_id": mapping.ragflow_chat_id if mapping else None,
                 "ragflow_agent_id": agent_id,
+                "ragflow_chunk_ui_url": chunk_ui_url,
                 "files_uploaded": sync_summary.files_uploaded,
                 "documents_visible": len(documents),
                 "retrieval_chunks_visible": len(chunks),
@@ -560,8 +657,14 @@ def _upload_file(
     library_name: str,
 ) -> None:
     upload_method = os.environ.get("DEMO_SEAFILE_UPLOAD_METHOD", "api").strip().lower()
-    if upload_method == "webdav" and _upload_file_webdav(settings, library_name, path):
-        return
+    if upload_method == "webdav":
+        if _upload_file_webdav(settings, library_name, path):
+            return
+        raise RuntimeError(
+            "DEMO_SEAFILE_UPLOAD_METHOD=webdav is configured, but WebDAV upload failed"
+        )
+    if upload_method != "api":
+        raise RuntimeError(f"unsupported DEMO_SEAFILE_UPLOAD_METHOD={upload_method!r}")
 
     client = make_client(
         settings.seafile_base_url,
@@ -782,18 +885,23 @@ def _open_browser_pages(args: argparse.Namespace, settings: Any) -> dict[str, An
 
     playwright = sync_playwright().start()
     browser_type = getattr(playwright, args.browser)
+    launch_args = _browser_launch_args(args)
+    launch_kwargs: dict[str, Any] = {"headless": not args.headed}
+    if launch_args:
+        launch_kwargs["args"] = launch_args
+    viewport = _browser_viewport(args)
     if args.profile_dir:
         context = browser_type.launch_persistent_context(
             user_data_dir=str(args.profile_dir),
-            headless=not args.headed,
-            viewport={"width": 1440, "height": 1000},
+            viewport=viewport,
             ignore_https_errors=True,
+            **launch_kwargs,
         )
         browser = None
     else:
-        browser = browser_type.launch(headless=not args.headed)
+        browser = browser_type.launch(**launch_kwargs)
         context = browser.new_context(
-            viewport={"width": 1440, "height": 1000},
+            viewport=viewport,
             ignore_https_errors=True,
         )
     if settings.openwebui_admin_api_key:
@@ -808,6 +916,7 @@ def _open_browser_pages(args: argparse.Namespace, settings: Any) -> dict[str, An
         "seafile": context.new_page(),
         "ragflow": context.new_page(),
         "openwebui": context.new_page(),
+        "_focus_page": lambda page: _focus_playwright_page(page, args),
         "close": lambda: _close_playwright(context, browser, playwright),
     }
     _show_pages(pages, "seafile", settings.seafile_public_base_url or settings.seafile_base_url)
@@ -818,8 +927,96 @@ def _show_pages(pages: dict[str, Any] | None, name: str, url: str | None) -> Non
     if pages is None or not url:
         return
     page = pages[name]
-    page.bring_to_front()
+    _focus_page(pages, page)
     page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+    with suppress(Exception):
+        page.wait_for_load_state("networkidle", timeout=30_000)
+    _wait_for_visible_body(page)
+    _focus_page(pages, page)
+
+
+def _browser_launch_args(args: argparse.Namespace) -> list[str]:
+    if not args.headed or args.browser != "chromium":
+        return []
+    return [
+        f"--window-position={args.browser_window_x},{args.browser_window_y}",
+        f"--window-size={args.browser_window_width},{args.browser_window_height}",
+        "--start-maximized",
+        "--disable-extensions",
+        "--disable-infobars",
+        "--disable-notifications",
+        "--disable-session-crashed-bubble",
+        "--no-default-browser-check",
+        "--no-first-run",
+    ]
+
+
+def _browser_viewport(args: argparse.Namespace) -> dict[str, int]:
+    if not args.headed:
+        return {"width": 1440, "height": 1000}
+    return {
+        "width": max(1024, args.browser_window_width),
+        "height": max(720, args.browser_window_height - 90),
+    }
+
+
+def _focus_page(pages: dict[str, Any], page: Any) -> None:
+    focus = pages.get("_focus_page")
+    if callable(focus):
+        focus(page)
+    else:
+        page.bring_to_front()
+
+
+def _focus_playwright_page(page: Any, args: argparse.Namespace) -> None:
+    page.bring_to_front()
+    if not args.headed:
+        return
+    with suppress(Exception):
+        page.evaluate(
+            """([x, y, width, height]) => {
+                window.moveTo(x, y);
+                window.resizeTo(width, height);
+                window.focus();
+            }""",
+            [
+                args.browser_window_x,
+                args.browser_window_y,
+                args.browser_window_width,
+                args.browser_window_height,
+            ],
+        )
+    with suppress(Exception):
+        page.bring_to_front()
+
+
+def _wait_for_visible_body(page: Any, timeout_seconds: float = 30.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        with suppress(Exception):
+            text = page.locator("body").inner_text(timeout=1_000).strip()
+            if len(text) >= 20:
+                return
+        time.sleep(0.5)
+
+
+def _minimize_other_windows() -> None:
+    if os.name != "nt":
+        return
+    with suppress(Exception):
+        subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-Command",
+                "(New-Object -ComObject Shell.Application).MinimizeAll()",
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        time.sleep(1.0)
 
 
 def _ensure_browser_login(
@@ -833,19 +1030,65 @@ def _ensure_browser_login(
         return False
     page = pages[name]
     password_input = page.locator("input[type='password']").first
-    if password_input.count() == 0:
-        return False
     try:
-        password_input.wait_for(state="visible", timeout=5_000)
+        password_input.wait_for(state="visible", timeout=30_000)
     except Exception:
         return False
     username_input = page.locator(
         "input[name='login'], input[name='email'], input[name='username'], "
         "input[type='email'], input[type='text']"
     ).first
-    if username_input.count() > 0:
-        username_input.fill(username)
-    password_input.fill(password)
+    filled = False
+    with suppress(Exception):
+        result = page.evaluate(
+            """([username, password]) => {
+                const visible = (element) => {
+                    const style = window.getComputedStyle(element);
+                    return style.visibility !== "hidden"
+                        && style.display !== "none"
+                        && element.getClientRects().length > 0;
+                };
+                const inputs = Array.from(document.querySelectorAll("input")).filter(visible);
+                const passwordInput = inputs.find((input) => input.type === "password");
+                const usernameInput = inputs.find((input) =>
+                    input !== passwordInput
+                    && ["", "text", "email"].includes(input.type || "")
+                );
+                const setValue = (input, value) => {
+                    const prototype = Object.getPrototypeOf(input);
+                    const prototypeSetter =
+                        Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+                    const nativeSetter =
+                        Object.getOwnPropertyDescriptor(
+                            window.HTMLInputElement.prototype,
+                            "value",
+                        )?.set;
+                    input.focus();
+                    if (prototypeSetter) {
+                        prototypeSetter.call(input, value);
+                    } else if (nativeSetter) {
+                        nativeSetter.call(input, value);
+                    } else {
+                        input.value = value;
+                    }
+                    input.dispatchEvent(new Event("input", { bubbles: true }));
+                    input.dispatchEvent(new Event("change", { bubbles: true }));
+                };
+                if (usernameInput) {
+                    setValue(usernameInput, username);
+                }
+                if (passwordInput) {
+                    setValue(passwordInput, password);
+                }
+                return Boolean(usernameInput && passwordInput);
+            }""",
+            [username, password],
+        )
+        filled = bool(result)
+    if not filled:
+        if username_input.count() > 0:
+            username_input.fill(username)
+        password_input.fill(password)
     submit = page.locator(
         "button[type='submit'], button:has-text('Login'), button:has-text('Sign in'), "
         "button:has-text('Anmelden'), button:has-text('Einloggen')"
@@ -858,6 +1101,12 @@ def _ensure_browser_login(
         page.wait_for_load_state("networkidle", timeout=30_000)
     except Exception:
         page.wait_for_load_state("domcontentloaded", timeout=30_000)
+    with suppress(Exception):
+        page.wait_for_url(lambda url: "/login" not in url, timeout=30_000)
+    _wait_for_visible_body(page)
+    with suppress(Exception):
+        if "/login" in page.url:
+            return False
     return True
 
 
@@ -891,6 +1140,9 @@ def _run_openwebui_visible_question(
     names: DemoRecordingNames,
     mapping: OpenWebUIDatasetMapping,
     paths: DemoRunPaths,
+    recorder: OBSWebhookClient | None,
+    checks: dict[str, Any],
+    args: argparse.Namespace,
     *,
     pause_seconds: float,
 ) -> dict[str, Any]:
@@ -903,7 +1155,7 @@ def _run_openwebui_visible_question(
             "reason": "browser navigation disabled",
         }
     page = pages["openwebui"]
-    page.bring_to_front()
+    _focus_page(pages, page)
     page.goto(settings.openwebui_base_url, wait_until="domcontentloaded", timeout=60_000)
     page.wait_for_load_state("networkidle", timeout=60_000)
     _pause(pause_seconds)
@@ -948,6 +1200,7 @@ def _run_openwebui_visible_question(
     )
     screenshot = paths.run_dir / "openwebui-answer.png"
     page.screenshot(path=str(screenshot), full_page=True)
+    _capture_obs_checkpoint(recorder, "09-openwebui-answer", names, paths, args, checks)
 
     preview_opened = False
     original_opened = False
@@ -955,7 +1208,9 @@ def _run_openwebui_visible_question(
     if preview_url:
         preview = page.context.new_page()
         try:
+            _focus_page(pages, preview)
             preview.goto(preview_url, wait_until="networkidle", timeout=60_000)
+            _focus_page(pages, preview)
             _pause(pause_seconds)
             preview_text = preview.locator("body").inner_text(timeout=30_000)
             preview_opened = (
@@ -964,6 +1219,7 @@ def _run_openwebui_visible_question(
                 or "Original öffnen" in preview_text
             )
             preview.screenshot(path=str(paths.run_dir / "openwebui-preview.png"), full_page=True)
+            _capture_obs_checkpoint(recorder, "10-openwebui-preview", names, paths, args, checks)
             original_url = str(
                 preview.evaluate(
                     """() => {
@@ -976,6 +1232,7 @@ def _run_openwebui_visible_question(
             if original_url:
                 original = page.context.new_page()
                 try:
+                    _focus_page(pages, original)
                     original.goto(original_url, wait_until="domcontentloaded", timeout=60_000)
                     _ensure_browser_login(
                         {"seafile": original},
@@ -986,6 +1243,7 @@ def _run_openwebui_visible_question(
                         ),
                         password=os.environ.get("SEAFILE_UI_PASSWORD"),
                     )
+                    _focus_page(pages, original)
                     _pause(pause_seconds)
                     original_text = original.locator("body").inner_text(timeout=30_000)
                     original_opened = (
@@ -997,12 +1255,21 @@ def _run_openwebui_visible_question(
                         path=str(paths.run_dir / "openwebui-original.png"),
                         full_page=True,
                     )
+                    _capture_obs_checkpoint(
+                        recorder,
+                        "11-openwebui-original",
+                        names,
+                        paths,
+                        args,
+                        checks,
+                    )
                 finally:
                     original.close()
         finally:
             preview.close()
-    page.bring_to_front()
+    _focus_page(pages, page)
     _pause(pause_seconds)
+    _capture_obs_checkpoint(recorder, "12-openwebui-final-chat", names, paths, args, checks)
     return {
         "question_asked": True,
         "answer_visible": answer_visible,
@@ -1310,6 +1577,27 @@ def _extract_chunks(retrieval: dict[str, Any]) -> list[Any]:
     return []
 
 
+def _select_demo_document(documents: list[dict[str, Any]], file_name: str) -> dict[str, Any]:
+    for document in documents:
+        names = {
+            str(document.get(key) or "")
+            for key in ("name", "document_name", "doc_name", "display_name")
+        }
+        if file_name in names:
+            return document
+    if documents:
+        return documents[0]
+    return {}
+
+
+def _document_id(document: dict[str, Any]) -> str | None:
+    for key in ("id", "document_id", "doc_id"):
+        value = document.get(key)
+        if value:
+            return str(value)
+    return None
+
+
 def _rewrite_local_service_url(url: str, base_url: str) -> str:
     base = httpx.URL(base_url)
     current = httpx.URL(url)
@@ -1344,9 +1632,106 @@ def _ragflow_agent_url(base_url: str | None, agent_id: str | None) -> str | None
     return f"{base_url.rstrip('/')}/agent/{quote(agent_id, safe='')}?category=agent_canvas"
 
 
+def _ragflow_dataflow_url(base_url: str | None, dataset_id: str, document_id: str) -> str | None:
+    if not base_url:
+        return None
+    query = (
+        f"knowledgeId={quote(dataset_id, safe='')}"
+        f"&doc_id={quote(document_id, safe='')}"
+        "&type=dataflow&is_read_only=false"
+    )
+    return f"{base_url.rstrip('/')}/dataflow-result?{query}"
+
+
+def _select_ragflow_chunk_stage(pages: dict[str, Any] | None) -> None:
+    if pages is None:
+        return
+    page = pages["ragflow"]
+    for label in (
+        "Token Chunker",
+        "Title Chunker",
+        "Chunker",
+        "Result",
+    ):
+        with suppress(Exception):
+            locator = page.get_by_text(label, exact=False).last
+            if locator.count() > 0:
+                locator.click(timeout=3_000)
+                page.wait_for_timeout(1_000)
+                break
+    with suppress(Exception):
+        page.mouse.wheel(0, 420)
+        page.wait_for_timeout(500)
+
+
 def _record_marker(recorder: OBSWebhookClient | None, marker: str, demo_id: str) -> None:
     if recorder is not None:
         recorder.add_marker(marker, demo_id=demo_id)
+
+
+def _start_obs_recording(
+    recorder: OBSWebhookClient | None,
+    args: argparse.Namespace,
+    names: DemoRecordingNames,
+    checks: dict[str, Any],
+    webhook_payloads: list[Any],
+    recording_state: dict[str, Any],
+) -> None:
+    if recorder is None or recording_state.get("started"):
+        return
+    recording_state["started_at"] = datetime.now(UTC)
+    start_payload = recorder.start_recording(
+        recording_name=names.recording_name,
+        scene_name=args.scene_name,
+        demo_id=names.demo_id,
+    )
+    webhook_payloads.append(start_payload)
+    checks["obs_recording"] = {
+        "start": "erfüllt",
+        "start_response": start_payload,
+    }
+    status_after_start = recorder.status()
+    if status_after_start is not None:
+        webhook_payloads.append(status_after_start)
+        checks["obs_recording"]["status_after_start"] = status_after_start
+        checks["obs_recording"]["recording_after_start"] = recorder.is_recording()
+    recording_state["started"] = True
+    recorder.add_marker("demo-start", demo_id=names.demo_id)
+
+
+def _capture_obs_checkpoint(
+    recorder: OBSWebhookClient | None,
+    marker: str,
+    names: DemoRecordingNames,
+    paths: DemoRunPaths,
+    args: argparse.Namespace,
+    checks: dict[str, Any],
+) -> None:
+    if recorder is None:
+        return
+    output_path = paths.run_dir / "obs-screenshots" / f"{_safe_artifact_name(marker)}.png"
+    try:
+        result = recorder.capture_screenshot(
+            output_path,
+            marker=marker,
+            demo_id=names.demo_id,
+            width=args.obs_screenshot_width,
+            height=args.obs_screenshot_height,
+        )
+    except Exception as exc:
+        result = {
+            "marker": marker,
+            "written": False,
+            "path": str(output_path),
+            "error": str(exc),
+        }
+    if result is None:
+        return
+    checks.setdefault("obs_screenshots", []).append(result)
+
+
+def _safe_artifact_name(value: str) -> str:
+    return "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in value)
 
 
 def _pause(seconds: float) -> None:

@@ -36,7 +36,7 @@ worktree.
 | `OBS_WEBHOOK_STOP_URL` | stops recording, required for `--record` |
 | `OBS_WEBHOOK_MARKER_URL` | optional marker endpoint for important steps |
 | `OBS_WEBHOOK_SCENE_URL` | optional scene switch |
-| `OBS_WEBHOOK_SCREENSHOT_URL` | reserved for later screenshot checks |
+| `OBS_WEBHOOK_SCREENSHOT_URL` | OBS source screenshot for visible marker validation |
 | `OBS_WEBHOOK_TOKEN` | optional webhook token, never printed |
 | `OBS_WEBHOOK_TOKEN_HEADER` | optional header, default `Authorization` |
 | `OBS_WEBHOOK_TOKEN_SCHEME` | optional scheme, default `Bearer` |
@@ -45,6 +45,8 @@ worktree.
 | `OBS_RECORDING_EXPECTED_EXTENSION` | expected extension, default `.mkv` |
 | `OBS_RECORDING_FORMAT` | alternative format hint, `mkv` becomes `.mkv` |
 | `OBS_SCENE_NAME` | optional OBS scene for the run |
+| `OBS_SCREENSHOT_WIDTH` / `OBS_SCREENSHOT_HEIGHT` | screenshot size for marker validation, default `1920x1080` |
+| `OBS_WEBHOOK_SCREENSHOT_ROOT` | allowed base directory for screenshot files written by the local bridge script |
 
 If the webhook does not accept JSON payloads, set
 `OBS_WEBHOOK_PAYLOAD_MODE=none`.
@@ -76,14 +78,31 @@ It contains:
 - `demo-seafile-ragflow-openwebui-workflow-<demo-id>.md`,
 - `recording-summary.json`.
 
-## Later Real Run
+With an OBS screenshot webhook, the run directory also contains
+`obs-screenshots/`. These PNGs must show the browser phases; the desktop,
+terminal, or a static wrong application window counts as failed visual
+validation.
 
-Run this only after the known runtime issues are fixed and the test environment
-is ready:
+## Real Run
+
+Run this only when the test environment is ready and the OBS webhook is
+reachable. For local Windows/WSL demos, the Seafile download URL must be
+rewritten to a host reachable from Windows, for example:
+
+```powershell
+$env:SEAFILE_REWRITE_DOWNLOAD_URLS = "true"
+$env:SEAFILE_DOWNLOAD_REWRITE_FROM = "https://seafile.top.secret/seafhttp"
+$env:SEAFILE_DOWNLOAD_REWRITE_TO = "http://127.0.0.1:18080/seafhttp"
+```
+
+The visible run should minimize other windows and place the browser on the
+OBS-captured area:
 
 ```bash
 uv run --extra dev python scripts/record_demo_workflow.py \
-  --execute --record --headed \
+  --execute --record --headed --minimize-other-windows \
+  --browser-window-x 0 --browser-window-y 0 \
+  --browser-window-width 1920 --browser-window-height 1080 \
   --obs-output-dir "C:\Users\adria\Videos"
 ```
 
@@ -121,24 +140,25 @@ demo-seafile-ragflow-openwebui-full-workflow-<demo-id>.mkv
 In execute mode, the script enforces this order:
 
 1. Prepare the demo browser window.
-2. Optionally validate OBS and start recording.
-3. Open Seafile.
+2. Open Seafile, place the visible browser window, and validate it with an
+   OBS screenshot.
+3. Optionally validate OBS and start recording.
 4. Create or reuse the test library.
 5. Open the library and verify through API that it is empty before upload.
 6. Run connector discovery.
 7. Ensure the RAGFlow dataset for the library.
 8. Create and visibly open the RAGFlow chat or assistant before upload.
-10. Upload the demo file to Seafile only after that.
-11. Run connector sync for the library.
-12. Wait for RAGFlow parsing until timeout.
-13. Validate retrieval against the dataset and mark the chunk evidence.
-14. Run OpenWebUI sync for exactly this library so the RAGFlow chat and
+9. Upload the demo file to Seafile only after that.
+10. Run connector sync for the library.
+11. Wait for RAGFlow parsing until timeout.
+12. Validate retrieval against the dataset and mark the chunk evidence.
+13. Run OpenWebUI sync for exactly this library so the RAGFlow chat and
    OpenWebUI pipe are created after successful parsing.
-15. Open OpenWebUI, select the pipe, ask the question, and wait for the answer.
-16. Open the source preview.
-17. Open the original file.
-18. Set OBS markers and stop recording cleanly.
-19. Find the generated `.mkv` in the OBS output directory and verify its size.
+14. Open OpenWebUI, select the pipe, ask the question, and wait for the answer.
+15. Open the source preview.
+16. Open the original file.
+17. Set OBS markers and stop recording cleanly.
+18. Find the generated `.mkv` in the OBS output directory and verify its size.
 
 ## Success Criteria
 

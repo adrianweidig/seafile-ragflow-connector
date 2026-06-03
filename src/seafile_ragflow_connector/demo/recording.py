@@ -203,6 +203,30 @@ class OBSWebhookClient:
     def stop_recording(self, *, demo_id: str | None = None) -> dict[str, Any]:
         return self.request("stop", {"demo_id": demo_id})
 
+    def capture_screenshot(
+        self,
+        output_path: str | Path,
+        *,
+        marker: str | None = None,
+        demo_id: str | None = None,
+        source_name: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> dict[str, Any] | None:
+        if not self.config.has_action("screenshot"):
+            return None
+        return self.request(
+            "screenshot",
+            {
+                "output_path": str(output_path),
+                "marker": marker,
+                "demo_id": demo_id,
+                "source_name": source_name,
+                "width": width,
+                "height": height,
+            },
+        )
+
     def add_marker(self, marker: str, *, demo_id: str | None = None) -> dict[str, Any] | None:
         if not self.config.has_action("marker"):
             return None
