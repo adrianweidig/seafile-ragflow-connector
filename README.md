@@ -41,7 +41,7 @@ RAGFlow-Secrets in OpenWebUI-Funktionen abzulegen.
 
 | Ziel | Einstieg |
 | --- | --- |
-| Demo | [OpenWebUI-RAG-Antwort als Video](#demo) |
+| Demo | [OBS-MKV-End-to-End-Aufnahme](#demo) |
 | Schnellstart | [Docker Compose](#schnellstart-mit-docker-compose) oder [Portainer](#portainer-start) |
 | Admin-Erststart | [Checkliste für den ersten produktionsnahen Start](docs/admin-first-start-checklist.md) |
 | Konfiguration | [`connector.env.example`](connector.env.example), [Environment-Referenz](docs/environment.md) |
@@ -54,14 +54,15 @@ RAGFlow-Secrets in OpenWebUI-Funktionen abzulegen.
 
 ## Demo
 
-Die Aufnahme zeigt eine normale OpenWebUI-Frage an das vom Connector erzeugte
-RAGFlow-Modell. Die Antwort fasst Inhalte gruppiert zusammen und hängt die
-auditierbaren Nachweise darunter an.
+Die vollständige Demo muss als OBS-gesteuerte MKV-Aufnahme erzeugt werden und
+den gesamten Ablauf Seafile -> RAGFlow -> OpenWebUI zeigen: neue leere
+Seafile-Bibliothek, RAGFlow-Dataset und Chat vor dem Upload, anschließender
+Dateiupload, Sync, Parsing, Chunks, OpenWebUI-Pipe, Frage, Antwort, Preview und
+Originaldatei. Das Runbook steht unter
+[docs/demo-recording.md](docs/demo-recording.md).
 
-<video src="docs/assets/demo/seafile-ragflow-openwebui-normal-content-chat.webm" controls width="100%"></video>
-
-Falls der Markdown-Renderer keinen Player anzeigt:
-[Demo-Video öffnen](docs/assets/demo/seafile-ragflow-openwebui-normal-content-chat.webm).
+Die frühere OpenWebUI-only-WebM-Aufnahme ist nicht mehr als vollständige Demo
+eingebunden, weil sie Seafile- und RAGFlow-Phasen nicht sichtbar dokumentiert.
 
 ## Was dieses Repository besonders macht
 

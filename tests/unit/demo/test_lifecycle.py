@@ -18,16 +18,28 @@ from seafile_ragflow_connector.demo.lifecycle import (
 class DemoLifecycleTests(unittest.TestCase):
     def test_safe_cleanup_matchers_only_accept_demo_names(self) -> None:
         self.assertTrue(is_safe_demo_library_name("Connector Demo Wissen"))
+        self.assertTrue(is_safe_demo_library_name("Demo OBS Seafile RAGFlow OpenWebUI 20260603"))
         self.assertTrue(is_safe_demo_library_name("Demo RAGFlow OpenWebUI Bibliothek 20260602"))
         self.assertTrue(is_safe_demo_library_name("RAG Demo Bibliothek 20260522_110601"))
         self.assertTrue(is_safe_demo_dataset_name("RAG_connector_demo_wissen_repo"))
+        self.assertTrue(
+            is_safe_demo_dataset_name("RAG_demo_obs_seafile_ragflow_openwebui_20260603_repo")
+        )
         self.assertTrue(
             is_safe_demo_dataset_name("RAG_demo_ragflow_openwebui_bibliothek_20260602_repo")
         )
         self.assertTrue(is_safe_demo_dataset_name("seafile__connector-demo-wissen__repo"))
         self.assertTrue(
+            is_safe_demo_dataset_name("seafile__demo-obs-seafile-ragflow-openwebui-20260603")
+        )
+        self.assertTrue(
             is_safe_demo_openwebui_artifact(
                 "ragflow_pipe_seafile_demo_ragflow_openwebui_bibliothek_20260602"
+            )
+        )
+        self.assertTrue(
+            is_safe_demo_openwebui_artifact(
+                "ragflow_pipe_demo_obs_seafile_ragflow_openwebui_20260603"
             )
         )
         self.assertTrue(is_safe_demo_openwebui_artifact("ragflow_tool_seafile_rag_demo_bibliothek_x"))
