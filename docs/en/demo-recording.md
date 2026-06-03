@@ -7,6 +7,10 @@ RAGFlow to OpenWebUI. The default mode is intentionally non-mutating: it only
 writes the demo file, plan, and summary. The real test-environment run requires
 `--execute`; OBS recording additionally requires `--record`.
 
+The primary recording must be an OBS-generated `.mkv`. Browser videos,
+Playwright WebM files, or isolated OpenWebUI chat recordings are diagnostic
+artifacts only and do not satisfy the demo requirement.
+
 ## Purpose
 
 The recording should show:
@@ -37,6 +41,9 @@ worktree.
 | `OBS_WEBHOOK_TOKEN_HEADER` | optional header, default `Authorization` |
 | `OBS_WEBHOOK_TOKEN_SCHEME` | optional scheme, default `Bearer` |
 | `OBS_WEBHOOK_PAYLOAD_MODE` | `json` or `none`, default `json` |
+| `OBS_RECORDING_OUTPUT_DIR` | local OBS output directory used to find the MKV |
+| `OBS_RECORDING_EXPECTED_EXTENSION` | expected extension, default `.mkv` |
+| `OBS_RECORDING_FORMAT` | alternative format hint, `mkv` becomes `.mkv` |
 | `OBS_SCENE_NAME` | optional OBS scene for the run |
 
 If the webhook does not accept JSON payloads, set
@@ -66,7 +73,7 @@ output/demo-recording/<demo-id>/
 
 It contains:
 
-- `seafile-ragflow-openwebui-demo-<demo-id>.md`,
+- `demo-seafile-ragflow-openwebui-workflow-<demo-id>.md`,
 - `recording-summary.json`.
 
 ## Later Real Run
@@ -75,7 +82,9 @@ Run this only after the known runtime issues are fixed and the test environment
 is ready:
 
 ```bash
-uv run --extra dev python scripts/record_demo_workflow.py --execute --record --headed
+uv run --extra dev python scripts/record_demo_workflow.py \
+  --execute --record --headed \
+  --obs-output-dir "C:\Users\adria\Videos"
 ```
 
 To use a persistent Playwright profile with existing test logins:
@@ -90,7 +99,7 @@ The real run uses local connector configuration from environment or `stack.env`.
 Secrets are not logged. The run creates a uniquely named test library:
 
 ```text
-Demo RAGFlow OpenWebUI Bibliothek <demo-id>
+Demo OBS Seafile RAGFlow OpenWebUI <demo-id>
 ```
 
 The technical RAGFlow dataset name remains connector-compatible and is derived
@@ -98,27 +107,38 @@ from the Seafile library name and real repo ID. The demo label in the summary
 and markers is:
 
 ```text
-Demo Dataset Seafile Sync <demo-id>
+Demo OBS Dataset Seafile Sync <demo-id>
+```
+
+The OBS recording name is:
+
+```text
+demo-seafile-ragflow-openwebui-full-workflow-<demo-id>.mkv
 ```
 
 ## Order
 
 In execute mode, the script enforces this order:
 
-1. Optionally validate OBS and start recording.
-2. Open Seafile.
-3. Create or reuse the test library.
-4. Run connector discovery.
-5. Ensure the RAGFlow dataset for the library.
-6. Run OpenWebUI sync for exactly this library so the RAGFlow chat and
-   OpenWebUI pipe exist before upload.
-7. Upload the demo file to Seafile.
-8. Run connector sync for the library.
-9. Wait for RAGFlow parsing until timeout.
-10. Validate retrieval against the dataset.
-11. Open OpenWebUI so the pipe, answer, preview, and original can be visibly
-    checked.
-12. Set OBS markers and stop recording cleanly.
+1. Prepare the demo browser window.
+2. Optionally validate OBS and start recording.
+3. Open Seafile.
+4. Create or reuse the test library.
+5. Open the library and verify through API that it is empty before upload.
+6. Run connector discovery.
+7. Ensure the RAGFlow dataset for the library.
+8. Create and visibly open the RAGFlow chat or assistant before upload.
+10. Upload the demo file to Seafile only after that.
+11. Run connector sync for the library.
+12. Wait for RAGFlow parsing until timeout.
+13. Validate retrieval against the dataset and mark the chunk evidence.
+14. Run OpenWebUI sync for exactly this library so the RAGFlow chat and
+   OpenWebUI pipe are created after successful parsing.
+15. Open OpenWebUI, select the pipe, ask the question, and wait for the answer.
+16. Open the source preview.
+17. Open the original file.
+18. Set OBS markers and stop recording cleanly.
+19. Find the generated `.mkv` in the OBS output directory and verify its size.
 
 ## Success Criteria
 
@@ -133,6 +153,10 @@ For the complete video run, visibly check:
 - The question from `recording-summary.json` is asked and answered.
 - Preview and original document contain the same demo marker and matching
   section headings.
+- `recording-summary.json` reports `erfüllt` for every required point; otherwise
+  the script does not finish successfully.
+- `checks.obs_recording.artifact` reports `valid: true`, `extension_ok: true`,
+  and a size greater than 0.
 
 ## Failure Handling
 

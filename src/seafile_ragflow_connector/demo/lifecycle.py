@@ -32,6 +32,7 @@ from seafile_ragflow_connector.persistence.models.openwebui import OpenWebUIData
 
 SAFE_SEAFILE_LIBRARY_PREFIXES = (
     "Connector Demo ",
+    "Demo OBS Seafile RAGFlow OpenWebUI ",
     "Demo RAGFlow OpenWebUI Bibliothek ",
     "RAG Demo Bibliothek ",
     "Offline Demo Bibliothek ",
@@ -39,11 +40,13 @@ SAFE_SEAFILE_LIBRARY_PREFIXES = (
 )
 SAFE_RAGFLOW_DATASET_PREFIXES = (
     "RAG_connector_demo_",
+    "RAG_demo_obs_seafile_ragflow_openwebui_",
     "RAG_demo_ragflow_openwebui_bibliothek_",
     "RAG_rag_demo_bibliothek_",
     "RAG_offline_demo_bibliothek_",
     "RAG_codex_gif_demo_",
     "seafile__connector-demo-",
+    "seafile__demo-obs-seafile-ragflow-openwebui-",
     "seafile__demo-ragflow-openwebui-bibliothek-",
     "seafile__rag-demo-bibliothek-",
     "seafile__offline-demo-bibliothek-",
@@ -51,6 +54,7 @@ SAFE_RAGFLOW_DATASET_PREFIXES = (
 )
 SAFE_OPENWEBUI_ARTIFACT_MARKERS = (
     "_connector_demo_",
+    "_demo_obs_seafile_ragflow_openwebui_",
     "_demo_ragflow_openwebui_bibliothek_",
     "_rag_demo_bibliothek_",
     "_offline_demo_bibliothek_",
