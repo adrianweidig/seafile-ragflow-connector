@@ -8,6 +8,10 @@ nicht mutierend: Er erzeugt nur Demo-Datei, Ablaufplan und Summary. Der echte
 Lauf gegen die Testumgebung startet erst mit `--execute`; die OBS-Aufnahme
 startet erst zusätzlich mit `--record`.
 
+Die Hauptaufnahme muss eine von OBS erzeugte `.mkv` sein. Browserinterne
+Videos, Playwright-WebM-Dateien oder reine OpenWebUI-Chatmitschnitte gelten nur
+als Diagnoseartefakte und erfüllen den Demoauftrag nicht.
+
 ## Zweck
 
 Die Aufnahme soll zeigen:
@@ -38,6 +42,9 @@ Arbeitsbaum.
 | `OBS_WEBHOOK_TOKEN_HEADER` | optionaler Header, Default `Authorization` |
 | `OBS_WEBHOOK_TOKEN_SCHEME` | optionales Schema, Default `Bearer` |
 | `OBS_WEBHOOK_PAYLOAD_MODE` | `json` oder `none`, Default `json` |
+| `OBS_RECORDING_OUTPUT_DIR` | lokaler OBS-Ausgabeordner zur MKV-Suche |
+| `OBS_RECORDING_EXPECTED_EXTENSION` | erwartete Dateiendung, Default `.mkv` |
+| `OBS_RECORDING_FORMAT` | alternative Formatangabe, `mkv` wird zu `.mkv` |
 | `OBS_SCENE_NAME` | optionale OBS-Szene für den Lauf |
 
 Wenn der Webhook keine JSON-Payload akzeptiert, setze
@@ -67,7 +74,7 @@ output/demo-recording/<demo-id>/
 
 Darin stehen:
 
-- `seafile-ragflow-openwebui-demo-<demo-id>.md`,
+- `demo-seafile-ragflow-openwebui-workflow-<demo-id>.md`,
 - `recording-summary.json`.
 
 ## Späterer echter Lauf
@@ -76,7 +83,9 @@ Erst ausführen, wenn die bekannten Laufzeitfehler behoben sind und die
 Testumgebung bereit ist:
 
 ```bash
-uv run --extra dev python scripts/record_demo_workflow.py --execute --record --headed
+uv run --extra dev python scripts/record_demo_workflow.py \
+  --execute --record --headed \
+  --obs-output-dir "C:\Users\adria\Videos"
 ```
 
 Wenn ein Playwright-Profil mit bestehenden Test-Logins verwendet werden soll:
@@ -92,7 +101,7 @@ Der echte Lauf nutzt die lokale Connector-Konfiguration aus Environment oder
 benannte Testbibliothek an:
 
 ```text
-Demo RAGFlow OpenWebUI Bibliothek <demo-id>
+Demo OBS Seafile RAGFlow OpenWebUI <demo-id>
 ```
 
 Der technische RAGFlow-Dataset-Name bleibt connector-konform und wird aus
@@ -100,27 +109,39 @@ Seafile-Bibliotheksname und echter Repo-ID gebildet. Das Demo-Label in Summary
 und Marker lautet:
 
 ```text
-Demo Dataset Seafile Sync <demo-id>
+Demo OBS Dataset Seafile Sync <demo-id>
+```
+
+Die OBS-Aufnahme heißt:
+
+```text
+demo-seafile-ragflow-openwebui-full-workflow-<demo-id>.mkv
 ```
 
 ## Reihenfolge
 
 Das Skript erzwingt im Ausführungsmodus diese Reihenfolge:
 
-1. OBS optional validieren und Aufnahme starten.
-2. Seafile-Seite öffnen.
-3. Testbibliothek erzeugen oder wiederverwenden.
-4. Connector-Discovery ausführen.
-5. RAGFlow-Dataset für die Bibliothek sicherstellen.
-6. OpenWebUI-Sync für genau diese Bibliothek ausführen, damit RAGFlow-Chat und
-   OpenWebUI-Pipe vor dem Upload entstehen.
-7. Demo-Datei nach Seafile hochladen.
-8. Connector-Sync für die Bibliothek ausführen.
-9. RAGFlow-Parsing bis zum Timeout prüfen.
-10. Retrieval gegen das Dataset prüfen.
-11. OpenWebUI öffnen, damit Pipe, Antwort, Preview und Original manuell sichtbar
-    nachvollzogen werden können.
-12. OBS-Marker setzen und Aufnahme kontrolliert stoppen.
+1. Demo-Browserfenster vorbereiten.
+2. OBS optional validieren und Aufnahme starten.
+3. Seafile-Seite öffnen.
+4. Testbibliothek erzeugen oder wiederverwenden.
+5. Bibliothek öffnen und per API prüfen, dass sie vor dem Upload leer ist.
+6. Connector-Discovery ausführen.
+7. RAGFlow-Dataset für die Bibliothek sicherstellen.
+8. RAGFlow-Chat beziehungsweise Assistant vor dem Upload erstellen und sichtbar
+   öffnen.
+10. Demo-Datei erst danach nach Seafile hochladen.
+11. Connector-Sync für die Bibliothek ausführen.
+12. RAGFlow-Parsing bis zum Timeout prüfen.
+13. Retrieval gegen das Dataset prüfen und Chunk-Nachweis markieren.
+14. OpenWebUI-Sync für genau diese Bibliothek ausführen, damit RAGFlow-Chat
+   und OpenWebUI-Pipe nach erfolgreichem Parsing entstehen.
+15. OpenWebUI öffnen, Pipe auswählen, Frage stellen und Antwort abwarten.
+16. Quellen-Preview öffnen.
+17. Originaldatei öffnen.
+18. OBS-Marker setzen und Aufnahme kontrolliert stoppen.
+19. Die erzeugte `.mkv` im OBS-Ausgabeordner finden und auf Größe prüfen.
 
 ## Erfolgskriterien
 
@@ -135,6 +156,10 @@ Für den vollständigen Videolauf müssen sichtbar geprüft werden:
 - Die Frage aus `recording-summary.json` wird gestellt und beantwortet.
 - Preview und Originaldokument enthalten denselben Demo-Marker und passende
   Abschnittsüberschriften.
+- `recording-summary.json` enthält für alle Pflichtpunkte `erfüllt`; andernfalls
+  beendet das Skript den Lauf nicht erfolgreich.
+- Der Abschnitt `checks.obs_recording.artifact` enthält `valid: true`,
+  `extension_ok: true` und eine Dateigröße größer 0.
 
 ## Abbruchverhalten
 

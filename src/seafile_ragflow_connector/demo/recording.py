@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +23,36 @@ _ACTION_ENV_NAMES: dict[OBSAction, str] = {
     "marker": "OBS_WEBHOOK_MARKER_URL",
 }
 _REQUIRED_OBS_ACTIONS: tuple[OBSAction, ...] = ("start", "stop")
+_RECORDING_PATH_KEYS = {
+    "file",
+    "filename",
+    "last_recording",
+    "last_recording_path",
+    "output",
+    "output_file",
+    "output_path",
+    "path",
+    "recording",
+    "recording_file",
+    "recording_path",
+    "saved_file",
+    "saved_path",
+}
+REQUIRED_WORKFLOW_POINTS: tuple[tuple[str, str], ...] = (
+    ("seafile_library_created", "Seafile-Bibliothek erstellt"),
+    ("seafile_empty_library_shown", "leere Bibliothek gezeigt"),
+    ("ragflow_dataset_created", "RAGFlow-Dataset erstellt"),
+    ("ragflow_chat_created", "RAGFlow-Chat beziehungsweise Assistant erstellt"),
+    ("file_uploaded_after_chat", "Datei erst danach hochgeladen"),
+    ("ragflow_sync_shown", "RAGFlow-Synchronisation gezeigt"),
+    ("ragflow_parsing_shown", "RAGFlow-Parsing gezeigt"),
+    ("ragflow_chunks_shown", "RAGFlow-Chunks gezeigt"),
+    ("openwebui_pipe_shown", "OpenWebUI-Pipe gezeigt"),
+    ("openwebui_question_asked", "Frage gestellt"),
+    ("openwebui_answer_shown", "Antwort gezeigt"),
+    ("openwebui_preview_opened", "Preview geöffnet"),
+    ("openwebui_original_opened", "Originaldatei geöffnet"),
+)
 
 
 class OBSWebhookError(RuntimeError):
@@ -41,6 +72,8 @@ class OBSWebhookConfig:
     token_scheme: str = "Bearer"
     payload_mode: Literal["json", "none"] = "json"
     timeout_seconds: float = 20.0
+    recording_output_dir: str | None = None
+    expected_extension: str = ".mkv"
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> OBSWebhookConfig:
@@ -49,6 +82,11 @@ class OBSWebhookConfig:
         if payload_mode not in {"json", "none"}:
             payload_mode = "json"
         timeout = _float_env(values.get("OBS_WEBHOOK_TIMEOUT_SECONDS"), default=20.0)
+        expected_extension = _normalize_extension(
+            _clean_env(values.get("OBS_RECORDING_EXPECTED_EXTENSION"))
+            or _clean_env(values.get("OBS_RECORDING_FORMAT"))
+            or ".mkv"
+        )
         return cls(
             status_url=_clean_env(values.get("OBS_WEBHOOK_STATUS_URL")),
             start_url=_clean_env(values.get("OBS_WEBHOOK_START_URL")),
@@ -61,6 +99,8 @@ class OBSWebhookConfig:
             token_scheme=_clean_env(values.get("OBS_WEBHOOK_TOKEN_SCHEME")) or "Bearer",
             payload_mode=payload_mode,  # type: ignore[arg-type]
             timeout_seconds=timeout,
+            recording_output_dir=_clean_env(values.get("OBS_RECORDING_OUTPUT_DIR")),
+            expected_extension=expected_extension,
         )
 
     def action_url(self, action: OBSAction) -> str | None:
@@ -101,6 +141,8 @@ class OBSWebhookConfig:
             ),
             "payload_mode": self.payload_mode,
             "timeout_seconds": self.timeout_seconds,
+            "recording_output_dir": self.recording_output_dir,
+            "expected_extension": self.expected_extension,
         }
 
 
@@ -128,6 +170,17 @@ class OBSWebhookClient:
         else:
             status = {"configured": True, "status_probe": "not_configured"}
         return {"obs": status, "config": self.config.redacted()}
+
+    def status(self) -> dict[str, Any] | None:
+        if not self.config.has_action("status"):
+            return None
+        return self.request("status")
+
+    def is_recording(self) -> bool | None:
+        status = self.status()
+        if status is None:
+            return None
+        return _recording_state(status)
 
     def start_recording(
         self,
@@ -187,24 +240,24 @@ class DemoRecordingNames:
         safe_id = safe_demo_id(demo_id)
         return cls(
             demo_id=safe_id,
-            library_name=f"Demo RAGFlow OpenWebUI Bibliothek {safe_id}",
-            dataset_label=f"Demo Dataset Seafile Sync {safe_id}",
-            chat_label=f"Demo Chat Seafile RAG {safe_id}",
-            file_name=f"seafile-ragflow-openwebui-demo-{safe_id}.md",
+            library_name=f"Demo OBS Seafile RAGFlow OpenWebUI {safe_id}",
+            dataset_label=f"Demo OBS Dataset Seafile Sync {safe_id}",
+            chat_label=f"Demo OBS Chat Seafile RAG {safe_id}",
+            file_name=f"demo-seafile-ragflow-openwebui-workflow-{safe_id}.md",
             question=(
-                "Welche zentralen Schritte beschreibt das Dokument für den Seafile-, "
-                "RAGFlow- und OpenWebUI-Workflow, und wo im Originaldokument werden "
-                "diese Schritte erläutert?"
+                "Welche Schritte beschreibt das Demo-Dokument für Seafile, RAGFlow "
+                "und OpenWebUI, und wo ist der Prüfbegriff "
+                "Bibliothek-Sync-Chunk-Preview-Originalprüfung zu sehen?"
             ),
         )
 
     @property
     def recording_name(self) -> str:
-        return f"seafile-ragflow-openwebui-demo-{self.demo_id}"
+        return f"demo-seafile-ragflow-openwebui-full-workflow-{self.demo_id}"
 
     @property
     def marker(self) -> str:
-        return f"DEMO_SEAFILE_RAGFLOW_OPENWEBUI_{self.demo_id.upper()}"
+        return f"BIBLIOTHEK_SYNC_CHUNK_PREVIEW_ORIGINALPRUEFUNG_{self.demo_id.upper()}"
 
 
 def safe_demo_id(value: str | None = None) -> str:
@@ -220,81 +273,107 @@ def write_demo_markdown(path: Path, names: DemoRecordingNames) -> Path:
 
 
 def build_demo_markdown(names: DemoRecordingNames) -> str:
-    return f"""# Seafile-, RAGFlow- und OpenWebUI-Demo {names.demo_id}
+    return f"""# Demo-Dokument: Seafile, RAGFlow und OpenWebUI Workflow
 
-Eindeutiger Prüfmarker: {names.marker}
+Laufkennung: {names.demo_id}
 
 ## Überblick
 
-Dieses Dokument beschreibt den Demoablauf für eine neue Seafile-Bibliothek, ein
-zugehöriges RAGFlow-Dataset, einen RAGFlow-Chat und eine automatisch erzeugte
-OpenWebUI-Pipe. Seafile bleibt die Quelle der Wahrheit; RAGFlow und OpenWebUI
-werden aus der Connector-Synchronisation aufgebaut.
+Dieses Dokument beschreibt einen Demonstrationsworkflow, bei dem eine Datei
+zuerst in eine Seafile-Bibliothek hochgeladen, danach in RAGFlow synchronisiert
+und geparsed und anschließend über eine automatisch erzeugte OpenWebUI-Pipe
+abgefragt wird.
 
-## Schritt 1: Bibliothek und Dataset
+## Seafile-Schritt
 
-Die Demo beginnt mit einer leeren Seafile-Bibliothek namens
-`{names.library_name}`. Danach wird das dazugehörige RAGFlow-Dataset sichtbar
-gemacht. Der Connector bildet den technischen Dataset-Namen aus dem
-Seafile-Bibliotheksnamen und der echten Repo-ID; das sichtbare Demo-Label lautet
-`{names.dataset_label}`.
+In Seafile wird eine neue Bibliothek erstellt. Die Bibliothek ist zunächst leer.
+Erst nachdem in RAGFlow ein Dataset und ein Chat beziehungsweise Assistant
+angelegt wurden, wird dieses Dokument in die Bibliothek hochgeladen.
 
-## Schritt 2: Chat vor Upload
+Sichtbarer Bibliotheksname: `{names.library_name}`
 
-Vor dem Datei-Upload wird der RAGFlow-Chat für das Dataset erzeugt. Das
-sichtbare Demo-Label für diesen Chat lautet `{names.chat_label}`. Damit ist im
-Video nachvollziehbar, dass die Chat- und Pipe-Strecke bereits vorbereitet ist,
-bevor Inhalte aus Seafile synchronisiert werden.
+## RAGFlow-Schritt
 
-## Schritt 3: Upload und Synchronisation
+RAGFlow synchronisiert die Datei aus der Seafile-Bibliothek. Danach wird die
+Datei geparsed. Die erzeugten Chunks enthalten Abschnitte zum Überblick, zum
+Seafile-Schritt, zum RAGFlow-Schritt und zum OpenWebUI-Schritt.
 
-Erst nach Bibliothek, Dataset und Chat wird diese Datei in Seafile hochgeladen.
-Der Connector synchronisiert sie anschließend nach RAGFlow, startet das Parsing
-und speichert Metadaten wie Repo-ID, Quellpfad, Dateityp und Prüfsumme.
+Sichtbares Dataset-Label: `{names.dataset_label}`
+Sichtbares Chat-Label: `{names.chat_label}`
 
-## Schritt 4: Chunks und Nachweise
+## OpenWebUI-Schritt
 
-Nach abgeschlossenem Parsing zeigt RAGFlow mehrere Chunks aus diesem Dokument.
-Die Chunks enthalten den Prüfmarker `{names.marker}`, die Schrittüberschriften
-und die Aussage, dass Seafile die Quelle der Wahrheit bleibt.
+OpenWebUI erkennt automatisch eine Pipe zur Bibliothek. Über diese Pipe kann
+eine Frage zum Dokument gestellt werden. Die Antwort soll über Preview und
+Originaldatei nachvollziehbar geprüft werden.
 
-## Schritt 5: OpenWebUI-Frage
+## Eindeutige Prüfinformation
 
-In OpenWebUI wird die automatisch erzeugte Pipe zur Bibliothek ausgewählt. Die
-Demo-Frage lautet:
+Der eindeutige Prüfbegriff für diese Demo lautet:
+Bibliothek-Sync-Chunk-Preview-Originalprüfung.
+
+Interner Prüfmarker für wiederholbare Läufe: `{names.marker}`
+
+## Demo-Frage
 
 > {names.question}
 
-Die erwartete Antwort nennt die Schritte Bibliothek, Dataset, Chat, Upload,
-Synchronisation, Parsing, Chunk-Prüfung, OpenWebUI-Pipe, Preview und
-Originaldatei. Preview und Originaldatei müssen den Marker `{names.marker}` und
-die passenden Abschnittsüberschriften enthalten.
+Die Antwort muss die Schritte Seafile, RAGFlow und OpenWebUI nennen und über
+Preview sowie Originaldatei mit diesem Dokument abgeglichen werden können.
 """
 
 
 def build_recording_steps(names: DemoRecordingNames) -> list[dict[str, str]]:
     return [
         {
+            "id": "browser-prepare",
+            "title": "Demo-Browserfenster vorbereiten",
+            "success": "Ein dediziertes Browserfenster ist für die OBS-Aufnahme sichtbar.",
+        },
+        {
             "id": "obs-start",
             "title": "OBS-Aufnahme starten",
-            "success": "OBS-WebHook meldet Start oder vorhandene Aufnahme.",
+            "success": "OBS-WebHook meldet den Start der Aufnahme.",
         },
         {
-            "id": "seafile-library",
-            "title": "Seafile öffnen und leere Bibliothek zeigen",
-            "success": f"Bibliothek `{names.library_name}` ist sichtbar und leer.",
+            "id": "seafile-open",
+            "title": "Seafile öffnen",
+            "success": "Seafile-Oberfläche ist sichtbar.",
         },
         {
-            "id": "ragflow-dataset",
-            "title": "RAGFlow-Dataset zur Bibliothek zeigen",
+            "id": "seafile-library-create",
+            "title": "Seafile-Bibliothek erstellen",
+            "success": (
+                f"Bibliothek `{names.library_name}` wurde neu erstellt "
+                "oder eindeutig geöffnet."
+            ),
+        },
+        {
+            "id": "seafile-library-empty",
+            "title": "Leere Bibliothek vor Upload zeigen",
+            "success": f"Bibliothek `{names.library_name}` ist vor dem Upload sichtbar leer.",
+        },
+        {
+            "id": "ragflow-open",
+            "title": "RAGFlow öffnen",
+            "success": "RAGFlow-Oberfläche ist sichtbar.",
+        },
+        {
+            "id": "ragflow-dataset-create",
+            "title": "RAGFlow-Dataset zur Bibliothek erstellen",
             "success": (
                 "Dataset ist sichtbar und mit Demo-Label "
                 f"`{names.dataset_label}` korrelierbar."
             ),
         },
         {
-            "id": "ragflow-chat",
-            "title": "RAGFlow-Chat vor Datei-Upload zeigen",
+            "id": "ragflow-dataset-details",
+            "title": "RAGFlow-Dataset-Details zeigen",
+            "success": "Dataset-ID, Bibliotheksbezug und Dokumentliste sind sichtbar.",
+        },
+        {
+            "id": "ragflow-chat-create",
+            "title": "RAGFlow-Chat oder Assistant vor Datei-Upload erstellen",
             "success": f"Chat `{names.chat_label}` ist dem Dataset zugeordnet.",
         },
         {
@@ -303,17 +382,27 @@ def build_recording_steps(names: DemoRecordingNames) -> list[dict[str, str]]:
             "success": f"`{names.file_name}` ist in Seafile sichtbar.",
         },
         {
-            "id": "ragflow-sync-parse",
-            "title": "RAGFlow-Synchronisation und Parsing prüfen",
-            "success": (
-                "Dokument ist sichtbar und Parsingstatus ist abgeschlossen "
-                "oder nachvollziehbar."
-            ),
+            "id": "ragflow-sync",
+            "title": "RAGFlow-Synchronisation zeigen",
+            "success": "Dokument ist in der RAGFlow-Dateiliste sichtbar.",
+        },
+        {
+            "id": "ragflow-parse",
+            "title": "RAGFlow-Parsingstatus zeigen",
+            "success": "Parsingstatus ist sichtbar erreicht oder abgeschlossen.",
         },
         {
             "id": "ragflow-chunks",
             "title": "Mehrere RAGFlow-Chunks öffnen",
-            "success": f"Mindestens ein Chunk enthält `{names.marker}`.",
+            "success": (
+                "Mehrere Chunks sind sichtbar; mindestens einer enthält "
+                "`Bibliothek-Sync-Chunk-Preview-Originalprüfung`."
+            ),
+        },
+        {
+            "id": "openwebui-open",
+            "title": "OpenWebUI öffnen",
+            "success": "OpenWebUI-Oberfläche ist sichtbar.",
         },
         {
             "id": "openwebui-pipe",
@@ -324,6 +413,21 @@ def build_recording_steps(names: DemoRecordingNames) -> list[dict[str, str]]:
             "id": "openwebui-question",
             "title": "Frage stellen, Antwort, Preview und Original prüfen",
             "success": "Antwort, Preview und Originaldokument enthalten denselben Demo-Kontext.",
+        },
+        {
+            "id": "openwebui-preview",
+            "title": "Preview der Quelle öffnen",
+            "success": "Die Preview zeigt den Prüfbegriff oder passende Abschnittsüberschriften.",
+        },
+        {
+            "id": "openwebui-original",
+            "title": "Originaldatei öffnen",
+            "success": "Das Original zeigt denselben Prüfbegriff und dieselben Schritte.",
+        },
+        {
+            "id": "workflow-final",
+            "title": "Abschlussansicht zeigen",
+            "success": "Antwort, Preview und Original sind nachvollziehbar zusammengeführt.",
         },
         {
             "id": "obs-stop",
@@ -352,11 +456,79 @@ def write_recording_summary(
         "file_name": names.file_name,
         "question": names.question,
         "steps": build_recording_steps(names),
+        "required_workflow": build_workflow_validation_template(),
         "obs": obs_config.redacted(),
         "checks": checks or {},
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
+
+
+def build_workflow_validation_template() -> dict[str, dict[str, Any]]:
+    return {
+        key: {
+            "label": label,
+            "status": "nicht geprüft",
+            "evidence": "",
+            "automatic": False,
+            "visual": False,
+        }
+        for key, label in REQUIRED_WORKFLOW_POINTS
+    }
+
+
+def validate_recording_artifact(
+    *,
+    recording_name: str,
+    demo_id: str,
+    expected_extension: str = ".mkv",
+    output_dir: str | Path | None = None,
+    webhook_payloads: Iterable[Any] = (),
+    started_at: datetime | None = None,
+) -> dict[str, Any]:
+    extension = _normalize_extension(expected_extension)
+    candidates: list[tuple[Path, str]] = []
+    for payload in webhook_payloads:
+        for value in _recording_paths_from_payload(payload, extension):
+            candidates.append((Path(value), "webhook"))
+    if output_dir:
+        candidates.extend(
+            (path, "output_dir")
+            for path in _filesystem_recording_candidates(
+                Path(output_dir),
+                recording_name=recording_name,
+                demo_id=demo_id,
+                expected_extension=extension,
+                started_at=started_at,
+            )
+        )
+    unique_candidates = _unique_path_candidates(candidates)
+    selected: tuple[Path, str] | None = None
+    for candidate in unique_candidates:
+        path, _source = candidate
+        if path.exists() and path.is_file() and path.suffix.lower() == extension:
+            selected = candidate
+            break
+    if selected is None and unique_candidates:
+        selected = unique_candidates[0]
+
+    artifact_path = selected[0] if selected else None
+    source = selected[1] if selected else None
+    exists = bool(artifact_path and artifact_path.exists() and artifact_path.is_file())
+    size_bytes = artifact_path.stat().st_size if exists and artifact_path else None
+    extension_ok = bool(artifact_path and artifact_path.suffix.lower() == extension)
+    valid = bool(exists and extension_ok and (size_bytes or 0) > 0)
+    return {
+        "path": str(artifact_path) if artifact_path else None,
+        "exists": exists,
+        "size_bytes": size_bytes,
+        "extension_ok": extension_ok,
+        "valid": valid,
+        "source": source,
+        "expected_extension": extension,
+        "candidate_count": len(unique_candidates),
+        "candidates": [str(candidate[0]) for candidate in unique_candidates[:10]],
+    }
 
 
 def _clean_env(value: str | None) -> str | None:
@@ -390,3 +562,124 @@ def _response_payload(response: httpx.Response) -> Any:
 def _safe_body_excerpt(body: Any) -> str:
     text = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False, default=str)
     return text[:500]
+
+
+def _normalize_extension(value: str) -> str:
+    extension = value.strip().lower()
+    if not extension:
+        return ".mkv"
+    if extension in {"matroska", "mkv"}:
+        return ".mkv"
+    if not extension.startswith("."):
+        extension = f".{extension}"
+    return extension
+
+
+def _recording_state(payload: Any) -> bool | None:
+    if isinstance(payload, dict):
+        for key in (
+            "recording",
+            "is_recording",
+            "recording_active",
+            "recording_running",
+            "active",
+            "running",
+        ):
+            if key in payload:
+                return _boolish(payload.get(key))
+        for key in ("status", "state"):
+            state = str(payload.get(key) or "").strip().lower()
+            if state in {"recording", "started", "running", "active"}:
+                return True
+            if state in {"idle", "stopped", "not_recording", "inactive"}:
+                return False
+        for value in payload.values():
+            nested = _recording_state(value)
+            if nested is not None:
+                return nested
+    if isinstance(payload, list):
+        for value in payload:
+            nested = _recording_state(value)
+            if nested is not None:
+                return nested
+    return None
+
+
+def _boolish(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "recording", "running", "started", "active"}:
+        return True
+    if text in {"0", "false", "no", "off", "idle", "stopped", "inactive"}:
+        return False
+    return None
+
+
+def _recording_paths_from_payload(payload: Any, expected_extension: str) -> list[str]:
+    paths: list[str] = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            normalized_key = str(key).strip().lower()
+            if normalized_key in _RECORDING_PATH_KEYS:
+                paths.extend(_recording_path_values(value, expected_extension))
+            paths.extend(_recording_paths_from_payload(value, expected_extension))
+    elif isinstance(payload, list):
+        for value in payload:
+            paths.extend(_recording_paths_from_payload(value, expected_extension))
+    return paths
+
+
+def _recording_path_values(value: Any, expected_extension: str) -> list[str]:
+    if isinstance(value, str):
+        text = value.strip().strip('"')
+        if _looks_like_recording_path(text, expected_extension):
+            return [text]
+    if isinstance(value, (dict, list)):
+        return _recording_paths_from_payload(value, expected_extension)
+    return []
+
+
+def _looks_like_recording_path(value: str, expected_extension: str) -> bool:
+    if not value or value.startswith(("http://", "https://")):
+        return False
+    return Path(value).suffix.lower() == expected_extension
+
+
+def _filesystem_recording_candidates(
+    output_dir: Path,
+    *,
+    recording_name: str,
+    demo_id: str,
+    expected_extension: str,
+    started_at: datetime | None,
+) -> list[Path]:
+    if not output_dir.exists() or not output_dir.is_dir():
+        return []
+    names = {recording_name.lower(), demo_id.lower()}
+    started_ts = started_at.timestamp() - 10 if started_at else None
+    candidates: list[Path] = []
+    for path in output_dir.rglob(f"*{expected_extension}"):
+        if not path.is_file():
+            continue
+        if started_ts is not None and path.stat().st_mtime < started_ts:
+            continue
+        lower_name = path.name.lower()
+        if any(name and name in lower_name for name in names):
+            candidates.append(path)
+    candidates.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+    return candidates
+
+
+def _unique_path_candidates(candidates: list[tuple[Path, str]]) -> list[tuple[Path, str]]:
+    seen: set[str] = set()
+    unique: list[tuple[Path, str]] = []
+    for path, source in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((path, source))
+    return unique
