@@ -235,6 +235,8 @@ class OBSWebhookHandler(BaseHTTPRequestHandler):
             self._handle_start(payload)
         elif self.path.startswith("/stop"):
             self._handle_stop()
+        elif self.path.startswith("/screenshot"):
+            self._handle_screenshot(payload)
         elif self.path.startswith("/scene"):
             self._handle_scene(payload)
         elif self.path.startswith("/marker"):
@@ -291,6 +293,60 @@ class OBSWebhookHandler(BaseHTTPRequestHandler):
         response = self.server.obs_request("SetCurrentProgramScene", {"sceneName": scene_name})
         self._send_json({"scene": scene_name, "changed": True, "response": response})
 
+    def _handle_screenshot(self, payload: dict[str, Any]) -> None:
+        source_name = (
+            _string_or_none(payload.get("source_name"))
+            or self.server.current_scene_name()
+        )
+        width = _int_or_none(payload.get("width")) or 1920
+        height = _int_or_none(payload.get("height")) or 1080
+        response = self.server.obs_request(
+            "GetSourceScreenshot",
+            {
+                "sourceName": source_name,
+                "imageFormat": "png",
+                "imageWidth": width,
+                "imageHeight": height,
+            },
+        )
+        image_data = _string_or_none(response.get("imageData"))
+        if not image_data:
+            self._send_json(
+                {
+                    "source_name": source_name,
+                    "written": False,
+                    "error": "OBS did not return imageData",
+                    "response": response,
+                },
+                status=502,
+            )
+            return
+        output_path = _string_or_none(payload.get("output_path"))
+        result: dict[str, Any] = {
+            "source_name": source_name,
+            "width": width,
+            "height": height,
+            "marker": _string_or_none(payload.get("marker")),
+            "demo_id": _string_or_none(payload.get("demo_id")),
+            "written": False,
+        }
+        if output_path:
+            path = Path(output_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            raw = image_data.split(",", 1)[-1]
+            data = base64.b64decode(raw)
+            path.write_bytes(data)
+            result.update(
+                {
+                    "written": True,
+                    "path": str(path),
+                    "size_bytes": path.stat().st_size,
+                }
+            )
+        else:
+            result["image_data_bytes"] = len(image_data)
+        self._send_json(result)
+
     def _handle_marker(self, payload: dict[str, Any]) -> None:
         marker = _string_or_none(payload.get("marker")) or "recording marker"
         try:
@@ -343,6 +399,13 @@ class OBSWebhookServer(ThreadingHTTPServer):
             "recording_path": output_path,
             "raw": response,
         }
+
+    def current_scene_name(self) -> str:
+        response = self.obs_request("GetCurrentProgramScene")
+        scene_name = _string_or_none(response.get("currentProgramSceneName"))
+        if not scene_name:
+            raise OBSBridgeError("OBS did not return a current program scene name")
+        return scene_name
 
     def wait_for_recording(self, expected: bool) -> dict[str, Any]:
         deadline = time.monotonic() + 10.0

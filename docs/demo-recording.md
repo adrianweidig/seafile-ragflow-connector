@@ -37,7 +37,7 @@ Arbeitsbaum.
 | `OBS_WEBHOOK_STOP_URL` | Stopp der Aufnahme, für `--record` erforderlich |
 | `OBS_WEBHOOK_MARKER_URL` | optionaler Marker-Endpunkt für wichtige Schritte |
 | `OBS_WEBHOOK_SCENE_URL` | optionaler Szenenwechsel |
-| `OBS_WEBHOOK_SCREENSHOT_URL` | reserviert für spätere Screenshot-Prüfung |
+| `OBS_WEBHOOK_SCREENSHOT_URL` | OBS-Quellenscreenshot für sichtbare Markerprüfung |
 | `OBS_WEBHOOK_TOKEN` | optionales Webhook-Token, wird nicht ausgegeben |
 | `OBS_WEBHOOK_TOKEN_HEADER` | optionaler Header, Default `Authorization` |
 | `OBS_WEBHOOK_TOKEN_SCHEME` | optionales Schema, Default `Bearer` |
@@ -46,6 +46,7 @@ Arbeitsbaum.
 | `OBS_RECORDING_EXPECTED_EXTENSION` | erwartete Dateiendung, Default `.mkv` |
 | `OBS_RECORDING_FORMAT` | alternative Formatangabe, `mkv` wird zu `.mkv` |
 | `OBS_SCENE_NAME` | optionale OBS-Szene für den Lauf |
+| `OBS_SCREENSHOT_WIDTH` / `OBS_SCREENSHOT_HEIGHT` | Screenshot-Größe für Markerprüfung, Default `1920x1080` |
 
 Wenn der Webhook keine JSON-Payload akzeptiert, setze
 `OBS_WEBHOOK_PAYLOAD_MODE=none`.
@@ -77,14 +78,31 @@ Darin stehen:
 - `demo-seafile-ragflow-openwebui-workflow-<demo-id>.md`,
 - `recording-summary.json`.
 
-## Späterer echter Lauf
+Bei Läufen mit OBS-Screenshot-Webhook enthält der Ordner zusätzlich
+`obs-screenshots/`. Diese PNGs müssen die Browserphasen zeigen; Desktop,
+Terminal oder eine statische falsche Anwendung zählen als fehlgeschlagene
+Sichtprüfung.
 
-Erst ausführen, wenn die bekannten Laufzeitfehler behoben sind und die
-Testumgebung bereit ist:
+## Echter Lauf
+
+Erst ausführen, wenn die Testumgebung bereit ist und der OBS-Webhook erreichbar
+ist. Für lokale Windows-/WSL-Demos muss die Seafile-Download-URL auf einen für
+Windows erreichbaren Host zeigen, zum Beispiel:
+
+```powershell
+$env:SEAFILE_REWRITE_DOWNLOAD_URLS = "true"
+$env:SEAFILE_DOWNLOAD_REWRITE_FROM = "https://seafile.top.secret/seafhttp"
+$env:SEAFILE_DOWNLOAD_REWRITE_TO = "http://127.0.0.1:18080/seafhttp"
+```
+
+Der sichtbare Lauf sollte andere Fenster minimieren und das Browserfenster auf
+die OBS-erfasste Fläche setzen:
 
 ```bash
 uv run --extra dev python scripts/record_demo_workflow.py \
-  --execute --record --headed \
+  --execute --record --headed --minimize-other-windows \
+  --browser-window-x 0 --browser-window-y 0 \
+  --browser-window-width 1920 --browser-window-height 1080 \
   --obs-output-dir "C:\Users\adria\Videos"
 ```
 
@@ -123,25 +141,26 @@ demo-seafile-ragflow-openwebui-full-workflow-<demo-id>.mkv
 Das Skript erzwingt im Ausführungsmodus diese Reihenfolge:
 
 1. Demo-Browserfenster vorbereiten.
-2. OBS optional validieren und Aufnahme starten.
-3. Seafile-Seite öffnen.
+2. Seafile-Seite öffnen, Browser sichtbar positionieren und per
+   OBS-Screenshot prüfen.
+3. OBS optional validieren und Aufnahme starten.
 4. Testbibliothek erzeugen oder wiederverwenden.
 5. Bibliothek öffnen und per API prüfen, dass sie vor dem Upload leer ist.
 6. Connector-Discovery ausführen.
 7. RAGFlow-Dataset für die Bibliothek sicherstellen.
 8. RAGFlow-Chat beziehungsweise Assistant vor dem Upload erstellen und sichtbar
    öffnen.
-10. Demo-Datei erst danach nach Seafile hochladen.
-11. Connector-Sync für die Bibliothek ausführen.
-12. RAGFlow-Parsing bis zum Timeout prüfen.
-13. Retrieval gegen das Dataset prüfen und Chunk-Nachweis markieren.
-14. OpenWebUI-Sync für genau diese Bibliothek ausführen, damit RAGFlow-Chat
+9. Demo-Datei erst danach nach Seafile hochladen.
+10. Connector-Sync für die Bibliothek ausführen.
+11. RAGFlow-Parsing bis zum Timeout prüfen.
+12. Retrieval gegen das Dataset prüfen und Chunk-Nachweis markieren.
+13. OpenWebUI-Sync für genau diese Bibliothek ausführen, damit RAGFlow-Chat
    und OpenWebUI-Pipe nach erfolgreichem Parsing entstehen.
-15. OpenWebUI öffnen, Pipe auswählen, Frage stellen und Antwort abwarten.
-16. Quellen-Preview öffnen.
-17. Originaldatei öffnen.
-18. OBS-Marker setzen und Aufnahme kontrolliert stoppen.
-19. Die erzeugte `.mkv` im OBS-Ausgabeordner finden und auf Größe prüfen.
+14. OpenWebUI öffnen, Pipe auswählen, Frage stellen und Antwort abwarten.
+15. Quellen-Preview öffnen.
+16. Originaldatei öffnen.
+17. OBS-Marker setzen und Aufnahme kontrolliert stoppen.
+18. Die erzeugte `.mkv` im OBS-Ausgabeordner finden und auf Größe prüfen.
 
 ## Erfolgskriterien
 
