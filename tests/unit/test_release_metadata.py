@@ -41,12 +41,12 @@ class ReleaseMetadataTest(unittest.TestCase):
         )
         self.assertIn(f"seafile-ragflow-connector:{__version__}", portainer_env)
 
-    def test_docker_workflow_keeps_semver_image_tags(self) -> None:
+    def test_docker_workflow_keeps_release_image_tags(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text(encoding="utf-8")
 
-        self.assertIn("type=semver,pattern={{version}}", workflow)
-        self.assertIn("type=semver,pattern={{major}}.{{minor}}", workflow)
-        self.assertIn("type=match,pattern=v(.*),group=1", workflow)
+        self.assertIn(r"type=match,pattern=v([0-9]+\.[0-9]+)$,group=1", workflow)
+        self.assertIn(r"type=match,pattern=v([0-9]+\.[0-9]+\.[0-9]+)$,group=1", workflow)
+        self.assertIn(r"type=match,pattern=v([0-9]+\.[0-9]+)\.[0-9]+$,group=1", workflow)
         self.assertIn("type=sha,prefix=sha-", workflow)
 
     def test_release_process_documents_minor_and_major_release_tags(self) -> None:
@@ -59,6 +59,7 @@ class ReleaseMetadataTest(unittest.TestCase):
         self.assertIn("ghcr.io/adrianweidig/seafile-ragflow-connector:2.1", release_process)
         self.assertIn("sha-<commit>", release_process)
         self.assertIn("ohne führendes `v`", release_process)
+        self.assertIn("Minor-Tag `3.0`", release_process)
 
 
 if __name__ == "__main__":
