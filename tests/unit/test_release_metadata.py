@@ -49,6 +49,17 @@ class ReleaseMetadataTest(unittest.TestCase):
         self.assertIn("type=match,pattern=v(.*),group=1", workflow)
         self.assertIn("type=sha,prefix=sha-", workflow)
 
+    def test_release_process_documents_minor_and_major_release_tags(self) -> None:
+        release_process = (ROOT / "docs" / "RELEASE_PROCESS.md").read_text(
+            encoding="utf-8"
+        )
+
+        for expected in ("v2.1", "v3.0", "v3.0.1"):
+            self.assertIn(expected, release_process)
+        self.assertIn("ghcr.io/adrianweidig/seafile-ragflow-connector:2.1", release_process)
+        self.assertIn("sha-<commit>", release_process)
+        self.assertIn("ohne führendes `v`", release_process)
+
 
 if __name__ == "__main__":
     unittest.main()

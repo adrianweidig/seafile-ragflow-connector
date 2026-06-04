@@ -27,13 +27,21 @@ python scripts/verify.py --with-compose
 ## GitHub Release
 
 1. Einen signifikanten Commit-Stand auf `master` wählen.
-2. Einen Tag im Format `vX.Y` oder `vX.Y.Z` erstellen.
-3. Tag pushen.
-4. GitHub Release mit kompakten Release Notes aus `CHANGELOG.md` erstellen.
+2. Prüfen, dass der gewünschte Tag lokal, remote und als GitHub Release noch
+   nicht existiert.
+3. Einen Tag im Format `vX.Y` oder `vX.Y.Z` erstellen. Gültige Beispiele sind
+   `v2.1`, `v3.0` oder `v3.0.1`.
+4. Tag pushen.
+5. Den `docker-image`-Workflow für den Tag abwarten.
+6. Den GHCR-Tag prüfen, bevor der GitHub Release veröffentlicht wird. Ein Tag
+   `v2.1` muss beispielsweise `ghcr.io/adrianweidig/seafile-ragflow-connector:2.1`
+   erzeugen; zusätzlich bleibt der `sha-<commit>`-Tag als Fallback verfügbar.
+7. GitHub Release mit kompakten Release Notes aus `CHANGELOG.md` erstellen.
 
-Der Docker-Workflow veröffentlicht für SemVer-Tags entsprechende GHCR-Tags. Für
-produktionsnahe Installationen sollten Betreiber nach Möglichkeit einen Release-
-oder SHA-Tag statt eines beweglichen Branch-Tags pinnen.
+Der Docker-Workflow veröffentlicht für `vX.Y`- und `vX.Y.Z`-Tags entsprechende
+GHCR-Tags ohne führendes `v`. Für produktionsnahe Installationen sollten
+Betreiber nach Möglichkeit einen Release- oder SHA-Tag statt eines beweglichen
+Branch-Tags pinnen.
 
 ## Automatische Release-Artefakte
 
