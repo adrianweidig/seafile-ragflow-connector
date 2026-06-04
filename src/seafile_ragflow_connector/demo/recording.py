@@ -41,9 +41,11 @@ _RECORDING_PATH_KEYS = {
 REQUIRED_WORKFLOW_POINTS: tuple[tuple[str, str], ...] = (
     ("seafile_library_created", "Seafile-Bibliothek erstellt"),
     ("seafile_empty_library_shown", "leere Bibliothek gezeigt"),
-    ("ragflow_dataset_created", "RAGFlow-Dataset erstellt"),
-    ("ragflow_chat_created", "RAGFlow-Chat beziehungsweise Assistant erstellt"),
-    ("file_uploaded_after_chat", "Datei erst danach hochgeladen"),
+    ("connector_config_shown", "Connector-Konfiguration geprüft"),
+    ("file_uploaded_before_connector_sync", "Datei vor Connector-Sync hochgeladen"),
+    ("connector_sync_started", "Connector-Synchronisation gestartet"),
+    ("ragflow_dataset_created", "RAGFlow-Dataset automatisch vom Connector erstellt"),
+    ("ragflow_chat_created", "RAGFlow-Chat automatisch vom Connector erstellt"),
     ("ragflow_sync_shown", "RAGFlow-Synchronisation gezeigt"),
     ("ragflow_parsing_shown", "RAGFlow-Parsing gezeigt"),
     ("ragflow_chunks_shown", "RAGFlow-Chunks gezeigt"),
@@ -303,24 +305,31 @@ Laufkennung: {names.demo_id}
 
 ## Überblick
 
-Dieses Dokument beschreibt einen Demonstrationsworkflow, bei dem eine Datei
-zuerst in eine Seafile-Bibliothek hochgeladen, danach in RAGFlow synchronisiert
-und geparsed und anschließend über eine automatisch erzeugte OpenWebUI-Pipe
-abgefragt wird.
+Dieses Dokument beschreibt einen Demonstrationsworkflow, bei dem der Connector
+eine Seafile-Bibliothek als Quelle verwendet, daraus automatisch ein
+RAGFlow-Dataset und einen RAGFlow-Chat erzeugt, die Datei synchronisiert und den
+Inhalt anschließend über eine automatisch erzeugte OpenWebUI-Pipe abfragbar
+macht.
 
 ## Seafile-Schritt
 
 In Seafile wird eine neue Bibliothek erstellt. Die Bibliothek ist zunächst leer.
-Erst nachdem in RAGFlow ein Dataset und ein Chat beziehungsweise Assistant
-angelegt wurden, wird dieses Dokument in die Bibliothek hochgeladen.
+Für den normalen Ablauf muss der Benutzer in RAGFlow kein Dataset und keinen
+Chat vorbereiten. Dieses Dokument wird in die Bibliothek hochgeladen; danach
+übernimmt der Connector Initialisierung, Synchronisation und Zielartefakte.
 
 Sichtbarer Bibliotheksname: `{names.library_name}`
 
 ## RAGFlow-Schritt
 
-RAGFlow synchronisiert die Datei aus der Seafile-Bibliothek. Danach wird die
-Datei geparsed. Die erzeugten Chunks enthalten Abschnitte zum Überblick, zum
+Der Connector erstellt das passende RAGFlow-Dataset automatisch und
+synchronisiert die Datei aus der Seafile-Bibliothek. Danach wird die Datei
+geparsed. Die erzeugten Chunks enthalten Abschnitte zum Überblick, zum
 Seafile-Schritt, zum RAGFlow-Schritt und zum OpenWebUI-Schritt.
+
+Der RAGFlow-Chat wird ebenfalls vom Connector erzeugt. Die RAGFlow-Oberfläche
+wird in der Demo nur zur Kontrolle geöffnet, nicht als notwendiger
+Benutzerschritt.
 
 Sichtbares Dataset-Label: `{names.dataset_label}`
 Sichtbares Chat-Label: `{names.chat_label}`
@@ -378,32 +387,43 @@ def build_recording_steps(names: DemoRecordingNames) -> list[dict[str, str]]:
             "success": f"Bibliothek `{names.library_name}` ist vor dem Upload sichtbar leer.",
         },
         {
-            "id": "ragflow-open",
-            "title": "RAGFlow öffnen",
-            "success": "RAGFlow-Oberfläche ist sichtbar.",
+            "id": "connector-config-open",
+            "title": "Connector-Konfiguration öffnen",
+            "success": (
+                "Connector-Dashboard, Health oder Konfiguration zeigt "
+                "Seafile-, RAGFlow- und OpenWebUI-Anbindung ohne Secrets."
+            ),
         },
         {
-            "id": "ragflow-dataset-create",
-            "title": "RAGFlow-Dataset zur Bibliothek erstellen",
+            "id": "seafile-upload",
+            "title": "Datei in Seafile hochladen",
+            "success": f"`{names.file_name}` ist in Seafile sichtbar.",
+        },
+        {
+            "id": "connector-sync-run",
+            "title": "Connector-Synchronisation starten",
+            "success": (
+                "Connector-Lauf erzeugt Dataset, synchronisiert Dokumente und "
+                "stößt OpenWebUI/RAGFlow-Chat-Erzeugung an."
+            ),
+        },
+        {
+            "id": "ragflow-open",
+            "title": "RAGFlow zur Ergebniskontrolle öffnen",
+            "success": "RAGFlow-Oberfläche ist sichtbar; keine manuelle Anlage erforderlich.",
+        },
+        {
+            "id": "ragflow-dataset-auto",
+            "title": "Automatisch erstelltes RAGFlow-Dataset zeigen",
             "success": (
                 "Dataset ist sichtbar und mit Demo-Label "
                 f"`{names.dataset_label}` korrelierbar."
             ),
         },
         {
-            "id": "ragflow-dataset-details",
-            "title": "RAGFlow-Dataset-Details zeigen",
-            "success": "Dataset-ID, Bibliotheksbezug und Dokumentliste sind sichtbar.",
-        },
-        {
-            "id": "ragflow-chat-create",
-            "title": "RAGFlow-Chat oder Assistant vor Datei-Upload erstellen",
-            "success": f"Chat `{names.chat_label}` ist dem Dataset zugeordnet.",
-        },
-        {
-            "id": "seafile-upload",
-            "title": "Datei erst nach Dataset und Chat hochladen",
-            "success": f"`{names.file_name}` ist in Seafile sichtbar.",
+            "id": "ragflow-chat-auto",
+            "title": "Automatisch erstellten RAGFlow-Chat zeigen",
+            "success": f"Chat `{names.chat_label}` wurde vom Connector erzeugt.",
         },
         {
             "id": "ragflow-sync",

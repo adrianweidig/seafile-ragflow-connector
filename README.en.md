@@ -48,15 +48,16 @@ not have to live inside OpenWebUI function code.
 
 ## Demo
 
-The recording walks through the workflow in a fresh demo environment: create a
-library, verify the empty state, create the RAGFlow dataset and chat/assistant,
-upload the file, check sync and parsing, open chunks, and use the generated
-OpenWebUI pipe with answer, preview, and original file.
+The video shows the normal connector flow, not a manual RAGFlow setup: prepare
+the Seafile library, upload a file, start connector sync, and then verify that
+the RAGFlow dataset, RAGFlow chat, and OpenWebUI pipe were created
+automatically. The final step checks the OpenWebUI answer against preview and
+original file.
 
-[![Demo video: full Seafile to RAGFlow to OpenWebUI workflow](docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg)](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mp4)
+[![Demo video: connector creates RAGFlow dataset and chat automatically](docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg)](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mp4)
 
 [Watch MP4](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mp4)
-· [Download OBS MKV](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mkv)
+· [Download MKV](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mkv)
 · [Recording runbook](docs/en/demo-recording.md)
 
 ## Features

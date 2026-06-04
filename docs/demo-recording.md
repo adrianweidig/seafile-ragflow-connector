@@ -17,9 +17,13 @@ als Diagnoseartefakte und erfüllen den Demoauftrag nicht.
 Die Aufnahme soll zeigen:
 
 - neue Seafile-Bibliothek anlegen und leer zeigen,
-- dazugehöriges RAGFlow-Dataset sichtbar machen,
-- RAGFlow-Chat und OpenWebUI-Pipe vor dem Datei-Upload erzeugen,
-- erst danach die Demo-Datei in Seafile hochladen,
+- Connector-Konfiguration beziehungsweise Dashboard öffnen und die Anbindung an
+  Seafile, RAGFlow und optional OpenWebUI prüfen,
+- Demo-Datei in Seafile hochladen,
+- Connector-Synchronisation starten,
+- sichtbar machen, dass der Connector das RAGFlow-Dataset automatisch erzeugt,
+- sichtbar machen, dass der Connector den RAGFlow-Chat und die OpenWebUI-Pipe
+  automatisch erzeugt,
 - Synchronisation, Parsing und mehrere Chunks in RAGFlow prüfen,
 - in OpenWebUI die automatisch erzeugte Pipe verwenden,
 - Antwort, Preview und Originaldokument gegeneinander nachvollziehen,
@@ -147,16 +151,16 @@ Das Skript erzwingt im Ausführungsmodus diese Reihenfolge:
 3. OBS optional validieren und Aufnahme starten.
 4. Testbibliothek erzeugen oder wiederverwenden.
 5. Bibliothek öffnen und per API prüfen, dass sie vor dem Upload leer ist.
-6. Connector-Discovery ausführen.
-7. RAGFlow-Dataset für die Bibliothek sicherstellen.
-8. RAGFlow-Chat beziehungsweise Assistant vor dem Upload erstellen und sichtbar
-   öffnen.
-9. Demo-Datei erst danach nach Seafile hochladen.
-10. Connector-Sync für die Bibliothek ausführen.
-11. RAGFlow-Parsing bis zum Timeout prüfen.
-12. Retrieval gegen das Dataset prüfen und Chunk-Nachweis markieren.
-13. OpenWebUI-Sync für genau diese Bibliothek ausführen, damit RAGFlow-Chat
-   und OpenWebUI-Pipe nach erfolgreichem Parsing entstehen.
+6. Connector-Konfiguration oder Dashboard öffnen und die Verbindungen zu
+   Seafile, RAGFlow und optional OpenWebUI sichtbar prüfen.
+7. Demo-Datei nach Seafile hochladen.
+8. Connector-Discovery und Connector-Sync für die Bibliothek starten.
+9. OpenWebUI-Sync für genau diese Bibliothek ausführen, damit der Connector den
+   RAGFlow-Chat und die OpenWebUI-Pipe erzeugt.
+10. In RAGFlow das automatisch erzeugte Dataset öffnen.
+11. In RAGFlow den automatisch erzeugten Chat öffnen.
+12. RAGFlow-Parsing bis zum Timeout prüfen.
+13. Retrieval gegen das Dataset prüfen und Chunk-Nachweis markieren.
 14. OpenWebUI öffnen, Pipe auswählen, Frage stellen und Antwort abwarten.
 15. Quellen-Preview öffnen.
 16. Originaldatei öffnen.
@@ -168,7 +172,13 @@ Das Skript erzwingt im Ausführungsmodus diese Reihenfolge:
 Für den vollständigen Videolauf müssen sichtbar geprüft werden:
 
 - Seafile-Bibliothek ist leer, bevor die Datei hochgeladen wird.
-- RAGFlow-Dataset und Chat existieren vor dem Upload.
+- Es wird keine manuelle RAGFlow-Dataset- oder Chat-Erstellung als
+  Benutzerschritt gezeigt.
+- Connector-Konfiguration, Connector-Start und Connector-Sync sind sichtbar.
+- Das RAGFlow-Dataset ist als automatisch vom Connector erzeugtes Ergebnis
+  sichtbar.
+- Der RAGFlow-Chat ist als automatisch vom Connector erzeugtes Ergebnis
+  sichtbar.
 - Datei ist nach dem Upload in Seafile sichtbar.
 - RAGFlow zeigt Datei, Sync-Status und Parsingstatus.
 - Mehrere Chunks sind sichtbar; mindestens ein Chunk enthält den Demo-Marker.

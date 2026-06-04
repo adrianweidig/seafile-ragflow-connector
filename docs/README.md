@@ -17,7 +17,7 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
 - `demo-recording.md` beschreibt die vorbereitete OBS-Demoaufnahme mit
   Dry-Run-Plan, Webhook-Konfiguration und späterem `--execute --record`-Lauf.
 - `assets/demo/` enthält das README-Poster sowie das Demo-Video als MP4 und
-  OBS-MKV; die README verlinkt die stabilen Dateien des GitHub-Releases.
+  MKV; die README verlinkt die stabilen Dateien des GitHub-Releases.
 - `operations.md` enthält Portainer-Betrieb, Docker-Compose-Varianten,
   Docker-Swarm-Betrieb, GHCR-/Offline-Hinweise, Recovery, Troubleshooting und
   lokale WSL-/Docker-Prüfungen.
