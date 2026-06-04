@@ -18,3 +18,6 @@ deploy/tls-lab/certs
 stack.env
 deploy/portainer/stack.env
 *.log
+docs/assets/demo/*.mkv
+docs/assets/demo/*.mp4
+docs/assets/demo/*.webm

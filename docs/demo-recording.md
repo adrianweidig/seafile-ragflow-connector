@@ -99,12 +99,12 @@ $env:SEAFILE_DOWNLOAD_REWRITE_TO = "http://127.0.0.1:18080/seafhttp"
 Der sichtbare Lauf sollte andere Fenster minimieren und das Browserfenster auf
 die OBS-erfasste Fläche setzen:
 
-```bash
-uv run --extra dev python scripts/record_demo_workflow.py \
-  --execute --record --headed --minimize-other-windows \
-  --browser-window-x 0 --browser-window-y 0 \
-  --browser-window-width 1920 --browser-window-height 1080 \
-  --obs-output-dir "C:\Users\adria\Videos"
+```powershell
+uv run --extra dev python scripts/record_demo_workflow.py `
+  --execute --record --headed --minimize-other-windows `
+  --browser-window-x 0 --browser-window-y 0 `
+  --browser-window-width 1920 --browser-window-height 1080 `
+  --obs-output-dir "$env:USERPROFILE\Videos"
 ```
 
 Wenn ein Playwright-Profil mit bestehenden Test-Logins verwendet werden soll:

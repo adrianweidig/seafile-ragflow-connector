@@ -16,6 +16,7 @@ for later static documentation pages.
 - [Environment variables](../environment.md)
 - [Admin first-start checklist](admin-first-start-checklist.md)
 - [Manual Seafile-RAGFlow-OpenWebUI verification](manual-workflow-verification.md)
+- [Demo video](../assets/demo/seafile-ragflow-connector-demo.mp4)
 - [OBS demo recording](demo-recording.md)
 - [Internationalization and Unicode](i18n.md)
 - [Testing model](../testing.md)

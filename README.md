@@ -18,7 +18,7 @@
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml"><img alt="Docker image" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml/badge.svg?branch=master"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml/badge.svg?branch=master"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="pyproject.toml"><img alt="Version 0.1.13" src="https://img.shields.io/badge/version-0.1.13-informational.svg"></a>
+  <a href="pyproject.toml"><img alt="Version 2.0" src="https://img.shields.io/badge/version-2.0-informational.svg"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/issues"><img alt="GitHub issues" src="https://img.shields.io/github/issues/adrianweidig/seafile-ragflow-connector"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/pulls"><img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/adrianweidig/seafile-ragflow-connector"></a>
 </p>
@@ -41,7 +41,7 @@ RAGFlow-Secrets in OpenWebUI-Funktionen abzulegen.
 
 | Ziel | Einstieg |
 | --- | --- |
-| Demo | [OBS-MKV-End-to-End-Aufnahme](#demo) |
+| Demo | [Demo-Video](#demo) |
 | Schnellstart | [Docker Compose](#schnellstart-mit-docker-compose) oder [Portainer](#portainer-start) |
 | Admin-Erststart | [Checkliste für den ersten produktionsnahen Start](docs/admin-first-start-checklist.md) |
 | Konfiguration | [`connector.env.example`](connector.env.example), [Environment-Referenz](docs/environment.md) |
@@ -54,15 +54,17 @@ RAGFlow-Secrets in OpenWebUI-Funktionen abzulegen.
 
 ## Demo
 
-Die vollständige Demo muss als OBS-gesteuerte MKV-Aufnahme erzeugt werden und
-den gesamten Ablauf Seafile -> RAGFlow -> OpenWebUI zeigen: neue leere
-Seafile-Bibliothek, RAGFlow-Dataset und Chat vor dem Upload, anschließender
-Dateiupload, Sync, Parsing, Chunks, OpenWebUI-Pipe, Frage, Antwort, Preview und
-Originaldatei. Das Runbook steht unter
-[docs/demo-recording.md](docs/demo-recording.md).
+Ein kurzes Demo-Video zeigt den vollständigen Ablauf von einer neuen
+Seafile-Bibliothek über RAGFlow-Synchronisation, Parsing und Chunks bis zur
+OpenWebUI-Pipe mit Antwort, Preview und Originaldatei.
 
-Die frühere OpenWebUI-only-WebM-Aufnahme ist nicht mehr als vollständige Demo
-eingebunden, weil sie Seafile- und RAGFlow-Phasen nicht sichtbar dokumentiert.
+<video src="docs/assets/demo/seafile-ragflow-connector-demo.mp4" controls width="100%"></video>
+
+Falls das Video nicht direkt angezeigt wird:
+[Demo-Video ansehen](docs/assets/demo/seafile-ragflow-connector-demo.mp4)
+oder [OBS-MKV herunterladen](docs/assets/demo/seafile-ragflow-connector-demo.mkv).
+Das Runbook für reproduzierbare Neuaufnahmen steht unter
+[docs/demo-recording.md](docs/demo-recording.md).
 
 ## Was dieses Repository besonders macht
 
@@ -302,11 +304,11 @@ der Name auf das bereits vorhandene gemeinsame Docker-Netz zeigen.
 
 Der Online-Start kann das veröffentlichte GHCR-Image nutzen. Für
 produktionsnahe Rollouts sollte nach Veröffentlichung ein fester Release-Tag
-wie `0.1.13` gepinnt werden; `latest` ist eine Komfortoption für Smoke-Tests und
+wie `2.0` gepinnt werden; `latest` ist eine Komfortoption für Smoke-Tests und
 frische Testumgebungen.
 
 ```bash
-docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.13
+docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:2.0
 ```
 
 Für Offline-Umgebungen können die benötigten Images vorab exportiert und auf dem
@@ -314,7 +316,7 @@ Zielhost importiert werden:
 
 ```bash
 docker save \
-  ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.13 \
+  ghcr.io/adrianweidig/seafile-ragflow-connector:2.0 \
   postgres:16 \
   redis:7 \
   -o images/seafile-ragflow-portainer-images.tar
@@ -326,7 +328,7 @@ Wenn interne Registry- oder lokale Image-Namen genutzt werden, trage sie in
 `connector.env` ein:
 
 ```env
-CONNECTOR_IMAGE=seafile-ragflow-connector:0.1.13
+CONNECTOR_IMAGE=seafile-ragflow-connector:2.0
 POSTGRES_IMAGE=postgres:16
 REDIS_IMAGE=redis:7
 ```

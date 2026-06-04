@@ -8,14 +8,26 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+Keine Einträge.
+
+## 2.0 - 2026-06-04
+
 ### Added
 
+- Demo-Video zum vollständigen Seafile -> RAGFlow -> OpenWebUI-Workflow ins
+  Repository aufgenommen und in der README eingebunden.
 - Der Dashboard-OpenWebUI-Tab kann connector-eigene Pipes, RAGFlow-Chats und
   RAGFlow-Datasets gezielt löschen, ohne die zugehörige Seafile-Bibliothek zu
   löschen.
 
 ### Changed
 
+- README, Changelog, Release-Prozess und Versionshinweise auf Version `2.0`
+  vorbereitet.
+- Dokumentation auf widersprüchliche Demo-, Release- und Encoding-Hinweise
+  geprüft; sichere Korrekturen wurden gezielt eingearbeitet.
+- Docker-Kontext bereinigt, damit die Repository-Demo-Videos nicht unnötig in
+  lokale Container-Images gelangen.
 - Normale OpenWebUI-/RAGFlow-Chatantworten kuratieren sichtbare Quellen auf
   zitierte Dokumente, damit irrelevante Treffer nicht mehr als scheinbare
   Antwortbelege erscheinen. Die OpenWebUI-Pipe-Artefaktversion wurde dafür auf

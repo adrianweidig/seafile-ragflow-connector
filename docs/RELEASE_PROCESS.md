@@ -1,6 +1,6 @@
 # Release-Prozess
 
-Dieses Repository enthält aktuell Paketmetadaten mit Version `0.1.13`, einen
+Dieses Repository enthält aktuell Paketmetadaten mit Version `2.0`, einen
 Docker-Publish-Workflow für GHCR und einen einfachen SemVer-Release-Pfad. Dieser
 Prozess beschreibt einen vorsichtigen Maintainer-Ablauf für zukünftige Releases.
 
@@ -27,7 +27,7 @@ python scripts/verify.py --with-compose
 ## GitHub Release
 
 1. Einen signifikanten Commit-Stand auf `master` wählen.
-2. Einen Tag im Format `vX.Y.Z` erstellen.
+2. Einen Tag im Format `vX.Y` oder `vX.Y.Z` erstellen.
 3. Tag pushen.
 4. GitHub Release mit kompakten Release Notes aus `CHANGELOG.md` erstellen.
 
