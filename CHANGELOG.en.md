@@ -8,13 +8,25 @@ retroactively.
 
 ## Unreleased
 
+No entries.
+
+## 2.0 - 2026-06-04
+
 ### Added
 
+- Added the full Seafile -> RAGFlow -> OpenWebUI demo video to the repository
+  and linked it from the README.
 - The Dashboard OpenWebUI tab can delete connector-owned pipes, RAGFlow chats,
   and RAGFlow datasets without deleting the related Seafile library.
 
 ### Changed
 
+- README, changelog, release process, and version references were prepared for
+  version `2.0`.
+- Documentation was checked for conflicting demo, release, and encoding notes;
+  safe corrections were applied directly.
+- Docker context hygiene now excludes the repository demo videos from local
+  container images.
 - Normal OpenWebUI/RAGFlow chat answers now curate visible sources to cited
   documents so irrelevant hits no longer appear as answer evidence. The
   OpenWebUI pipe artifact version was bumped to 24 for this change.

@@ -17,7 +17,7 @@
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml"><img alt="Docker image" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml/badge.svg?branch=master"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml/badge.svg?branch=master"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="pyproject.toml"><img alt="Version 0.1.13" src="https://img.shields.io/badge/version-0.1.13-informational.svg"></a>
+  <a href="pyproject.toml"><img alt="Version 2.0" src="https://img.shields.io/badge/version-2.0-informational.svg"></a>
 </p>
 
 ## Overview
@@ -28,6 +28,7 @@ The connector is an offline-ready sync control plane for environments where Seaf
 
 | Goal | Entry point |
 | --- | --- |
+| Demo | [Demo video](#demo) |
 | Quick start | [Docker Compose](#docker-compose-quick-start) or [Portainer](#portainer-start) |
 | Admin first start | [first-start checklist](docs/en/admin-first-start-checklist.md) |
 | Configuration | [`connector.env.example`](connector.env.example), [environment reference](docs/environment.md) |
@@ -37,6 +38,20 @@ The connector is an offline-ready sync control plane for environments where Seaf
 | TLS | [TLS topology](docs/tls-topology.md), [certificates](docs/tls-certificates.md), [troubleshooting](docs/troubleshooting-ssl.md) |
 | Development | [development checks](#development) and [tests](docs/testing.md) |
 | Contributing | [CONTRIBUTING.en.md](CONTRIBUTING.en.md), [security policy](SECURITY.en.md), [support](SUPPORT.en.md) |
+
+## Demo
+
+A short demo video shows the full workflow from a new Seafile library through
+RAGFlow synchronization, parsing, and chunks to the OpenWebUI pipe with answer,
+preview, and original file.
+
+<video src="docs/assets/demo/seafile-ragflow-connector-demo.mp4" controls width="100%"></video>
+
+If the embedded video is not shown:
+[watch the demo video](docs/assets/demo/seafile-ragflow-connector-demo.mp4)
+or [download the OBS MKV](docs/assets/demo/seafile-ragflow-connector-demo.mkv).
+The reproducible recording runbook remains available at
+[docs/en/demo-recording.md](docs/en/demo-recording.md).
 
 ## Features
 
@@ -150,7 +165,7 @@ For Compose and Portainer, tune the schedule with
 6. Deploy the stack and inspect the logs of `connector-controller`, `connector-worker`, and `connector-reconciler`.
 
 For production-like deployments, pin `CONNECTOR_IMAGE` to a fixed release tag
-such as `ghcr.io/adrianweidig/seafile-ragflow-connector:0.1.13` after that
+such as `ghcr.io/adrianweidig/seafile-ragflow-connector:2.0` after that
 release has been published. Treat `latest` as a convenience tag for smoke tests
 and fresh test environments.
 The first acceptance path after deployment is summarized in the
