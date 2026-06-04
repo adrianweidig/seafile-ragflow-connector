@@ -27,6 +27,8 @@ No entries.
   safe corrections were applied directly.
 - Docker context hygiene now excludes the repository demo videos from local
   container images.
+- Docker image publishing also supports `vX.Y` tags such as `v2.0` as image tag
+  `2.0`.
 - Normal OpenWebUI/RAGFlow chat answers now curate visible sources to cited
   documents so irrelevant hits no longer appear as answer evidence. The
   OpenWebUI pipe artifact version was bumped to 24 for this change.

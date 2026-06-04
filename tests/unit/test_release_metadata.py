@@ -46,6 +46,7 @@ class ReleaseMetadataTest(unittest.TestCase):
 
         self.assertIn("type=semver,pattern={{version}}", workflow)
         self.assertIn("type=semver,pattern={{major}}.{{minor}}", workflow)
+        self.assertIn("type=match,pattern=v(.*),group=1", workflow)
         self.assertIn("type=sha,prefix=sha-", workflow)
 
 

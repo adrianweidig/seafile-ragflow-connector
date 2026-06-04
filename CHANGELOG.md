@@ -28,6 +28,8 @@ Keine Einträge.
   geprüft; sichere Korrekturen wurden gezielt eingearbeitet.
 - Docker-Kontext bereinigt, damit die Repository-Demo-Videos nicht unnötig in
   lokale Container-Images gelangen.
+- Docker-Image-Workflow unterstützt zusätzlich `vX.Y`-Tags wie `v2.0` als
+  Image-Tag `2.0`.
 - Normale OpenWebUI-/RAGFlow-Chatantworten kuratieren sichtbare Quellen auf
   zitierte Dokumente, damit irrelevante Treffer nicht mehr als scheinbare
   Antwortbelege erscheinen. Die OpenWebUI-Pipe-Artefaktversion wurde dafür auf
