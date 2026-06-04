@@ -60,6 +60,29 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare release tags
+        id: release-tags
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            exit 0
+          fi
+
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v([0-9]+)\.([0-9]+)(\.([0-9]+))?$ ]]; then
+            echo "::error::Release tag must use vX.Y or vX.Y.Z, got ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+          version="${GITHUB_REF_NAME#v}"
+          minor="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+          {
+            echo "tags<<EOF"
+            echo "type=raw,value=${version}"
+            if [[ "${version}" != "${minor}" ]]; then
+              echo "type=raw,value=${minor}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/metadata-action@v6
         id: meta
         with:
@@ -68,9 +91,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
             type=sha,prefix=sha-
-            type=match,pattern=v([0-9]+\.[0-9]+)$,group=1
-            type=match,pattern=v([0-9]+\.[0-9]+\.[0-9]+)$,group=1
-            type=match,pattern=v([0-9]+\.[0-9]+)\.[0-9]+$,group=1
+            ${{ steps.release-tags.outputs.tags }}
       - uses: docker/build-push-action@v7
         with:
           context: .
