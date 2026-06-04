@@ -9,8 +9,8 @@
 <h1 align="center">Seafile RAGFlow Connector</h1>
 
 <p align="center">
-  Aus Seafile-Libraries werden reproduzierbare RAGFlow-Datasets und optional OpenWebUI Custom Models:
-  mit Delta-Sync, Delete-Propagation, Drift-Repair, TLS, Audit und Portainer-tauglichem Betrieb.
+  Synchronisiert Seafile-Bibliotheken kontrolliert nach RAGFlow und stellt sie
+  bei Bedarf als OpenWebUI-Modelle bereit.
 </p>
 
 <p align="center">
@@ -25,17 +25,15 @@
 
 ## Überblick
 
-Der Connector ist keine dünne Upload-Schleife. Er ist eine eigenständige
-Sync-Control-Plane für Umgebungen, in denen Seafile die Dokumentenquelle bleibt
-und RAGFlow daraus zuverlässig nutzbare Knowledge-Datasets bekommt.
+Der Connector hält Seafile als Quelle der Wahrheit. Er entdeckt Bibliotheken,
+legt passende RAGFlow-Datasets an, importiert geänderte Dateien und stößt das
+Parsing an. Entfernte Dateien oder Bibliotheken werden nachvollziehbar in den
+Zielsystemen bereinigt; fehlende Zielartefakte können aus Seafile wieder
+aufgebaut werden.
 
-Für jede Seafile-Library kann der Connector ein RAGFlow-Dataset aus einem
-Template erzeugen, Dateien inkrementell importieren, entfernte Dateien und
-Libraries kontrolliert in den Zielsystemen nachvollziehen und verlorene oder
-extern gelöschte Zielartefakte wieder aus Seafile aufbauen. OpenWebUI kann
-additiv angebunden werden: pro Dataset entstehen deterministische RAGFlow-Chats,
-Tools und Pipes, sodass die Inhalte als Custom Models nutzbar werden, ohne
-RAGFlow-Secrets in OpenWebUI-Funktionen abzulegen.
+Optional erzeugt der Connector OpenWebUI-Chats, Tools und Pipes für die
+Datasets. OpenWebUI spricht dabei über den Connector-Proxy, sodass keine
+RAGFlow-Admin-Secrets im Function-Code liegen.
 
 ## Quick Links
 
@@ -54,19 +52,19 @@ RAGFlow-Secrets in OpenWebUI-Funktionen abzulegen.
 
 ## Demo
 
-Ein kurzes Demo-Video zeigt den vollständigen Ablauf von einer neuen
-Seafile-Bibliothek über RAGFlow-Synchronisation, Parsing und Chunks bis zur
-OpenWebUI-Pipe mit Antwort, Preview und Originaldatei.
+Die Aufnahme zeigt den Workflow in einer frischen Demo-Umgebung: Bibliothek
+anlegen, leeren Zustand prüfen, RAGFlow-Dataset und Chat/Assistant erstellen,
+Datei hochladen, Sync und Parsing kontrollieren, Chunks öffnen und die
+automatisch erzeugte OpenWebUI-Pipe mit Antwort, Preview und Originaldatei
+prüfen.
 
-<video src="docs/assets/demo/seafile-ragflow-connector-demo.mp4" controls width="100%"></video>
+[![Demo-Video: vollständiger Seafile-zu-RAGFlow-zu-OpenWebUI-Workflow](docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg)](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mp4)
 
-Falls das Video nicht direkt angezeigt wird:
-[Demo-Video ansehen](docs/assets/demo/seafile-ragflow-connector-demo.mp4)
-oder [OBS-MKV herunterladen](docs/assets/demo/seafile-ragflow-connector-demo.mkv).
-Das Runbook für reproduzierbare Neuaufnahmen steht unter
-[docs/demo-recording.md](docs/demo-recording.md).
+[MP4 ansehen](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mp4)
+· [OBS-MKV herunterladen](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mkv)
+· [Aufnahme-Runbook](docs/demo-recording.md)
 
-## Was dieses Repository besonders macht
+## Kernfunktionen
 
 | Bereich | Was der Connector leistet |
 | --- | --- |
