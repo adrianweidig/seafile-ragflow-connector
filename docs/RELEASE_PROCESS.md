@@ -39,9 +39,10 @@ python scripts/verify.py --with-compose
 7. GitHub Release mit kompakten Release Notes aus `CHANGELOG.md` erstellen.
 
 Der Docker-Workflow veröffentlicht für `vX.Y`- und `vX.Y.Z`-Tags entsprechende
-GHCR-Tags ohne führendes `v`. Für produktionsnahe Installationen sollten
-Betreiber nach Möglichkeit einen Release- oder SHA-Tag statt eines beweglichen
-Branch-Tags pinnen.
+GHCR-Tags ohne führendes `v`. Ein Patch-Tag wie `v3.0.1` erzeugt zusätzlich den
+Minor-Tag `3.0`. Für produktionsnahe Installationen sollten Betreiber nach
+Möglichkeit einen Release- oder SHA-Tag statt eines beweglichen Branch-Tags
+pinnen.
 
 ## Automatische Release-Artefakte
 
