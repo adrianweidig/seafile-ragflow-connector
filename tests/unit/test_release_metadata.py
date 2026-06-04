@@ -44,10 +44,13 @@ class ReleaseMetadataTest(unittest.TestCase):
     def test_docker_workflow_keeps_release_image_tags(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text(encoding="utf-8")
 
-        self.assertIn(r"type=match,pattern=v([0-9]+\.[0-9]+)$,group=1", workflow)
-        self.assertIn(r"type=match,pattern=v([0-9]+\.[0-9]+\.[0-9]+)$,group=1", workflow)
-        self.assertIn(r"type=match,pattern=v([0-9]+\.[0-9]+)\.[0-9]+$,group=1", workflow)
+        self.assertIn(r"^v([0-9]+)\.([0-9]+)(\.([0-9]+))?$", workflow)
+        self.assertIn('echo "type=raw,value=${version}"', workflow)
+        self.assertIn('echo "type=raw,value=${minor}"', workflow)
+        self.assertIn("${{ steps.release-tags.outputs.tags }}", workflow)
         self.assertIn("type=sha,prefix=sha-", workflow)
+        self.assertNotIn("type=semver", workflow)
+        self.assertNotIn("type=match", workflow)
 
     def test_release_process_documents_minor_and_major_release_tags(self) -> None:
         release_process = (ROOT / "docs" / "RELEASE_PROCESS.md").read_text(
