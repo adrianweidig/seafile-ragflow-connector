@@ -52,16 +52,16 @@ RAGFlow-Admin-Secrets im Function-Code liegen.
 
 ## Demo
 
-Die Aufnahme zeigt den Workflow in einer frischen Demo-Umgebung: Bibliothek
-anlegen, leeren Zustand prüfen, RAGFlow-Dataset und Chat/Assistant erstellen,
-Datei hochladen, Sync und Parsing kontrollieren, Chunks öffnen und die
-automatisch erzeugte OpenWebUI-Pipe mit Antwort, Preview und Originaldatei
-prüfen.
+Das Video zeigt den normalen Connector-Ablauf und bewusst kein manuelles
+RAGFlow-Setup: Seafile-Bibliothek bereitstellen, Datei hochladen,
+Connector-Sync starten und danach prüfen, dass RAGFlow-Dataset, RAGFlow-Chat
+und OpenWebUI-Pipe automatisch entstanden sind. Am Ende wird die Antwort in
+OpenWebUI über Preview und Originaldatei nachvollzogen.
 
-[![Demo-Video: vollständiger Seafile-zu-RAGFlow-zu-OpenWebUI-Workflow](docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg)](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mp4)
+[![Demo-Video: Connector erzeugt RAGFlow-Dataset und Chat automatisch](docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg)](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mp4)
 
 [MP4 ansehen](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mp4)
-· [OBS-MKV herunterladen](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mkv)
+· [MKV herunterladen](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mkv)
 · [Aufnahme-Runbook](docs/demo-recording.md)
 
 ## Kernfunktionen

@@ -42,6 +42,7 @@ class DemoRecordingTests(unittest.TestCase):
             self.assertIn(names.question, content)
             self.assertIn("Bibliothek-Sync-Chunk-Preview-Originalprüfung", content)
             self.assertIn("Die Bibliothek ist zunächst leer", content)
+            self.assertIn("kein Dataset und keinen", content)
 
     def test_recording_steps_cover_required_flow(self) -> None:
         names = DemoRecordingNames.build("flow")
@@ -51,9 +52,11 @@ class DemoRecordingTests(unittest.TestCase):
         self.assertIn("obs-start", step_ids)
         self.assertIn("seafile-library-create", step_ids)
         self.assertIn("seafile-library-empty", step_ids)
-        self.assertIn("ragflow-dataset-create", step_ids)
-        self.assertIn("ragflow-chat-create", step_ids)
+        self.assertIn("connector-config-open", step_ids)
         self.assertIn("seafile-upload", step_ids)
+        self.assertIn("connector-sync-run", step_ids)
+        self.assertIn("ragflow-dataset-auto", step_ids)
+        self.assertIn("ragflow-chat-auto", step_ids)
         self.assertIn("ragflow-sync", step_ids)
         self.assertIn("ragflow-parse", step_ids)
         self.assertIn("ragflow-chunks", step_ids)

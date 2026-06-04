@@ -16,9 +16,13 @@ artifacts only and do not satisfy the demo requirement.
 The recording should show:
 
 - creating and showing an empty Seafile library,
-- showing the related RAGFlow dataset,
-- creating the RAGFlow chat and OpenWebUI pipe before uploading the file,
-- uploading the demo file to Seafile only after that,
+- opening the connector configuration or dashboard and checking the links to
+  Seafile, RAGFlow, and optional OpenWebUI,
+- uploading the demo file to Seafile,
+- starting connector synchronization,
+- showing that the connector automatically creates the RAGFlow dataset,
+- showing that the connector automatically creates the RAGFlow chat and
+  OpenWebUI pipe,
 - checking synchronization, parsing, and multiple chunks in RAGFlow,
 - using the automatically created pipe in OpenWebUI,
 - comparing answer, preview, and original document,
@@ -145,15 +149,16 @@ In execute mode, the script enforces this order:
 3. Optionally validate OBS and start recording.
 4. Create or reuse the test library.
 5. Open the library and verify through API that it is empty before upload.
-6. Run connector discovery.
-7. Ensure the RAGFlow dataset for the library.
-8. Create and visibly open the RAGFlow chat or assistant before upload.
-9. Upload the demo file to Seafile only after that.
-10. Run connector sync for the library.
-11. Wait for RAGFlow parsing until timeout.
-12. Validate retrieval against the dataset and mark the chunk evidence.
-13. Run OpenWebUI sync for exactly this library so the RAGFlow chat and
-   OpenWebUI pipe are created after successful parsing.
+6. Open connector configuration or dashboard and visibly check Seafile,
+   RAGFlow, and optional OpenWebUI connectivity.
+7. Upload the demo file to Seafile.
+8. Run connector discovery and connector sync for the library.
+9. Run OpenWebUI sync for exactly this library so the connector creates the
+   RAGFlow chat and OpenWebUI pipe.
+10. Open the automatically created dataset in RAGFlow.
+11. Open the automatically created chat in RAGFlow.
+12. Wait for RAGFlow parsing until timeout.
+13. Validate retrieval against the dataset and mark the chunk evidence.
 14. Open OpenWebUI, select the pipe, ask the question, and wait for the answer.
 15. Open the source preview.
 16. Open the original file.
@@ -165,7 +170,13 @@ In execute mode, the script enforces this order:
 For the complete video run, visibly check:
 
 - The Seafile library is empty before upload.
-- The RAGFlow dataset and chat exist before upload.
+- The video does not present manual RAGFlow dataset or chat creation as a user
+  step.
+- Connector configuration, connector start, and connector sync are visible.
+- The RAGFlow dataset is visible as an artifact created automatically by the
+  connector.
+- The RAGFlow chat is visible as an artifact created automatically by the
+  connector.
 - The file is visible in Seafile after upload.
 - RAGFlow shows the file, sync status, and parsing status.
 - Multiple chunks are visible; at least one chunk contains the demo marker.

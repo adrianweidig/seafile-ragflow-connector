@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import json
 import os
 import subprocess
@@ -383,60 +382,21 @@ def _execute_workflow(
             )
             _pause(args.pause_seconds)
 
-            runtime.orchestrator.discover_libraries()
-            dataset_id = runtime.orchestrator.ensure_dataset_for_repo(repo_id)
-            dataset_name = _dataset_name(runtime.orchestrator.session_factory, repo_id)
-            ragflow_url = settings.ragflow_public_base_url or settings.ragflow_base_url
-            _show_pages(pages, "ragflow", _ragflow_dataset_url(ragflow_url, dataset_id))
-            _record_marker(recorder, "ragflow-dataset-created", names.demo_id)
-            dataset = runtime.ragflow_client.get_dataset(dataset_id)
+            connector_url = _connector_dashboard_url(settings)
+            _show_pages(pages, "connector", connector_url)
             _mark_workflow(
                 workflow,
-                "ragflow_dataset_created",
+                "connector_config_shown",
                 "erfüllt",
-                f"dataset_id={dataset_id}; name={dataset.get('name') or dataset_name}",
+                (
+                    "Connector-Dashboard oder lokale Konfiguration für "
+                    "Seafile/RAGFlow/OpenWebUI gezeigt"
+                ),
                 automatic=True,
-                visual=pages is not None,
+                visual=pages is not None and bool(connector_url),
             )
-            _ensure_browser_login(
-                pages,
-                "ragflow",
-                username=os.environ.get("RAGFLOW_UI_EMAIL"),
-                password=os.environ.get("RAGFLOW_UI_PASSWORD"),
-            )
-            if (
-                pages is not None
-                and os.environ.get("RAGFLOW_UI_EMAIL")
-                and os.environ.get("RAGFLOW_UI_PASSWORD")
-                and "/login" in str(pages["ragflow"].url)
-            ):
-                raise RuntimeError("RAGFlow UI login failed; still on login page")
-            _show_pages(pages, "ragflow", _ragflow_dataset_url(ragflow_url, dataset_id))
-            _capture_obs_checkpoint(recorder, "03-ragflow-dataset", names, paths, args, checks)
-            _pause(args.pause_seconds)
-
-            agent = _ensure_ragflow_agent_for_dataset(settings, names, dataset_id)
-            agent_id = str(agent.get("id") or "")
-            if not agent_id:
-                raise RuntimeError("RAGFlow agent was not created before upload")
-            _record_marker(recorder, "ragflow-agent-created-before-upload", names.demo_id)
-            _show_pages(pages, "ragflow", _ragflow_agent_url(ragflow_url, agent_id))
-            _mark_workflow(
-                workflow,
-                "ragflow_chat_created",
-                "erfüllt",
-                f"ragflow_agent_id={agent_id}; dataset_id={dataset_id}",
-                automatic=True,
-                visual=pages is not None,
-            )
-            _capture_obs_checkpoint(
-                recorder,
-                "04-ragflow-agent-before-upload",
-                names,
-                paths,
-                args,
-                checks,
-            )
+            _record_marker(recorder, "connector-config-shown", names.demo_id)
+            _capture_obs_checkpoint(recorder, "03-connector-config", names, paths, args, checks)
             _pause(args.pause_seconds)
 
             _upload_file(settings, repo_id, paths.demo_file, library_name=names.library_name)
@@ -451,16 +411,45 @@ def _execute_workflow(
                 raise RuntimeError(f"Uploaded file is not visible in Seafile: {names.file_name}")
             _mark_workflow(
                 workflow,
-                "file_uploaded_after_chat",
+                "file_uploaded_before_connector_sync",
                 "erfüllt",
                 f"uploaded={names.file_name}",
                 automatic=True,
                 visual=pages is not None,
             )
-            _capture_obs_checkpoint(recorder, "05-seafile-uploaded", names, paths, args, checks)
+            _capture_obs_checkpoint(recorder, "04-seafile-uploaded", names, paths, args, checks)
             _pause(args.pause_seconds)
 
+            _show_pages(pages, "connector", connector_url)
+            _record_marker(recorder, "connector-sync-started", names.demo_id)
+            _mark_workflow(
+                workflow,
+                "connector_sync_started",
+                "erfüllt",
+                (
+                    "runtime.orchestrator.discover_libraries + sync_library_full "
+                    "+ openwebui_sync_service"
+                ),
+                automatic=True,
+                visual=pages is not None and bool(connector_url),
+            )
+            _capture_obs_checkpoint(
+                recorder,
+                "05-connector-sync-started",
+                names,
+                paths,
+                args,
+                checks,
+            )
+            runtime.orchestrator.discover_libraries()
             sync_summary = runtime.orchestrator.sync_library_full(repo_id)
+            dataset_id, dataset_name = _dataset_identity(
+                runtime.orchestrator.session_factory,
+                repo_id,
+            )
+            if not dataset_id:
+                raise RuntimeError("Connector sync did not create a RAGFlow dataset")
+            ragflow_url = settings.ragflow_public_base_url or settings.ragflow_base_url
             documents_after_parse = _wait_for_parse(
                 runtime.ragflow_client.list_documents,
                 dataset_id,
@@ -469,7 +458,42 @@ def _execute_workflow(
             documents = documents_after_parse or runtime.ragflow_client.list_documents(dataset_id)
             if not documents:
                 raise RuntimeError("RAGFlow document list is empty after sync")
+            if runtime.openwebui_sync_service is not None:
+                openwebui_summary = runtime.openwebui_sync_service.sync_once(repo_ids={repo_id})
+                if openwebui_summary.failed:
+                    raise RuntimeError(
+                        "OpenWebUI sync failed after RAGFlow parsing; "
+                        f"failed={openwebui_summary.failed}"
+                    )
+            mapping = _openwebui_mapping(runtime.orchestrator.session_factory, repo_id)
+            if mapping is None or not mapping.ragflow_chat_id:
+                raise RuntimeError("Connector did not create the RAGFlow chat")
+
+            _ensure_browser_login(
+                pages,
+                "ragflow",
+                username=os.environ.get("RAGFLOW_UI_EMAIL"),
+                password=os.environ.get("RAGFLOW_UI_PASSWORD"),
+            )
+            if (
+                pages is not None
+                and os.environ.get("RAGFLOW_UI_EMAIL")
+                and os.environ.get("RAGFLOW_UI_PASSWORD")
+                and "/login" in str(pages["ragflow"].url)
+            ):
+                raise RuntimeError("RAGFlow UI login failed; still on login page")
+
             _show_pages(pages, "ragflow", _ragflow_dataset_url(ragflow_url, dataset_id))
+            _record_marker(recorder, "ragflow-dataset-auto-created", names.demo_id)
+            dataset = runtime.ragflow_client.get_dataset(dataset_id)
+            _mark_workflow(
+                workflow,
+                "ragflow_dataset_created",
+                "erfüllt",
+                f"dataset_id={dataset_id}; name={dataset.get('name') or dataset_name}",
+                automatic=True,
+                visual=pages is not None,
+            )
             _mark_workflow(
                 workflow,
                 "ragflow_sync_shown",
@@ -489,12 +513,25 @@ def _execute_workflow(
             _record_marker(recorder, "ragflow-file-synced-and-parsed", names.demo_id)
             _capture_obs_checkpoint(
                 recorder,
-                "06-ragflow-synced-parsed",
+                "06-ragflow-dataset-auto-synced-parsed",
                 names,
                 paths,
                 args,
                 checks,
             )
+            _pause(args.pause_seconds)
+
+            _show_pages(pages, "ragflow", _ragflow_chat_url(ragflow_url, mapping.ragflow_chat_id))
+            _record_marker(recorder, "ragflow-chat-auto-created", names.demo_id)
+            _mark_workflow(
+                workflow,
+                "ragflow_chat_created",
+                "erfüllt",
+                f"ragflow_chat_id={mapping.ragflow_chat_id}; dataset_id={dataset_id}",
+                automatic=True,
+                visual=pages is not None,
+            )
+            _capture_obs_checkpoint(recorder, "07-ragflow-chat-auto", names, paths, args, checks)
             _pause(args.pause_seconds)
 
             retrieval = runtime.ragflow_client.retrieve_chunks(
@@ -524,25 +561,11 @@ def _execute_workflow(
                 visual=pages is not None,
             )
             _record_marker(recorder, "ragflow-chunks-opened", names.demo_id)
-            _capture_obs_checkpoint(recorder, "07-ragflow-chunks", names, paths, args, checks)
-            _pause(args.pause_seconds)
-
-            if runtime.openwebui_sync_service is not None:
-                openwebui_summary = runtime.openwebui_sync_service.sync_once(repo_ids={repo_id})
-                if openwebui_summary.failed:
-                    raise RuntimeError(
-                        "OpenWebUI sync failed after RAGFlow parsing; "
-                        f"failed={openwebui_summary.failed}"
-                    )
-            mapping = _openwebui_mapping(runtime.orchestrator.session_factory, repo_id)
-            if mapping is None or not mapping.ragflow_chat_id:
-                raise RuntimeError("RAGFlow chat was not created after parsing")
-            _show_pages(pages, "ragflow", _ragflow_chat_url(ragflow_url, mapping.ragflow_chat_id))
-            _record_marker(recorder, "ragflow-chat-created-after-parse", names.demo_id)
+            _capture_obs_checkpoint(recorder, "08-ragflow-chunks", names, paths, args, checks)
             _pause(args.pause_seconds)
 
             _show_pages(pages, "openwebui", settings.openwebui_base_url)
-            _capture_obs_checkpoint(recorder, "08-openwebui-pipe", names, paths, args, checks)
+            _capture_obs_checkpoint(recorder, "09-openwebui-pipe", names, paths, args, checks)
             _mark_workflow(
                 workflow,
                 "openwebui_pipe_shown",
@@ -575,7 +598,6 @@ def _execute_workflow(
                 "ragflow_dataset_name": dataset_name,
                 "openwebui_pipe_id": mapping.openwebui_pipe_id if mapping else None,
                 "ragflow_chat_id": mapping.ragflow_chat_id if mapping else None,
-                "ragflow_agent_id": agent_id,
                 "ragflow_chunk_ui_url": chunk_ui_url,
                 "files_uploaded": sync_summary.files_uploaded,
                 "documents_visible": len(documents),
@@ -747,114 +769,6 @@ def _file_visible_in_seafile(client: Any, repo_id: str, file_name: str) -> bool:
     return False
 
 
-def _ensure_ragflow_agent_for_dataset(
-    settings: Any,
-    names: DemoRecordingNames,
-    dataset_id: str,
-) -> dict[str, Any]:
-    client = make_client(
-        settings.ragflow_base_url,
-        headers={"Authorization": f"Bearer {settings.ragflow_api_key}"},
-        timeout=120.0,
-        verify=settings.ragflow_httpx_verify,
-    )
-    try:
-        existing = _agent_list(
-            unwrap_response(
-                client.get(
-                    "/api/v1/agents",
-                    params={"title": names.chat_label, "page": 1, "page_size": 100},
-                )
-            )
-        )
-        for agent in existing:
-            if str(agent.get("title") or "") == names.chat_label:
-                return agent
-
-        templates = _agent_list(unwrap_response(client.get("/api/v1/agents/templates")))
-        template = _select_agent_template(templates)
-        dsl = copy.deepcopy(template.get("dsl") or {})
-        _bind_agent_dsl_to_dataset(dsl, dataset_id, names)
-        created = unwrap_response(
-            client.post(
-                "/api/v1/agents",
-                json={
-                    "title": names.chat_label,
-                    "description": (
-                        "Demo-Agent für die OBS-Aufnahme. Das Retrieval-Tool ist "
-                        "vor dem Seafile-Upload mit dem leeren Dataset verbunden."
-                    ),
-                    "canvas_category": "agent_canvas",
-                    "dsl": dsl,
-                    "release": False,
-                },
-            )
-        )
-        if not isinstance(created, dict):
-            raise TypeError("unexpected RAGFlow agent create response")
-        return created
-    finally:
-        client.close()
-
-
-def _select_agent_template(templates: list[dict[str, Any]]) -> dict[str, Any]:
-    for template in templates:
-        title = template.get("title")
-        title_values = title.values() if isinstance(title, dict) else [title]
-        if any(str(value).lower() == "your starter dataset chatbot" for value in title_values):
-            return template
-    for template in templates:
-        if template.get("canvas_category") == "agent_canvas" and isinstance(
-            template.get("dsl"), dict
-        ):
-            return template
-    raise RuntimeError("RAGFlow does not expose a usable agent template")
-
-
-def _bind_agent_dsl_to_dataset(
-    dsl: dict[str, Any],
-    dataset_id: str,
-    names: DemoRecordingNames,
-) -> None:
-    dsl["retrieval"] = [dataset_id]
-    components = dsl.get("components")
-    if not isinstance(components, dict):
-        return
-    for component in components.values():
-        if not isinstance(component, dict):
-            continue
-        obj = component.get("obj")
-        if not isinstance(obj, dict):
-            continue
-        params = obj.get("params")
-        if not isinstance(params, dict):
-            continue
-        if obj.get("component_name") == "Agent":
-            params["description"] = names.dataset_label
-            params["sys_prompt"] = (
-                "Du bist der Demo-Agent für die OBS-Aufnahme. Nutze ausschließlich "
-                "das angebundene Dataset und antworte mit Quellenbezug."
-            )
-            for tool in params.get("tools") or []:
-                if not isinstance(tool, dict) or tool.get("component_name") != "Retrieval":
-                    continue
-                tool_params = tool.setdefault("params", {})
-                if isinstance(tool_params, dict):
-                    tool_params["kb_ids"] = [dataset_id]
-                    tool_params["description"] = names.dataset_label
-
-
-def _agent_list(data: Any) -> list[dict[str, Any]]:
-    if isinstance(data, dict):
-        for key in ("canvas", "agents", "items", "data"):
-            value = data.get(key)
-            if isinstance(value, list):
-                return [item for item in value if isinstance(item, dict)]
-    if isinstance(data, list):
-        return [item for item in data if isinstance(item, dict)]
-    return []
-
-
 def _wait_for_parse(
     list_documents: Callable[[str], list[dict[str, Any]]],
     dataset_id: str,
@@ -914,6 +828,7 @@ def _open_browser_pages(args: argparse.Namespace, settings: Any) -> dict[str, An
         )
     pages = {
         "seafile": context.new_page(),
+        "connector": context.new_page(),
         "ragflow": context.new_page(),
         "openwebui": context.new_page(),
         "_focus_page": lambda page: _focus_playwright_page(page, args),
@@ -1117,12 +1032,16 @@ def _close_playwright(context: Any, browser: Any, playwright: Any) -> None:
     playwright.stop()
 
 
-def _dataset_name(session_factory: Any, repo_id: str) -> str | None:
+def _dataset_identity(session_factory: Any, repo_id: str) -> tuple[str | None, str | None]:
     with session_factory() as session:
         library = session.get(Library, repo_id)
-        if library and library.ragflow_dataset_name:
-            return str(library.ragflow_dataset_name)
-        return None
+        if not library:
+            return None, None
+        dataset_id = str(library.ragflow_dataset_id) if library.ragflow_dataset_id else None
+        dataset_name = (
+            str(library.ragflow_dataset_name) if library.ragflow_dataset_name else None
+        )
+        return dataset_id, dataset_name
 
 
 def _openwebui_mapping(session_factory: Any, repo_id: str) -> OpenWebUIDatasetMapping | None:
@@ -1614,6 +1533,16 @@ def _seafile_library_url(settings: Any, repo_id: str, library_name: str) -> str:
     return f"{base_url}/library/{quote(repo_id, safe='')}/{quote(library_name, safe='')}/"
 
 
+def _connector_dashboard_url(settings: Any) -> str | None:
+    if not getattr(settings, "connector_dashboard_enabled", False):
+        return None
+    host = str(getattr(settings, "connector_dashboard_host", "127.0.0.1") or "127.0.0.1")
+    if host in {"0.0.0.0", "::", "[::]"}:
+        host = "127.0.0.1"
+    port = int(getattr(settings, "connector_dashboard_port", 8080) or 8080)
+    return f"http://{host}:{port}/dashboard"
+
+
 def _ragflow_dataset_url(base_url: str | None, dataset_id: str) -> str | None:
     if not base_url:
         return None
@@ -1624,12 +1553,6 @@ def _ragflow_chat_url(base_url: str | None, chat_id: str | None) -> str | None:
     if not base_url or not chat_id:
         return base_url
     return f"{base_url.rstrip('/')}/chat/{quote(chat_id, safe='')}"
-
-
-def _ragflow_agent_url(base_url: str | None, agent_id: str | None) -> str | None:
-    if not base_url or not agent_id:
-        return base_url
-    return f"{base_url.rstrip('/')}/agent/{quote(agent_id, safe='')}?category=agent_canvas"
 
 
 def _ragflow_dataflow_url(base_url: str | None, dataset_id: str, document_id: str) -> str | None:
