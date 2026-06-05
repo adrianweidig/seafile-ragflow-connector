@@ -15,7 +15,8 @@ artifacts only and do not satisfy the demo requirement.
 
 For the actual visible Chrome run, use `scripts/record_real_chrome_demo.py`.
 The script records the existing logged-in Google Chrome window, adds overlays
-only on top of real pages, and writes:
+only on top of real pages, masks the Chrome tab, address, and bookmarks bars by
+default, and writes:
 
 - `docs/assets/demo/seafile-ragflow-connector-demo.mkv`
 - `docs/assets/demo/seafile-ragflow-connector-demo.mp4`

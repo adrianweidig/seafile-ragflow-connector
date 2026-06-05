@@ -17,6 +17,7 @@ import json
 import math
 import os
 import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Iterable
@@ -466,6 +467,16 @@ def capture_chrome(window: WindowInfo, target_size: tuple[int, int]) -> Image.Im
     return raw.convert("RGB")
 
 
+def redact_browser_chrome(frame: Image.Image) -> Image.Image:
+    """Hide tabs, address bar, profile badge, and bookmarks from the recording."""
+    image = frame.copy()
+    draw = ImageDraw.Draw(image)
+    width, height = image.size
+    redaction_height = min(132, max(96, int(height * 0.125)))
+    draw.rectangle((0, 0, width, redaction_height), fill=(13, 18, 28))
+    return image
+
+
 def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     font_names = ["segoeuib.ttf" if bold else "segoeui.ttf", "arialbd.ttf" if bold else "arial.ttf"]
     for name in font_names:
@@ -586,6 +597,41 @@ def scale_box(
     )
 
 
+def openwebui_prompt_js(prompt: str) -> str:
+    encoded_prompt = json.dumps(prompt)
+    return (
+        "(()=>{"
+        f"const prompt={encoded_prompt};"
+        "const selector='textarea,[contenteditable=\"true\"],input[type=\"text\"]';"
+        "const input=document.querySelector(selector);"
+        "if(!input){document.title='OpenWebUI input not found';return;}"
+        "input.focus();"
+        "if(input.isContentEditable){"
+        "input.textContent=prompt;"
+        "input.dispatchEvent(new InputEvent('input',"
+        "{bubbles:true,inputType:'insertText',data:prompt}));"
+        "}else{"
+        "const proto=Object.getPrototypeOf(input);"
+        "const descriptor=Object.getOwnPropertyDescriptor(proto,'value');"
+        "if(descriptor&&descriptor.set){descriptor.set.call(input,prompt);}else{input.value=prompt;}"
+        "input.dispatchEvent(new Event('input',{bubbles:true}));"
+        "input.dispatchEvent(new Event('change',{bubbles:true}));"
+        "}"
+        "setTimeout(()=>{"
+        "input.dispatchEvent(new KeyboardEvent('keydown',"
+        "{key:'Enter',code:'Enter',bubbles:true,cancelable:true}));"
+        "const buttons=[...document.querySelectorAll('button')].filter((button)=>"
+        "!button.disabled&&button.offsetParent!==null);"
+        "const send=buttons.find((button)=>"
+        "/send|submit|abschicken|senden/i.test("
+        "`${button.getAttribute('aria-label')||''} ${button.title||''} ${button.textContent||''}`"
+        "))||buttons.at(-1);"
+        "send?.click();"
+        "},600);"
+        "})()"
+    )
+
+
 def open_video_writer(
     path: Path,
     fps: float,
@@ -598,6 +644,38 @@ def open_video_writer(
             return writer
         writer.release()
     raise RuntimeError(f"Kein OpenCV-VideoWriter konnte für {path} geöffnet werden.")
+
+
+def transcode_mp4(source: Path, target: Path) -> None:
+    refresh_process_path()
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("ffmpeg wurde nicht gefunden; MP4 konnte nicht erzeugt werden.")
+    temp_target = target.with_name(f"{target.stem}.tmp{target.suffix}")
+    if temp_target.exists():
+        temp_target.unlink()
+    subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(source),
+            "-c:v",
+            "copy",
+            str(temp_target),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    for attempt in range(5):
+        try:
+            os.replace(temp_target, target)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(1)
 
 
 def make_contact_sheet(frames: list[tuple[str, Image.Image]], output: Path) -> None:
@@ -646,6 +724,11 @@ def validate_video(path: Path) -> dict[str, object]:
 
 def scenes() -> list[Scene]:
     dashboard = "https://connector.top.secret/dashboard"
+    openwebui_question = (
+        "Welche Rolle übernimmt der Seafile-RAGFlow-Connector, und wo "
+        "sieht man, dass Dataset, Chat und OpenWebUI-Pipe automatisch "
+        "erzeugt werden?"
+    )
     return [
         Scene(
             name="Kapitel 1: Seafile als Quelle",
@@ -748,7 +831,21 @@ def scenes() -> list[Scene]:
             pointer=(0.20, 0.34),
         ),
         Scene(
-            name="Kapitel 10: OpenWebUI-Pipe",
+            name="Kapitel 10: RAGFlow-Chat",
+            js=(
+                "(()=>{const items=[...document.querySelectorAll('a,button,span,div')];"
+                "items.find((el)=>(el.textContent||'').trim()==='Chat')?.click();})()"
+            ),
+            duration=10,
+            caption=(
+                "RAGFlow-Chat-Kontrolle: Der Chat ist Ergebnis des "
+                "Connector-Laufs und kein manueller Benutzerschritt."
+            ),
+            highlight=(0.08, 0.16, 0.94, 0.88),
+            pointer=(0.19, 0.09),
+        ),
+        Scene(
+            name="Kapitel 11: OpenWebUI-Pipe",
             url="https://openwebui.top.secret/",
             duration=9,
             caption=(
@@ -759,15 +856,11 @@ def scenes() -> list[Scene]:
             pointer=(0.55, 0.25),
         ),
         Scene(
-            name="Kapitel 11: Frage an die Pipe",
-            click_input=True,
-            prompt=(
-                "Welche Rolle übernimmt der Seafile-RAGFlow-Connector, und wo "
-                "sieht man, dass Dataset, Chat und OpenWebUI-Pipe automatisch "
-                "erzeugt werden?"
-            ),
-            duration=46,
-            wait_after_action=0.5,
+            name="Kapitel 12: Frage an die Pipe",
+            js=openwebui_prompt_js(openwebui_question),
+            prompt=openwebui_question,
+            duration=105,
+            wait_after_action=1.0,
             caption=(
                 "Die Frage wird in OpenWebUI an genau diese Pipe gestellt; die "
                 "Antwort soll den Connector-Ablauf nachvollziehbar machen."
@@ -776,7 +869,7 @@ def scenes() -> list[Scene]:
             pointer=(0.30, 0.56),
         ),
         Scene(
-            name="Kapitel 12: Abschlusskontrolle",
+            name="Kapitel 13: Abschlusskontrolle",
             url=dashboard,
             js="(()=>{document.querySelector('[data-tab=\"openwebui\"]')?.click();})()",
             duration=8,
@@ -815,6 +908,8 @@ def record(args: argparse.Namespace) -> dict[str, object]:
 
     if args.dry_run:
         first = capture_chrome(chrome, size)
+        if not args.show_browser_chrome:
+            first = redact_browser_chrome(first)
         first_path = run_dir / "dry-run-chrome.png"
         first.save(first_path)
         return {
@@ -822,6 +917,7 @@ def record(args: argparse.Namespace) -> dict[str, object]:
             "chrome": asdict(chrome),
             "screenshot": str(first_path),
             "closed_windows": log,
+            "browser_chrome_redacted": not args.show_browser_chrome,
         }
 
     fps = float(args.fps)
@@ -829,9 +925,14 @@ def record(args: argparse.Namespace) -> dict[str, object]:
     mp4_path = docs_demo / "seafile-ragflow-connector-demo.mp4"
     poster_path = docs_demo / "seafile-ragflow-connector-demo-poster.jpg"
     contact_path = artifacts / "demo-recording-contact-sheet.jpg"
+    recording_notes: list[dict[str, str]] = []
 
     mkv_writer = open_video_writer(mkv_path, fps, size, ["mp4v", "XVID", "MJPG"])
-    mp4_writer = open_video_writer(mp4_path, fps, size, ["mp4v", "avc1", "H264"])
+    mp4_writer: cv2.VideoWriter | None = None
+    try:
+        mp4_writer = open_video_writer(mp4_path, fps, size, ["mp4v", "avc1", "H264"])
+    except RuntimeError as exc:
+        recording_notes.append({"mp4_writer_fallback": str(exc)})
     contact_frames: list[tuple[str, Image.Image]] = []
     poster_saved = False
     scene_list = scenes()
@@ -861,27 +962,66 @@ def record(args: argparse.Namespace) -> dict[str, object]:
 
             scene_start = time.monotonic()
             sample_taken = False
+            sample_after = scene.duration * (0.9 if scene.prompt else 0.8)
+            written_scene_frames = 0
+            last_frame = None
+            last_rendered: Image.Image | None = None
             while time.monotonic() - scene_start < scene.duration:
                 loop_start = time.monotonic()
                 raw = capture_chrome(chrome, size)
+                if not args.show_browser_chrome:
+                    raw = redact_browser_chrome(raw)
                 scene_elapsed = time.monotonic() - scene_start
                 rendered = overlay_frame(raw, scene, elapsed, scene_elapsed, total_duration)
+                last_rendered = rendered
                 if not poster_saved:
                     rendered.save(poster_path, quality=92)
                     poster_saved = True
-                if not sample_taken and len(contact_frames) < len(scene_list):
+                if (
+                    not sample_taken
+                    and scene_elapsed >= sample_after
+                    and len(contact_frames) < len(scene_list)
+                ):
                     contact_frames.append((scene.name, rendered.copy()))
                     sample_taken = True
                 frame = cv2.cvtColor(np.array(rendered), cv2.COLOR_RGB2BGR)
-                mkv_writer.write(frame)
-                mp4_writer.write(frame)
-                elapsed += frame_period
-                sleep_for = frame_period - (time.monotonic() - loop_start)
+                last_frame = frame
+                target_scene_frames = max(
+                    written_scene_frames + 1,
+                    int(round(scene_elapsed * fps)),
+                )
+                frames_to_write = target_scene_frames - written_scene_frames
+                for _ in range(frames_to_write):
+                    mkv_writer.write(frame)
+                    if mp4_writer is not None:
+                        mp4_writer.write(frame)
+                written_scene_frames = target_scene_frames
+                elapsed += frames_to_write * frame_period
+                processing_time = time.monotonic() - loop_start
+                sleep_for = frame_period - processing_time
                 if sleep_for > 0:
                     time.sleep(sleep_for)
+            expected_scene_frames = int(round(scene.duration * fps))
+            if last_frame is not None and written_scene_frames < expected_scene_frames:
+                missing_frames = expected_scene_frames - written_scene_frames
+                for _ in range(missing_frames):
+                    mkv_writer.write(last_frame)
+                    if mp4_writer is not None:
+                        mp4_writer.write(last_frame)
+                elapsed += missing_frames * frame_period
+            if (
+                not sample_taken
+                and last_rendered is not None
+                and len(contact_frames) < len(scene_list)
+            ):
+                contact_frames.append((scene.name, last_rendered.copy()))
     finally:
         mkv_writer.release()
-        mp4_writer.release()
+        if mp4_writer is not None:
+            mp4_writer.release()
+
+    if mp4_writer is None:
+        transcode_mp4(mkv_path, mp4_path)
 
     make_contact_sheet(contact_frames, contact_path)
     report = {
@@ -889,12 +1029,14 @@ def record(args: argparse.Namespace) -> dict[str, object]:
         "created_at": datetime.now(UTC).isoformat(),
         "chrome": asdict(chrome),
         "closed_windows": log,
+        "recording_notes": recording_notes,
         "outputs": {
             "mkv": validate_video(mkv_path),
             "mp4": validate_video(mp4_path),
             "poster": str(poster_path),
             "contact_sheet": str(contact_path),
         },
+        "browser_chrome_redacted": not args.show_browser_chrome,
         "scenes": [asdict(scene) for scene in scene_list],
     }
     report_path = run_dir / "recording-report.json"
@@ -910,6 +1052,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--close-other-windows", action="store_true")
     parser.add_argument("--check-tools", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--show-browser-chrome",
+        action="store_true",
+        help="Do not redact Chrome tabs, address bar, profile badge, or bookmarks.",
+    )
     return parser.parse_args()
 
 
