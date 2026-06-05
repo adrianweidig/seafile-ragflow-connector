@@ -11,6 +11,29 @@ The primary recording must be an OBS-generated `.mkv`. Browser videos,
 Playwright WebM files, or isolated OpenWebUI chat recordings are diagnostic
 artifacts only and do not satisfy the demo requirement.
 
+## Real Chrome Script on Windows
+
+For the actual visible Chrome run, use `scripts/record_real_chrome_demo.py`.
+The script records the existing logged-in Google Chrome window, adds overlays
+only on top of real pages, and writes:
+
+- `docs/assets/demo/seafile-ragflow-connector-demo.mkv`
+- `docs/assets/demo/seafile-ragflow-connector-demo.mp4`
+- `docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg`
+- `artifacts/demo-recording-contact-sheet.jpg`
+
+Windows prerequisites:
+
+- `ffmpeg` and `ffprobe` must be available on the Windows `PATH`.
+- Install the Python dependencies with
+  `uv sync --locked --extra dev --extra demo-recording`.
+
+You can validate the local toolchain without touching the browser:
+
+```powershell
+uv run --extra demo-recording python scripts/record_real_chrome_demo.py --check-tools
+```
+
 ## Purpose
 
 The recording should show:
