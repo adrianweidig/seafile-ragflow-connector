@@ -12,6 +12,31 @@ Die Hauptaufnahme muss eine von OBS erzeugte `.mkv` sein. Browserinterne
 Videos, Playwright-WebM-Dateien oder reine OpenWebUI-Chatmitschnitte gelten nur
 als Diagnoseartefakte und erfüllen den Demoauftrag nicht.
 
+## Real-Chrome-Skript unter Windows
+
+Für den echten sichtbaren Chrome-Lauf gibt es zusätzlich
+`scripts/record_real_chrome_demo.py`. Das Skript nimmt das bereits geöffnete
+und eingeloggte Google-Chrome-Fenster auf, blendet nur Overlays über echte
+Seiten und erzeugt dabei direkt:
+
+- `docs/assets/demo/seafile-ragflow-connector-demo.mkv`
+- `docs/assets/demo/seafile-ragflow-connector-demo.mp4`
+- `docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg`
+- `artifacts/demo-recording-contact-sheet.jpg`
+
+Voraussetzungen auf Windows:
+
+- `ffmpeg` und `ffprobe` müssen im Windows-`PATH` liegen.
+- Die Python-Abhängigkeiten kommen über
+  `uv sync --locked --extra dev --extra demo-recording`.
+
+Vor einem echten Lauf kann die lokale Toollage ohne Browseraktion geprüft
+werden:
+
+```powershell
+uv run --extra demo-recording python scripts/record_real_chrome_demo.py --check-tools
+```
+
 ## Zweck
 
 Die Aufnahme soll zeigen:

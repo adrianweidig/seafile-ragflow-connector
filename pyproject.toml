@@ -53,6 +53,11 @@ dev = [
   "respx>=0.21",
   "ruff>=0.15.15",
 ]
+demo-recording = [
+  "numpy>=2.1",
+  "opencv-python>=4.10",
+  "pillow>=11.0",
+]
 
 [project.scripts]
 connector = "seafile_ragflow_connector.app.cli:app"
