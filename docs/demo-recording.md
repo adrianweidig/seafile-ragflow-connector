@@ -17,7 +17,8 @@ als Diagnoseartefakte und erfüllen den Demoauftrag nicht.
 Für den echten sichtbaren Chrome-Lauf gibt es zusätzlich
 `scripts/record_real_chrome_demo.py`. Das Skript nimmt das bereits geöffnete
 und eingeloggte Google-Chrome-Fenster auf, blendet nur Overlays über echte
-Seiten und erzeugt dabei direkt:
+Seiten, maskiert standardmäßig die Chrome-Tab-, Adress- und Lesezeichenleiste
+und erzeugt dabei direkt:
 
 - `docs/assets/demo/seafile-ragflow-connector-demo.mkv`
 - `docs/assets/demo/seafile-ragflow-connector-demo.mp4`
