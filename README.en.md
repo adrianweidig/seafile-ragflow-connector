@@ -54,10 +54,11 @@ the RAGFlow dataset, RAGFlow chat, and OpenWebUI pipe were created
 automatically. The final step checks the OpenWebUI answer against preview and
 original file.
 
-[![Demo video: connector creates RAGFlow dataset and chat automatically](docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg)](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mp4)
+[![Demo video: connector creates RAGFlow dataset and chat automatically](docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg)](docs/assets/demo/seafile-ragflow-connector-demo.mp4)
 
-[Watch MP4](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mp4)
-· [Download MKV](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mkv)
+[Watch MP4](docs/assets/demo/seafile-ragflow-connector-demo.mp4)
+· [Download MKV](docs/assets/demo/seafile-ragflow-connector-demo.mkv)
+· [Contact sheet](artifacts/demo-recording-contact-sheet.jpg)
 · [Recording runbook](docs/en/demo-recording.md)
 
 ## Features

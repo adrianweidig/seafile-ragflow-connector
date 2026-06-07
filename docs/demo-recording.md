@@ -24,6 +24,11 @@ Chrome-Tab-, Adress- und Lesezeichenleiste und erzeugt dabei direkt:
 - `docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg`
 - `artifacts/demo-recording-contact-sheet.jpg`
 
+Der aktuell abgelegte Stand ist eine artefaktarme Real-Chrome-Aufnahme ohne
+eingebrannte Kapiteltexte, Highlight-Rahmen oder künstlichen Mauszeiger. Der
+Kontaktbogen enthält 15 echte Videoframes und wurde zusätzlich per ChatGPT-QA
+mit `STATUS: PASS` bewertet.
+
 Voraussetzungen auf Windows:
 
 - `ffmpeg` und `ffprobe` müssen im Windows-`PATH` liegen.

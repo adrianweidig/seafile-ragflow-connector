@@ -58,11 +58,12 @@ Connector-Sync starten und danach prüfen, dass RAGFlow-Dataset, RAGFlow-Chat
 und OpenWebUI-Pipe automatisch entstanden sind. Am Ende wird die Antwort in
 OpenWebUI über Preview und Originaldatei nachvollzogen.
 
-Die frühere Demoaufnahme wurde entfernt, weil ihre eingebrannten Overlays nicht
-mehr den aktuellen Qualitätskriterien entsprechen. Die neue Aufnahme muss als
-artefaktarme Real-Web-Aufnahme gegen die echten Chrome-Tabs erstellt werden.
+[![Demoaufnahme: Connector erstellt RAGFlow-Dataset, Chat und OpenWebUI-Pipe automatisch](docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg)](docs/assets/demo/seafile-ragflow-connector-demo.mp4)
 
-[Aufnahme-Runbook](docs/demo-recording.md)
+[MP4 ansehen](docs/assets/demo/seafile-ragflow-connector-demo.mp4)
+· [MKV herunterladen](docs/assets/demo/seafile-ragflow-connector-demo.mkv)
+· [Kontaktbogen](artifacts/demo-recording-contact-sheet.jpg)
+· [Aufnahme-Runbook](docs/demo-recording.md)
 
 ## Kernfunktionen
 
