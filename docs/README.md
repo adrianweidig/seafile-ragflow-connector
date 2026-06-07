@@ -16,8 +16,8 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
   Seafile-Upload-zu-RAGFlow-Dataset-zu-OpenWebUI-Pipe-Ablauf.
 - `demo-recording.md` beschreibt die vorbereitete OBS-Demoaufnahme mit
   Dry-Run-Plan, Webhook-Konfiguration und späterem `--execute --record`-Lauf.
-- `assets/demo/` enthält das README-Poster sowie das Demo-Video als MP4 und
-  MKV; die README verlinkt die stabilen Dateien des GitHub-Releases.
+- `assets/demo/` ist für die neu geprüfte Demoaufnahme reserviert. Alte
+  Aufnahmen mit eingebrannten Overlays gelten nicht als gültiger Stand.
 - `operations.md` enthält Portainer-Betrieb, Docker-Compose-Varianten,
   Docker-Swarm-Betrieb, GHCR-/Offline-Hinweise, Recovery, Troubleshooting und
   lokale WSL-/Docker-Prüfungen.

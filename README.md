@@ -39,7 +39,7 @@ RAGFlow-Admin-Secrets im Function-Code liegen.
 
 | Ziel | Einstieg |
 | --- | --- |
-| Demo | [Demo-Video](#demo) |
+| Demo | [Demoaufnahme](#demo) |
 | Schnellstart | [Docker Compose](#schnellstart-mit-docker-compose) oder [Portainer](#portainer-start) |
 | Admin-Erststart | [Checkliste für den ersten produktionsnahen Start](docs/admin-first-start-checklist.md) |
 | Konfiguration | [`connector.env.example`](connector.env.example), [Environment-Referenz](docs/environment.md) |
@@ -58,11 +58,11 @@ Connector-Sync starten und danach prüfen, dass RAGFlow-Dataset, RAGFlow-Chat
 und OpenWebUI-Pipe automatisch entstanden sind. Am Ende wird die Antwort in
 OpenWebUI über Preview und Originaldatei nachvollzogen.
 
-[![Demo-Video: Connector erzeugt RAGFlow-Dataset und Chat automatisch](docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg)](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mp4)
+Die frühere Demoaufnahme wurde entfernt, weil ihre eingebrannten Overlays nicht
+mehr den aktuellen Qualitätskriterien entsprechen. Die neue Aufnahme muss als
+artefaktarme Real-Web-Aufnahme gegen die echten Chrome-Tabs erstellt werden.
 
-[MP4 ansehen](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mp4)
-· [MKV herunterladen](https://github.com/adrianweidig/seafile-ragflow-connector/releases/download/v2.0/seafile-ragflow-connector-demo.mkv)
-· [Aufnahme-Runbook](docs/demo-recording.md)
+[Aufnahme-Runbook](docs/demo-recording.md)
 
 ## Kernfunktionen
 

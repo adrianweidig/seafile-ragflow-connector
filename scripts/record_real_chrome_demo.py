@@ -568,6 +568,19 @@ def overlay_frame(
     return Image.alpha_composite(image, overlay).convert("RGB")
 
 
+def render_frame(
+    frame: Image.Image,
+    scene: Scene,
+    elapsed: float,
+    scene_elapsed: float,
+    total_duration: float,
+    overlay_mode: str,
+) -> Image.Image:
+    if overlay_mode == "none":
+        return frame.convert("RGB")
+    return overlay_frame(frame, scene, elapsed, scene_elapsed, total_duration)
+
+
 def wrap_text(text: str, limit: int) -> list[str]:
     words = text.split()
     lines: list[str] = []
@@ -720,6 +733,72 @@ def validate_video(path: Path) -> dict[str, object]:
     finally:
         cap.release()
     return result
+
+
+def write_scene_capture(
+    chrome: WindowInfo,
+    scene: Scene,
+    size: tuple[int, int],
+    fps: float,
+    elapsed: float,
+    total_duration: float,
+    show_browser_chrome: bool,
+    overlay_mode: str,
+    mkv_writer: cv2.VideoWriter,
+    mp4_writer: cv2.VideoWriter | None,
+    poster_path: Path,
+    poster_saved: bool,
+    contact_frames: list[tuple[str, Image.Image]],
+) -> tuple[float, bool]:
+    frame_period = 1.0 / fps
+    scene_start = time.monotonic()
+    sample_taken = False
+    sample_after = scene.duration * (0.9 if scene.prompt else 0.8)
+    written_scene_frames = 0
+    last_frame = None
+    last_rendered: Image.Image | None = None
+    while time.monotonic() - scene_start < scene.duration:
+        loop_start = time.monotonic()
+        raw = capture_chrome(chrome, size)
+        if not show_browser_chrome:
+            raw = redact_browser_chrome(raw)
+        scene_elapsed = time.monotonic() - scene_start
+        rendered = render_frame(raw, scene, elapsed, scene_elapsed, total_duration, overlay_mode)
+        last_rendered = rendered
+        if not poster_saved:
+            rendered.save(poster_path, quality=92)
+            poster_saved = True
+        if not sample_taken and scene_elapsed >= sample_after:
+            contact_frames.append((scene.name, rendered.copy()))
+            sample_taken = True
+        frame = cv2.cvtColor(np.array(rendered), cv2.COLOR_RGB2BGR)
+        last_frame = frame
+        target_scene_frames = max(
+            written_scene_frames + 1,
+            int(round(scene_elapsed * fps)),
+        )
+        frames_to_write = target_scene_frames - written_scene_frames
+        for _ in range(frames_to_write):
+            mkv_writer.write(frame)
+            if mp4_writer is not None:
+                mp4_writer.write(frame)
+        written_scene_frames = target_scene_frames
+        elapsed += frames_to_write * frame_period
+        processing_time = time.monotonic() - loop_start
+        sleep_for = frame_period - processing_time
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+    expected_scene_frames = int(round(scene.duration * fps))
+    if last_frame is not None and written_scene_frames < expected_scene_frames:
+        missing_frames = expected_scene_frames - written_scene_frames
+        for _ in range(missing_frames):
+            mkv_writer.write(last_frame)
+            if mp4_writer is not None:
+                mp4_writer.write(last_frame)
+        elapsed += missing_frames * frame_period
+    if not sample_taken and last_rendered is not None:
+        contact_frames.append((scene.name, last_rendered.copy()))
+    return elapsed, poster_saved
 
 
 def scenes() -> list[Scene]:
@@ -935,86 +1014,69 @@ def record(args: argparse.Namespace) -> dict[str, object]:
         recording_notes.append({"mp4_writer_fallback": str(exc)})
     contact_frames: list[tuple[str, Image.Image]] = []
     poster_saved = False
-    scene_list = scenes()
-    total_duration = sum(scene.duration + scene.wait_after_action for scene in scene_list)
+    passive_mode = args.passive_duration > 0
+    if passive_mode:
+        scene_list = [
+            Scene(
+                name="Passive Real-Chrome-Aufnahme",
+                caption=(
+                    "Echte Chrome-Aufnahme ohne automatische Navigation, "
+                    "Bookmarklets, Klicks oder Texteingaben."
+                ),
+                duration=float(args.passive_duration),
+                wait_after_action=0.0,
+            )
+        ]
+        total_duration = float(args.passive_duration)
+        recording_notes.append(
+            {
+                "passive_mode": (
+                    "Chrome wird nur sichtbar aufgenommen; Navigation und Eingaben "
+                    "müssen extern erfolgen."
+                )
+            }
+        )
+    else:
+        scene_list = scenes()
+        total_duration = sum(scene.duration + scene.wait_after_action for scene in scene_list)
     elapsed = 0.0
-    frame_period = 1.0 / fps
 
     try:
         for scene in scene_list:
-            chrome = activate_and_maximize(find_chrome_window())
-            if scene.url:
-                navigate(chrome, scene.url)
-                time.sleep(scene.wait_after_action)
-                elapsed += scene.wait_after_action
-            if scene.js:
-                run_bookmarklet(chrome, scene.js)
-                time.sleep(scene.wait_after_action)
-                elapsed += scene.wait_after_action
-            if scene.click_input and scene.prompt:
-                # OpenWebUI prompt box is centered in the real page. The click is
-                # proportional to the Chrome window to remain stable across DPI.
-                click_window(chrome, int(size[0] * 0.43), int(size[1] * 0.56))
-                type_text(scene.prompt)
-                press_vk(VK_RETURN)
-                time.sleep(scene.wait_after_action)
-                elapsed += scene.wait_after_action
+            if not passive_mode:
+                chrome = activate_and_maximize(find_chrome_window())
+                if scene.url:
+                    navigate(chrome, scene.url)
+                    time.sleep(scene.wait_after_action)
+                    elapsed += scene.wait_after_action
+                if scene.js:
+                    run_bookmarklet(chrome, scene.js)
+                    time.sleep(scene.wait_after_action)
+                    elapsed += scene.wait_after_action
+                if scene.click_input and scene.prompt:
+                    # OpenWebUI prompt box is centered in the real page. The click is
+                    # proportional to the Chrome window to remain stable across DPI.
+                    click_window(chrome, int(size[0] * 0.43), int(size[1] * 0.56))
+                    type_text(scene.prompt)
+                    press_vk(VK_RETURN)
+                    time.sleep(scene.wait_after_action)
+                    elapsed += scene.wait_after_action
 
-            scene_start = time.monotonic()
-            sample_taken = False
-            sample_after = scene.duration * (0.9 if scene.prompt else 0.8)
-            written_scene_frames = 0
-            last_frame = None
-            last_rendered: Image.Image | None = None
-            while time.monotonic() - scene_start < scene.duration:
-                loop_start = time.monotonic()
-                raw = capture_chrome(chrome, size)
-                if not args.show_browser_chrome:
-                    raw = redact_browser_chrome(raw)
-                scene_elapsed = time.monotonic() - scene_start
-                rendered = overlay_frame(raw, scene, elapsed, scene_elapsed, total_duration)
-                last_rendered = rendered
-                if not poster_saved:
-                    rendered.save(poster_path, quality=92)
-                    poster_saved = True
-                if (
-                    not sample_taken
-                    and scene_elapsed >= sample_after
-                    and len(contact_frames) < len(scene_list)
-                ):
-                    contact_frames.append((scene.name, rendered.copy()))
-                    sample_taken = True
-                frame = cv2.cvtColor(np.array(rendered), cv2.COLOR_RGB2BGR)
-                last_frame = frame
-                target_scene_frames = max(
-                    written_scene_frames + 1,
-                    int(round(scene_elapsed * fps)),
-                )
-                frames_to_write = target_scene_frames - written_scene_frames
-                for _ in range(frames_to_write):
-                    mkv_writer.write(frame)
-                    if mp4_writer is not None:
-                        mp4_writer.write(frame)
-                written_scene_frames = target_scene_frames
-                elapsed += frames_to_write * frame_period
-                processing_time = time.monotonic() - loop_start
-                sleep_for = frame_period - processing_time
-                if sleep_for > 0:
-                    time.sleep(sleep_for)
-            expected_scene_frames = int(round(scene.duration * fps))
-            if last_frame is not None and written_scene_frames < expected_scene_frames:
-                missing_frames = expected_scene_frames - written_scene_frames
-                for _ in range(missing_frames):
-                    mkv_writer.write(last_frame)
-                    if mp4_writer is not None:
-                        mp4_writer.write(last_frame)
-                elapsed += missing_frames * frame_period
-            if (
-                not sample_taken
-                and last_rendered is not None
-                and len(contact_frames) < len(scene_list)
-            ):
-                contact_frames.append((scene.name, last_rendered.copy()))
+            elapsed, poster_saved = write_scene_capture(
+                chrome=chrome,
+                scene=scene,
+                size=size,
+                fps=fps,
+                elapsed=elapsed,
+                total_duration=total_duration,
+                show_browser_chrome=args.show_browser_chrome,
+                overlay_mode=args.overlay_mode,
+                mkv_writer=mkv_writer,
+                mp4_writer=mp4_writer,
+                poster_path=poster_path,
+                poster_saved=poster_saved,
+                contact_frames=contact_frames,
+            )
     finally:
         mkv_writer.release()
         if mp4_writer is not None:
@@ -1027,6 +1089,7 @@ def record(args: argparse.Namespace) -> dict[str, object]:
     report = {
         "status": "completed",
         "created_at": datetime.now(UTC).isoformat(),
+        "mode": "passive" if passive_mode else "scripted",
         "chrome": asdict(chrome),
         "closed_windows": log,
         "recording_notes": recording_notes,
@@ -1037,6 +1100,7 @@ def record(args: argparse.Namespace) -> dict[str, object]:
             "contact_sheet": str(contact_path),
         },
         "browser_chrome_redacted": not args.show_browser_chrome,
+        "overlay_mode": args.overlay_mode,
         "scenes": [asdict(scene) for scene in scene_list],
     }
     report_path = run_dir / "recording-report.json"
@@ -1056,6 +1120,25 @@ def parse_args() -> argparse.Namespace:
         "--show-browser-chrome",
         action="store_true",
         help="Do not redact Chrome tabs, address bar, profile badge, or bookmarks.",
+    )
+    parser.add_argument(
+        "--overlay-mode",
+        choices=("full", "none"),
+        default="none",
+        help=(
+            "Use 'none' for clean real-page footage without captions, "
+            "highlights, or synthetic pointers. Use 'full' only for a "
+            "legacy annotated diagnostic recording."
+        ),
+    )
+    parser.add_argument(
+        "--passive-duration",
+        type=float,
+        default=0.0,
+        help=(
+            "Record the visible Chrome window for this many seconds without "
+            "navigation, bookmarklets, clicks, or typed input."
+        ),
     )
     return parser.parse_args()
 
