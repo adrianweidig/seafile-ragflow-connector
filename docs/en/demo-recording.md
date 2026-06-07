@@ -14,9 +14,8 @@ artifacts only and do not satisfy the demo requirement.
 ## Real Chrome Script on Windows
 
 For the actual visible Chrome run, use `scripts/record_real_chrome_demo.py`.
-The script records the existing logged-in Google Chrome window, adds overlays
-only on top of real pages, masks the Chrome tab, address, and bookmarks bars by
-default, and writes:
+The script records the existing logged-in Google Chrome window, masks the
+Chrome tab, address, and bookmarks bars by default, and writes:
 
 - `docs/assets/demo/seafile-ragflow-connector-demo.mkv`
 - `docs/assets/demo/seafile-ragflow-connector-demo.mp4`
@@ -34,6 +33,27 @@ You can validate the local toolchain without touching the browser:
 ```powershell
 uv run --extra demo-recording python scripts/record_real_chrome_demo.py --check-tools
 ```
+
+For an artifact-light final real-web recording, avoid burned-in chapter text,
+highlight boxes, and synthetic pointers:
+
+```powershell
+uv run --extra demo-recording python scripts/record_real_chrome_demo.py --overlay-mode none
+```
+
+If Chrome cannot be driven reliably through Computer Use or an approved browser
+control surface, use passive mode. In that mode Codex only records the visible
+real Chrome window; tab changes and input must happen manually during the
+recording:
+
+```powershell
+uv run --extra demo-recording python scripts/record_real_chrome_demo.py `
+  --passive-duration 180 --overlay-mode none --show-browser-chrome
+```
+
+Passive mode does not navigate, run bookmarklets, click, or type text. It is
+intended for acceptance attempts where visible real webpages matter more than
+an automatically driven click path.
 
 ## Purpose
 
