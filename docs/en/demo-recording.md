@@ -22,6 +22,11 @@ Chrome tab, address, and bookmarks bars by default, and writes:
 - `docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg`
 - `artifacts/demo-recording-contact-sheet.jpg`
 
+The current checked-in recording is an artifact-light real-Chrome capture with
+no burned-in chapter text, highlight boxes, or synthetic pointer. The contact
+sheet contains 15 real video frames and was also reviewed through ChatGPT QA
+with `STATUS: PASS`.
+
 Windows prerequisites:
 
 - `ffmpeg` and `ffprobe` must be available on the Windows `PATH`.
