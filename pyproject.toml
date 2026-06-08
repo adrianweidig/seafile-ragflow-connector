@@ -39,7 +39,7 @@ dependencies = [
   "python-multipart>=0.0.32",
   "redis>=5.0",
   "sqlalchemy>=2.0.50",
-  "structlog>=24.1",
+  "structlog>=26.1.0",
   "typer>=0.26.7",
 ]
 
