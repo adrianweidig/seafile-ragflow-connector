@@ -22,10 +22,9 @@ Chrome tab, address, and bookmarks bars by default, and writes:
 - `docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg`
 - `artifacts/demo-recording-contact-sheet.jpg`
 
-The current checked-in recording is an artifact-light real-Chrome capture with
-no burned-in chapter text, highlight boxes, or synthetic pointer. The contact
-sheet contains 15 real video frames and was also reviewed through ChatGPT QA
-with `STATUS: PASS`.
+The current checked-in recording is the final silent MKV from the real-Chrome
+run. The MP4 file is a browser-friendly derivative of the same recording;
+poster and contact sheet are generated from that MKV.
 
 Windows prerequisites:
 
