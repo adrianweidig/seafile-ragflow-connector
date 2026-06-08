@@ -58,10 +58,13 @@ Connector-Sync starten und danach prüfen, dass RAGFlow-Dataset, RAGFlow-Chat
 und OpenWebUI-Pipe automatisch entstanden sind. Am Ende wird die Antwort in
 OpenWebUI über Preview und Originaldatei nachvollzogen.
 
-[![Demoaufnahme: Connector erstellt RAGFlow-Dataset, Chat und OpenWebUI-Pipe automatisch](docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg)](docs/assets/demo/seafile-ragflow-connector-demo.mp4)
+Die finale stille Aufnahme liegt als MKV im Repository. Die MP4-Datei ist eine
+browserfreundliche Ableitung derselben Aufnahme.
 
-[MP4 ansehen](docs/assets/demo/seafile-ragflow-connector-demo.mp4)
-· [MKV herunterladen](docs/assets/demo/seafile-ragflow-connector-demo.mkv)
+[![Demoaufnahme: Connector erstellt RAGFlow-Dataset, Chat und OpenWebUI-Pipe automatisch](docs/assets/demo/seafile-ragflow-connector-demo-poster.jpg)](docs/assets/demo/seafile-ragflow-connector-demo.mkv)
+
+[Finale MKV herunterladen](docs/assets/demo/seafile-ragflow-connector-demo.mkv)
+· [MP4-Vorschau ansehen](docs/assets/demo/seafile-ragflow-connector-demo.mp4)
 · [Kontaktbogen](artifacts/demo-recording-contact-sheet.jpg)
 · [Aufnahme-Runbook](docs/demo-recording.md)
 
