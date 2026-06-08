@@ -152,6 +152,7 @@ class Scene:
     wait_after_action: float = 2.5
     click_input: bool = False
     prompt: str | None = None
+    dismiss_chrome_popups: bool = False
     highlight: tuple[float, float, float, float] | None = None
     pointer: tuple[float, float] | None = None
 
@@ -372,6 +373,38 @@ def activate_and_maximize(window: WindowInfo) -> WindowInfo:
     return refreshed
 
 
+def foreground_hwnd() -> int:
+    ensure_windows()
+    return int(USER32.GetForegroundWindow())
+
+
+def safe_action_name(value: str) -> str:
+    cleaned = "".join(char if char.isalnum() else "-" for char in value.lower())
+    return "-".join(part for part in cleaned.split("-") if part)[:72] or "ui-action"
+
+
+def save_pre_action_screenshot(window: WindowInfo, safety_dir: Path, action: str) -> Path:
+    safety_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S%f")
+    path = safety_dir / f"{stamp}-{safe_action_name(action)}.png"
+    ImageGrab.grab(all_screens=True).save(path)
+    foreground = foreground_hwnd()
+    if foreground != window.hwnd:
+        raise RuntimeError(
+            "UI-Aktion abgebrochen: Chrome ist nicht im Vordergrund. "
+            f"Erwartet hwnd={window.hwnd}, gefunden hwnd={foreground}. "
+            f"Sicherheits-Screenshot: {path}"
+        )
+    return path
+
+
+def prepare_chrome_action(window: WindowInfo, safety_dir: Path | None, action: str) -> None:
+    USER32.SetForegroundWindow(window.hwnd)
+    time.sleep(0.25)
+    if safety_dir is not None:
+        save_pre_action_screenshot(window, safety_dir, action)
+
+
 def send_input(inputs: Iterable[INPUT]) -> None:
     ensure_windows()
     input_list = list(inputs)
@@ -418,7 +451,14 @@ def type_text(text: str, delay: float = 0.001) -> None:
             time.sleep(delay)
 
 
-def click_window(window: WindowInfo, x: int, y: int) -> None:
+def click_window(
+    window: WindowInfo,
+    x: int,
+    y: int,
+    safety_dir: Path | None = None,
+    action: str = "click",
+) -> None:
+    prepare_chrome_action(window, safety_dir, action)
     screen_x = window.left + x
     screen_y = window.top + y
     USER32.SetCursorPos(screen_x, screen_y)
@@ -442,21 +482,38 @@ def click_window(window: WindowInfo, x: int, y: int) -> None:
     time.sleep(0.4)
 
 
-def navigate(window: WindowInfo, url: str) -> None:
-    USER32.SetForegroundWindow(window.hwnd)
-    time.sleep(0.15)
+def navigate(window: WindowInfo, url: str, safety_dir: Path | None = None) -> None:
+    prepare_chrome_action(window, safety_dir, f"navigate {url}")
     hotkey(VK_CONTROL, VK_L)
     type_text(url)
     press_vk(VK_RETURN)
 
 
-def run_bookmarklet(window: WindowInfo, javascript_body: str) -> None:
+def run_bookmarklet(
+    window: WindowInfo,
+    javascript_body: str,
+    safety_dir: Path | None = None,
+    action: str = "bookmarklet",
+) -> None:
     script = "javascript:" + javascript_body
-    USER32.SetForegroundWindow(window.hwnd)
-    time.sleep(0.15)
+    prepare_chrome_action(window, safety_dir, action)
     hotkey(VK_CONTROL, VK_L)
     type_text(script)
     press_vk(VK_RETURN)
+
+
+def dismiss_chrome_popups(
+    window: WindowInfo,
+    safety_dir: Path | None = None,
+    action: str = "dismiss chrome popup",
+) -> None:
+    # Chrome UI popups such as Translate are outside the page DOM; Escape closes
+    # them without touching the real application page state.
+    prepare_chrome_action(window, safety_dir, action)
+    press_vk(VK_ESCAPE)
+    time.sleep(0.2)
+    press_vk(VK_ESCAPE)
+    time.sleep(0.3)
 
 
 def capture_chrome(window: WindowInfo, target_size: tuple[int, int]) -> Image.Image:
@@ -641,6 +698,39 @@ def openwebui_prompt_js(prompt: str) -> str:
         "))||buttons.at(-1);"
         "send?.click();"
         "},600);"
+        "})()"
+    )
+
+
+def open_openwebui_preview_js() -> str:
+    return (
+        "(()=>{"
+        "const visible=(el)=>!!(el.offsetWidth||el.offsetHeight||el.getClientRects().length);"
+        "const links=[...document.querySelectorAll('a[href]')].filter(visible);"
+        "const text=(el)=>(`${el.textContent||''} ${el.getAttribute('aria-label')||''} "
+        "${el.title||''}`).trim();"
+        "const preview=links.reverse().find((link)=>"
+        "/preview|vorschau/i.test(text(link))||"
+        "/\\/api\\/openwebui\\/sources\\/preview/i.test(link.href));"
+        "if(!preview){document.title='OpenWebUI preview link not found';return;}"
+        "location.href=preview.href;"
+        "})()"
+    )
+
+
+def open_preview_original_js() -> str:
+    return (
+        "(()=>{"
+        "const visible=(el)=>!!(el.offsetWidth||el.offsetHeight||el.getClientRects().length);"
+        "const links=[...document.querySelectorAll('a[href]')].filter(visible);"
+        "const text=(el)=>(`${el.textContent||''} ${el.getAttribute('aria-label')||''} "
+        "${el.title||''}`).trim();"
+        "const original=links.reverse().find((link)=>"
+        "/original|ursprung|datei öffnen|open original/i.test(text(link))||"
+        "(/seafile\\.top\\.secret/i.test(link.href)&&"
+        "!/\\/api\\/openwebui\\/sources\\/preview/i.test(link.href)));"
+        "if(!original){document.title='Seafile original link not found';return;}"
+        "location.href=original.href;"
         "})()"
     )
 
@@ -902,6 +992,7 @@ def scenes() -> list[Scene]:
             name="Kapitel 9: RAGFlow-Ergebnis",
             url="https://rag.top.secret/",
             duration=14,
+            dismiss_chrome_popups=True,
             caption=(
                 "RAGFlow zeigt das automatisch angelegte Dataset und den "
                 "automatisch angelegten Chat nach dem Connector-Lauf."
@@ -916,6 +1007,7 @@ def scenes() -> list[Scene]:
                 "items.find((el)=>(el.textContent||'').trim()==='Chat')?.click();})()"
             ),
             duration=10,
+            dismiss_chrome_popups=True,
             caption=(
                 "RAGFlow-Chat-Kontrolle: Der Chat ist Ergebnis des "
                 "Connector-Laufs und kein manueller Benutzerschritt."
@@ -948,11 +1040,35 @@ def scenes() -> list[Scene]:
             pointer=(0.30, 0.56),
         ),
         Scene(
-            name="Kapitel 13: Abschlusskontrolle",
+            name="Kapitel 13: Connector-Preview",
+            js=open_openwebui_preview_js(),
+            duration=14,
+            wait_after_action=2.5,
+            caption=(
+                "Die Connector-Preview öffnet den Treffer aus der OpenWebUI-"
+                "Antwort und zeigt den synchronisierten Inhalt im Viewer."
+            ),
+            highlight=(0.18, 0.18, 0.86, 0.86),
+            pointer=(0.76, 0.18),
+        ),
+        Scene(
+            name="Kapitel 14: Original in Seafile",
+            js=open_preview_original_js(),
+            duration=14,
+            wait_after_action=2.5,
+            caption=(
+                "Von der Preview geht es direkt zur Originaldatei in Seafile; "
+                "Seafile bleibt die Quelle der Wahrheit."
+            ),
+            highlight=(0.10, 0.18, 0.88, 0.90),
+            pointer=(0.72, 0.20),
+        ),
+        Scene(
+            name="Kapitel 15: Abschlusskontrolle",
             url=dashboard,
             js="(()=>{document.querySelector('[data-tab=\"openwebui\"]')?.click();})()",
             duration=8,
-            wait_after_action=2.0,
+            wait_after_action=7.0,
             caption=(
                 "Endzustand: Dashboard, RAGFlow und OpenWebUI zeigen den "
                 "automatisch erzeugten und nutzbaren Workflow."
@@ -971,6 +1087,7 @@ def record(args: argparse.Namespace) -> dict[str, object]:
     timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     run_dir = repo_root / "output" / "demo-recording" / f"real-chrome-{timestamp}"
     run_dir.mkdir(parents=True, exist_ok=True)
+    safety_dir = run_dir / "safety"
     docs_demo = repo_root / "docs" / "assets" / "demo"
     artifacts = repo_root / "artifacts"
     docs_demo.mkdir(parents=True, exist_ok=True)
@@ -1046,21 +1163,38 @@ def record(args: argparse.Namespace) -> dict[str, object]:
             if not passive_mode:
                 chrome = activate_and_maximize(find_chrome_window())
                 if scene.url:
-                    navigate(chrome, scene.url)
+                    navigate(chrome, scene.url, safety_dir=safety_dir)
                     time.sleep(scene.wait_after_action)
                     elapsed += scene.wait_after_action
                 if scene.js:
-                    run_bookmarklet(chrome, scene.js)
+                    run_bookmarklet(
+                        chrome,
+                        scene.js,
+                        safety_dir=safety_dir,
+                        action=scene.name,
+                    )
                     time.sleep(scene.wait_after_action)
                     elapsed += scene.wait_after_action
                 if scene.click_input and scene.prompt:
                     # OpenWebUI prompt box is centered in the real page. The click is
                     # proportional to the Chrome window to remain stable across DPI.
-                    click_window(chrome, int(size[0] * 0.43), int(size[1] * 0.56))
+                    click_window(
+                        chrome,
+                        int(size[0] * 0.43),
+                        int(size[1] * 0.56),
+                        safety_dir=safety_dir,
+                        action=scene.name,
+                    )
                     type_text(scene.prompt)
                     press_vk(VK_RETURN)
                     time.sleep(scene.wait_after_action)
                     elapsed += scene.wait_after_action
+                if scene.dismiss_chrome_popups:
+                    dismiss_chrome_popups(
+                        chrome,
+                        safety_dir=safety_dir,
+                        action=f"{scene.name} chrome popup dismiss",
+                    )
 
             elapsed, poster_saved = write_scene_capture(
                 chrome=chrome,

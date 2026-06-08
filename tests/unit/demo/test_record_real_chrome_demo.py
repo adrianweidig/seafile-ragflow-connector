@@ -87,3 +87,47 @@ class RecordRealChromeDemoCliTests(unittest.TestCase):
             args = module.parse_args()
 
         self.assertEqual(args.overlay_mode, "none")
+
+    def test_final_scenes_show_preview_and_original(self) -> None:
+        spec = importlib.util.spec_from_file_location("record_real_chrome_demo", SCRIPT)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        scene_names = [scene.name for scene in module.scenes()]
+        self.assertIn("Kapitel 13: Connector-Preview", scene_names)
+        self.assertIn("Kapitel 14: Original in Seafile", scene_names)
+        self.assertIn("Kapitel 15: Abschlusskontrolle", scene_names)
+
+        preview_scene = next(
+            scene for scene in module.scenes() if "Connector-Preview" in scene.name
+        )
+        original_scene = next(
+            scene for scene in module.scenes() if "Original in Seafile" in scene.name
+        )
+        final_scene = next(
+            scene for scene in module.scenes() if "Abschlusskontrolle" in scene.name
+        )
+
+        self.assertIn("sources\\/preview", preview_scene.js)
+        self.assertIn("seafile\\.top\\.secret", original_scene.js)
+        self.assertGreaterEqual(final_scene.wait_after_action, 7.0)
+
+    def test_only_ragflow_scenes_dismiss_chrome_popups(self) -> None:
+        spec = importlib.util.spec_from_file_location("record_real_chrome_demo", SCRIPT)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        dismissing = [
+            scene.name for scene in module.scenes() if scene.dismiss_chrome_popups
+        ]
+
+        self.assertEqual(
+            dismissing,
+            ["Kapitel 9: RAGFlow-Ergebnis", "Kapitel 10: RAGFlow-Chat"],
+        )
