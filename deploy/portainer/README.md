@@ -19,8 +19,9 @@ Die Abnahme nach dem Deploy ist in der
 [Admin-Erststart-Checkliste](../../docs/admin-first-start-checklist.md)
 zusammengefasst.
 
-- `docker-compose.yml` definiert Controller, Worker, Reconciler, PostgreSQL,
-  Redis, Volumes, Healthchecks und das optionale Dashboard-Portmapping.
+- `docker-compose.yml` definiert Controller, Worker, Reconciler, den separaten
+  Search-Service, PostgreSQL, Redis, Volumes, Healthchecks sowie Dashboard- und
+  Search-Portmapping.
 - `../../connector.env.example` ist die empfohlene einheitliche Vorlage für
   Portainer-Environment-Variablen.
 - `stack.env.example` bleibt als Portainer-spezifische Referenz erhalten.
@@ -33,7 +34,8 @@ Intervalle über `DISCOVERY_INTERVAL_SECONDS`, `DELTA_SYNC_INTERVAL_SECONDS`,
 `OPENWEBUI_SYNC_INTERVAL_SECONDS` anpassen. Werte unter 60 Sekunden werden von
 der Anwendung abgelehnt, damit kein versehentlicher Retry- oder Sync-Sturm
 entsteht. Manuelle Läufe bleiben über `connector check-live`,
-`connector sync-once` und `connector openwebui-sync-once` möglich.
+`connector sync-once`, `connector authz-sync-once` und
+`connector openwebui-sync-once` möglich.
 
 Der Standardwert für `CONNECTOR_IMAGE` ist
 `ghcr.io/adrianweidig/seafile-ragflow-connector:latest`. Für Offline-Betrieb
@@ -54,8 +56,10 @@ Portainer-Start:
 6. Die Minimalpflichtwerte ersetzen: `SEAFILE_BASE_URL`,
    `SEAFILE_ADMIN_TOKEN`, `SEAFILE_SYNC_USER_TOKEN`, `RAGFLOW_BASE_URL`,
    `RAGFLOW_API_KEY` und `POSTGRES_PASSWORD` oder alternativ `DATABASE_URL`.
-   OpenWebUI-Werte nur setzen, wenn `OPENWEBUI_INTEGRATION_ENABLED=true`
-   genutzt wird.
+   `AUTHZ_API_SHARED_SECRET`, `SEARCH_AUTHZ_SHARED_SECRET`,
+   `SEARCH_RAGFLOW_BASE_URL` und `SEARCH_RAGFLOW_API_KEY` für die
+   Wissenssuche setzen. OpenWebUI-Werte nur setzen, wenn
+   `OPENWEBUI_INTEGRATION_ENABLED=true` genutzt wird.
    Wenn interne Zertifikate genutzt werden, die CA-PEM-Datei in ein
    Host-Verzeichnis legen, `CONNECTOR_CERTS_HOST_DIR` auf dieses Verzeichnis
    und `CONNECTOR_CA_BUNDLE=/certs/<datei>.pem` setzen. Fehlt die CA beim

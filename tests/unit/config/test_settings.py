@@ -3,11 +3,12 @@ from __future__ import annotations
 import unittest
 
 try:
-    from seafile_ragflow_connector.config.settings import Settings
+    from seafile_ragflow_connector.config.settings import SearchServiceSettings, Settings
 except ModuleNotFoundError as exc:
     if exc.name != "pydantic":
         raise
     Settings = None  # type: ignore[assignment]
+    SearchServiceSettings = None  # type: ignore[assignment]
 
 
 @unittest.skipIf(Settings is None, "pydantic is not installed in this Python environment")
@@ -69,6 +70,12 @@ class SettingsTests(unittest.TestCase):
         self.assertIsNone(settings.connector_dashboard_auth_username)
         self.assertIsNone(settings.connector_dashboard_auth_password)
         self.assertIsNone(settings.connector_language)
+        self.assertTrue(settings.authz_api_enabled)
+        self.assertTrue(settings.authz_api_fail_closed)
+        self.assertEqual(settings.authz_api_max_acl_age_seconds, 7200)
+        self.assertTrue(settings.search_acl_sync_enabled)
+        self.assertFalse(settings.search_acl_include_subfolder_permissions)
+        self.assertFalse(settings.search_acl_include_share_links)
 
     def test_automation_intervals_default_to_30_minutes(self) -> None:
         values = self.base_values()
@@ -291,6 +298,19 @@ class SettingsTests(unittest.TestCase):
         settings = Settings(**values)
 
         self.assertEqual(settings.openwebui_source_preview_mode, "connector_viewer")
+
+    def test_search_service_settings_do_not_require_seafile_admin_token(self) -> None:
+        settings = SearchServiceSettings(
+            search_authz_base_url="http://connector-controller:8080",
+            search_authz_shared_secret="authz-secret",
+            search_ragflow_base_url="http://ragflow:9380",
+            search_ragflow_api_key="ragflow-key",
+        )
+
+        self.assertEqual(settings.search_service_port, 8090)
+        self.assertEqual(settings.search_auth_mode, "trusted_header")
+        self.assertEqual(settings.search_default_top_k, 8)
+        self.assertEqual(settings.search_max_top_k, 20)
 
     def test_global_dry_run_forces_openwebui_dry_run(self) -> None:
         values = self.base_values()

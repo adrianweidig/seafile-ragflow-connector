@@ -58,6 +58,20 @@ class Settings(BaseSettings):
     connector_dashboard_auth_password: str | None = None
     connector_transport_status: dict[str, object] = Field(default_factory=dict)
 
+    authz_api_enabled: bool = True
+    authz_api_shared_secret: str = "change-me"
+    authz_api_allow_networks_csv: str = Field(
+        default="",
+        validation_alias="AUTHZ_API_ALLOW_NETWORKS",
+    )
+    authz_api_fail_closed: bool = True
+    authz_api_max_acl_age_seconds: int = 7200
+
+    search_acl_sync_enabled: bool = True
+    search_acl_sync_interval_seconds: int = DEFAULT_AUTOMATION_INTERVAL_SECONDS
+    search_acl_include_subfolder_permissions: bool = False
+    search_acl_include_share_links: bool = False
+
     seafile_base_url: str
     seafile_internal_url: str | None = None
     seafile_admin_token: str
@@ -126,6 +140,10 @@ class Settings(BaseSettings):
     openwebui_pipe_answer_llm_base_url: str | None = None
     openwebui_pipe_answer_llm_model: str | None = None
     openwebui_pipe_answer_llm_api_key: str | None = None
+    openwebui_authz_enabled: bool = True
+    openwebui_authz_base_url: str | None = None
+    openwebui_authz_shared_secret: str | None = None
+    openwebui_authz_fail_closed: bool = True
     ragflow_client_cert_file: str | None = None
     ragflow_client_key_file: str | None = None
     seafile_client_cert_file: str | None = None
@@ -209,6 +227,7 @@ class Settings(BaseSettings):
         "openwebui_proxy_public_base_url",
         "openwebui_proxy_internal_base_url",
         "openwebui_pipe_answer_llm_base_url",
+        "openwebui_authz_base_url",
     )
     @classmethod
     def strip_url(cls, value: str | None) -> str | None:
@@ -278,6 +297,7 @@ class Settings(BaseSettings):
     @field_validator(
         "ragflow_template_refresh_seconds",
         "openwebui_sync_interval_seconds",
+        "search_acl_sync_interval_seconds",
         "discovery_interval_seconds",
         "delta_sync_interval_seconds",
         "reconcile_interval_seconds",
@@ -289,6 +309,14 @@ class Settings(BaseSettings):
                 "automation interval settings must be at least "
                 f"{MIN_AUTOMATION_INTERVAL_SECONDS} seconds"
             )
+            raise ValueError(msg)
+        return value
+
+    @field_validator("authz_api_max_acl_age_seconds")
+    @classmethod
+    def validate_authz_max_acl_age(cls, value: int) -> int:
+        if value <= 0:
+            msg = "AUTHZ_API_MAX_ACL_AGE_SECONDS must be positive"
             raise ValueError(msg)
         return value
 
@@ -348,12 +376,17 @@ class Settings(BaseSettings):
             self.redis_url = f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
         if self.openwebui_proxy_internal_base_url is None:
             self.openwebui_proxy_internal_base_url = self.openwebui_proxy_public_base_url
+        if self.openwebui_authz_base_url is None:
+            self.openwebui_authz_base_url = self.openwebui_proxy_base_url_for_functions
+        if self.openwebui_authz_shared_secret is None:
+            self.openwebui_authz_shared_secret = self.authz_api_shared_secret
         for name in (
             "seafile_public_base_url",
             "ragflow_public_base_url",
             "openwebui_proxy_public_base_url",
             "openwebui_proxy_internal_base_url",
             "openwebui_pipe_answer_llm_base_url",
+            "openwebui_authz_base_url",
         ):
             value = getattr(self, name)
             if value and not _is_http_url(value):
@@ -443,6 +476,10 @@ class Settings(BaseSettings):
         )
 
     @property
+    def authz_api_allow_networks(self) -> tuple[str, ...]:
+        return _split_csv(self.authz_api_allow_networks_csv)
+
+    @property
     def openwebui_effective_sync_mode(self) -> Literal["disabled", "dry-run", "sync", "repair"]:
         if not self.openwebui_integration_enabled or self.openwebui_sync_mode == "disabled":
             return "disabled"
@@ -495,6 +532,108 @@ class Settings(BaseSettings):
         )
 
 
+class SearchServiceSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file="stack.env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    app_env: str = "production"
+    connector_language: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("CONNECTOR_LANGUAGE", "LANGUAGE"),
+    )
+    log_level: str = "INFO"
+    log_format: Literal["json", "console"] = "json"
+    connector_ca_bundle: str | None = None
+
+    search_service_enabled: bool = True
+    search_service_host: str = "0.0.0.0"  # nosec B104
+    search_service_port: int = 8090
+
+    search_auth_mode: Literal["trusted_header"] = "trusted_header"
+    search_trusted_username_header: str = "X-Forwarded-User"
+    search_trusted_email_header: str = "X-Forwarded-Email"
+    search_trusted_display_name_header: str = "X-Forwarded-Name"
+
+    search_authz_base_url: str = "http://connector-controller:8080"
+    search_authz_shared_secret: str = "change-me"
+
+    search_ragflow_base_url: str = "http://ragflow:9380"
+    search_ragflow_api_key: str = "change-me"
+    search_ragflow_verify_ssl: bool = True
+    search_ragflow_ca_bundle: str | None = None
+
+    search_default_top_k: int = 8
+    search_max_top_k: int = 20
+    search_max_selected_profiles: int = 25
+    search_enable_chat_mode: bool = True
+    search_enable_retrieval_mode: bool = True
+
+    @field_validator("connector_language")
+    @classmethod
+    def validate_connector_language(cls, value: str | None) -> str | None:
+        return normalize_language(value)
+
+    @field_validator("search_authz_base_url", "search_ragflow_base_url")
+    @classmethod
+    def strip_url(cls, value: str | None) -> str | None:
+        return value.rstrip("/") if value else value
+
+    @field_validator("connector_ca_bundle", "search_ragflow_ca_bundle", mode="before")
+    @classmethod
+    def strip_optional_path(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("search_service_port")
+    @classmethod
+    def validate_search_port(cls, value: int) -> int:
+        if value < 1 or value > 65535:
+            msg = "SEARCH_SERVICE_PORT must be between 1 and 65535"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("search_default_top_k", "search_max_top_k", "search_max_selected_profiles")
+    @classmethod
+    def validate_search_positive_int(cls, value: int) -> int:
+        if value <= 0:
+            msg = "search numeric settings must be positive"
+            raise ValueError(msg)
+        return value
+
+    @model_validator(mode="after")
+    def validate_search_urls_and_limits(self) -> SearchServiceSettings:
+        for name in ("search_authz_base_url", "search_ragflow_base_url"):
+            value = getattr(self, name)
+            if not _is_http_url(value):
+                msg = f"{name.upper()} must be an http or https URL"
+                raise ValueError(msg)
+        if self.search_default_top_k > self.search_max_top_k:
+            msg = "SEARCH_DEFAULT_TOP_K must be <= SEARCH_MAX_TOP_K"
+            raise ValueError(msg)
+        if not self.search_enable_chat_mode and not self.search_enable_retrieval_mode:
+            msg = "at least one search mode must be enabled"
+            raise ValueError(msg)
+        for name in ("connector_ca_bundle", "search_ragflow_ca_bundle"):
+            value = getattr(self, name)
+            if value:
+                validate_tls_file(str(value), label=name.upper())
+        return self
+
+    @property
+    def search_ragflow_httpx_verify(self) -> VerifyConfig:
+        return build_service_httpx_verify(
+            self.search_ragflow_verify_ssl,
+            self.search_ragflow_ca_bundle,
+            fallback_ca_bundle=self.connector_ca_bundle,
+        )
+
+
 def _is_http_url(value: str) -> bool:
     parsed = urlparse(value)
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
@@ -503,3 +642,8 @@ def _is_http_url(value: str) -> bool:
 @lru_cache
 def get_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]
+
+
+@lru_cache
+def get_search_service_settings() -> SearchServiceSettings:
+    return SearchServiceSettings()

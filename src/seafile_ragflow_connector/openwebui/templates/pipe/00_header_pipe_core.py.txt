@@ -1,9 +1,9 @@
 """
 title: RAGFlow Dataset Pipe
 author: Seafile RAGFlow Connector
-version: 3.9.3
+version: 3.10.0
 owner: seafile-ragflow-connector
-artifact_version: 24
+artifact_version: 25
 """
 
 # =============================================================================
@@ -26,6 +26,7 @@ artifact_version: 24
 #   OpenWebUI Chat
 #        -> diese Pipe
 #        -> Connector-Proxy: /api/openwebui/proxy/chat
+#        -> zentrale ACL-Prüfung im Connector-Core
 #        -> RAGFlow Dataset/Chat
 #        -> generierte Antwort + Quellen
 #        -> OpenWebUI Antwort mit Citations
