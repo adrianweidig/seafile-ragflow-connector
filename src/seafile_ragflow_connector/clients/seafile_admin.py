@@ -59,3 +59,22 @@ class SeafileAdminClient:
             if len(libraries) < per_page:
                 break
             page += 1
+
+    def list_library_shares(self, repo_id: str, *, share_type: str) -> list[dict[str, Any]]:
+        params = {"repo_id": repo_id, "share_type": share_type}
+        data = unwrap_response(self._client.get("/api/v2.1/admin/shares/", params=params))
+        if isinstance(data, dict):
+            for key in ("shares", "share_list", "items", "data"):
+                if isinstance(data.get(key), list):
+                    return list(data[key])
+            return [data]
+        return list(data or [])
+
+    def list_group_members(self, group_id: str | int) -> list[dict[str, Any]]:
+        data = unwrap_response(self._client.get(f"/api/v2.1/admin/groups/{group_id}/members/"))
+        if isinstance(data, dict):
+            for key in ("members", "member_list", "users", "items", "data"):
+                if isinstance(data.get(key), list):
+                    return list(data[key])
+            return [data]
+        return list(data or [])

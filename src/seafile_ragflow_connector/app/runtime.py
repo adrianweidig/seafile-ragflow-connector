@@ -136,6 +136,7 @@ def build_dashboard_store(
     dashboard_not_needed = (
         not settings.connector_dashboard_enabled
         and settings.openwebui_effective_sync_mode == "disabled"
+        and not settings.authz_api_enabled
     )
     if dashboard_not_needed:
         return None

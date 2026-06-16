@@ -11,7 +11,8 @@ Swarm-Nodes beziehungsweise aus den Connector-Tasks erreichbar sein.
 Die allgemeine erste Abnahme steht in der
 [Admin-Erststart-Checkliste](../../docs/admin-first-start-checklist.md);
 Swarm-spezifisch ist zusätzlich die reine Portnummer für
-`CONNECTOR_DASHBOARD_PUBLISHED_PORT` zu beachten.
+`CONNECTOR_DASHBOARD_PUBLISHED_PORT` und `SEARCH_SERVICE_PUBLISHED_PORT` zu
+beachten.
 
 ## Wichtige Unterschiede zu Docker Compose
 
@@ -21,6 +22,8 @@ Swarm-spezifisch ist zusätzlich die reine Portnummer für
   Connector-Entrypoint wartet selbst auf PostgreSQL und Redis.
 - Dashboard-Ports werden über Swarm Routing-Mesh veröffentlicht. Verwende im
   Swarm-Env nur eine Portnummer, keine Bind-Adresse wie `127.0.0.1:18080`.
+- `connector-search` läuft als eigener Service ohne Seafile-Admin- oder
+  Sync-Token und fragt vor RAGFlow-Abfragen die Authz-API im Controller.
 - Für produktive Secrets sollte Docker Secrets oder ein externes Secret
   Management genutzt werden. Die Beispiel-Env enthält nur Platzhalter.
 
@@ -32,8 +35,9 @@ cp ../../connector.env.example stack.env
 ```
 
 `stack.env` bearbeiten, die Minimalpflichtwerte ersetzen und
-`CONNECTOR_DASHBOARD_PUBLISHED_PORT` auf eine reine Portnummer wie `18080`
-setzen. OpenWebUI-Werte nur setzen, wenn die Anbindung aktiviert wird. Danach:
+`CONNECTOR_DASHBOARD_PUBLISHED_PORT` und `SEARCH_SERVICE_PUBLISHED_PORT` auf
+reine Portnummern wie `18080` und `18090` setzen. OpenWebUI-Werte nur setzen,
+wenn die Anbindung aktiviert wird. Danach:
 
 ```bash
 set -a

@@ -46,6 +46,19 @@ x-connector-env: &connector-env
   CONNECTOR_DASHBOARD_AUTH_PASSWORD: ${CONNECTOR_DASHBOARD_AUTH_PASSWORD:-}
 
   # -------------------------------------------------------------------
+  # Interne Autorisierungs-API und ACL-Snapshot
+  # -------------------------------------------------------------------
+  AUTHZ_API_ENABLED: ${AUTHZ_API_ENABLED:-true}
+  AUTHZ_API_SHARED_SECRET: ${AUTHZ_API_SHARED_SECRET:?set AUTHZ_API_SHARED_SECRET}
+  AUTHZ_API_ALLOW_NETWORKS: ${AUTHZ_API_ALLOW_NETWORKS:-}
+  AUTHZ_API_FAIL_CLOSED: ${AUTHZ_API_FAIL_CLOSED:-true}
+  AUTHZ_API_MAX_ACL_AGE_SECONDS: ${AUTHZ_API_MAX_ACL_AGE_SECONDS:-7200}
+  SEARCH_ACL_SYNC_ENABLED: ${SEARCH_ACL_SYNC_ENABLED:-true}
+  SEARCH_ACL_SYNC_INTERVAL_SECONDS: ${SEARCH_ACL_SYNC_INTERVAL_SECONDS:-1800}
+  SEARCH_ACL_INCLUDE_SUBFOLDER_PERMISSIONS: ${SEARCH_ACL_INCLUDE_SUBFOLDER_PERMISSIONS:-false}
+  SEARCH_ACL_INCLUDE_SHARE_LINKS: ${SEARCH_ACL_INCLUDE_SHARE_LINKS:-false}
+
+  # -------------------------------------------------------------------
   # Quelle: bestehender Seafile-Server
   # -------------------------------------------------------------------
   # Muss aus dem Connector-Container erreichbar sein. Der Connector versucht
@@ -113,6 +126,10 @@ x-connector-env: &connector-env
   OPENWEBUI_PROXY_PUBLIC_BASE_URL: ${OPENWEBUI_PROXY_PUBLIC_BASE_URL:-}
   OPENWEBUI_PROXY_INTERNAL_BASE_URL: ${OPENWEBUI_PROXY_INTERNAL_BASE_URL:-}
   OPENWEBUI_PROXY_SHARED_SECRET: ${OPENWEBUI_PROXY_SHARED_SECRET:-}
+  OPENWEBUI_AUTHZ_ENABLED: ${OPENWEBUI_AUTHZ_ENABLED:-true}
+  OPENWEBUI_AUTHZ_BASE_URL: ${OPENWEBUI_AUTHZ_BASE_URL:-http://connector-controller:8080}
+  OPENWEBUI_AUTHZ_SHARED_SECRET: ${OPENWEBUI_AUTHZ_SHARED_SECRET:-${AUTHZ_API_SHARED_SECRET:-}}
+  OPENWEBUI_AUTHZ_FAIL_CLOSED: ${OPENWEBUI_AUTHZ_FAIL_CLOSED:-true}
   OPENWEBUI_PROXY_VERIFY_SSL: ${OPENWEBUI_PROXY_VERIFY_SSL:-${CONNECTOR_PROXY_VERIFY_SSL:-true}}
   OPENWEBUI_PROXY_CA_BUNDLE: ${OPENWEBUI_PROXY_CA_BUNDLE:-${CONNECTOR_PROXY_CA_BUNDLE:-}}
   CONNECTOR_PROXY_VERIFY_SSL: ${CONNECTOR_PROXY_VERIFY_SSL:-}
@@ -235,6 +252,62 @@ x-connector-common: &connector-common
     retries: 5
     start_period: 30s
 
+# Separater Search-Container ohne Seafile-Admin- oder Sync-Token.
+x-search-env: &search-env
+  TZ: ${TZ:-Europe/Berlin}
+  APP_ENV: ${APP_ENV:-production}
+  CONNECTOR_LANGUAGE: ${CONNECTOR_LANGUAGE:-}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  CONNECTOR_CA_BUNDLE: ${CONNECTOR_CA_BUNDLE:-}
+  CONNECTOR_SYSTEM_CA_BUNDLE: ${CONNECTOR_SYSTEM_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}
+  SSL_CERT_FILE: ${SSL_CERT_FILE:-}
+  REQUESTS_CA_BUNDLE: ${REQUESTS_CA_BUNDLE:-}
+  SEARCH_SERVICE_ENABLED: ${SEARCH_SERVICE_ENABLED:-true}
+  SEARCH_SERVICE_HOST: ${SEARCH_SERVICE_HOST:-0.0.0.0}
+  SEARCH_SERVICE_PORT: ${SEARCH_SERVICE_PORT:-8090}
+  SEARCH_AUTH_MODE: ${SEARCH_AUTH_MODE:-trusted_header}
+  SEARCH_TRUSTED_USERNAME_HEADER: ${SEARCH_TRUSTED_USERNAME_HEADER:-X-Forwarded-User}
+  SEARCH_TRUSTED_EMAIL_HEADER: ${SEARCH_TRUSTED_EMAIL_HEADER:-X-Forwarded-Email}
+  SEARCH_TRUSTED_DISPLAY_NAME_HEADER: ${SEARCH_TRUSTED_DISPLAY_NAME_HEADER:-X-Forwarded-Name}
+  SEARCH_AUTHZ_BASE_URL: ${SEARCH_AUTHZ_BASE_URL:-http://connector-controller:8080}
+  SEARCH_AUTHZ_SHARED_SECRET: ${SEARCH_AUTHZ_SHARED_SECRET:?set SEARCH_AUTHZ_SHARED_SECRET}
+  SEARCH_RAGFLOW_BASE_URL: ${SEARCH_RAGFLOW_BASE_URL:?set SEARCH_RAGFLOW_BASE_URL}
+  SEARCH_RAGFLOW_API_KEY: ${SEARCH_RAGFLOW_API_KEY:?set SEARCH_RAGFLOW_API_KEY}
+  SEARCH_RAGFLOW_VERIFY_SSL: ${SEARCH_RAGFLOW_VERIFY_SSL:-true}
+  SEARCH_RAGFLOW_CA_BUNDLE: ${SEARCH_RAGFLOW_CA_BUNDLE:-}
+  SEARCH_DEFAULT_TOP_K: ${SEARCH_DEFAULT_TOP_K:-8}
+  SEARCH_MAX_TOP_K: ${SEARCH_MAX_TOP_K:-20}
+  SEARCH_MAX_SELECTED_PROFILES: ${SEARCH_MAX_SELECTED_PROFILES:-25}
+  SEARCH_ENABLE_CHAT_MODE: ${SEARCH_ENABLE_CHAT_MODE:-true}
+  SEARCH_ENABLE_RETRIEVAL_MODE: ${SEARCH_ENABLE_RETRIEVAL_MODE:-true}
+
+x-search-common: &search-common
+  image: ${CONNECTOR_IMAGE:-ghcr.io/adrianweidig/seafile-ragflow-connector:latest}
+  pull_policy: ${CONNECTOR_IMAGE_PULL_POLICY:-missing}
+  restart: unless-stopped
+  environment: *search-env
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  volumes:
+    - type: bind
+      source: ${CONNECTOR_CERTS_HOST_DIR:-./certs}
+      target: /certs
+      read_only: true
+  networks:
+    - connector-net
+  healthcheck:
+    test:
+      - CMD-SHELL
+      - >-
+        python -c "import os, urllib.request;
+        urllib.request.urlopen('http://127.0.0.1:%s/health' %
+        os.getenv('SEARCH_SERVICE_PORT', '8090'), timeout=5).read()"
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 20s
+
 services:
   # Persistenter Connector-State. Diese Dienste können durch DATABASE_URL und
   # REDIS_URL ersetzt werden, bleiben aber als robuste Standardeinstellung im
@@ -304,6 +377,15 @@ services:
         condition: service_healthy
       connector-redis:
         condition: service_healthy
+
+  connector-search:
+    <<: *search-common
+    command: ["search-server"]
+    ports:
+      - "${SEARCH_SERVICE_PUBLISHED_PORT:-127.0.0.1:18090}:${SEARCH_SERVICE_PORT:-8090}"
+    depends_on:
+      connector-controller:
+        condition: service_started
 
 volumes:
   # Benannte Volumes schuetzen State/Caches vor Container-Recreates.

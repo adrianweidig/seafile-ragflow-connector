@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hmac
+import ipaddress
 import json
 import threading
 import time
@@ -43,6 +44,12 @@ from seafile_ragflow_connector.openwebui.sources import (
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.persistence.models.openwebui import OpenWebUIDatasetMapping
+from seafile_ragflow_connector.persistence.models.search import SearchProfile
+from seafile_ragflow_connector.security.access_control import (
+    AccessControlService,
+    AuthzResource,
+    UserIdentity,
+)
 from seafile_ragflow_connector.sync.discovery import normalize_library, should_skip_library
 from seafile_ragflow_connector.utils.redaction import redact_mapping
 
@@ -60,6 +67,10 @@ DASHBOARD_CONTENT_SECURITY_POLICY = (
 
 
 class DashboardBindError(RuntimeError):
+    pass
+
+
+class AuthzDeniedError(PermissionError):
     pass
 
 
@@ -121,9 +132,22 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             try:
+                if parsed.path == "/api/authz/profiles":
+                    payload, status = _handle_authz_profiles(
+                        context,
+                        self.headers.get("Authorization"),
+                        self.client_address[0],
+                        self.headers.get("X-Authz-Username"),
+                        self.headers.get("X-Authz-Email"),
+                    )
+                    self._send_json(payload, status=status)
+                    return
                 if parsed.path == "/api/openwebui/sources/preview":
                     params = parse_qs(parsed.query)
                     self._send_html(_preview_html(context.settings, _one(params, "token")))
+                    return
+                if not context.settings.connector_dashboard_enabled:
+                    self._send_json({"error": "dashboard disabled"}, status=HTTPStatus.NOT_FOUND)
                     return
                 if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
                     self._send_auth_required()
@@ -244,6 +268,24 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             try:
+                if parsed.path == "/api/authz/check":
+                    payload, status = _handle_authz_check(
+                        context,
+                        self._json_body(),
+                        self.headers.get("Authorization"),
+                        self.client_address[0],
+                    )
+                    self._send_json(payload, status=status)
+                    return
+                if parsed.path == "/api/authz/filter-profiles":
+                    payload, status = _handle_authz_filter_profiles(
+                        context,
+                        self._json_body(),
+                        self.headers.get("Authorization"),
+                        self.client_address[0],
+                    )
+                    self._send_json(payload, status=status)
+                    return
                 if parsed.path == "/api/openwebui/proxy/query":
                     self._send_json(_handle_openwebui_query(context, self._json_body(), self.headers.get("Authorization")))
                     return
@@ -251,6 +293,9 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                     self._send_json(_handle_openwebui_chat(context, self._json_body(), self.headers.get("Authorization")))
                     return
                 if parsed.path == "/api/workflow/run":
+                    if not context.settings.connector_dashboard_enabled:
+                        self._send_json({"error": "dashboard disabled"}, status=HTTPStatus.NOT_FOUND)
+                        return
                     if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
                         self._send_auth_required()
                         return
@@ -258,18 +303,29 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                     self._send_json(payload, status=status)
                     return
                 if parsed.path == "/api/jobs/dead/cleanup":
+                    if not context.settings.connector_dashboard_enabled:
+                        self._send_json({"error": "dashboard disabled"}, status=HTTPStatus.NOT_FOUND)
+                        return
                     if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
                         self._send_auth_required()
                         return
                     self._send_json(_handle_dead_jobs_cleanup(context))
                     return
                 if parsed.path == "/api/openwebui/artifacts/delete":
+                    if not context.settings.connector_dashboard_enabled:
+                        self._send_json({"error": "dashboard disabled"}, status=HTTPStatus.NOT_FOUND)
+                        return
                     if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
                         self._send_auth_required()
                         return
                     self._send_json(_handle_openwebui_artifact_delete(context, self._json_body()))
                     return
                 self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+            except AuthzDeniedError:
+                self._send_json(
+                    {"error": "forbidden", "message": "Kein Zugriff auf diese Bibliothek."},
+                    status=HTTPStatus.FORBIDDEN,
+                )
             except PermissionError:
                 self._send_json({"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
             except ValueError as exc:
@@ -401,6 +457,184 @@ def _parse_basic_auth(authorization: str | None) -> tuple[str | None, str | None
     if not separator:
         return None, None
     return username, password
+
+
+def _handle_authz_check(
+    context: DashboardContext,
+    payload: dict[str, Any],
+    authorization: str | None,
+    client_host: str,
+) -> tuple[dict[str, Any], HTTPStatus]:
+    if not _authz_request_ok(context.settings, authorization, client_host):
+        return {"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED
+    service = _access_control_service(context)
+    if service is None:
+        return {"error": "authz unavailable"}, HTTPStatus.SERVICE_UNAVAILABLE
+    user = _user_identity_from_payload(payload.get("user"))
+    resource = _resource_from_payload(payload.get("resource"))
+    operation = str(payload.get("operation") or "search")
+    decision = service.check_access(user, resource, operation)
+    _log_authz_decision(user, resource, operation, decision.to_payload())
+    return decision.to_payload(), HTTPStatus.OK
+
+
+def _handle_authz_filter_profiles(
+    context: DashboardContext,
+    payload: dict[str, Any],
+    authorization: str | None,
+    client_host: str,
+) -> tuple[dict[str, Any], HTTPStatus]:
+    if not _authz_request_ok(context.settings, authorization, client_host):
+        return {"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED
+    service = _access_control_service(context)
+    if service is None:
+        return {"error": "authz unavailable"}, HTTPStatus.SERVICE_UNAVAILABLE
+    user = _user_identity_from_payload(payload.get("user"))
+    profile_ids = _profile_ids_from_payload(payload.get("profile_ids"))
+    profiles, denied = service.filter_profiles_for_user(user, profile_ids)
+    allowed = []
+    for profile in profiles:
+        decision = service.check_access(
+            user,
+            AuthzResource(repo_id=profile.repo_id, ragflow_dataset_id=profile.ragflow_dataset_id),
+            "search",
+        )
+        allowed.append(
+            {
+                "profile_id": profile.repo_id,
+                "repo_id": profile.repo_id,
+                "ragflow_dataset_id": profile.ragflow_dataset_id,
+                "permission": decision.permission,
+            }
+        )
+    return {"allowed": allowed, "denied": denied}, HTTPStatus.OK
+
+
+def _handle_authz_profiles(
+    context: DashboardContext,
+    authorization: str | None,
+    client_host: str,
+    username: str | None,
+    email: str | None,
+) -> tuple[dict[str, Any], HTTPStatus]:
+    if not _authz_request_ok(context.settings, authorization, client_host):
+        return {"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED
+    service = _access_control_service(context)
+    if service is None:
+        return {"error": "authz unavailable"}, HTTPStatus.SERVICE_UNAVAILABLE
+    user = UserIdentity(username=username, email=email)
+    profiles, denied = service.filter_profiles_for_user(user, None)
+    items: list[dict[str, Any]] = []
+    for profile in profiles:
+        decision = service.check_access(
+            user,
+            AuthzResource(repo_id=profile.repo_id, ragflow_dataset_id=profile.ragflow_dataset_id),
+            "search",
+        )
+        items.append(_search_profile_payload(profile, permission=decision.permission))
+    return {"profiles": items, "denied_count": len(denied)}, HTTPStatus.OK
+
+
+def _access_control_service(context: DashboardContext) -> AccessControlService | None:
+    if context.store is None:
+        return None
+    return AccessControlService.from_settings(
+        session_factory=context.store.session_factory,
+        settings=context.settings,
+    )
+
+
+def _authz_request_ok(settings: Settings, authorization: str | None, client_host: str) -> bool:
+    if not settings.authz_api_enabled:
+        return False
+    if not _bearer_matches(authorization, settings.authz_api_shared_secret):
+        return False
+    networks = settings.authz_api_allow_networks
+    if not networks:
+        return True
+    try:
+        address = ipaddress.ip_address(client_host)
+    except ValueError:
+        return False
+    for raw_network in networks:
+        try:
+            network = ipaddress.ip_network(raw_network, strict=False)
+        except ValueError:
+            continue
+        if address in network:
+            return True
+    return False
+
+
+def _bearer_matches(authorization: str | None, secret: str | None) -> bool:
+    if not authorization or not secret:
+        return False
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return False
+    return hmac.compare_digest(token.strip(), secret)
+
+
+def _user_identity_from_payload(value: Any) -> UserIdentity:
+    if not isinstance(value, dict):
+        return UserIdentity(username=None, email=None)
+    username = value.get("username") or value.get("name") or value.get("id")
+    email = value.get("email")
+    return UserIdentity(
+        username=str(username) if username not in (None, "") else None,
+        email=str(email) if email not in (None, "") else None,
+    )
+
+
+def _resource_from_payload(value: Any) -> AuthzResource:
+    if not isinstance(value, dict):
+        return AuthzResource(repo_id=None, ragflow_dataset_id=None)
+    repo_id = value.get("repo_id")
+    dataset_id = value.get("ragflow_dataset_id") or value.get("dataset_id")
+    return AuthzResource(
+        repo_id=str(repo_id) if repo_id not in (None, "") else None,
+        ragflow_dataset_id=str(dataset_id) if dataset_id not in (None, "") else None,
+    )
+
+
+def _profile_ids_from_payload(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError("profile_ids must be a list")
+    return [str(item) for item in value if item not in (None, "")]
+
+
+def _search_profile_payload(profile: SearchProfile, *, permission: str | None = None) -> dict[str, Any]:
+    payload = {
+        "id": profile.repo_id,
+        "repo_id": profile.repo_id,
+        "display_name": profile.display_name,
+        "kind": profile.kind,
+        "ragflow_dataset_id": profile.ragflow_dataset_id,
+        "status": profile.status,
+    }
+    if permission:
+        payload["permission"] = permission
+    return payload
+
+
+def _log_authz_decision(
+    user: UserIdentity,
+    resource: AuthzResource,
+    operation: str,
+    decision: dict[str, Any],
+) -> None:
+    structlog.get_logger(__name__).info(
+        "authz.decision",
+        username=user.username,
+        email_present=bool(user.email),
+        repo_id=decision.get("repo_id") or resource.repo_id,
+        ragflow_dataset_id=decision.get("ragflow_dataset_id") or resource.ragflow_dataset_id,
+        operation=operation,
+        decision=decision.get("decision"),
+        reason=decision.get("reason"),
+    )
 
 
 def _one(params: dict[str, list[str]], key: str) -> str | None:
@@ -905,6 +1139,7 @@ def _handle_openwebui_query(
     question = _required_text(payload, "question")
     top_k = _bounded_top_k(payload.get("top_k"))
     mapping = _load_mapping(context.store, dataset_id=dataset_id, tool_id=artifact_id)
+    _require_openwebui_dataset_access(context, payload, mapping, dataset_id)
     ragflow = RAGFlowClient(
         context.settings.ragflow_internal_url or context.settings.ragflow_base_url,
         context.settings.ragflow_api_key,
@@ -959,6 +1194,7 @@ def _handle_openwebui_chat(
         chat_id=chat_id,
         pipe_id=artifact_id,
     )
+    _require_openwebui_dataset_access(context, payload, mapping, dataset_id)
     ragflow = RAGFlowClient(
         context.settings.ragflow_internal_url or context.settings.ragflow_base_url,
         context.settings.ragflow_api_key,
@@ -1070,6 +1306,35 @@ def _handle_openwebui_chat(
         "citations_emitted": False,
         "diagnostics": diagnostics,
     }
+
+
+def _require_openwebui_dataset_access(
+    context: DashboardContext,
+    payload: dict[str, Any],
+    mapping: OpenWebUIDatasetMapping,
+    dataset_id: str,
+) -> None:
+    if not context.settings.openwebui_authz_enabled:
+        return
+    service = _access_control_service(context)
+    if service is None:
+        if context.settings.openwebui_authz_fail_closed:
+            raise AuthzDeniedError("authz unavailable")
+        return
+    user = _user_identity_from_payload(payload.get("user"))
+    decision = service.check_access(
+        user,
+        AuthzResource(repo_id=mapping.repo_id, ragflow_dataset_id=dataset_id),
+        "search",
+    )
+    _log_authz_decision(
+        user,
+        AuthzResource(repo_id=mapping.repo_id, ragflow_dataset_id=dataset_id),
+        "search",
+        decision.to_payload(),
+    )
+    if decision.decision == "deny":
+        raise AuthzDeniedError(decision.reason)
 
 
 def _proxy_error_response(
