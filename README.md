@@ -35,6 +35,11 @@ Optional erzeugt der Connector OpenWebUI-Chats, Tools und Pipes für die
 Datasets. OpenWebUI spricht dabei über den Connector-Proxy, sodass keine
 RAGFlow-Admin-Secrets im Function-Code liegen.
 
+Zusätzlich kann ein separater Search-Service als nutzernahe Wissenssuche
+betrieben werden. Search-Service und OpenWebUI-Pipe bekommen keine
+Seafile-Admin-Tokens; beide fragen vor RAGFlow-Abfragen die zentrale
+Autorisierungs-API des Connector-Cores.
+
 ## Quick Links
 
 | Ziel | Einstieg |
@@ -43,6 +48,8 @@ RAGFlow-Admin-Secrets im Function-Code liegen.
 | Schnellstart | [Docker Compose](#schnellstart-mit-docker-compose) oder [Portainer](#portainer-start) |
 | Admin-Erststart | [Checkliste für den ersten produktionsnahen Start](docs/admin-first-start-checklist.md) |
 | Konfiguration | [`connector.env.example`](connector.env.example), [Environment-Referenz](docs/environment.md) |
+| Security und ACL | [Sicherheitsmodell](docs/security-model.md), [Access-Control](docs/access-control.md), [OpenWebUI-ACL](docs/openwebui-acl.md) |
+| Wissenssuche | [Search-Service](docs/search-service.md) |
 | Betrieb | [Operations-Handbuch](docs/operations.md) |
 | Architektur | [Architektur](docs/architecture.md) |
 | Internationalisierung | [Sprach- und Unicode-Modell](docs/i18n.md), [English docs](docs/en/index.md) |
@@ -77,6 +84,7 @@ browserfreundliche Ableitung derselben Aufnahme.
 | Delta und Delete | Änderungen, entfernte Dateien und gelöschte Libraries werden nachvollziehbar in RAGFlow und optional OpenWebUI propagiert. |
 | Repair statt Fragilität | Extern gelöschte RAGFlow-Datasets, Dokumente, Chats, Tools oder Pipes werden aus State und Seafile wieder aufgebaut. |
 | OpenWebUI | Datasets können als Custom Models erscheinen; Tool und Pipe nutzen einen Connector-Proxy statt eingebetteter RAGFlow-Secrets. |
+| ACL-aware Search | Separater Search-Service mit Trusted-Header-Auth, SearchProfiles und zentraler Authz-Prüfung vor jeder RAGFlow-Abfrage. |
 | Betrieb | PostgreSQL-State, Redis-Jobs, Dashboard, Health, Metriken, Excel-Audit-Export, TLS/CA-Bundles, GHCR, Portainer, Compose und Swarm. |
 
 ## Architektur
@@ -128,6 +136,7 @@ Mehr Details stehen in [docs/architecture.md](docs/architecture.md).
 - Der Connector löscht nur eigene, eindeutig zuordenbare Zielartefakte.
 - RAGFlow-Dataset-Einstellungen bleiben nach der Erstellung live; das Template wird nur für neue Datasets genutzt.
 - OpenWebUI-Funktionen bekommen keine RAGFlow-Admin-Secrets, sondern sprechen mit dem Connector-Proxy.
+- Search-Service und OpenWebUI-Pipe bekommen keine Seafile-Admin-Tokens; RAGFlow wird nur nach zentralem `allow` abgefragt.
 - Der Runtime-Betrieb ist offline-fähig: keine Telemetrie und keine externen Service-Abhängigkeiten außerhalb der konfigurierten Zielsysteme.
 - Das Dashboard startet nur explizit ausgewählte Prüfläufe und kann
   connector-eigene Pipe-, Chat- oder Dataset-Artefakte löschen; Seafile-

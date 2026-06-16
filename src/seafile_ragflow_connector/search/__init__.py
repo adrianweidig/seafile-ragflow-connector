@@ -1,0 +1,1 @@
+"""Nutzernahe Search-Service-Komponenten."""

@@ -9,7 +9,7 @@ from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.i18n import SUPPORTED_LANGUAGES, Localizer
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "24"
+ARTIFACT_VERSION = "25"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 _PIPE_TEMPLATE_PACKAGE = "seafile_ragflow_connector.openwebui.templates.pipe"
 _PIPE_TEMPLATE_FRAGMENTS = (
@@ -211,7 +211,7 @@ def _tool_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.4.2
         owner: seafile-ragflow-connector
-        artifact_version: 24
+        artifact_version: 25
         """
 
         import httpx
@@ -241,7 +241,12 @@ def _tool_content() -> str:
             def __init__(self):
                 self.valves = self.Valves()
 
-            async def query_dataset(self, question: str, __event_emitter__=None) -> str:
+            async def query_dataset(
+                self,
+                question: str,
+                __event_emitter__=None,
+                __user__=None,
+            ) -> str:
                 """Query the assigned RAGFlow dataset through the connector proxy."""
                 if __event_emitter__:
                     await __event_emitter__(
@@ -261,6 +266,7 @@ def _tool_content() -> str:
                     "dataset_id": self.valves.DATASET_ID,
                     "question": question,
                     "top_k": self.valves.TOP_K,
+                    "user": _user_payload(__user__),
                 }
                 headers = {
                     "Authorization": f"Bearer {self.valves.CONNECTOR_PROXY_SHARED_SECRET}",
@@ -543,6 +549,19 @@ def _artifact_source_helpers() -> str:
             if isinstance(exc, ValueError):
                 return "TLS_CONFIGURATION_ERROR"
             return exc.__class__.__name__.upper()
+
+
+        def _user_payload(user):
+            if not isinstance(user, dict):
+                return {}
+            values = {
+                "id": user.get("id"),
+                "username": user.get("username") or user.get("name") or user.get("id"),
+                "email": user.get("email"),
+                "name": user.get("name"),
+                "role": user.get("role"),
+            }
+            return {key: value for key, value in values.items() if value not in (None, "")}
 
 
         class SourceHit(BaseModel):

@@ -86,6 +86,7 @@ def _build_payload(valves: Pipe.Valves, body: dict, user: Optional[dict]) -> dic
         user_payload = _drop_empty(
             {
                 "id": user.get("id"),
+                "username": user.get("username") or user.get("name") or user.get("id"),
                 "email": user.get("email"),
                 "name": user.get("name"),
                 "role": user.get("role"),
