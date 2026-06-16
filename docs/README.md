@@ -6,6 +6,14 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
 
 - `architecture.md` erklärt Komponenten, Datenflüsse, Delete-/Repair-Regeln und
   die optionale OpenWebUI-Integration.
+- `security-model.md` beschreibt die getrennten Rollen von Connector-Core,
+  Search-Service und OpenWebUI-Pipe sowie das Fail-Closed-Modell.
+- `access-control.md` beschreibt ACL-Snapshot, SearchProfiles und die interne
+  Authz-API.
+- `search-service.md` dokumentiert die nutzernahe Wissenssuche als separaten
+  Container.
+- `openwebui-acl.md` erklärt die zentrale Autorisierung für OpenWebUI-Pipes
+  vor RAGFlow-Abfragen.
 - `configuration.md` beschreibt Environment-Variablen, Delete-Policy,
   Dashboard und OpenWebUI-Modi.
 - `environment.md` trennt minimale Pflichtvariablen von optionalen und

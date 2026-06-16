@@ -10,6 +10,11 @@ from seafile_ragflow_connector.persistence.models.openwebui import (
     OpenWebUIDatasetMapping,
     OpenWebUISyncState,
 )
+from seafile_ragflow_connector.persistence.models.search import (
+    LibraryACLEffectiveUser,
+    LibraryACLSubject,
+    SearchProfile,
+)
 from seafile_ragflow_connector.persistence.models.template import (
     DatasetSettingsSnapshot,
     TemplateState,
@@ -21,9 +26,12 @@ __all__ = [
     "DashboardSyncRun",
     "DatasetSettingsSnapshot",
     "File",
+    "LibraryACLEffectiveUser",
+    "LibraryACLSubject",
     "Library",
     "OpenWebUIDatasetMapping",
     "OpenWebUISyncState",
+    "SearchProfile",
     "SyncJob",
     "TemplateState",
 ]
