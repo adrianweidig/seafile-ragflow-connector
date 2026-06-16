@@ -10,6 +10,26 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.1 - 2026-06-16
+
+### Added
+
+- ACL-Snapshot und zentrale Authz-API für nutzerbezogene RAGFlow-Abfragen
+  ergänzt. Der Connector-Core spiegelt Seafile-Bibliotheksrechte, expandiert
+  Gruppen-Shares und entscheidet fail-closed für Search-Service und
+  OpenWebUI-Pipe.
+- Separater `connector search-server` mit nutzerfreundlicher
+  Wissenssuche, Trusted-Header-Auth, SearchProfiles, Retrieval-Suche,
+  Quellen-/Vorschau-Aktionen und Portainer-/Compose-/Swarm-Artefakten.
+
+### Changed
+
+- OpenWebUI-Proxy-Abfragen prüfen vor RAGFlow-Aufrufen dieselbe zentrale
+  ACL-Entscheidung wie der Search-Service. Die OpenWebUI-Artefaktversion wurde
+  dafür auf 25 erhöht.
+- Runtime-Entwicklungsabhängigkeiten aus Dependabot aktualisiert:
+  `cryptography` 49.0.0, `ruff` 0.15.17 und `pytest` 9.1.0.
+
 ## 2.0 - 2026-06-04
 
 ### Added

@@ -10,6 +10,25 @@ retroactively.
 
 No entries.
 
+## 2.1 - 2026-06-16
+
+### Added
+
+- Added ACL snapshots and a central Authz API for user-scoped RAGFlow queries.
+  The connector core mirrors Seafile library permissions, expands group shares,
+  and makes fail-closed decisions for the Search service and OpenWebUI pipe.
+- Added a separate `connector search-server` with an end-user knowledge search
+  UI, trusted-header auth, SearchProfiles, retrieval search, source/preview
+  actions, and Portainer/Compose/Swarm artifacts.
+
+### Changed
+
+- OpenWebUI proxy requests now check the same central ACL decision as the
+  Search service before RAGFlow is queried. The OpenWebUI artifact version was
+  bumped to 25 for this change.
+- Updated development/runtime dependency pins from Dependabot:
+  `cryptography` 49.0.0, `ruff` 0.15.17, and `pytest` 9.1.0.
+
 ## 2.0 - 2026-06-04
 
 ### Added
