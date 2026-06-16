@@ -35,6 +35,10 @@ try:
     from seafile_ragflow_connector.persistence.models.job import SyncJob
     from seafile_ragflow_connector.persistence.models.library import Library
     from seafile_ragflow_connector.persistence.models.openwebui import OpenWebUIDatasetMapping
+    from seafile_ragflow_connector.persistence.models.search import (
+        LibraryACLEffectiveUser,
+        SearchProfile,
+    )
 except ModuleNotFoundError as exc:
     if exc.name not in {"pydantic", "sqlalchemy"}:
         raise
@@ -54,6 +58,7 @@ def _settings(port: int) -> Settings:
         connector_dashboard_host="127.0.0.1",
         connector_dashboard_port=1,
         openwebui_proxy_shared_secret="proxy-secret",
+        openwebui_authz_enabled=False,
     )
     settings.connector_dashboard_port = port
     return settings
@@ -181,6 +186,79 @@ class DashboardServerTests(unittest.TestCase):
             handle.stop()
 
         self.assertIn("state", status)
+
+    def test_authz_check_route_allows_and_denies_without_dashboard_enabled(self) -> None:
+        store = _store(self)
+        now = utcnow()
+        with store.session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Anleitungen",
+                    name_slug="anleitungen",
+                    status="active",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Anleitungen",
+                )
+            )
+            session.add(
+                SearchProfile(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Anleitungen",
+                    display_name="Anleitungen",
+                    kind="documents",
+                    enabled=True,
+                    status="ready",
+                    last_acl_sync_at=now,
+                )
+            )
+            session.add(
+                LibraryACLEffectiveUser(
+                    repo_id="repo-1",
+                    user_email="olaf@example.local",
+                    permission="rw",
+                    sources=["user_share"],
+                    last_seen_at=now,
+                )
+            )
+            session.commit()
+        settings = _settings(0)
+        settings.connector_dashboard_enabled = False
+        settings.authz_api_enabled = True
+        settings.authz_api_shared_secret = "authz-secret"
+        handle = start_dashboard_server(
+            DashboardContext(store=store, settings=settings, started_at=utcnow())
+        )
+        port = handle.server.server_address[1]
+        try:
+            allowed = _post_json_bearer(
+                port,
+                "/api/authz/check",
+                {
+                    "user": {"username": "olaf", "email": "OLAF@EXAMPLE.LOCAL"},
+                    "resource": {"ragflow_dataset_id": "dataset-1"},
+                    "operation": "search",
+                },
+                "authz-secret",
+            )
+            denied = _post_json_bearer(
+                port,
+                "/api/authz/check",
+                {
+                    "user": {"username": "alfred", "email": "alfred@example.local"},
+                    "resource": {"repo_id": "repo-1"},
+                    "operation": "search",
+                },
+                "authz-secret",
+            )
+        finally:
+            handle.stop()
+
+        self.assertEqual(allowed["decision"], "allow")
+        self.assertEqual(allowed["permission"], "rw")
+        self.assertEqual(denied["decision"], "deny")
+        self.assertEqual(denied["reason"], "user_not_in_library_acl")
 
     def test_workflow_libraries_lists_api_visible_libraries_with_control_state(self) -> None:
         store = _store(self)
@@ -352,7 +430,7 @@ class DashboardServerTests(unittest.TestCase):
                 "meta": {
                     "manifest": {
                         "owner": "seafile-ragflow-connector",
-                        "artifact_version": "24",
+                        "artifact_version": "25",
                     }
                 },
             }
@@ -403,7 +481,7 @@ class DashboardServerTests(unittest.TestCase):
             "meta": {
                 "manifest": {
                     "owner": "seafile-ragflow-connector",
-                    "artifact_version": "24",
+                    "artifact_version": "25",
                 }
             },
         }
@@ -934,6 +1012,137 @@ class DashboardServerTests(unittest.TestCase):
         self.assertNotIn("<table", result["answer"])
         self.assertNotIn("<td>", result["answer"])
 
+    def test_openwebui_chat_proxy_denies_before_ragflow_when_acl_blocks_user(self) -> None:
+        store = _store(self)
+        now = utcnow()
+        with store.session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    status="active",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                )
+            )
+            session.add(
+                SearchProfile(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                    display_name="Demo",
+                    kind="library",
+                    enabled=True,
+                    status="ready",
+                    last_acl_sync_at=now,
+                )
+            )
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                    ragflow_chat_id="chat-1",
+                    openwebui_pipe_id="pipe-1",
+                )
+            )
+            session.commit()
+
+        settings = _settings(0)
+        settings.openwebui_authz_enabled = True
+        original_client = dashboard_server.RAGFlowClient
+        dashboard_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        _FakeRAGFlowClient.retrieve_calls = 0
+        _FakeRAGFlowClient.last_model = None
+        try:
+            with self.assertRaises(dashboard_server.AuthzDeniedError):
+                _handle_openwebui_chat(
+                    DashboardContext(store=store, settings=settings, started_at=utcnow()),
+                    {
+                        "artifact_id": "pipe-1",
+                        "dataset_id": "dataset-1",
+                        "chat_id": "chat-1",
+                        "messages": [{"role": "user", "content": "Frage"}],
+                        "user": {"username": "alfred", "email": "alfred@example.local"},
+                    },
+                    "Bearer proxy-secret",
+                )
+        finally:
+            dashboard_server.RAGFlowClient = original_client  # type: ignore[assignment]
+
+        self.assertEqual(_FakeRAGFlowClient.retrieve_calls, 0)
+        self.assertIsNone(_FakeRAGFlowClient.last_model)
+
+    def test_openwebui_chat_proxy_allows_authorized_user_before_ragflow(self) -> None:
+        store = _store(self)
+        now = utcnow()
+        with store.session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    status="active",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                )
+            )
+            session.add(
+                SearchProfile(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                    display_name="Demo",
+                    kind="library",
+                    enabled=True,
+                    status="ready",
+                    last_acl_sync_at=now,
+                )
+            )
+            session.add(
+                LibraryACLEffectiveUser(
+                    repo_id="repo-1",
+                    user_email="olaf@example.local",
+                    permission="rw",
+                    sources=["user_share"],
+                    last_seen_at=now,
+                )
+            )
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Dataset",
+                    ragflow_chat_id="chat-1",
+                    openwebui_pipe_id="pipe-1",
+                )
+            )
+            session.commit()
+
+        settings = _settings(0)
+        settings.openwebui_authz_enabled = True
+        original_client = dashboard_server.RAGFlowClient
+        dashboard_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        _FakeRAGFlowClient.retrieve_calls = 0
+        try:
+            result = _handle_openwebui_chat(
+                DashboardContext(store=store, settings=settings, started_at=utcnow()),
+                {
+                    "artifact_id": "pipe-1",
+                    "dataset_id": "dataset-1",
+                    "chat_id": "chat-1",
+                    "messages": [{"role": "user", "content": "Frage"}],
+                    "user": {"username": "olaf", "email": "OLAF@EXAMPLE.LOCAL"},
+                },
+                "Bearer proxy-secret",
+            )
+        finally:
+            dashboard_server.RAGFlowClient = original_client  # type: ignore[assignment]
+
+        self.assertIn("RAGFlow liefert eine echte Antwort", result["answer"])
+        self.assertEqual(_FakeRAGFlowClient.retrieve_calls, 1)
+
     def test_openwebui_preview_html_renders_source_card_and_original_link(self) -> None:
         settings = _settings(0)
         token = sign_preview_payload(
@@ -1284,6 +1493,24 @@ def _post_json(
         raw_credentials = f"{username}:{password}".encode()
         token = base64.b64encode(raw_credentials).decode("ascii")
         request.add_header("Authorization", f"Basic {token}")
+    with urlopen(request, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _post_json_bearer(
+    port: int,
+    path: str,
+    payload: dict[str, object],
+    token: str,
+) -> dict[str, object]:
+    request = Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+    )
+    request.add_header("Content-Type", "application/json")
+    request.add_header("Accept", "application/json")
+    request.add_header("Authorization", f"Bearer {token}")
     with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
 

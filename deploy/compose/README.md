@@ -57,6 +57,7 @@ Mit `CONNECTOR_IMAGE_PULL_POLICY=never`, `POSTGRES_IMAGE_PULL_POLICY=never` und
 | Externe Dienste über Host/LAN | `external-services.compose.yml` | `../../connector.env.example` | Seafile, RAGFlow und optional OpenWebUI laufen außerhalb des Stacks, z. B. über Reverse Proxy, LAN-IP oder veröffentlichte Host-Ports. |
 | Bestehendes Docker-Netz | `shared-network.compose.yml` | `../../connector.env.example` | Connector, Seafile, RAGFlow und optional OpenWebUI hängen im selben Docker-Netz und sprechen sich über Service-Namen an. |
 | OpenWebUI zusätzlich anbinden | `openwebui.compose.yml` | `../../connector.env.example` | Wie Shared-Network, zusätzlich mit Dashboard/Proxy und aktivierter OpenWebUI-Synchronisation. |
+| Nutzernahe Search-Webseite | `search.compose.yml` als Overlay | `../../connector.env.example` | Ergänzt einen separaten Search-Service ohne Seafile-Admin-Token; vor RAGFlow wird die Authz-API des Cores gefragt. |
 | Unternehmensnetz mit interner CA | `enterprise-ca.compose.yml` als Overlay | per `scripts/configure-enterprise-compose.sh` | Mountet die Unternehmens-Root-CA/Chain read-only, wenn ein CA-Pfad bekannt ist, und setzt alle Connector-TLS-Strecken auf verifizierte HTTPS-Kommunikation. |
 | Manuelles TLS-Beispiel | `docker-compose.tls-example.yml` als Overlay | `../../connector.env.example` | Schlankes Referenz-Overlay für selbst konfigurierte CA-Mounts. Für neue Enterprise-Installationen ist `enterprise-ca.compose.yml` klarer. |
 
@@ -87,6 +88,16 @@ docker compose \
 docker compose \
   --env-file connector.env \
   -f deploy/compose/openwebui.compose.yml \
+  up -d
+```
+
+Search-Service zusätzlich starten:
+
+```bash
+docker compose \
+  --env-file connector.env \
+  -f deploy/compose/shared-network.compose.yml \
+  -f deploy/compose/search.compose.yml \
   up -d
 ```
 

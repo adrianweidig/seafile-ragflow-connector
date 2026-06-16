@@ -14,6 +14,12 @@ COMPOSE_FILES = (
     Path("deploy/swarm/docker-stack.yml"),
 )
 
+SEARCH_COMPOSE_FILES = (
+    Path("deploy/compose/search.compose.yml"),
+    Path("deploy/portainer/docker-compose.yml"),
+    Path("deploy/swarm/docker-stack.yml"),
+)
+
 HOST_ONLY_ENV_KEYS = {
     "COMPOSE_PROJECT_NAME",
     "CONNECTOR_CERTS_HOST_DIR",
@@ -29,11 +35,18 @@ HOST_ONLY_ENV_KEYS = {
     "POSTGRES_IMAGE_PULL_POLICY",
     "REDIS_IMAGE",
     "REDIS_IMAGE_PULL_POLICY",
+    "SEARCH_SERVICE_PUBLISHED_PORT",
 }
 
 
 def main() -> int:
-    expected = _connector_env_example_keys() - HOST_ONLY_ENV_KEYS
+    env_keys = _connector_env_example_keys()
+    search_service_keys = {
+        key for key in env_keys
+        if key.startswith("SEARCH_") and not key.startswith("SEARCH_ACL_")
+    }
+    expected = env_keys - HOST_ONLY_ENV_KEYS - search_service_keys
+    expected_search = search_service_keys - HOST_ONLY_ENV_KEYS
     failed = False
     for compose_file in COMPOSE_FILES:
         actual = _compose_connector_env_keys(compose_file)
@@ -46,6 +59,13 @@ def main() -> int:
                 print("  missing: " + ", ".join(missing), file=sys.stderr)
             if unknown:
                 print("  unknown: " + ", ".join(unknown), file=sys.stderr)
+    for compose_file in SEARCH_COMPOSE_FILES:
+        actual = _compose_search_env_keys(compose_file, expected_search)
+        missing = sorted(expected_search - actual)
+        if missing:
+            failed = True
+            print(f"{compose_file}: search environment drift detected", file=sys.stderr)
+            print("  missing: " + ", ".join(missing), file=sys.stderr)
     if failed:
         return 1
     print("Deployment connector environment blocks are aligned.")
@@ -75,6 +95,17 @@ def _compose_connector_env_keys(path: Path) -> set[str]:
     return {
         match.group(1)
         for match in re.finditer(r"^  ([A-Z][A-Z0-9_]*):", block, flags=re.MULTILINE)
+    }
+
+
+def _compose_search_env_keys(path: Path, expected_search: set[str]) -> set[str]:
+    text = (ROOT / path).read_text(encoding="utf-8")
+    if "connector-search:" not in text:
+        raise RuntimeError(f"{path}: connector-search service not found")
+    return {
+        match.group(1)
+        for match in re.finditer(r"^\s+([A-Z][A-Z0-9_]*):", text, flags=re.MULTILINE)
+        if match.group(1) in expected_search
     }
 
 

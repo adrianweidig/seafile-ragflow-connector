@@ -35,6 +35,46 @@ Compose-Dateien wird Redis standardmäßig als `connector-redis` bereitgestellt.
 | `CONNECTOR_IMAGE`, `POSTGRES_IMAGE`, `REDIS_IMAGE` | optional | Image-Tags überschreiben, z. B. Offline-Registry. |
 | `CONNECTOR_IMAGE_PULL_POLICY`, `POSTGRES_IMAGE_PULL_POLICY`, `REDIS_IMAGE_PULL_POLICY` | optional | Pull-Verhalten steuern. |
 
+## Authz-API und ACL-Snapshot
+
+Die Authz-API läuft im Connector-Core. Sie wird von Search-Service und
+OpenWebUI-Pipe vor RAGFlow-Abfragen genutzt.
+
+| Variable | Pflicht | Zweck |
+| --- | --- | --- |
+| `AUTHZ_API_ENABLED` | optional | Aktiviert die interne Authz-API; Default `true`. |
+| `AUTHZ_API_SHARED_SECRET` | ja, wenn Authz genutzt wird | Bearer-Secret für technische Komponenten. |
+| `AUTHZ_API_ALLOW_NETWORKS` | optional | CSV aus CIDR-Netzen, die zusätzlich zum Bearer-Secret zugelassen sind. |
+| `AUTHZ_API_FAIL_CLOSED` | optional | Default `true`; unbekannte oder zu alte ACLs führen zu `deny`. |
+| `AUTHZ_API_MAX_ACL_AGE_SECONDS` | optional | Maximales Alter eines ACL-Snapshots, Default `7200`. |
+| `SEARCH_ACL_SYNC_ENABLED` | optional | Periodischer ACL-Snapshot im Controller, Default `true`. |
+| `SEARCH_ACL_SYNC_INTERVAL_SECONDS` | optional | Snapshot-Intervall, Default `1800`. |
+| `SEARCH_ACL_INCLUDE_SUBFOLDER_PERMISSIONS` | optional | Muss produktiv `false` bleiben; Unterordnerrechte werden nicht ausgewertet. |
+| `SEARCH_ACL_INCLUDE_SHARE_LINKS` | optional | Muss produktiv `false` bleiben; Share-Links erzeugen keine personenbezogene Berechtigung. |
+
+## Search-Service
+
+Der Search-Service ist ein separater Container mit `connector search-server`.
+Er benötigt keinen Seafile-Admin- oder Sync-Token.
+
+| Variable | Pflicht | Zweck |
+| --- | --- | --- |
+| `SEARCH_SERVICE_ENABLED` | optional | Aktiviert den Search-Server; Default `true`. |
+| `SEARCH_SERVICE_HOST`, `SEARCH_SERVICE_PORT` | optional | Bind-Adresse und Container-Port. |
+| `SEARCH_SERVICE_PUBLISHED_PORT` | optional | Host-Portbindung in Compose/Portainer, z. B. `127.0.0.1:18090`. |
+| `SEARCH_AUTH_MODE` | optional | Aktuell `trusted_header`. |
+| `SEARCH_TRUSTED_USERNAME_HEADER` | optional | Header für den Login-/Usernamen. |
+| `SEARCH_TRUSTED_EMAIL_HEADER` | optional | Header für die Nutzer-E-Mail; primärer ACL-Match-Key. |
+| `SEARCH_TRUSTED_DISPLAY_NAME_HEADER` | optional | Header für den Anzeigenamen in der GUI. |
+| `SEARCH_AUTHZ_BASE_URL` | ja | Interne URL zum Connector-Core, z. B. `http://connector-controller:8080`. |
+| `SEARCH_AUTHZ_SHARED_SECRET` | ja | Muss zum Authz-Secret im Core passen. |
+| `SEARCH_RAGFLOW_BASE_URL` | ja | RAGFlow-URL aus Sicht des Search-Containers. |
+| `SEARCH_RAGFLOW_API_KEY` | ja | RAGFlow-API-Key für erlaubte Abfragen. |
+| `SEARCH_RAGFLOW_VERIFY_SSL`, `SEARCH_RAGFLOW_CA_BUNDLE` | optional | TLS-Prüfung und optionales CA-Bundle für Search -> RAGFlow. |
+| `SEARCH_DEFAULT_TOP_K`, `SEARCH_MAX_TOP_K` | optional | Trefferzahl-Defaults und Obergrenze. |
+| `SEARCH_MAX_SELECTED_PROFILES` | optional | Maximale Anzahl gleichzeitig ausgewählter Bibliotheken. |
+| `SEARCH_ENABLE_CHAT_MODE`, `SEARCH_ENABLE_RETRIEVAL_MODE` | optional | UI- und API-Modi einzeln aktivieren. |
+
 ## OpenWebUI-Pflichtwerte
 
 OpenWebUI ist optional. Solange `OPENWEBUI_INTEGRATION_ENABLED=false` oder
@@ -69,6 +109,10 @@ Proxy-Secret und keine Preview-URL.
 | `OPENWEBUI_PIPE_ANSWER_LLM_API_KEY` | optional | Runtime-Secret für den Fallback; nicht in Repository-Dateien speichern. |
 | `OPENWEBUI_SYNC_INTERVAL_SECONDS` | optional | Periodischer OpenWebUI-Sync im Controller. Default `1800` Sekunden, also 30 Minuten. Werte unter 60 Sekunden werden abgelehnt. |
 | `OPENWEBUI_DATASET_ALLOWLIST` | optional | CSV aus Repo-IDs oder Dataset-IDs für stufenweisen Rollout. |
+| `OPENWEBUI_AUTHZ_ENABLED` | optional | Aktiviert die zentrale ACL-Prüfung vor RAGFlow-Abfragen; Default `true`. |
+| `OPENWEBUI_AUTHZ_BASE_URL` | optional | Interne Authz-Basis-URL; fällt auf die Connector-Proxy-Basis-URL zurück. |
+| `OPENWEBUI_AUTHZ_SHARED_SECRET` | optional | Sollte dem `AUTHZ_API_SHARED_SECRET` entsprechen. |
+| `OPENWEBUI_AUTHZ_FAIL_CLOSED` | optional | Default `true`; bei Authz-Fehlern wird RAGFlow nicht abgefragt. |
 
 ## TLS/CA
 
@@ -140,7 +184,7 @@ Die Controller-Automationen `DISCOVERY_INTERVAL_SECONDS` und
 `RECONCILE_INTERVAL_SECONDS` verwenden als sicheren Standard ebenfalls
 `1800` Sekunden. Der aktive Intervall wird beim Start von Controller und
 Reconciler geloggt. Manuelle Läufe sind unabhängig davon über
-`connector sync-once`, `connector check-live` und
+`connector sync-once`, `connector check-live`, `connector authz-sync-once` und
 `connector openwebui-sync-once` möglich.
 
 Für produktive Starts ist die kleinste robuste Konfiguration meistens besser:

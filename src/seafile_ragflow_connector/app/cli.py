@@ -19,8 +19,8 @@ from seafile_ragflow_connector.app.runtime import (
     check_redis,
 )
 from seafile_ragflow_connector.clients import OpenWebUIClient
-from seafile_ragflow_connector.config import get_settings
-from seafile_ragflow_connector.config.settings import Settings
+from seafile_ragflow_connector.config import get_search_service_settings, get_settings
+from seafile_ragflow_connector.config.settings import SearchServiceSettings, Settings
 from seafile_ragflow_connector.dashboard.server import (
     DashboardBindError,
     DashboardContext,
@@ -40,6 +40,8 @@ from seafile_ragflow_connector.jobs.scheduler import PeriodicTask, SimpleSchedul
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 from seafile_ragflow_connector.jobs.worker import WorkerRunner
 from seafile_ragflow_connector.persistence.db import init_database
+from seafile_ragflow_connector.search.server import SearchServiceContext, serve_search_forever
+from seafile_ragflow_connector.security.access_control import ACLSnapshotService
 from seafile_ragflow_connector.sync.target_cleanup import LibrarySourceLike, TargetCleanupService
 
 app = typer.Typer(help=t("cli.app_help"))
@@ -54,6 +56,12 @@ def _bootstrap() -> Settings:
         settings.log_format,
         dashboard_store=build_dashboard_store(settings),
     )
+    return settings
+
+
+def _bootstrap_search() -> SearchServiceSettings:
+    settings = get_search_service_settings()
+    configure_logging(settings.log_level, settings.log_format)
     return settings
 
 
@@ -124,6 +132,9 @@ def sync_once(
         if wait_parse_seconds > 0:
             _wait_for_parse(runtime, wait_parse_seconds)
         payload: dict[str, Any] = dict(summary.__dict__)
+        acl_summary = _sync_acl_snapshot_if_enabled(runtime)
+        if acl_summary is not None:
+            payload["acl_snapshot"] = acl_summary
         openwebui_summary = _sync_openwebui_if_enabled(runtime)
         if openwebui_summary is not None:
             payload["openwebui"] = openwebui_summary
@@ -321,6 +332,7 @@ def controller() -> None:
     dashboard_required = (
         settings.connector_dashboard_enabled
         or settings.openwebui_effective_sync_mode != "disabled"
+        or settings.authz_api_enabled
     )
     if dashboard_required and runtime.dashboard_store is not None:
         try:
@@ -365,6 +377,10 @@ def controller() -> None:
             return
         runtime.openwebui_sync_service.sync_once()
 
+    def acl_snapshot() -> None:
+        summary = _sync_acl_snapshot(runtime)
+        log.info("controller.acl_snapshot.synced", **summary)
+
     if (
         settings.openwebui_sync_on_startup
         and settings.openwebui_effective_sync_mode != "disabled"
@@ -377,6 +393,14 @@ def controller() -> None:
         PeriodicTask("delta", settings.delta_sync_interval_seconds, delta),
         PeriodicTask("template", settings.ragflow_template_refresh_seconds, template),
     ]
+    if settings.search_acl_sync_enabled:
+        tasks.append(
+            PeriodicTask(
+                "acl_snapshot",
+                settings.search_acl_sync_interval_seconds,
+                acl_snapshot,
+            )
+        )
     if settings.openwebui_effective_sync_mode != "disabled":
         tasks.append(PeriodicTask("openwebui", settings.openwebui_sync_interval_seconds, openwebui))
     scheduler = SimpleScheduler(tasks)
@@ -451,11 +475,17 @@ def check_config(
             "connector_dashboard_enabled": settings.connector_dashboard_enabled,
             "connector_dashboard_host": settings.connector_dashboard_host,
             "connector_dashboard_port": settings.connector_dashboard_port,
+            "authz_api_enabled": settings.authz_api_enabled,
+            "authz_api_fail_closed": settings.authz_api_fail_closed,
+            "authz_api_max_acl_age_seconds": settings.authz_api_max_acl_age_seconds,
+            "search_acl_sync_enabled": settings.search_acl_sync_enabled,
+            "search_acl_sync_interval_seconds": settings.search_acl_sync_interval_seconds,
             "openwebui_integration_enabled": settings.openwebui_integration_enabled,
             "openwebui_sync_mode": settings.openwebui_effective_sync_mode,
             "openwebui_base_url": settings.openwebui_base_url,
             "openwebui_create_tools": settings.openwebui_create_tools,
             "openwebui_create_pipes": settings.openwebui_create_pipes,
+            "openwebui_authz_enabled": settings.openwebui_authz_enabled,
         },
         json_output=json_output,
     )
@@ -481,6 +511,34 @@ def dashboard() -> None:
     except DashboardBindError as exc:
         log.error("dashboard.bind_failed", error=str(exc))
         raise typer.Exit(1) from exc
+
+
+@app.command("authz-sync-once")
+def authz_sync_once(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help=t("cli.output_json")),
+    ] = False,
+) -> None:
+    """Seafile-Bibliotheksrechte einmal in den ACL-Snapshot spiegeln."""
+    settings = _bootstrap()
+    runtime = build_runtime(settings)
+    try:
+        _emit_payload(_sync_acl_snapshot(runtime), json_output=json_output)
+    finally:
+        runtime.close()
+
+
+@app.command("search-server")
+def search_server() -> None:
+    """Nutzernahe Such-Webseite als separaten HTTP-Service starten."""
+    settings = _bootstrap_search()
+    log = structlog.get_logger(__name__)
+    if not settings.search_service_enabled:
+        log.info("search_service.disabled")
+        typer.echo("Search-Service ist deaktiviert.")
+        return
+    serve_search_forever(SearchServiceContext(settings=settings, started_at=PROCESS_STARTED_AT))
 
 
 def _enqueue_specs(
@@ -609,6 +667,21 @@ def _sync_openwebui_if_enabled(runtime: Runtime) -> dict[str, Any] | None:
     if not _openwebui_sync_enabled(runtime) or runtime.openwebui_sync_service is None:
         return None
     summary = runtime.openwebui_sync_service.sync_once()
+    return dict(summary.__dict__)
+
+
+def _sync_acl_snapshot_if_enabled(runtime: Runtime) -> dict[str, Any] | None:
+    if not runtime.settings.search_acl_sync_enabled:
+        return None
+    return _sync_acl_snapshot(runtime)
+
+
+def _sync_acl_snapshot(runtime: Runtime) -> dict[str, Any]:
+    summary = ACLSnapshotService(
+        settings=runtime.settings,
+        session_factory=runtime.orchestrator.session_factory,
+        admin_client=runtime.admin_client,
+    ).refresh_once()
     return dict(summary.__dict__)
 
 
