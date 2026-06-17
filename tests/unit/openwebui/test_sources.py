@@ -718,6 +718,30 @@ class OpenWebUISourceTests(unittest.TestCase):
                 self.assertEqual(result.answer, "")
                 self.assertEqual(result.origin, "retrieval_only")
 
+    def test_extract_answer_rejects_backend_error_text(self) -> None:
+        for answer in (
+            "ERROR: Model(@None) not authorized",
+            "**ERROR**: Model(@None) not authorized",
+        ):
+            with self.subTest(answer=answer):
+                result = extract_answer_result(
+                    {
+                        "data": {"answer": answer},
+                        "reference": {
+                            "chunks": [
+                                {
+                                    "document_name": "quelle.md",
+                                    "content": "Ein verwertbarer Quellenchunk.",
+                                }
+                            ]
+                        },
+                    }
+                )
+
+                self.assertEqual(result.answer, "")
+                self.assertEqual(result.origin, "retrieval_only")
+                self.assertTrue(any("backend error" in warning for warning in result.warnings))
+
     def test_extract_references_does_not_duplicate_shared_references(self) -> None:
         reference = {
             "chunks": [

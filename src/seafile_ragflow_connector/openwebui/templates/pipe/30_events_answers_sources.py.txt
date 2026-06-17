@@ -222,6 +222,8 @@ def _answer_rejection_reason(text: str) -> str:
     lower = clean.lower()
     if len(clean) < 2:
         return "empty"
+    if _looks_like_backend_error_answer(clean):
+        return "backend error"
     if clean in {"[]", "{}", "true", "false", "null", "ok", "OK"}:
         return "non-answer scalar"
     if _looks_like_source_markdown_only(text):
@@ -235,6 +237,18 @@ def _answer_rejection_reason(text: str) -> str:
     if _looks_like_short_title(clean):
         return "short title without sentence structure"
     return ""
+
+
+def _looks_like_backend_error_answer(text: str) -> bool:
+    clean = _clean(text)
+    return bool(
+        re.fullmatch(
+            r"\*{0,3}(?:error|fehler|exception)\*{0,3}\s*:\s*.{0,220}"
+            r"\b(?:not\s+authorized|unauthorized|forbidden|permission\s+denied|access\s+denied|api[- ]?key|model\(@none\))\b.*",
+            clean,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _looks_like_filename_or_path(text: str) -> bool:

@@ -286,6 +286,8 @@ def _answer_rejection_reason(text: str) -> str:
     lower = clean.lower()
     if not clean:
         return "empty"
+    if _looks_like_backend_error_answer(clean):
+        return "backend error"
     if re.fullmatch(r"\d+\s+treffer\s+im\s+dokument", lower):
         return "document hit count"
     if _looks_like_filename_or_path(clean):
@@ -295,6 +297,19 @@ def _answer_rejection_reason(text: str) -> str:
     if len(clean) <= 64 and not re.search(r"[.!?;:]", clean) and len(clean.split()) <= 5:
         return "short title"
     return ""
+
+
+def _looks_like_backend_error_answer(text: str) -> bool:
+    clean = _compact_plain(text)
+    return bool(
+        re.fullmatch(
+            r"\*{0,3}(?:error|fehler|exception)\*{0,3}\s*:\s*.{0,220}"
+            r"\b(?:not\s+authorized|unauthorized|forbidden|permission\s+denied|"
+            r"access\s+denied|api[- ]?key|model\(@none\))\b.*",
+            clean,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _compact_plain(value: Any) -> str:

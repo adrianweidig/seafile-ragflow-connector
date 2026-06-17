@@ -231,9 +231,14 @@ async def _post_json(
     except httpx.HTTPStatusError as exc:
         _log_proxy_error(exc, url, ca_bundle, debug=tls_debug)
         status_code = exc.response.status_code
+        user_message = _http_status_user_message(status_code, exc.response, error_verbosity)
         raise PipeError(
-            _http_status_user_message(status_code, exc.response, error_verbosity),
-            status=f"RAGFlow-Proxy antwortete mit HTTP {status_code}.",
+            user_message,
+            status=(
+                user_message
+                if user_message in {"Kein Zugriff auf diese Bibliothek.", "No access to this library."}
+                else f"RAGFlow-Proxy antwortete mit HTTP {status_code}."
+            ),
         ) from exc
     except httpx.ConnectError as exc:
         _log_proxy_error(exc, url, ca_bundle, debug=tls_debug)

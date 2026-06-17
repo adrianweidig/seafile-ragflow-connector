@@ -260,6 +260,61 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(denied["decision"], "deny")
         self.assertEqual(denied["reason"], "user_not_in_library_acl")
 
+    def test_authz_filter_profiles_returns_user_facing_profile_fields(self) -> None:
+        store = _store(self)
+        now = utcnow()
+        with store.session_factory() as session:
+            session.add(
+                SearchProfile(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Anleitungen",
+                    display_name="Anleitungen",
+                    kind="documents",
+                    enabled=True,
+                    status="ready",
+                    last_acl_sync_at=now,
+                )
+            )
+            session.add(
+                LibraryACLEffectiveUser(
+                    repo_id="repo-1",
+                    user_email="olaf@example.local",
+                    permission="rw",
+                    sources=["user_share"],
+                    last_seen_at=now,
+                )
+            )
+            session.commit()
+        settings = _settings(0)
+        settings.connector_dashboard_enabled = False
+        settings.authz_api_enabled = True
+        settings.authz_api_shared_secret = "authz-secret"
+        handle = start_dashboard_server(
+            DashboardContext(store=store, settings=settings, started_at=utcnow())
+        )
+        port = handle.server.server_address[1]
+        try:
+            result = _post_json_bearer(
+                port,
+                "/api/authz/filter-profiles",
+                {
+                    "user": {"username": "olaf", "email": "olaf@example.local"},
+                    "profile_ids": ["repo-1"],
+                },
+                "authz-secret",
+            )
+        finally:
+            handle.stop()
+
+        self.assertEqual(result["denied"], [])
+        self.assertEqual(result["allowed"][0]["profile_id"], "repo-1")
+        self.assertEqual(result["allowed"][0]["id"], "repo-1")
+        self.assertEqual(result["allowed"][0]["display_name"], "Anleitungen")
+        self.assertEqual(result["allowed"][0]["kind"], "documents")
+        self.assertEqual(result["allowed"][0]["status"], "ready")
+        self.assertEqual(result["allowed"][0]["permission"], "rw")
+
     def test_workflow_libraries_lists_api_visible_libraries_with_control_state(self) -> None:
         store = _store(self)
         with store.session_factory() as session:

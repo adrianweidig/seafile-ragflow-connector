@@ -4,6 +4,8 @@ import json
 import unittest
 from importlib import resources
 
+import httpx
+
 import seafile_ragflow_connector.openwebui.templates.pipe as pipe_templates
 from seafile_ragflow_connector.openwebui.artifacts import (
     _PIPE_TEMPLATE_FRAGMENTS,
@@ -562,6 +564,30 @@ class OpenWebUIArtifactTests(unittest.TestCase):
                 self.assertEqual(result.answer, "")
                 self.assertEqual(result.origin, "retrieval_only")
 
+        for answer in (
+            "ERROR: Model(@None) not authorized",
+            "**ERROR**: Model(@None) not authorized",
+        ):
+            with self.subTest(answer=answer):
+                backend_error_result = namespace["extract_answer_result"](
+                    {
+                        "data": {"answer": answer},
+                        "reference": {
+                            "chunks": [
+                                {
+                                    "document_name": "quelle.md",
+                                    "content": "Ein verwertbarer Quellenchunk.",
+                                }
+                            ]
+                        },
+                    }
+                )
+                self.assertEqual(backend_error_result.answer, "")
+                self.assertEqual(backend_error_result.origin, "retrieval_only")
+                self.assertTrue(
+                    any("backend error" in warning for warning in backend_error_result.warnings)
+                )
+
     def test_pipe_extract_answer_result_rejects_source_markdown_only(self) -> None:
         namespace = _pipe_namespace()
         result = namespace["extract_answer_result"](
@@ -579,6 +605,28 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertEqual(result.answer, "")
         self.assertEqual(result.origin, "retrieval_only")
         self.assertTrue(any("source markdown" in warning for warning in result.warnings))
+
+    def test_pipe_http_status_uses_safe_connector_denial_message(self) -> None:
+        namespace = _pipe_namespace()
+        response = httpx.Response(
+            403,
+            json={"error": "forbidden", "message": "Kein Zugriff auf diese Bibliothek."},
+        )
+
+        message = namespace["_http_status_user_message"](403, response, "safe")
+
+        self.assertEqual(message, "Kein Zugriff auf diese Bibliothek.")
+
+    def test_pipe_http_status_keeps_untrusted_forbidden_messages_generic(self) -> None:
+        namespace = _pipe_namespace()
+        response = httpx.Response(
+            403,
+            json={"error": "forbidden", "message": "user_not_in_library_acl"},
+        )
+
+        message = namespace["_http_status_user_message"](403, response, "safe")
+
+        self.assertIn("RAGFlow-Proxy hat die Anfrage abgelehnt", message)
 
     def test_pipe_extract_sources_uses_prioritized_references_once(self) -> None:
         namespace = _pipe_namespace()

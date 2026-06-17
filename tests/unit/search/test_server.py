@@ -4,7 +4,12 @@ import unittest
 
 import seafile_ragflow_connector.search.server as search_server
 from seafile_ragflow_connector.config.settings import SearchServiceSettings
-from seafile_ragflow_connector.search.server import SearchPermissionError, SearchUser, _handle_query
+from seafile_ragflow_connector.search.server import (
+    SearchPermissionError,
+    SearchUser,
+    _handle_query,
+    _search_results_from_ragflow,
+)
 from seafile_ragflow_connector.search.ui import SEARCH_HTML
 
 
@@ -185,6 +190,40 @@ class SearchServerTests(unittest.TestCase):
             search_server.RAGFlowClient = original_client  # type: ignore[assignment]
 
         self.assertEqual(_FakeRAGFlowClient.calls, [])
+
+    def test_ragflow_document_keyword_and_doc_aggs_are_user_facing_source_fields(self) -> None:
+        results = _search_results_from_ragflow(
+            {
+                "chunks": [
+                    {
+                        "document_id": "doc-1",
+                        "document_keyword": "acl-live-test.md",
+                        "content": "Eindeutiger Suchbegriff ACLOHNECONFIG20260617.",
+                        "similarity": 0.73,
+                        "positions": [[1, 0, 0, 0, 0]],
+                    },
+                    {
+                        "document_id": "doc-2",
+                        "content": "Treffer aus Dokument-Aggregaten.",
+                        "similarity": 0.62,
+                    },
+                ],
+                "doc_aggs": [
+                    {"doc_id": "doc-2", "doc_name": "aggregated-name.pdf"},
+                ],
+            },
+            {
+                "repo_id": "repo-anleitungen",
+                "ragflow_dataset_id": "dataset-anleitungen",
+                "display_name": "Anleitungen",
+            },
+        )
+
+        self.assertEqual(results[0]["document_name"], "acl-live-test.md")
+        self.assertEqual(results[0]["source_path"], "/Anleitungen/acl-live-test.md")
+        self.assertEqual(results[0]["page"], 1)
+        self.assertEqual(results[1]["document_name"], "aggregated-name.pdf")
+        self.assertEqual(results[1]["source_path"], "/Anleitungen/aggregated-name.pdf")
 
 
 def _settings() -> SearchServiceSettings:
