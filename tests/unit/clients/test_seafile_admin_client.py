@@ -8,6 +8,9 @@ from seafile_ragflow_connector.clients.seafile_admin import SeafileAdminClient
 
 
 class _FakeHttpClient:
+    def __init__(self) -> None:
+        self.user_sources: list[str | None] = []
+
     def get(self, path: str, *, params: dict[str, str | int] | None = None) -> httpx.Response:
         request = httpx.Request("GET", f"http://seafile.local{path}")
         if path == "/api/v2.1/admin/shares/":
@@ -20,6 +23,20 @@ class _FakeHttpClient:
             return httpx.Response(
                 200,
                 json={"members": [{"email": "carla@example.local"}]},
+                request=request,
+            )
+        if path == "/api/v2.1/admin/users/":
+            source = str((params or {}).get("source") or "")
+            self.user_sources.append(source or None)
+            users_by_source = {
+                "db": [{"email": "admin@example.local", "contact_email": "admin@example.local"}],
+                "ldapimport": [
+                    {"email": "ldap-internal@auth.local", "contact_email": "ldap@example.local"}
+                ],
+            }
+            return httpx.Response(
+                200,
+                json={"data": users_by_source.get(source, [])},
                 request=request,
             )
         return httpx.Response(
@@ -59,6 +76,22 @@ class SeafileAdminClientTests(unittest.TestCase):
 
         self.assertEqual(shares[0]["user_email"], "olaf@example.local")
         self.assertEqual(members[0]["email"], "carla@example.local")
+
+    def test_iter_users_reads_db_and_ldapimport_sources(self) -> None:
+        fake = _FakeHttpClient()
+        client = SeafileAdminClient("http://seafile.local", "token")
+        client._client = fake  # type: ignore[assignment]
+
+        users = list(client.iter_users())
+
+        self.assertEqual(
+            users,
+            [
+                {"email": "admin@example.local", "contact_email": "admin@example.local"},
+                {"email": "ldap-internal@auth.local", "contact_email": "ldap@example.local"},
+            ],
+        )
+        self.assertEqual(fake.user_sources, ["db", "ldapimport"])
 
 
 if __name__ == "__main__":

@@ -70,8 +70,16 @@ class SeafileAdminClient:
             return [data]
         return list(data or [])
 
-    def list_users(self, *, page: int = 1, per_page: int = 100) -> list[dict[str, Any]]:
+    def list_users(
+        self,
+        *,
+        page: int = 1,
+        per_page: int = 100,
+        source: str | None = None,
+    ) -> list[dict[str, Any]]:
         params = {"page": page, "per_page": per_page}
+        if source:
+            params["source"] = source
         data = unwrap_response(self._client.get("/api/v2.1/admin/users/", params=params))
         if isinstance(data, dict):
             for key in ("users", "user_list", "items", "data"):
@@ -81,15 +89,16 @@ class SeafileAdminClient:
         return list(data or [])
 
     def iter_users(self, *, per_page: int = 100) -> Generator[dict[str, Any], None, None]:
-        page = 1
-        while True:
-            users = self.list_users(page=page, per_page=per_page)
-            if not users:
-                break
-            yield from users
-            if len(users) < per_page:
-                break
-            page += 1
+        for source in ("db", "ldapimport"):
+            page = 1
+            while True:
+                users = self.list_users(page=page, per_page=per_page, source=source)
+                if not users:
+                    break
+                yield from users
+                if len(users) < per_page:
+                    break
+                page += 1
 
     def list_group_members(self, group_id: str | int) -> list[dict[str, Any]]:
         data = unwrap_response(self._client.get(f"/api/v2.1/admin/groups/{group_id}/members/"))
