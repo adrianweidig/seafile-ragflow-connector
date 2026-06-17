@@ -266,6 +266,8 @@ def _handle_query(
         raise ValueError("Retrieval-Modus ist deaktiviert.")
     question = _required_text(payload, "question")
     profile_ids = _profile_ids(payload, settings)
+    if not profile_ids:
+        raise SearchPermissionError("Wähle mindestens eine Bibliothek aus.")
     top_k = _bounded_top_k(payload.get("top_k"), settings)
     filtered = _authz_filter_profiles(settings, user, profile_ids)
     allowed = filtered["allowed"]
