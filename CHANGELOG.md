@@ -10,6 +10,14 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.4.1 - 2026-06-17
+
+### Fixed
+
+- Antwortquellen in der Search-Webseite werden als klickbare Quellenkarten mit
+  direktem `Quelle öffnen`-Link gerendert, statt nur als statische
+  Ergebnisliste.
+
 ## 2.4 - 2026-06-17
 
 ### Fixed

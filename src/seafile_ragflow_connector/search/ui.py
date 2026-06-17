@@ -264,6 +264,7 @@ SEARCH_HTML = r"""<!doctype html>
       display: grid;
       gap: 8px;
     }
+    .answer-sources li { margin: 0; }
     .answer-source {
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -271,9 +272,21 @@ SEARCH_HTML = r"""<!doctype html>
       padding: 10px 12px;
       display: grid;
       gap: 5px;
+      color: inherit;
+      text-decoration: none;
+    }
+    .answer-source-link { cursor: pointer; }
+    .answer-source-link:hover {
+      border-color: var(--accent);
+      background: var(--surface-soft);
     }
     .answer-source strong { color: var(--text-strong); overflow-wrap: anywhere; }
     .answer-source span { color: var(--muted); font-size: .86rem; overflow-wrap: anywhere; }
+    .answer-source-action {
+      justify-self: start;
+      color: var(--accent-strong) !important;
+      font-weight: 760;
+    }
     .results { padding: 18px; display: grid; gap: 14px; }
     .result-card {
       border: 1px solid var(--border);
@@ -537,11 +550,15 @@ SEARCH_HTML = r"""<!doctype html>
 
     function renderAnswer(answer, sources = []) {
       answerEl.hidden = false;
-      const sourceItems = sources.slice(0, 4).map(item => `
-        <li class="answer-source">
+      const sourceItems = sources.slice(0, 4).map(item => {
+        const content = `
           <strong>${escapeHtml(item.document_name || 'Dokument')}</strong>
           <span>${escapeHtml(item.dataset_name || 'Bibliothek')}${item.source_path ? ` · ${escapeHtml(item.source_path)}` : ''}</span>
-        </li>`).join('');
+          ${item.open_url ? '<span class="answer-source-action">Quelle öffnen</span>' : ''}`;
+        return item.open_url
+          ? `<li><a class="answer-source answer-source-link" href="${escapeAttr(item.open_url)}" target="_blank" rel="noreferrer noopener">${content}</a></li>`
+          : `<li><span class="answer-source" aria-disabled="true">${content}</span></li>`;
+      }).join('');
       answerEl.innerHTML = `
         <h2>Antwort mit Quellen</h2>
         <p>${escapeHtml(answer)}</p>

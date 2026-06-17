@@ -28,6 +28,7 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn("Quelle öffnen", SEARCH_HTML)
         self.assertIn("Vorschau", SEARCH_HTML)
         self.assertIn("answer-sources", SEARCH_HTML)
+        self.assertIn("answer-source-link", SEARCH_HTML)
         self.assertIn("Originallink", SEARCH_HTML)
 
     def test_query_calls_ragflow_only_for_allowed_profiles(self) -> None:

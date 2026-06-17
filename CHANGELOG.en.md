@@ -10,6 +10,13 @@ retroactively.
 
 No entries.
 
+## 2.4.1 - 2026-06-17
+
+### Fixed
+
+- Search answer sources are rendered as clickable source cards with a direct
+  `Open source` link instead of a static result list.
+
 ## 2.4 - 2026-06-17
 
 ### Fixed
