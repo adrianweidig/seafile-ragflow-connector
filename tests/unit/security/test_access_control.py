@@ -177,7 +177,6 @@ class _FakeSeafileAdminClient:
         self.user_shares = [
             {
                 "user_email": "olaf-internal@auth.local",
-                "contact_email": "olaf@example.local",
                 "permission": "rw",
             },
             {"user_email": "hugo@example.local", "permission": "r"},
@@ -199,12 +198,18 @@ class _FakeSeafileAdminClient:
             return list(self.user_shares)
         return [{"group_id": "42", "group_name": "Team", "permission": "rw"}]
 
+    def iter_users(self) -> list[dict[str, object]]:
+        return [
+            {"email": "olaf-internal@auth.local", "contact_email": "olaf@example.local"},
+            {"email": "carla-internal@auth.local", "contact_email": "carla@example.local"},
+        ]
+
     def list_group_members(self, group_id: str) -> list[dict[str, object]]:
         if self.raise_group_error:
             raise RuntimeError("group failed")
         self.assertEqual(group_id, "42")
         return [
-            {"email": "carla-internal@auth.local", "contact_email": "carla@example.local"},
+            {"email": "carla-internal@auth.local"},
             {"email": "dan@example.local"},
         ]
 

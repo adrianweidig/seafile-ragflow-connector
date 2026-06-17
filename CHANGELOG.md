@@ -10,6 +10,15 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.4 - 2026-06-17
+
+### Fixed
+
+- Der ACL-Snapshot löst technische Seafile-User-IDs aus Direct User Shares über
+  die Admin-User-Liste auf `contact_email` auf. Das deckt Seafile-LDAP-/SSO-
+  Installationen ab, bei denen `/api/v2.1/admin/shares/` nur interne
+  `@auth.local`-IDs liefert.
+
 ## 2.3 - 2026-06-17
 
 ### Fixed

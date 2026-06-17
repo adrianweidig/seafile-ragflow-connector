@@ -102,9 +102,11 @@ class ACLSnapshotService:
         self.session_factory = session_factory
         self.admin_client = admin_client
         self.log = structlog.get_logger(__name__)
+        self._user_contact_email_by_email: dict[str, str] | None = None
 
     def refresh_once(self) -> ACLRefreshSummary:
         now = _utcnow()
+        self._user_contact_email_by_email = None
         summary = ACLRefreshSummary()
         for raw_library in self.admin_client.iter_libraries():
             summary = ACLRefreshSummary(
@@ -177,17 +179,7 @@ class ACLSnapshotService:
             _merge_effective(effective, owner, "admin", "owner")
 
         for share in self.admin_client.list_library_shares(library.repo_id, share_type="user"):
-            user_email = normalize_email(
-                _first_text(
-                    share,
-                    "contact_email",
-                    "user_contact_email",
-                    "user_email",
-                    "email",
-                    "share_to",
-                    "user",
-                )
-            )
+            user_email = self._shared_user_email(share)
             if not user_email:
                 continue
             permission = _normalize_permission(_first_text(share, "permission", "perm"))
@@ -217,16 +209,7 @@ class ACLSnapshotService:
                 )
             )
             for member in self.admin_client.list_group_members(group_id):
-                user_email = normalize_email(
-                    _first_text(
-                        member,
-                        "contact_email",
-                        "user_contact_email",
-                        "email",
-                        "user_email",
-                        "name",
-                    )
-                )
+                user_email = self._shared_user_email(member)
                 if user_email:
                     _merge_effective(effective, user_email, permission, f"group:{group_id}")
 
@@ -235,6 +218,33 @@ class ACLSnapshotService:
             for email, (permission, sources) in sorted(effective.items())
         ]
         return subjects, grants
+
+    def _shared_user_email(self, raw: dict[str, Any]) -> str | None:
+        contact_email = normalize_email(_first_text(raw, "contact_email", "user_contact_email"))
+        if contact_email:
+            return contact_email
+        raw_email = normalize_email(_first_text(raw, "user_email", "email", "share_to", "user"))
+        if raw_email:
+            return self._user_contact_email_map().get(raw_email, raw_email)
+        return normalize_email(_first_text(raw, "name", "username"))
+
+    def _user_contact_email_map(self) -> dict[str, str]:
+        if self._user_contact_email_by_email is not None:
+            return self._user_contact_email_by_email
+        mapping: dict[str, str] = {}
+        iter_users = getattr(self.admin_client, "iter_users", None)
+        if not callable(iter_users):
+            self._user_contact_email_by_email = mapping
+            return mapping
+        for raw_user in iter_users():
+            email = normalize_email(_first_text(raw_user, "email", "user_email"))
+            contact_email = normalize_email(
+                _first_text(raw_user, "contact_email", "user_contact_email")
+            )
+            if email and contact_email:
+                mapping[email] = contact_email
+        self._user_contact_email_by_email = mapping
+        return mapping
 
     def _write_library_acl(
         self,

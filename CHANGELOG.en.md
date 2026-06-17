@@ -10,6 +10,15 @@ retroactively.
 
 No entries.
 
+## 2.4 - 2026-06-17
+
+### Fixed
+
+- ACL snapshots now resolve technical Seafile user IDs from direct user shares
+  through the admin user list to `contact_email`. This covers Seafile LDAP/SSO
+  installations where `/api/v2.1/admin/shares/` only returns internal
+  `@auth.local` IDs.
+
 ## 2.3 - 2026-06-17
 
 ### Fixed
