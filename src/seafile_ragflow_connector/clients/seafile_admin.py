@@ -77,7 +77,7 @@ class SeafileAdminClient:
         per_page: int = 100,
         source: str | None = None,
     ) -> list[dict[str, Any]]:
-        params = {"page": page, "per_page": per_page}
+        params: dict[str, str | int] = {"page": page, "per_page": per_page}
         if source:
             params["source"] = source
         data = unwrap_response(self._client.get("/api/v2.1/admin/users/", params=params))
