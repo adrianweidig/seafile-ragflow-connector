@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import UTC, datetime
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -133,6 +134,58 @@ class AccessControlTests(unittest.TestCase):
         self.assertEqual(denied.decision, "deny")
         self.assertEqual(denied.reason, "user_not_in_library_acl")
 
+    def test_authz_accepts_username_only_and_username_email_identity(self) -> None:
+        ACLSnapshotService(
+            settings=_settings(),
+            session_factory=self.session_factory,
+            admin_client=_FakeSeafileAdminClient(),
+        ).refresh_once()
+        service = AccessControlService(session_factory=self.session_factory)
+
+        username_only = service.check_access(
+            UserIdentity(username="OLAF", email=None),
+            AuthzResource(repo_id="repo-anleitungen", ragflow_dataset_id=None),
+            "search",
+        )
+        username_email = service.check_access(
+            UserIdentity(username="OLAF@EXAMPLE.LOCAL", email=None),
+            AuthzResource(repo_id=None, ragflow_dataset_id="dataset-anleitungen"),
+            "search",
+        )
+
+        self.assertEqual(username_only.decision, "allow")
+        self.assertEqual(username_only.permission, "rw")
+        self.assertEqual(username_email.decision, "allow")
+        self.assertEqual(username_email.permission, "rw")
+
+    def test_authz_denies_ambiguous_username_only_identity(self) -> None:
+        ACLSnapshotService(
+            settings=_settings(),
+            session_factory=self.session_factory,
+            admin_client=_FakeSeafileAdminClient(),
+        ).refresh_once()
+        with self.session_factory() as session:
+            session.add(
+                LibraryACLEffectiveUser(
+                    repo_id="repo-anleitungen",
+                    user_email="olaf@other.example",
+                    permission="r",
+                    sources=["user_share"],
+                    last_seen_at=datetime.now(UTC),
+                )
+            )
+            session.commit()
+        service = AccessControlService(session_factory=self.session_factory)
+
+        decision = service.check_access(
+            UserIdentity(username="olaf", email=None),
+            AuthzResource(repo_id="repo-anleitungen", ragflow_dataset_id=None),
+            "search",
+        )
+
+        self.assertEqual(decision.decision, "deny")
+        self.assertEqual(decision.reason, "ambiguous_username")
+
     def test_authz_denies_missing_mail_and_unknown_dataset_fail_closed(self) -> None:
         ACLSnapshotService(
             settings=_settings(),
@@ -153,7 +206,7 @@ class AccessControlTests(unittest.TestCase):
         )
 
         self.assertEqual(missing_user.decision, "deny")
-        self.assertEqual(missing_user.reason, "user_identity_missing")
+        self.assertEqual(missing_user.reason, "user_not_in_library_acl")
         self.assertEqual(unknown_dataset.decision, "deny")
         self.assertEqual(unknown_dataset.reason, "resource_not_found")
 

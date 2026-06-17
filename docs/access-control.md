@@ -61,9 +61,13 @@ AuthzDecision(decision, repo_id, ragflow_dataset_id, permission, reason, acl_ver
 
 `check_access()` löst zuerst das Repo/Dataset-Mapping über `search_profiles`
 auf und prüft anschließend die effektive User-ACL. E-Mail-Adressen werden
-case-insensitive verglichen. Ein Username wird nur dann als E-Mail-Fallback
-genutzt, wenn er selbst wie eine E-Mail-Adresse aussieht. Normale Loginnamen
-ohne E-Mail reichen bei Fail-Closed nicht für Zugriff.
+case-insensitive verglichen. Ein Username wird als E-Mail-Fallback genutzt,
+wenn er selbst wie eine E-Mail-Adresse aussieht, z. B.
+`olaf@example.local`. Ein Username ohne Domain, z. B. `olaf`, wird nur dann
+akzeptiert, wenn genau eine effektive ACL-Mailadresse der Bibliothek diesen
+lokalen Teil besitzt. Gibt es mehrere Treffer wie `olaf@example.local` und
+`olaf@other.local`, bleibt die Entscheidung fail-closed mit
+`ambiguous_username`.
 
 `filter_profiles_for_user()` ist der gemeinsame Bulk-Pfad für GUI-Auswahl und
 Multi-Dataset-Suche. Verbotene Profile werden vor jeder RAGFlow-Abfrage

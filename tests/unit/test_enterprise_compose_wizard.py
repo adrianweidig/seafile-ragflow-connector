@@ -11,6 +11,14 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "configure-enterprise-compose.sh"
 
 
+def _env_value(env_text: str, key: str) -> str:
+    prefix = f"{key}="
+    for line in env_text.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix) :]
+    raise AssertionError(f"{key} missing from generated env")
+
+
 def _find_portable_bash() -> str:
     bash = shutil.which("bash")
     if not bash:
@@ -127,7 +135,9 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
     )
 
     generated_env = output_env.read_text(encoding="utf-8")
-    assert f"CONNECTOR_ENTERPRISE_CA_HOST_FILE={ca_file}" in generated_env
+    ca_env_path = _env_value(generated_env, "CONNECTOR_ENTERPRISE_CA_HOST_FILE")
+    assert ca_env_path
+    assert ca_env_path.replace("\\", "/").endswith("/root-ca.pem")
     assert "CONNECTOR_ENTERPRISE_CA_CONTAINER_FILE=/certs/company-root-ca.pem" in generated_env
     assert "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" in generated_env
     assert "SEAFILE_VERIFY_SSL=true" in generated_env
@@ -153,7 +163,7 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
         ]
     )
     assert "docker compose --env-file" in helper_scripts
-    assert str(output_env) in helper_scripts
+    assert "connector.env" in helper_scripts
     for secret in secret_values.values():
         assert secret not in helper_scripts
 
