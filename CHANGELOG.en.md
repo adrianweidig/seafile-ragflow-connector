@@ -10,6 +10,19 @@ retroactively.
 
 No entries.
 
+## 2.2 - 2026-06-17
+
+### Fixed
+
+- Search results now show user-facing document names and source paths for real
+  RAGFlow retrieval responses even when RAGFlow only exposes them through
+  `document_keyword` or `doc_aggs`.
+- The central Authz API returns all profile fields required by the search UI in
+  `filter-profiles` responses.
+- OpenWebUI pipes no longer treat technical RAGFlow backend errors as generated
+  user answers and show only the safe `No access to this library.` denial for
+  Connector 403 responses.
+
 ## 2.1 - 2026-06-16
 
 ### Added

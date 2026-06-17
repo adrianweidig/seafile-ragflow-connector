@@ -10,6 +10,19 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.2 - 2026-06-17
+
+### Fixed
+
+- Search-Ergebnisse zeigen für echte RAGFlow-Retrieval-Antworten wieder
+  nutzerfreundliche Dokumentnamen und Quellpfade, auch wenn RAGFlow diese nur
+  über `document_keyword` oder `doc_aggs` liefert.
+- Die zentrale Authz-API liefert bei `filter-profiles` alle für die
+  Suchoberfläche benötigten Profilfelder zurück.
+- OpenWebUI-Pipes behandeln technische RAGFlow-Backendfehler nicht mehr als
+  generierte Nutzerantwort und zeigen bei Connector-403 nur die sichere Meldung
+  `Kein Zugriff auf diese Bibliothek.`.
+
 ## 2.1 - 2026-06-16
 
 ### Added
