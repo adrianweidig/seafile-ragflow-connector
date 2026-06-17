@@ -499,14 +499,9 @@ def _handle_authz_filter_profiles(
             AuthzResource(repo_id=profile.repo_id, ragflow_dataset_id=profile.ragflow_dataset_id),
             "search",
         )
-        allowed.append(
-            {
-                "profile_id": profile.repo_id,
-                "repo_id": profile.repo_id,
-                "ragflow_dataset_id": profile.ragflow_dataset_id,
-                "permission": decision.permission,
-            }
-        )
+        item = _search_profile_payload(profile, permission=decision.permission)
+        item["profile_id"] = profile.repo_id
+        allowed.append(item)
     return {"allowed": allowed, "denied": denied}, HTTPStatus.OK
 
 

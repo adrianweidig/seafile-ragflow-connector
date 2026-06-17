@@ -391,11 +391,27 @@ def _search_results_from_ragflow(
     dataset_name = str(profile.get("display_name") or profile.get("repo_id") or "Bibliothek")
     dataset_id = str(profile.get("ragflow_dataset_id") or "")
     repo_id = str(profile.get("repo_id") or "")
+    document_names_by_id = _document_names_by_id(payload)
     items: list[dict[str, Any]] = []
     for raw in extract_references(payload):
         metadata = _metadata(raw)
-        document_name = _first_text(raw, metadata, "document_name", "docnm_kwd", "name", "title")
+        document_id = _first_text(raw, metadata, "document_id", "doc_id")
+        document_name = (
+            _first_text(
+                raw,
+                metadata,
+                "document_name",
+                "docnm_kwd",
+                "document_keyword",
+                "doc_name",
+                "name",
+                "title",
+            )
+            or document_names_by_id.get(document_id or "")
+        )
         source_path = _first_text(raw, metadata, "source_path", "path", "file_path", "source")
+        if not source_path and document_name:
+            source_path = f"/{dataset_name}/{document_name}"
         snippet = _clean_snippet(
             _first_text(
                 raw,
@@ -429,6 +445,23 @@ def _search_results_from_ragflow(
         )
     items.sort(key=lambda item: (item["score"] is None, -(item["score"] or 0.0)))
     return items
+
+
+def _document_names_by_id(payload: Any) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        return {}
+    doc_aggs = payload.get("doc_aggs")
+    if not isinstance(doc_aggs, list):
+        return {}
+    names: dict[str, str] = {}
+    for item in doc_aggs:
+        if not isinstance(item, dict):
+            continue
+        doc_id = item.get("doc_id") or item.get("document_id") or item.get("id")
+        doc_name = item.get("doc_name") or item.get("document_name") or item.get("name")
+        if doc_id not in (None, "") and doc_name not in (None, ""):
+            names[str(doc_id)] = str(doc_name)
+    return names
 
 
 def _deduplicate_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
