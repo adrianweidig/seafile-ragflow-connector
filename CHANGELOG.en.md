@@ -10,6 +10,15 @@ retroactively.
 
 No entries.
 
+## 2.3 - 2026-06-17
+
+### Fixed
+
+- ACL snapshots now prefer `contact_email` and `owner_contact_email` for
+  Seafile LDAP/SSO identities before technical internal Seafile IDs such as
+  `@auth.local`. Search-Service and OpenWebUI pipes therefore make the same
+  allow/deny decision for real user email addresses.
+
 ## 2.2 - 2026-06-17
 
 ### Fixed

@@ -175,7 +175,11 @@ class _FakeSeafileAdminClient:
 
     def __init__(self) -> None:
         self.user_shares = [
-            {"user_email": "olaf@example.local", "permission": "rw"},
+            {
+                "user_email": "olaf-internal@auth.local",
+                "contact_email": "olaf@example.local",
+                "permission": "rw",
+            },
             {"user_email": "hugo@example.local", "permission": "r"},
         ]
 
@@ -184,7 +188,8 @@ class _FakeSeafileAdminClient:
             {
                 "id": "repo-anleitungen",
                 "name": "Anleitungen",
-                "owner": "bernd@example.local",
+                "owner": "bernd-internal@auth.local",
+                "owner_contact_email": "bernd@example.local",
             }
         ]
 
@@ -198,7 +203,10 @@ class _FakeSeafileAdminClient:
         if self.raise_group_error:
             raise RuntimeError("group failed")
         self.assertEqual(group_id, "42")
-        return [{"email": "carla@example.local"}, {"email": "dan@example.local"}]
+        return [
+            {"email": "carla-internal@auth.local", "contact_email": "carla@example.local"},
+            {"email": "dan@example.local"},
+        ]
 
     def assert_repo(self, repo_id: str) -> None:
         if repo_id != "repo-anleitungen":

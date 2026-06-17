@@ -10,6 +10,15 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.3 - 2026-06-17
+
+### Fixed
+
+- Der ACL-Snapshot bevorzugt bei Seafile-LDAP-/SSO-Identitäten jetzt
+  `contact_email` bzw. `owner_contact_email` vor technischen internen
+  Seafile-IDs wie `@auth.local`. Dadurch treffen Search-Service und
+  OpenWebUI-Pipe dieselbe Allow/Deny-Entscheidung für reale Nutzer-Mailadressen.
+
 ## 2.2 - 2026-06-17
 
 ### Fixed

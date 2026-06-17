@@ -23,7 +23,7 @@ def normalize_library(raw: dict[str, Any]) -> DiscoveredLibrary:
     return DiscoveredLibrary(
         repo_id=repo_id,
         name=str(raw.get("name") or raw.get("repo_name") or repo_id),
-        owner_email=raw.get("owner") or raw.get("owner_email"),
+        owner_email=raw.get("owner_contact_email") or raw.get("owner_email") or raw.get("owner"),
         encrypted=bool(raw.get("encrypted", False)),
         virtual=bool(raw.get("virtual", False) or raw.get("is_virtual", False)),
         seafile_mtime=raw.get("mtime"),
@@ -42,4 +42,3 @@ def should_skip_library(
     if skip_virtual and library.virtual:
         return True, "virtual"
     return False, None
-

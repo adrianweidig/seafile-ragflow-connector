@@ -178,7 +178,15 @@ class ACLSnapshotService:
 
         for share in self.admin_client.list_library_shares(library.repo_id, share_type="user"):
             user_email = normalize_email(
-                _first_text(share, "user_email", "email", "share_to", "user")
+                _first_text(
+                    share,
+                    "contact_email",
+                    "user_contact_email",
+                    "user_email",
+                    "email",
+                    "share_to",
+                    "user",
+                )
             )
             if not user_email:
                 continue
@@ -210,7 +218,14 @@ class ACLSnapshotService:
             )
             for member in self.admin_client.list_group_members(group_id):
                 user_email = normalize_email(
-                    _first_text(member, "email", "user_email", "contact_email", "name")
+                    _first_text(
+                        member,
+                        "contact_email",
+                        "user_contact_email",
+                        "email",
+                        "user_email",
+                        "name",
+                    )
                 )
                 if user_email:
                     _merge_effective(effective, user_email, permission, f"group:{group_id}")
