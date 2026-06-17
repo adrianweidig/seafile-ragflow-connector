@@ -30,10 +30,11 @@ Die Pipe sendet die verfügbare OpenWebUI-Nutzeridentität im Payload:
 }
 ```
 
-Die E-Mail ist der primäre Match-Key. Der Username wird mitgesendet, damit Logs
-und spätere Mapping-Strategien nachvollziehbar bleiben. Fehlt eine verwertbare
-E-Mail und ist kein E-Mail-förmiger Username vorhanden, führt Fail-Closed zu
-`deny`.
+Die E-Mail ist der primäre Match-Key. Ein Username im Format
+`username@domain` wird ebenfalls als E-Mail-Adresse geprüft. Wenn OpenWebUI nur
+einen kurzen Login-Namen wie `olaf` liefert, erlaubt der Connector den Zugriff
+nur dann, wenn dieser lokale Teil in der effektiven ACL der Bibliothek eindeutig
+ist. Mehrdeutige kurze Namen bleiben fail-closed.
 
 ## Allow und Deny
 

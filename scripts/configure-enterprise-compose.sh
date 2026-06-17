@@ -129,8 +129,12 @@ current_version_image() {
 
 normalize_path() {
   local raw="$1"
-  if command -v wslpath >/dev/null 2>&1 && [[ "$raw" =~ ^[A-Za-z]:\\ ]]; then
-    raw="$(wslpath -a "$raw")"
+  if [[ "$raw" =~ ^[A-Za-z]:[\\/] ]]; then
+    if command -v wslpath >/dev/null 2>&1; then
+      raw="$(wslpath -a "$raw")"
+    elif command -v cygpath >/dev/null 2>&1; then
+      raw="$(cygpath -u "$raw")"
+    fi
   fi
   case "$raw" in
     /*) printf '%s\n' "$raw" ;;

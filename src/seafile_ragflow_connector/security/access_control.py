@@ -432,7 +432,7 @@ class AccessControlService:
             email = normalize_email(username)
         if operation != "search":
             return _deny(resource, "unsupported_operation")
-        if not email:
+        if not email and not username:
             return _deny(resource, "user_identity_missing")
         with self.session_factory() as session:
             profile = self._profile_for_resource(session, resource)
@@ -451,14 +451,18 @@ class AccessControlService:
                 return _deny(resolved_resource, "acl_unknown", acl_version)
             if self.fail_closed and _profile_acl_stale(profile, self.max_acl_age):
                 return _deny(resolved_resource, "acl_too_old", acl_version)
-            grant = session.scalar(
-                select(LibraryACLEffectiveUser).where(
-                    LibraryACLEffectiveUser.repo_id == profile.repo_id,
-                    LibraryACLEffectiveUser.user_email == email,
-                )
+            grant, deny_reason = self._grant_for_identity(
+                session,
+                repo_id=profile.repo_id,
+                email=email,
+                username=username,
             )
             if grant is None:
-                if not self.fail_closed and acl_version is None:
+                if (
+                    deny_reason != "ambiguous_username"
+                    and not self.fail_closed
+                    and acl_version is None
+                ):
                     return AuthzDecision(
                         decision="allow",
                         repo_id=profile.repo_id,
@@ -467,7 +471,11 @@ class AccessControlService:
                         reason="fail_open_acl_unavailable",
                         acl_version=acl_version,
                     )
-                return _deny(resolved_resource, "user_not_in_library_acl", acl_version)
+                return _deny(
+                    resolved_resource,
+                    deny_reason or "user_not_in_library_acl",
+                    acl_version,
+                )
             return AuthzDecision(
                 decision="allow",
                 repo_id=profile.repo_id,
@@ -519,6 +527,47 @@ class AccessControlService:
                         }
                     )
             return allowed, denied
+
+    def _grant_for_identity(
+        self,
+        session: Session,
+        *,
+        repo_id: str,
+        email: str | None,
+        username: str | None,
+    ) -> tuple[LibraryACLEffectiveUser | None, str | None]:
+        direct_candidates: list[str] = []
+        if email:
+            direct_candidates.append(email)
+        if username and "@" in username:
+            username_email = normalize_email(username)
+            if username_email and username_email not in direct_candidates:
+                direct_candidates.append(username_email)
+        for candidate in direct_candidates:
+            grant = session.scalar(
+                select(LibraryACLEffectiveUser).where(
+                    LibraryACLEffectiveUser.repo_id == repo_id,
+                    LibraryACLEffectiveUser.user_email == candidate,
+                )
+            )
+            if grant is not None:
+                return grant, None
+
+        if email is None and username and "@" not in username:
+            rows = session.scalars(
+                select(LibraryACLEffectiveUser).where(
+                    LibraryACLEffectiveUser.repo_id == repo_id
+                )
+            ).all()
+            local_matches = [
+                row for row in rows if _email_local_part(row.user_email) == username
+            ]
+            if len(local_matches) == 1:
+                return local_matches[0], None
+            if len(local_matches) > 1:
+                return None, "ambiguous_username"
+
+        return None, "user_not_in_library_acl"
 
     def _profile_for_resource(
         self,
@@ -638,6 +687,13 @@ def _first_text(raw: dict[str, Any], *keys: str) -> str | None:
         if value not in (None, ""):
             return str(value)
     return None
+
+
+def _email_local_part(value: str) -> str | None:
+    normalized = normalize_email(value)
+    if not normalized or "@" not in normalized:
+        return None
+    return normalized.split("@", 1)[0] or None
 
 
 def _guess_profile_kind(name: str) -> str:
