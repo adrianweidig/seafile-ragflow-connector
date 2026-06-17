@@ -257,6 +257,23 @@ SEARCH_HTML = r"""<!doctype html>
     }
     .answer h2 { margin: 0 0 8px; font-size: 1rem; color: var(--text-strong); }
     .answer p { margin: 0; color: var(--text); white-space: pre-wrap; }
+    .answer-sources {
+      margin: 14px 0 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 8px;
+    }
+    .answer-source {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-raised);
+      padding: 10px 12px;
+      display: grid;
+      gap: 5px;
+    }
+    .answer-source strong { color: var(--text-strong); overflow-wrap: anywhere; }
+    .answer-source span { color: var(--muted); font-size: .86rem; overflow-wrap: anywhere; }
     .results { padding: 18px; display: grid; gap: 14px; }
     .result-card {
       border: 1px solid var(--border);
@@ -304,6 +321,8 @@ SEARCH_HTML = r"""<!doctype html>
       cursor: pointer;
     }
     .secondary:hover { border-color: var(--accent); color: var(--accent-strong); }
+    .secondary[aria-disabled="true"] { opacity: .58; cursor: not-allowed; }
+    .secondary[aria-disabled="true"]:hover { border-color: var(--border); color: var(--text); }
     .empty { padding: 36px 24px; color: var(--muted); text-align: center; }
     dialog {
       width: min(760px, calc(100vw - 28px));
@@ -504,8 +523,8 @@ SEARCH_HTML = r"""<!doctype html>
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.message || data.error || 'Suche fehlgeschlagen.');
-        if (data.answer) renderAnswer(data.answer);
         const results = data.results || data.sources || [];
+        if (data.answer) renderAnswer(data.answer, results);
         renderResults(results);
         const denied = data.diagnostics && data.diagnostics.profiles_denied ? data.diagnostics.profiles_denied : 0;
         const allowed = data.diagnostics && data.diagnostics.profiles_allowed ? data.diagnostics.profiles_allowed : profile_ids.length;
@@ -516,9 +535,17 @@ SEARCH_HTML = r"""<!doctype html>
       }
     }
 
-    function renderAnswer(answer) {
+    function renderAnswer(answer, sources = []) {
       answerEl.hidden = false;
-      answerEl.innerHTML = `<h2>Antwort mit Quellen</h2><p>${escapeHtml(answer)}</p>`;
+      const sourceItems = sources.slice(0, 4).map(item => `
+        <li class="answer-source">
+          <strong>${escapeHtml(item.document_name || 'Dokument')}</strong>
+          <span>${escapeHtml(item.dataset_name || 'Bibliothek')}${item.source_path ? ` · ${escapeHtml(item.source_path)}` : ''}</span>
+        </li>`).join('');
+      answerEl.innerHTML = `
+        <h2>Antwort mit Quellen</h2>
+        <p>${escapeHtml(answer)}</p>
+        ${sourceItems ? `<ul class="answer-sources">${sourceItems}</ul>` : ''}`;
     }
 
     function renderResults(results) {
@@ -545,7 +572,7 @@ SEARCH_HTML = r"""<!doctype html>
           <p class="snippet">${escapeHtml(item.snippet || 'Kein Snippet verfügbar.')}</p>
           <div class="path">${escapeHtml(item.source_path || '')}</div>
           <div class="actions">
-            ${item.open_url ? `<a class="secondary" href="${escapeAttr(item.open_url)}" target="_blank" rel="noreferrer noopener">Quelle öffnen</a>` : '<span class="secondary" aria-disabled="true">Quelle öffnen</span>'}
+            ${item.open_url ? `<a class="secondary" href="${escapeAttr(item.open_url)}" target="_blank" rel="noreferrer noopener">Quelle öffnen</a>` : '<span class="secondary" aria-disabled="true" title="Für diesen Treffer ist kein Originallink vorhanden.">Quelle öffnen</span>'}
             <button class="secondary" type="button">Vorschau</button>
           </div>`;
         card.querySelector('button').addEventListener('click', () => showPreview(item));

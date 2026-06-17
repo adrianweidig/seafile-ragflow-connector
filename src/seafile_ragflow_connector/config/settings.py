@@ -565,6 +565,17 @@ class SearchServiceSettings(BaseSettings):
     search_ragflow_api_key: str = "change-me"
     search_ragflow_verify_ssl: bool = True
     search_ragflow_ca_bundle: str | None = None
+    search_seafile_public_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SEARCH_SEAFILE_PUBLIC_BASE_URL", "SEAFILE_PUBLIC_BASE_URL"),
+    )
+    search_seafile_file_url_template: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SEARCH_SEAFILE_FILE_URL_TEMPLATE",
+            "SEAFILE_FILE_URL_TEMPLATE",
+        ),
+    )
 
     search_default_top_k: int = 8
     search_max_top_k: int = 20
@@ -577,10 +588,23 @@ class SearchServiceSettings(BaseSettings):
     def validate_connector_language(cls, value: str | None) -> str | None:
         return normalize_language(value)
 
-    @field_validator("search_authz_base_url", "search_ragflow_base_url")
+    @field_validator(
+        "search_authz_base_url",
+        "search_ragflow_base_url",
+        "search_seafile_public_base_url",
+    )
     @classmethod
     def strip_url(cls, value: str | None) -> str | None:
         return value.rstrip("/") if value else value
+
+    @property
+    def effective_search_seafile_file_url_template(self) -> str | None:
+        if self.search_seafile_file_url_template:
+            return self.search_seafile_file_url_template
+        base_url = self.search_seafile_public_base_url
+        if not base_url:
+            return None
+        return f"{base_url}/lib/{{repo_id}}/file{{path_quoted}}{{page_fragment}}"
 
     @field_validator("connector_ca_bundle", "search_ragflow_ca_bundle", mode="before")
     @classmethod

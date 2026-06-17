@@ -68,6 +68,23 @@ zusammengeführt, dedupliziert und nutzerfreundlich ausgegeben. RAGFlow bekommt
 keine Information über verbotene Datasets, weil diese vor dem Aufruf entfernt
 werden.
 
+## Quellenlinks
+
+Für den Button "Quelle öffnen" braucht der Search-Service nur eine öffentliche
+Seafile-Basis-URL oder ein Link-Template. Er bekommt dafür keinen Seafile-Token:
+
+```env
+SEARCH_SEAFILE_PUBLIC_BASE_URL=https://sea.top.secret
+SEARCH_SEAFILE_FILE_URL_TEMPLATE=
+```
+
+Ohne Template erzeugt der Search-Service Links nach
+`{base}/lib/{repo_id}/file{path_quoted}{page_fragment}`. Bei abweichenden
+Seafile-Routen kann `SEARCH_SEAFILE_FILE_URL_TEMPLATE` gesetzt werden. Verfügbare
+Platzhalter sind `base`, `repo_id`, `repo_id_quoted`, `path`, `path_quoted`,
+`path_query`, `path_no_leading_slash`, `path_no_leading_slash_quoted`, `page`
+und `page_fragment`.
+
 ## Weboberfläche
 
 Die GUI unter `/search` ist als Arbeitsoberfläche für Endnutzer gebaut:

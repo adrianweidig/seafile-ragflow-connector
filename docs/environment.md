@@ -71,6 +71,7 @@ Er benötigt keinen Seafile-Admin- oder Sync-Token.
 | `SEARCH_RAGFLOW_BASE_URL` | ja | RAGFlow-URL aus Sicht des Search-Containers. |
 | `SEARCH_RAGFLOW_API_KEY` | ja | RAGFlow-API-Key für erlaubte Abfragen. |
 | `SEARCH_RAGFLOW_VERIFY_SSL`, `SEARCH_RAGFLOW_CA_BUNDLE` | optional | TLS-Prüfung und optionales CA-Bundle für Search -> RAGFlow. |
+| `SEARCH_SEAFILE_PUBLIC_BASE_URL`, `SEARCH_SEAFILE_FILE_URL_TEMPLATE` | optional | Browserseitige Seafile-Links für "Quelle öffnen"; kein Seafile-Token. |
 | `SEARCH_DEFAULT_TOP_K`, `SEARCH_MAX_TOP_K` | optional | Trefferzahl-Defaults und Obergrenze. |
 | `SEARCH_MAX_SELECTED_PROFILES` | optional | Maximale Anzahl gleichzeitig ausgewählter Bibliotheken. |
 | `SEARCH_ENABLE_CHAT_MODE`, `SEARCH_ENABLE_RETRIEVAL_MODE` | optional | UI- und API-Modi einzeln aktivieren. |

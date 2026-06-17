@@ -7,6 +7,7 @@ from seafile_ragflow_connector.config.settings import SearchServiceSettings
 from seafile_ragflow_connector.search.server import (
     SearchPermissionError,
     SearchUser,
+    _compose_answer_from_sources,
     _handle_query,
     _search_results_from_ragflow,
 )
@@ -26,6 +27,8 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn("Antwort mit Quellen", SEARCH_HTML)
         self.assertIn("Quelle öffnen", SEARCH_HTML)
         self.assertIn("Vorschau", SEARCH_HTML)
+        self.assertIn("answer-sources", SEARCH_HTML)
+        self.assertIn("Originallink", SEARCH_HTML)
 
     def test_query_calls_ragflow_only_for_allowed_profiles(self) -> None:
         settings = _settings()
@@ -224,6 +227,66 @@ class SearchServerTests(unittest.TestCase):
         self.assertEqual(results[0]["page"], 1)
         self.assertEqual(results[1]["document_name"], "aggregated-name.pdf")
         self.assertEqual(results[1]["source_path"], "/Anleitungen/aggregated-name.pdf")
+
+    def test_projected_text_results_hide_ingestion_header_and_link_to_seafile(self) -> None:
+        results = _search_results_from_ragflow(
+            {
+                "chunks": [
+                    {
+                        "document_name": "4c6f30f466699b19__admin-handbuch-test.md.txt",
+                        "content": (
+                            "Source path: /admin-handbuch-test.md\n"
+                            "Source path hash: 4c6f30f466699b19\n\n"
+                            "----- BEGIN SOURCE CONTENT -----\n"
+                            "# Testnetz Admin Handbuch\n"
+                            "TESTNETZADMIN-HANDBUCH-20260617 Wartungsintervall.\n"
+                            "----- END SOURCE CONTENT -----"
+                        ),
+                        "similarity": 0.73,
+                        "positions": [[2, 0, 0, 0, 0]],
+                    }
+                ],
+            },
+            {
+                "repo_id": "repo-anleitungen",
+                "ragflow_dataset_id": "dataset-anleitungen",
+                "display_name": "Anleitungen",
+            },
+            settings=SearchServiceSettings(
+                search_authz_base_url="http://connector-controller:8080",
+                search_authz_shared_secret="authz-secret",
+                search_ragflow_base_url="http://ragflow:9380",
+                search_ragflow_api_key="ragflow-key",
+                search_seafile_public_base_url="https://sea.top.secret",
+            ),
+        )
+
+        self.assertEqual(results[0]["document_name"], "admin-handbuch-test.md")
+        self.assertEqual(results[0]["source_path"], "/admin-handbuch-test.md")
+        self.assertIn("TESTNETZADMIN-HANDBUCH-20260617", results[0]["snippet"])
+        self.assertNotIn("Source path", results[0]["snippet"])
+        self.assertNotIn("Source path hash", results[0]["snippet"])
+        self.assertNotIn("BEGIN SOURCE CONTENT", results[0]["snippet"])
+        self.assertEqual(
+            results[0]["open_url"],
+            "https://sea.top.secret/lib/repo-anleitungen/file/admin-handbuch-test.md#page=2",
+        )
+
+    def test_chat_answer_is_not_raw_s_number_source_dump(self) -> None:
+        answer = _compose_answer_from_sources(
+            "Test",
+            [
+                {
+                    "document_name": "admin-handbuch-test.md",
+                    "dataset_name": "Anleitungen",
+                    "snippet": "TESTNETZADMIN-HANDBUCH-20260617 Wartungsintervall.",
+                }
+            ],
+        )
+
+        self.assertIn("1 passende Quelle", answer)
+        self.assertNotIn("[S1]", answer)
+        self.assertNotIn("TESTNETZADMIN-HANDBUCH-20260617", answer)
 
 
 def _settings() -> SearchServiceSettings:

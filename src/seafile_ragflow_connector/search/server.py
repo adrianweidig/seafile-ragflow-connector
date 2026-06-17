@@ -9,6 +9,7 @@ from html.parser import HTMLParser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 import structlog
@@ -30,6 +31,11 @@ SEARCH_CONTENT_SECURITY_POLICY = (
     "connect-src 'self'; "
     "form-action 'self'"
 )
+
+SOURCE_PATH_LABEL = "Source path:"
+SOURCE_PATH_HASH_LABEL = "Source path hash:"
+SOURCE_BEGIN_MARKER = "----- BEGIN SOURCE CONTENT -----"
+SOURCE_END_MARKER = "----- END SOURCE CONTENT -----"
 
 
 class SearchBindError(RuntimeError):
@@ -378,7 +384,7 @@ def _retrieve_allowed_profiles(
                 top_k=top_k,
                 page_size=top_k,
             )
-            results.extend(_search_results_from_ragflow(raw, profile))
+            results.extend(_search_results_from_ragflow(raw, profile, settings=settings))
     finally:
         client.close()
     return _deduplicate_results(results)[:top_k]
@@ -387,6 +393,8 @@ def _retrieve_allowed_profiles(
 def _search_results_from_ragflow(
     payload: Any,
     profile: dict[str, Any],
+    *,
+    settings: SearchServiceSettings | None = None,
 ) -> list[dict[str, Any]]:
     dataset_name = str(profile.get("display_name") or profile.get("repo_id") or "Bibliothek")
     dataset_id = str(profile.get("ragflow_dataset_id") or "")
@@ -410,9 +418,7 @@ def _search_results_from_ragflow(
             or document_names_by_id.get(document_id or "")
         )
         source_path = _first_text(raw, metadata, "source_path", "path", "file_path", "source")
-        if not source_path and document_name:
-            source_path = f"/{dataset_name}/{document_name}"
-        snippet = _clean_snippet(
+        raw_snippet = _clean_snippet(
             _first_text(
                 raw,
                 metadata,
@@ -424,17 +430,43 @@ def _search_results_from_ragflow(
             )
             or ""
         )
+        embedded_source_path, snippet = _extract_projected_source(raw_snippet)
+        if embedded_source_path:
+            source_path = embedded_source_path
+        document_name = _friendly_document_name(document_name, source_path)
+        if not source_path and document_name:
+            source_path = f"/{dataset_name}/{document_name}"
         score = _score_value(_first_value(raw, metadata, "score", "similarity", "weight"))
         page = _first_value(raw, metadata, "page", "page_number") or _first_page(
             _first_value(raw, metadata, "positions", "position")
         )
-        open_url = _safe_http_url(_first_text(raw, metadata, "original_url", "url", "preview_url"))
+        open_url = _safe_http_url(
+            _first_text(
+                raw,
+                metadata,
+                "original_url",
+                "url",
+                "preview_url",
+                "web_url",
+                "seafile_url",
+                "seafile_web_url",
+                "source_url",
+                "document_url",
+            )
+        )
+        if open_url is None and settings is not None:
+            open_url = _seafile_file_url(
+                settings,
+                repo_id=repo_id,
+                source_path=source_path,
+                page=page,
+            )
         items.append(
             {
                 "dataset_name": dataset_name,
                 "repo_id": repo_id,
                 "ragflow_dataset_id": dataset_id,
-                "document_name": document_name or "Dokument",
+                "document_name": document_name,
                 "source_path": source_path or "",
                 "snippet": snippet,
                 "page": page,
@@ -488,16 +520,17 @@ def _deduplicate_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _compose_answer_from_sources(question: str, sources: list[dict[str, Any]]) -> str:
     if not sources:
         return "Ich habe in den freigegebenen Bibliotheken keine belastbaren Quellen gefunden."
-    lines = [f"Zur Frage \"{question}\" wurden passende Quellen gefunden:"]
-    for index, source in enumerate(sources[:4], start=1):
-        title = source.get("document_name") or "Dokument"
-        snippet = _compact(source.get("snippet") or "", 240)
-        if snippet:
-            lines.append(f"[S{index}] {title}: {snippet}")
-        else:
-            lines.append(f"[S{index}] {title}.")
-    lines.append("Bitte prüfe die verlinkten Quellen für den vollständigen Kontext.")
-    return "\n".join(lines)
+    count = len(sources)
+    library_names = sorted({str(source.get("dataset_name") or "Bibliothek") for source in sources})
+    libraries = ", ".join(library_names[:3])
+    if len(library_names) > 3:
+        libraries += f" und {len(library_names) - 3} weitere"
+    return (
+        f"Zur Frage \"{question}\" wurden {count} passende Quelle"
+        f"{'' if count == 1 else 'n'} gefunden. "
+        f"Die relevantesten Treffer stehen unten als Quellenkarten"
+        f"{f' aus {libraries}' if libraries else ''}."
+    )
 
 
 def _user_from_headers(settings: SearchServiceSettings, headers: Any) -> SearchUser:
@@ -596,6 +629,94 @@ def _safe_http_url(value: str | None) -> str | None:
     if lowered.startswith("http://") or lowered.startswith("https://"):
         return value.strip()
     return None
+
+
+def _extract_projected_source(value: str) -> tuple[str | None, str]:
+    body = value.strip()
+    source_path = _embedded_source_path(body)
+
+    begin = body.find(SOURCE_BEGIN_MARKER)
+    if begin >= 0:
+        body = body[begin + len(SOURCE_BEGIN_MARKER) :].strip()
+    elif body.startswith(SOURCE_PATH_LABEL):
+        lines = [
+            line
+            for line in body.splitlines()
+            if not line.startswith(SOURCE_PATH_LABEL)
+            and not line.startswith(SOURCE_PATH_HASH_LABEL)
+        ]
+        body = "\n".join(lines).strip()
+
+    end = body.find(SOURCE_END_MARKER)
+    if end >= 0:
+        body = body[:end].strip()
+    return source_path, body
+
+
+def _embedded_source_path(value: str) -> str | None:
+    start = value.find(SOURCE_PATH_LABEL)
+    if start < 0:
+        return None
+    start += len(SOURCE_PATH_LABEL)
+    end = len(value)
+    for marker in (SOURCE_PATH_HASH_LABEL, SOURCE_BEGIN_MARKER, "\n"):
+        marker_start = value.find(marker, start)
+        if marker_start >= 0:
+            end = min(end, marker_start)
+    source_path = value[start:end].strip()
+    return _normalize_source_path(source_path)
+
+
+def _normalize_source_path(value: str | None) -> str | None:
+    clean = str(value or "").strip()
+    if not clean:
+        return None
+    clean = clean.replace("\\", "/")
+    return clean if clean.startswith("/") else f"/{clean}"
+
+
+def _friendly_document_name(document_name: str | None, source_path: str | None) -> str:
+    if source_path:
+        path_name = source_path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].strip()
+        if path_name:
+            return path_name
+    clean = str(document_name or "").strip()
+    if "__" in clean:
+        clean = clean.split("__", 1)[1].strip()
+    for suffix in (".md.txt", ".pdf.txt", ".docx.txt", ".xlsx.txt", ".pptx.txt", ".html.txt"):
+        if clean.lower().endswith(suffix):
+            return clean[: -len(".txt")]
+    return clean or "Dokument"
+
+
+def _seafile_file_url(
+    settings: SearchServiceSettings,
+    *,
+    repo_id: str,
+    source_path: str | None,
+    page: Any,
+) -> str | None:
+    template = settings.effective_search_seafile_file_url_template
+    if not template or not repo_id or not source_path:
+        return None
+    path_for_file_url = source_path if source_path.startswith("/") else f"/{source_path}"
+    page_text = "" if page in (None, "") else str(page)
+    values = {
+        "base": (settings.search_seafile_public_base_url or "").rstrip("/"),
+        "repo_id": repo_id,
+        "repo_id_quoted": quote(repo_id, safe=""),
+        "path": source_path,
+        "path_quoted": quote(path_for_file_url, safe="/"),
+        "path_query": quote(source_path, safe=""),
+        "path_no_leading_slash": source_path.lstrip("/"),
+        "path_no_leading_slash_quoted": quote(source_path.lstrip("/"), safe="/"),
+        "page": page_text,
+        "page_fragment": f"#page={quote(page_text, safe='')}" if page_text else "",
+    }
+    try:
+        return _safe_http_url(template.format(**values))
+    except (KeyError, ValueError):
+        return None
 
 
 def _clean_header(value: str | None) -> str | None:
