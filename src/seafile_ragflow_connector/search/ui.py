@@ -100,9 +100,18 @@ SEARCH_HTML = r"""<!doctype html>
       place-items: center;
       border-radius: 8px;
       background: var(--accent);
-      color: #fff;
-      font-weight: 900;
+      color: #042321;
+      flex: 0 0 auto;
       box-shadow: inset 0 -10px 18px rgba(0, 0, 0, .12);
+    }
+    .brand-mark svg {
+      width: 20px;
+      height: 20px;
+      stroke: currentColor;
+      stroke-width: 2.6;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
     h1 { margin: 0; color: var(--strong); font-size: 1.16rem; line-height: 1.1; }
     .user-line { margin-top: 2px; color: var(--muted); font-size: .9rem; overflow-wrap: anywhere; }
@@ -337,7 +346,13 @@ SEARCH_HTML = r"""<!doctype html>
   <div class="shell">
     <header>
       <div class="brand">
-        <div class="brand-mark" aria-hidden="true">W</div>
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="m21 21-4.3-4.3"></path>
+            <circle cx="11" cy="11" r="7"></circle>
+            <path d="m8.4 11.2 1.7 1.7 3.8-4"></path>
+          </svg>
+        </div>
         <div>
           <h1>Wissenssuche</h1>
           <div class="user-line" id="userLine">Bereit</div>
@@ -360,7 +375,7 @@ SEARCH_HTML = r"""<!doctype html>
             </div>
             <span class="count-pill" id="selectionCount">0/0</span>
           </div>
-          <input id="profileFilter" class="profile-search" type="search" autocomplete="off" placeholder="Bibliothek filtern" aria-label="Bibliothek filtern">
+          <input id="profileFilter" class="profile-search" type="search" autocomplete="off" placeholder="Bibliothek suchen" aria-label="Bibliothek suchen">
           <div class="profile-actions" aria-label="Bibliotheksauswahl">
             <button class="mini-button" type="button" id="selectAllProfiles">Alle</button>
             <button class="mini-button" type="button" id="clearProfiles">Keine</button>
@@ -371,7 +386,7 @@ SEARCH_HTML = r"""<!doctype html>
       <section class="panel search-panel" aria-label="Suche">
         <div class="query-area">
           <form class="query-form" id="queryForm">
-            <input class="query-input" id="question" name="question" autocomplete="off" placeholder="Frage oder Suchbegriff eingeben" aria-label="Suchfrage">
+            <input class="query-input" id="question" name="question" autocomplete="off" placeholder="Was möchtest du in deinen Bibliotheken wissen?" aria-label="Suchfrage">
             <button class="primary" type="submit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 18a7.5 7.5 0 1 1 5.3-12.8A7.5 7.5 0 0 1 10.5 18Zm6-1.5 4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Suchen</button>
           </form>
           <div class="toolbar">

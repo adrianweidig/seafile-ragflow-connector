@@ -10,6 +10,15 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.4.3 - 2026-06-18
+
+### Fixed
+
+- Search-Webseite nutzt im Kopfbereich ein verständliches Such-/Quellen-Icon
+  statt eines einzelnen Buchstaben-Watermarks.
+- Placeholder im Suchfeld und Bibliotheksfilter sind nutzerorientiert
+  formuliert.
+
 ## 2.4.2 - 2026-06-18
 
 ### Added

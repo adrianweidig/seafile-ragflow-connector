@@ -10,6 +10,14 @@ retroactively.
 
 No entries.
 
+## 2.4.3 - 2026-06-18
+
+### Fixed
+
+- The Search page header now uses a clear search/source icon instead of a
+  single-letter watermark.
+- Search-field and library-filter placeholders now use user-facing wording.
+
 ## 2.4.2 - 2026-06-18
 
 ### Added
