@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import unittest
+from urllib.parse import unquote
 
 import seafile_ragflow_connector.search.server as search_server
 from seafile_ragflow_connector.config.settings import SearchServiceSettings
+from seafile_ragflow_connector.openwebui.sources import verify_preview_token
 from seafile_ragflow_connector.search.server import (
     SearchPermissionError,
     SearchUser,
@@ -30,6 +32,9 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn("answer-sources", SEARCH_HTML)
         self.assertIn("answer-source-link", SEARCH_HTML)
         self.assertIn("Originallink", SEARCH_HTML)
+        self.assertIn("sourceRail", SEARCH_HTML)
+        self.assertIn("sourceHover", SEARCH_HTML)
+        self.assertIn("Passage suchen", SEARCH_HTML)
 
     def test_query_calls_ragflow_only_for_allowed_profiles(self) -> None:
         settings = _settings()
@@ -87,6 +92,15 @@ class SearchServerTests(unittest.TestCase):
         self.assertEqual(result["diagnostics"]["profiles_allowed"], 1)
         self.assertEqual(result["diagnostics"]["profiles_denied"], 1)
         self.assertEqual(result["results"][0]["document_name"], "Handbuch FI Typ B.pdf")
+        self.assertEqual(result["results"][0]["source_id"], "S1")
+        self.assertEqual(result["results"][0]["citation_label"], "S1")
+        self.assertEqual(result["results"][0]["locator"]["page"], 12)
+        self.assertEqual(result["results"][0]["locator"]["quality"], "page")
+        self.assertTrue(result["results"][0]["preview_url"].startswith("/api/search/source/preview?token="))
+        token = unquote(result["results"][0]["preview_url"].rsplit("token=", 1)[1])
+        preview = verify_preview_token(token, settings.effective_search_source_preview_secret)
+        self.assertEqual(preview["document_name"], "Handbuch FI Typ B.pdf")
+        self.assertEqual(preview["citation_label"], "S1")
 
     def test_subset_selection_queries_only_checked_libraries(self) -> None:
         settings = _settings()

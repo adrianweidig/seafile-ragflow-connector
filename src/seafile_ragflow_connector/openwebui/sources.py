@@ -14,6 +14,15 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from seafile_ragflow_connector.i18n import Localizer, localizer_for
+from seafile_ragflow_connector.sources.evidence import (
+    build_text_fragment_url,
+)
+from seafile_ragflow_connector.sources.evidence import (
+    locator_quality as shared_locator_quality,
+)
+from seafile_ragflow_connector.sources.evidence import (
+    open_url_kind as shared_open_url_kind,
+)
 
 if TYPE_CHECKING:
     from seafile_ragflow_connector.config.settings import Settings
@@ -55,6 +64,8 @@ class SourceHit:
     score: Any = None
     preview_url: str | None = None
     original_url: str | None = None
+    text_fragment_url: str | None = None
+    open_url_kind: str = "none"
     dataset_id: str | None = None
     dataset_name: str | None = None
     document_id: str | None = None
@@ -149,6 +160,8 @@ class SourceHit:
             "file_type": self.file_type,
             "mime_type": self.mime_type,
             "original_url": self.original_url,
+            "text_fragment_url": self.text_fragment_url,
+            "open_url_kind": self.open_url_kind,
             "preview_url": self.preview_url,
         }
         return {key: value for key, value in values.items() if value not in (None, "")}
@@ -174,6 +187,8 @@ class SourceHit:
             "url": self.preview_url,
             "preview_url": self.preview_url,
             "original_url": self.original_url,
+            "text_fragment_url": self.text_fragment_url,
+            "open_url_kind": self.open_url_kind,
             "citation": {
                 "id": self.rank - 1,
                 "marker": f"[S{self.rank}]",
@@ -1144,6 +1159,7 @@ def _source_match_text(hit: SourceHit) -> str:
 
 def _locator_quality_score(value: str) -> float:
     return {
+        "exact_line": 1.0,
         "line": 1.0,
         "page": 0.9,
         "section": 0.85,
@@ -1258,6 +1274,14 @@ def _normalize_reference(
         chunk_id=chunk_id,
         page=page,
     )
+    text_fragment_url = None
+    if page in (None, ""):
+        text_fragment_url = build_text_fragment_url(original_url, snippet, enabled=True)
+    source_open_url_kind = shared_open_url_kind(
+        text_fragment_url or original_url,
+        page=page,
+        text_fragment_url=text_fragment_url,
+    )
     citation_label = _citation_label(index=index, page=page, chunk_id=chunk_id, l10n=l10n)
     preview_url = _preview_url(
         raw,
@@ -1282,6 +1306,8 @@ def _normalize_reference(
         seafile_library_name=seafile_library_name,
         source_path=source_path,
         original_url=original_url,
+        text_fragment_url=text_fragment_url,
+        open_url_kind=source_open_url_kind,
         score=score,
         file_type=file_type,
         mime_type=mime_type,
@@ -1302,6 +1328,8 @@ def _normalize_reference(
         snippet=snippet or "",
         preview_url=preview_url,
         original_url=original_url,
+        text_fragment_url=text_fragment_url,
+        open_url_kind=source_open_url_kind,
         dataset_id=dataset_id,
         dataset_name=dataset_name,
         document_id=document_id,
@@ -1344,6 +1372,8 @@ def _preview_url(
     seafile_library_name: str | None,
     source_path: str | None,
     original_url: str | None,
+    text_fragment_url: str | None,
+    open_url_kind: str,
     score: Any,
     file_type: str | None,
     mime_type: str | None,
@@ -1380,6 +1410,8 @@ def _preview_url(
             "seafile_library_name": seafile_library_name,
             "source_path": source_path,
             "original_url": original_url,
+            "text_fragment_url": text_fragment_url,
+            "open_url_kind": open_url_kind,
             "score": score,
             "file_type": file_type,
             "mime_type": mime_type,
@@ -1627,21 +1659,18 @@ def _locator_quality(
     path: str | None,
     snippet: str | None,
 ) -> str:
-    if line_start not in (None, "") or line_end not in (None, ""):
-        return "line"
-    if page not in (None, ""):
-        return "page"
-    if section not in (None, ""):
-        return "section"
-    if position not in (None, "", [], {}):
-        return "position"
-    if chunk_id:
-        return "chunk"
-    if document_id or document_name or path:
-        return "document"
-    if snippet:
-        return "snippet_only"
-    return "unknown"
+    return shared_locator_quality(
+        page=page,
+        section=section,
+        line_start=line_start,
+        line_end=line_end,
+        position=position,
+        chunk_id=chunk_id,
+        document_id=document_id,
+        document_name=document_name,
+        source_path=path,
+        snippet=snippet,
+    )
 
 
 def _safe_document_name_from_file_row(file_row: dict[str, Any]) -> str:

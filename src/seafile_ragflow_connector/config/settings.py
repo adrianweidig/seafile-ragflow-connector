@@ -582,6 +582,12 @@ class SearchServiceSettings(BaseSettings):
     search_max_selected_profiles: int = 25
     search_enable_chat_mode: bool = True
     search_enable_retrieval_mode: bool = True
+    search_source_preview_enabled: bool = True
+    search_source_hover_enabled: bool = True
+    search_text_fragment_links_enabled: bool = True
+    search_result_snippet_context_chars: int = 420
+    search_answer_max_sources: int = 8
+    search_source_preview_secret: str | None = None
 
     @field_validator("connector_language")
     @classmethod
@@ -622,7 +628,13 @@ class SearchServiceSettings(BaseSettings):
             raise ValueError(msg)
         return value
 
-    @field_validator("search_default_top_k", "search_max_top_k", "search_max_selected_profiles")
+    @field_validator(
+        "search_default_top_k",
+        "search_max_top_k",
+        "search_max_selected_profiles",
+        "search_result_snippet_context_chars",
+        "search_answer_max_sources",
+    )
     @classmethod
     def validate_search_positive_int(cls, value: int) -> int:
         if value <= 0:
@@ -656,6 +668,10 @@ class SearchServiceSettings(BaseSettings):
             self.search_ragflow_ca_bundle,
             fallback_ca_bundle=self.connector_ca_bundle,
         )
+
+    @property
+    def effective_search_source_preview_secret(self) -> str:
+        return self.search_source_preview_secret or self.search_authz_shared_secret
 
 
 def _is_http_url(value: str) -> bool:

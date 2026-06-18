@@ -51,6 +51,45 @@ Kein Zugriff auf diese Bibliothek.
 Der interne Deny-Grund wird geloggt, aber nicht detailliert an Endnutzer
 weitergegeben.
 
+## Quellenanzeige in OpenWebUI
+
+Die Pipe zeigt im Standardmodus zuerst den Antworttext und danach eine kompakte
+Quellenliste. Lange Audit-Tabellen sind nicht mehr der Standard, bleiben aber
+für Administratoren und Prüfzwecke verfügbar.
+
+Standardverhalten neuer Pipe-Artefakte:
+
+```env
+SOURCE_DISPLAY_MODE=compact
+SOURCE_MARKDOWN_MODE=compact
+APPEND_SOURCE_OVERVIEW=true
+OPENWEBUI_SOURCE_PREVIEW_MODE=connector_viewer
+```
+
+Die kompakte Liste enthält pro Quelle:
+
+- Quellenlabel, z. B. `S1`
+- Dokumentname
+- Bibliothek/Dataset
+- Fundstelle, z. B. Seite oder Zeile
+- kurzes Snippet
+- Link zur Connector-Vorschau
+- Link zum Originaldokument, wenn ein sicherer Browserlink erzeugt werden kann
+
+OpenWebUI kann keine eigene NotebookLM-artige Seitenleiste oder Hoverkarten
+rendern. Deshalb nutzt die Pipe native Citation-Events und Markdown-Links. Der
+reichere Evidence-Viewer öffnet sich über den Vorschau-Link.
+
+Für Audits kann weiterhin gesetzt werden:
+
+```env
+SOURCE_DISPLAY_MODE=audit
+SOURCE_MARKDOWN_MODE=audit
+```
+
+Dann wird die ausführliche Nachweisansicht mit Audit-Status,
+Claim-Abdeckung und technischen Prüfinformationen eingeblendet.
+
 ## Konfiguration
 
 ```env

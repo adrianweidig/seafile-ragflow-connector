@@ -21,6 +21,7 @@ auf. Nur erlaubte SearchProfiles werden an RAGFlow weitergegeben.
 | `GET /api/search/profiles` | erlaubte Bibliotheken/Datasets für den Nutzer |
 | `POST /api/search/query` | Retrieval-Suche über erlaubte Datasets |
 | `POST /api/search/chat` | Antwortmodus mit Quellen aus erlaubten Datasets |
+| `GET /api/search/source/preview?token=...` | signierter Evidence-Viewer für eine Trefferpassage |
 
 ## Authentifizierung
 
@@ -85,6 +86,34 @@ Platzhalter sind `base`, `repo_id`, `repo_id_quoted`, `path`, `path_quoted`,
 `path_query`, `path_no_leading_slash`, `path_no_leading_slash_quoted`, `page`
 und `page_fragment`.
 
+Zusätzlich erzeugt der Search-Service pro Treffer einen signierten Preview-Link
+zum internen Evidence-Viewer. Dieser Viewer ist der verlässliche Pfad zur
+angezeigten Passage: Er zeigt Dokumentname, Bibliothek, Pfad, Fundstelle,
+Snippet, Score und den bestmöglichen Originallink. Dafür werden nur die bereits
+autorisierten RAGFlow-Treffer- und Metadaten in einem signierten Token genutzt;
+der Search-Service wird dadurch nicht zu einem generischen Seafile-Daten-Tunnel.
+
+```env
+SEARCH_SOURCE_PREVIEW_ENABLED=true
+SEARCH_SOURCE_HOVER_ENABLED=true
+SEARCH_TEXT_FRAGMENT_LINKS_ENABLED=true
+SEARCH_RESULT_SNIPPET_CONTEXT_CHARS=420
+SEARCH_ANSWER_MAX_SOURCES=8
+SEARCH_SOURCE_PREVIEW_SECRET=
+```
+
+Wenn `SEARCH_SOURCE_PREVIEW_SECRET` leer bleibt, wird intern das
+`SEARCH_AUTHZ_SHARED_SECRET` für die Signatur genutzt. Ein explizites separates
+Secret ist für größere Setups empfehlenswert.
+
+Originalsprünge sind bestmöglich, aber nicht garantiert exakt:
+
+- PDF-Treffer bekommen bei bekannter Seite einen `#page=`-Anker.
+- Text-/HTML-Treffer ohne Seitenanker können zusätzlich einen Browser
+  Text-Fragment-Link (`#:~:text=`) erhalten.
+- Wenn Browser, Seafile-Viewer oder Login-Redirect das Fragment nicht
+  unterstützen, bleibt der Evidence-Viewer die verlässliche Fundstelle.
+
 ## Weboberfläche
 
 Die GUI unter `/search` ist als Arbeitsoberfläche für Endnutzer gebaut:
@@ -92,10 +121,13 @@ Die GUI unter `/search` ist als Arbeitsoberfläche für Endnutzer gebaut:
 - Kopfzeile "Wissenssuche"
 - großes zentrales Suchfeld
 - Bibliotheksauswahl mit Checkboxen
+- Filterfeld für Bibliotheken
 - Umschaltung zwischen "Dokumente finden" und "Antwort mit Quellen"
-- Kartenlayout für Ergebnisse
-- Dokumentname, Bibliothek, Pfad, Snippet, optional Score und Seite
-- Aktionen "Quelle öffnen" und "Vorschau"
+- dreispaltiges Desktop-Layout mit Quellenpanel
+- Kartenlayout für Ergebnisse mit `S1`-/`S2`-Quellenlabels
+- Dokumentname, Bibliothek, Pfad, Snippet, Score und Locator-Chip
+- Aktionen "Vorschau", "Quelle öffnen", "Seite öffnen" oder "Passage suchen"
+- Hover-/Fokus-Vorschau für Quellenchips und Trefferkarten
 - verständliche leere Zustände, Ladezustand und Berechtigungsfehler
 - responsive Layout ohne externe CDN-Assets
 

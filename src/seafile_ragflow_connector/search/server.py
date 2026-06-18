@@ -3,13 +3,13 @@ from __future__ import annotations
 import html
 import json
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 import structlog
@@ -17,8 +17,16 @@ import structlog
 from seafile_ragflow_connector.clients.http import ApiError
 from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
 from seafile_ragflow_connector.config.settings import SearchServiceSettings
-from seafile_ragflow_connector.openwebui.sources import extract_references
+from seafile_ragflow_connector.openwebui.sources import extract_references, sign_preview_payload
 from seafile_ragflow_connector.search.ui import SEARCH_HTML
+from seafile_ragflow_connector.sources.evidence import (
+    EvidenceHit,
+    build_text_fragment_url,
+    locator_quality,
+    open_url_kind,
+    render_preview_html,
+    score_value,
+)
 
 SEARCH_CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
@@ -140,6 +148,17 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                             "service": "connector-search",
                             "started_at": context.started_at.isoformat(),
                         }
+                    )
+                    return
+                parsed = urlparse(self.path)
+                if parsed.path == "/api/search/source/preview":
+                    params = parse_qs(parsed.query)
+                    self._send_html(
+                        render_preview_html(
+                            _one(params, "token"),
+                            context.settings.effective_search_source_preview_secret,
+                            language=context.settings.connector_language or "de",
+                        )
                     )
                     return
                 if self.path == "/api/search/profiles":
@@ -301,8 +320,12 @@ def _handle_chat(
         raise ValueError("Antwortmodus ist deaktiviert.")
     response = _handle_query(settings, user, payload)
     sources = response["results"]
-    answer = _compose_answer_from_sources(str(response["query"]), sources)
-    response["answer"] = answer
+    answer_text = _compose_answer_from_sources(str(response["query"]), sources)
+    response["answer"] = {
+        "text": answer_text,
+        "mode": "retrieval_summary",
+        "citations": _answer_citations(sources, settings),
+    }
     response["sources"] = sources
     response["diagnostics"]["retrieval_mode"] = "answer_with_sources"
     return response
@@ -387,7 +410,10 @@ def _retrieve_allowed_profiles(
             results.extend(_search_results_from_ragflow(raw, profile, settings=settings))
     finally:
         client.close()
-    return _deduplicate_results(results)[:top_k]
+    return _finalize_search_results(
+        _deduplicate_results(results)[:top_k],
+        settings=settings,
+    )
 
 
 def _search_results_from_ragflow(
@@ -437,9 +463,15 @@ def _search_results_from_ragflow(
         if not source_path and document_name:
             source_path = f"/{dataset_name}/{document_name}"
         score = _score_value(_first_value(raw, metadata, "score", "similarity", "weight"))
+        chunk_id = _first_text(raw, metadata, "id", "chunk_id", "chunkId")
         page = _first_value(raw, metadata, "page", "page_number") or _first_page(
             _first_value(raw, metadata, "positions", "position")
         )
+        line = _first_value(raw, metadata, "line", "line_number")
+        line_start = _first_value(raw, metadata, "line_start", "start_line") or line
+        line_end = _first_value(raw, metadata, "line_end", "end_line")
+        section = _first_value(raw, metadata, "section", "section_title", "heading")
+        position = _first_value(raw, metadata, "positions", "position")
         open_url = _safe_http_url(
             _first_text(
                 raw,
@@ -461,15 +493,34 @@ def _search_results_from_ragflow(
                 source_path=source_path,
                 page=page,
             )
+        quality = locator_quality(
+            page=page,
+            section=section,
+            line_start=line_start,
+            line_end=line_end,
+            position=position,
+            chunk_id=chunk_id,
+            document_id=document_id,
+            document_name=document_name,
+            source_path=source_path,
+            snippet=snippet,
+        )
         items.append(
             {
                 "dataset_name": dataset_name,
                 "repo_id": repo_id,
                 "ragflow_dataset_id": dataset_id,
+                "document_id": document_id,
+                "chunk_id": chunk_id,
                 "document_name": document_name,
                 "source_path": source_path or "",
                 "snippet": snippet,
                 "page": page,
+                "line_start": line_start,
+                "line_end": line_end,
+                "section": section,
+                "position": position,
+                "locator_quality": quality,
                 "score": score,
                 "preview_url": "",
                 "open_url": open_url,
@@ -517,6 +568,88 @@ def _deduplicate_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
+def _finalize_search_results(
+    results: list[dict[str, Any]],
+    *,
+    settings: SearchServiceSettings,
+) -> list[dict[str, Any]]:
+    finalized: list[dict[str, Any]] = []
+    for rank, result in enumerate(results, start=1):
+        source_id = f"S{rank}"
+        open_url = _safe_http_url(str(result.get("open_url") or "")) or None
+        text_fragment_url = None
+        if result.get("page") in (None, ""):
+            text_fragment_url = build_text_fragment_url(
+                open_url,
+                str(result.get("snippet") or ""),
+                enabled=settings.search_text_fragment_links_enabled,
+            )
+        kind = open_url_kind(
+            text_fragment_url or open_url,
+            page=result.get("page"),
+            text_fragment_url=text_fragment_url,
+        )
+        best_open_url = text_fragment_url or open_url
+        hit = EvidenceHit(
+            source_id=source_id,
+            citation_label=source_id,
+            rank=rank,
+            document_name=str(result.get("document_name") or "Dokument"),
+            dataset_name=str(result.get("dataset_name") or "Bibliothek"),
+            repo_id=_optional_text(result.get("repo_id")),
+            ragflow_dataset_id=_optional_text(result.get("ragflow_dataset_id")),
+            source_path=_optional_text(result.get("source_path")),
+            snippet=_compact(result.get("snippet"), settings.search_result_snippet_context_chars),
+            page=result.get("page"),
+            line_start=result.get("line_start"),
+            line_end=result.get("line_end"),
+            section=result.get("section"),
+            chunk_id=_optional_text(result.get("chunk_id")),
+            document_id=_optional_text(result.get("document_id")),
+            score=score_value(result.get("score")),
+            match_type=str(result.get("match_type") or "semantic"),
+            source_role=str(result.get("source_role") or "related"),
+            locator_quality=str(result.get("locator_quality") or "unknown"),
+            open_url=best_open_url,
+            open_url_kind=kind,
+            text_fragment_url=text_fragment_url,
+        )
+        preview_url = _search_preview_url(hit, settings)
+        hit = replace(hit, preview_url=preview_url)
+        finalized.append(hit.to_search_result())
+    return finalized
+
+
+def _search_preview_url(hit: EvidenceHit, settings: SearchServiceSettings) -> str | None:
+    if not settings.search_source_preview_enabled:
+        return None
+    token = sign_preview_payload(
+        hit.preview_payload(),
+        settings.effective_search_source_preview_secret,
+    )
+    return f"/api/search/source/preview?token={quote(token)}"
+
+
+def _answer_citations(
+    sources: list[dict[str, Any]],
+    settings: SearchServiceSettings,
+) -> list[dict[str, Any]]:
+    citations = []
+    for source in sources[: settings.search_answer_max_sources]:
+        citations.append(
+            {
+                "label": source.get("citation_label") or source.get("source_id"),
+                "source_id": source.get("source_id"),
+                "document_name": source.get("document_name"),
+                "dataset_name": source.get("dataset_name"),
+                "location": (source.get("locator") or {}).get("label"),
+                "preview_url": source.get("preview_url"),
+                "open_url": source.get("open_url"),
+            }
+        )
+    return citations
+
+
 def _compose_answer_from_sources(question: str, sources: list[dict[str, Any]]) -> str:
     if not sources:
         return "Ich habe in den freigegebenen Bibliotheken keine belastbaren Quellen gefunden."
@@ -528,7 +661,8 @@ def _compose_answer_from_sources(question: str, sources: list[dict[str, Any]]) -
     return (
         f"Zur Frage \"{question}\" wurden {count} passende Quelle"
         f"{'' if count == 1 else 'n'} gefunden. "
-        f"Die relevantesten Treffer stehen unten als Quellenkarten"
+        "Ich habe noch keinen separaten KI-Antworttext generiert; die belastbaren "
+        "Fundstellen stehen unten als Quellenkarten und sind direkt prüfbar"
         f"{f' aus {libraries}' if libraries else ''}."
     )
 
@@ -717,6 +851,20 @@ def _seafile_file_url(
         return _safe_http_url(template.format(**values))
     except (KeyError, ValueError):
         return None
+
+
+def _optional_text(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _one(params: dict[str, list[str]], key: str) -> str | None:
+    values = params.get(key)
+    if not values:
+        return None
+    return values[0]
 
 
 def _clean_header(value: str | None) -> str | None:

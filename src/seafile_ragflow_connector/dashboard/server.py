@@ -142,7 +142,7 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                     )
                     self._send_json(payload, status=status)
                     return
-                if parsed.path == "/api/openwebui/sources/preview":
+                if parsed.path in {"/api/openwebui/sources/preview", "/api/sources/preview"}:
                     params = parse_qs(parsed.query)
                     self._send_html(_preview_html(context.settings, _one(params, "token")))
                     return
@@ -2012,6 +2012,7 @@ def _preview_is_connector_link(url: str) -> bool:
     path = parsed.path or ""
     return (
         path.startswith("/api/openwebui/sources/preview")
+        or path.startswith("/api/sources/preview")
         or path == "/api/openwebui/proxy"
         or path.startswith("/api/openwebui/proxy/")
     )
