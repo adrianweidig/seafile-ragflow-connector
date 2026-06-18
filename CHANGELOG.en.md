@@ -10,6 +10,22 @@ retroactively.
 
 No entries.
 
+## 2.4.2 - 2026-06-18
+
+### Added
+
+- Added a shared evidence/source model for the Search service and OpenWebUI
+  pipe so sources, locators, preview links, and original links render
+  consistently.
+- The Search service now displays sources with a source panel, hover/focus
+  preview, signed evidence viewer, locator chips, and best-effort original or
+  text-fragment links.
+
+### Changed
+
+- Answer mode and the OpenWebUI pipe now render compact clickable sources
+  without raw RAGFlow projection markers such as `BEGIN SOURCE CONTENT`.
+
 ## 2.4.1 - 2026-06-17
 
 ### Fixed

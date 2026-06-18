@@ -10,6 +10,22 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.4.2 - 2026-06-18
+
+### Added
+
+- Gemeinsames Evidence-/Source-Modell für Search-Service und OpenWebUI-Pipe
+  ergänzt, damit Quellen, Locators, Preview-Links und Original-Links konsistent
+  dargestellt werden.
+- Search-Service zeigt Quellen jetzt mit Quellenpanel, Hover-/Fokus-Vorschau,
+  signiertem Evidence-Viewer, Locator-Chips und bestmöglichen Original- bzw.
+  Textfragment-Links.
+
+### Changed
+
+- Antwortmodus und OpenWebUI-Pipe geben Quellen kompakt, klickbar und ohne rohe
+  RAGFlow-Projektionsmarker wie `BEGIN SOURCE CONTENT` aus.
+
 ## 2.4.1 - 2026-06-17
 
 ### Fixed
