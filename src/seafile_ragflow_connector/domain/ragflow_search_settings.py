@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
+import httpx
+
 from seafile_ragflow_connector.clients.http import ApiError
 
 DEFAULT_SEARCH_TEMPLATE_NAME = "search_template"
@@ -223,7 +225,7 @@ def ensure_search_template(
     }
     try:
         created = client.create_search(payload)
-    except (ApiError, AttributeError) as exc:
+    except (ApiError, AttributeError, httpx.RequestError) as exc:
         if config.required:
             msg = f"RAGFlow search template could not be created: {config.name}"
             raise RuntimeError(msg) from exc
@@ -329,7 +331,7 @@ def _resolve_search_app(
 ) -> ResolvedSearchTemplate | None:
     try:
         searches = client.list_searches(keywords=config.name, page_size=20)
-    except (ApiError, AttributeError):
+    except (ApiError, AttributeError, httpx.RequestError):
         warnings.append("search_app_api_unavailable")
         return None
     matches = [item for item in searches if item.get("name") == config.name]
@@ -342,7 +344,7 @@ def _resolve_search_app(
             full = client.get_search(search_id)
             if isinstance(full, dict):
                 search_app = full
-        except ApiError:
+        except (ApiError, httpx.RequestError):
             warnings.append("search_app_detail_unavailable")
     return ResolvedSearchTemplate(
         source="search_app",
@@ -360,7 +362,7 @@ def _resolve_chat(
 ) -> ResolvedSearchTemplate | None:
     try:
         chats = client.list_chats(name=config.name)
-    except (ApiError, AttributeError):
+    except (ApiError, AttributeError, httpx.RequestError):
         warnings.append("chat_template_api_unavailable")
         return None
     matches = [item for item in chats if item.get("name") == config.name]
@@ -373,7 +375,7 @@ def _resolve_chat(
             full = client.get_chat(chat_id)
             if isinstance(full, dict):
                 chat = full
-        except ApiError:
+        except (ApiError, httpx.RequestError):
             warnings.append("chat_template_detail_unavailable")
     return ResolvedSearchTemplate(
         source="chat",
