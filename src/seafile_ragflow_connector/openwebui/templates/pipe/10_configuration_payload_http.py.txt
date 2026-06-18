@@ -236,7 +236,7 @@ async def _post_json(
             user_message,
             status=(
                 user_message
-                if user_message in {"Kein Zugriff auf diese Bibliothek.", "No access to this library."}
+                if _is_access_denied_message(user_message)
                 else f"RAGFlow-Proxy antwortete mit HTTP {status_code}."
             ),
         ) from exc

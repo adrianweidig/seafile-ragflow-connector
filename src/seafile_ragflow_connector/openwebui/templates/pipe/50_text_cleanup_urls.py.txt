@@ -98,6 +98,10 @@ def _error_card(title: str, message: str) -> str:
     return f"### {title}\n\n{message.strip()}"
 
 
+def _is_access_denied_message(message: Any) -> bool:
+    return str(message or "").strip() in ACCESS_DENIED_MESSAGES
+
+
 def _compact(value: Any, limit: int = 220) -> str:
     clean = _clean(value)
     return clean if len(clean) <= limit else clean[: limit - 1].rstrip() + "…"

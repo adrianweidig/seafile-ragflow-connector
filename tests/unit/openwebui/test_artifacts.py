@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import unittest
 from importlib import resources
@@ -614,6 +615,32 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         message = namespace["_http_status_user_message"](403, response, "safe")
 
         self.assertEqual(message, "Kein Zugriff auf diese Bibliothek.")
+
+    def test_pipe_returns_plain_connector_denial_without_error_card(self) -> None:
+        namespace = _pipe_namespace()
+        pipe = namespace["Pipe"]()
+        pipe.valves.CONNECTOR_PROXY_BASE_URL = "http://connector:8080"
+        pipe.valves.CONNECTOR_PROXY_SHARED_SECRET = "test-secret"
+        pipe.valves.DATASET_ID = "dataset-123"
+
+        async def fake_post_json(*_args: object, **_kwargs: object) -> dict[str, object]:
+            raise namespace["PipeError"](
+                "Kein Zugriff auf diese Bibliothek.",
+                status="Kein Zugriff auf diese Bibliothek.",
+            )
+
+        namespace["_post_json"] = fake_post_json
+
+        result = asyncio.run(
+            pipe.pipe(
+                {"messages": [{"role": "user", "content": "Admin-Dokument"}]},
+                __event_emitter__=None,
+                __user__={"username": "julien", "email": "julien@top.secret"},
+            )
+        )
+
+        self.assertEqual(result, "Kein Zugriff auf diese Bibliothek.")
+        self.assertNotIn("RAGFlow-Anfrage fehlgeschlagen", result)
 
     def test_pipe_http_status_keeps_untrusted_forbidden_messages_generic(self) -> None:
         namespace = _pipe_namespace()
