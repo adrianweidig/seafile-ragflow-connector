@@ -87,6 +87,20 @@ Der Search-Service und die OpenWebUI-Pipe geben an Nutzer nur knappe,
 verständliche Fehlermeldungen aus. Interne Deny-Gründe werden geloggt, aber
 nicht als detaillierte Zugriffsinformation an Endnutzer weitergegeben.
 
+## Quellen-Preview und Original-Links
+
+Die verbesserte Quellen-UX ändert das Sicherheitsmodell nicht. Search-Service
+und OpenWebUI-Pipe fragen RAGFlow weiterhin nur nach positiver Authz-Entscheidung
+ab. Treffer erhalten danach signierte Preview-Links. Diese Tokens enthalten nur
+die bereits autorisierte Trefferpassage und Metadaten wie Dokumentname,
+Bibliothek, Seite, Zeile, Score und Originallink.
+
+Der Evidence-Viewer ist damit eine Fundstellenanzeige, kein generischer
+Seafile-Dateidownload. Original-Links zeigen den Browser direkt zu Seafile und
+verwenden nach Möglichkeit `#page=` oder Browser-Textfragmente. Wenn Seafile,
+der Browser oder ein Login-Redirect diese Sprungmarken nicht unterstützt, bleibt
+die signierte Connector-Vorschau die verlässliche Fundstelle.
+
 ## Konfigurationsanker
 
 ```env

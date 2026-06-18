@@ -75,6 +75,12 @@ Er benötigt keinen Seafile-Admin- oder Sync-Token.
 | `SEARCH_DEFAULT_TOP_K`, `SEARCH_MAX_TOP_K` | optional | Trefferzahl-Defaults und Obergrenze. |
 | `SEARCH_MAX_SELECTED_PROFILES` | optional | Maximale Anzahl gleichzeitig ausgewählter Bibliotheken. |
 | `SEARCH_ENABLE_CHAT_MODE`, `SEARCH_ENABLE_RETRIEVAL_MODE` | optional | UI- und API-Modi einzeln aktivieren. |
+| `SEARCH_SOURCE_PREVIEW_ENABLED` | optional | Aktiviert signierte Evidence-Viewer-Links pro Treffer; Default `true`. |
+| `SEARCH_SOURCE_HOVER_ENABLED` | optional | Reservierter UX-Schalter für Hover-/Fokus-Vorschauen; Default `true`. |
+| `SEARCH_TEXT_FRAGMENT_LINKS_ENABLED` | optional | Erzeugt best-effort Browser-Textfragment-Links, wenn kein Seitenanker vorhanden ist; Default `true`. |
+| `SEARCH_RESULT_SNIPPET_CONTEXT_CHARS` | optional | Maximale Snippet-Länge in Search-Antworten und Preview-Tokens; Default `420`. |
+| `SEARCH_ANSWER_MAX_SOURCES` | optional | Maximale Anzahl Quellenchips im Antwortmodus; Default `8`. |
+| `SEARCH_SOURCE_PREVIEW_SECRET` | optional | Separates Signatur-Secret für Search-Preview-Tokens; fällt auf `SEARCH_AUTHZ_SHARED_SECRET` zurück. |
 
 ## OpenWebUI-Pflichtwerte
 
@@ -103,7 +109,7 @@ Proxy-Secret und keine Preview-URL.
 | `OPENWEBUI_REQUEST_TIMEOUT_SECONDS` | optional | Timeout für OpenWebUI- und Proxy-Aufrufe. Default `180` unterstützt lange RAG-Antworten; für latenzkritische Proxy-/Edge-Flows eher `30` bis `60` Sekunden wählen und Reverse-Proxy-Timeouts angleichen. |
 | `OPENWEBUI_VERIFY_SSL`, `OPENWEBUI_CA_BUNDLE` | optional | TLS für Connector -> OpenWebUI Admin API. |
 | `OPENWEBUI_FUNCTION_NAMESPACE` | optional | Präfix für erzeugte Tool-/Pipe-IDs. |
-| `OPENWEBUI_SOURCE_PREVIEW_MODE` | optional | `ragflow_link`, `connector_viewer`, `citation_only` oder `disabled`; `connector_viewer` ist für auditierbare Citations mit Direktlink zur Fundstelle empfohlen. |
+| `OPENWEBUI_SOURCE_PREVIEW_MODE` | optional | `ragflow_link`, `connector_viewer`, `citation_only` oder `disabled`; `connector_viewer` ist für klickbare Citations mit Direktlink zur Fundstelle empfohlen. |
 | `OPENWEBUI_PIPE_ANSWER_SYNTHESIS_ENABLED` | optional | Aktiviert einen OpenAI-kompatiblen Modell-Fallback, falls RAGFlow nur Retrieval-Treffer zurückgibt. |
 | `OPENWEBUI_PIPE_ANSWER_LLM_BASE_URL` | optional | Base-URL des Fallback-Modells, z. B. `http://litellm:4000/v1`. |
 | `OPENWEBUI_PIPE_ANSWER_LLM_MODEL` | optional | Modellname für die Antwortsynthese. |

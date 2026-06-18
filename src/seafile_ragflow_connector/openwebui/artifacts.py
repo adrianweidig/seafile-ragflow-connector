@@ -9,7 +9,7 @@ from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.i18n import SUPPORTED_LANGUAGES, Localizer
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "25"
+ARTIFACT_VERSION = "26"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 _PIPE_TEMPLATE_PACKAGE = "seafile_ragflow_connector.openwebui.templates.pipe"
 _PIPE_TEMPLATE_FRAGMENTS = (
@@ -123,8 +123,8 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "MAX_SOURCE_EVENTS": 20,
         "SHOW_SOURCE_SCORES": True,
         "SHOW_SOURCE_DEBUG": False,
-        "SOURCE_DISPLAY_MODE": "audit",
-        "SOURCE_MARKDOWN_MODE": "audit",
+        "SOURCE_DISPLAY_MODE": "compact",
+        "SOURCE_MARKDOWN_MODE": "compact",
         "APPEND_SOURCE_OVERVIEW": True,
         "SHOW_LOCATOR_QUALITY": True,
         "ALLOW_CONNECTOR_SOURCE_LINKS": False,
@@ -211,7 +211,7 @@ def _tool_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.4.2
         owner: seafile-ragflow-connector
-        artifact_version: 25
+        artifact_version: 26
         """
 
         import httpx

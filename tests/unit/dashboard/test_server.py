@@ -688,11 +688,14 @@ class DashboardServerTests(unittest.TestCase):
         port = handle.server.server_address[1]
         try:
             html = _get_text(port, f"/api/openwebui/sources/preview?token={token}")
+            alias_html = _get_text(port, f"/api/sources/preview?token={token}")
         finally:
             handle.stop()
 
         self.assertIn("Signierter Treffer", html)
         self.assertIn("Original öffnen", html)
+        self.assertIn("Signierter Treffer", alias_html)
+        self.assertIn("Original öffnen", alias_html)
 
     def test_dashboard_and_preview_send_defensive_security_headers(self) -> None:
         store = _store(self)

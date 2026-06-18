@@ -3,7 +3,7 @@ title: RAGFlow Dataset Pipe
 author: Seafile RAGFlow Connector
 version: 3.10.0
 owner: seafile-ragflow-connector
-artifact_version: 25
+artifact_version: 26
 """
 
 # =============================================================================
@@ -50,9 +50,9 @@ artifact_version: 25
 #   SEND_GENERATIVE_RAG_HINTS=true
 #   RETRIEVAL_ONLY_FALLBACK=brief
 #   EMIT_CITATION_EVENTS=false
-#   SOURCE_DISPLAY_MODE=audit
+#   SOURCE_DISPLAY_MODE=compact
 #   APPEND_SOURCE_OVERVIEW=true
-#   SOURCE_MARKDOWN_MODE=audit
+#   SOURCE_MARKDOWN_MODE=compact
 #   SHOW_SOURCE_SCORES=true
 #   SHOW_SOURCE_DEBUG=false
 #
@@ -584,12 +584,12 @@ class Pipe:
         )
 
         # Primärer Quellenkanal:
-        #   compact        nur native OpenWebUI-Citation-Events
-        #   audit          sichtbare Markdown-Nachweistabelle, Standard
+        #   compact        kurze, klickbare Quellenliste, Standard
+        #   audit          sichtbare Markdown-Nachweistabelle
         #   debug          native Events plus Markdown, nur für Admin-Tests
         #   none           keine Quellenanzeige im Chat
         SOURCE_DISPLAY_MODE: str = Field(
-            default="audit",
+            default="compact",
             description="Quellenanzeige: compact, audit, debug oder none.",
         )
 
@@ -597,10 +597,10 @@ class Pipe:
         # SOURCE_DISPLAY_MODE=markdown_audit oder both_debug:
         #   none     keine Markdown-Quellenübersicht
         #   audit    Nachweistabelle mit Quellen-ID, Fundstelle, Relevanz und Link
-        #   compact  kurze Tabelle
+        #   compact  kurze, klickbare Quellenliste
         #   detailed ausführliche Quellen mit Snippets; gut für Reviews/Tests
         SOURCE_MARKDOWN_MODE: str = Field(
-            default="audit",
+            default="compact",
             description="Zusätzliche Quellenübersicht im Antworttext: none, compact, detailed oder audit.",
         )
 
@@ -609,7 +609,7 @@ class Pipe:
         # den Chat noch cleaner zu machen.
         APPEND_SOURCE_OVERVIEW: bool = Field(
             default=True,
-            description="Hängt eine auditierbare Nachweistabelle an die Antwort an.",
+            description="Hängt eine Quellenübersicht an die Antwort an.",
         )
 
         SHOW_LOCATOR_QUALITY: bool = Field(

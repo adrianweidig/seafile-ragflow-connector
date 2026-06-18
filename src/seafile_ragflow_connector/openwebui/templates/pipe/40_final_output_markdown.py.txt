@@ -204,23 +204,34 @@ def _source_markdown_audit(
 
 
 def _source_markdown_compact(groups: list[list[dict[str, Any]]], *, show_scores: bool) -> str:
-    lines = ["---", "### Quellenüberblick", ""]
-    lines.append("| # | Quelle | Fundstelle | Relevanz |")
-    lines.append("|---:|---|---|---|")
+    lines = ["---", "## Quellen", ""]
 
     for display_rank, group in enumerate(groups[:MAX_SOURCE_GROUPS_COMPACT], start=1):
         source = group[0]
         metadata = _metadata(source)
-        source_cell = _source_table_link(source, metadata)
-        location = _escape_table_cell(_location(metadata))
-        relevance = _escape_table_cell(_relevance_text(source.get("score") or metadata.get("score")) if show_scores else "—")
+        source_id = _source_id(source, metadata)
+        title = _escape_markdown(source.get("name") or metadata.get("document_name") or "Quelle")
+        location = _location(metadata)
+        relevance = _relevance_text(source.get("score") or metadata.get("score")) if show_scores else ""
+        actions = _actions(source, metadata)
+        snippet = _clean_snippet(source.get("text") or source.get("snippet") or "")
         if len(group) > 1:
-            location = f"{location}<br>{len(group)} Treffer"
-        lines.append(f"| {display_rank} | {source_cell} | {location} | {relevance} |")
+            location = f"{location} · {len(group)} Treffer"
+        headline = f"### {source_id} · {title}"
+        lines.append(headline)
+        meta = " · ".join(part for part in (location, relevance) if part)
+        if meta:
+            lines.append(meta)
+        if actions:
+            lines.append(f"**Öffnen:** {actions}")
+        if snippet:
+            lines.append("")
+            lines.extend(_blockquote(_compact(snippet, 280)))
+        lines.append("")
 
     if len(groups) > MAX_SOURCE_GROUPS_COMPACT:
         remaining = len(groups) - MAX_SOURCE_GROUPS_COMPACT
-        lines.append(f"|  | weitere Quellen | {remaining} zusätzliche Treffer |  |")
+        lines.append(f"{remaining} zusätzliche Quellen ausgeblendet.")
 
     return "\n".join(lines).rstrip()
 
@@ -275,7 +286,7 @@ def _source_markdown_mode(value: Any) -> str:
 def _source_display_mode(valves: Pipe.Valves) -> str:
     mode = _clean(getattr(valves, "SOURCE_DISPLAY_MODE", "")).lower()
     aliases = {
-        "compact": "native",
+        "compact": "markdown_audit",
         "audit": "markdown_audit",
         "debug": "both_debug",
         "retrieval_only": "markdown_audit",
