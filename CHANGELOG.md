@@ -10,6 +10,25 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.4.5 - 2026-06-18
+
+### Fixed
+
+- Release-Metadaten, README-Beispiele und Betreiberhinweise auf den aktuellen
+  GHCR-Release-Tag synchronisiert.
+
+## 2.4.4 - 2026-06-18
+
+### Fixed
+
+- Controller bleibt beim Start stabil, wenn RAGFlow- oder OpenWebUI-Template-
+  Abfragen vorübergehend nicht verfügbar sind.
+- RAGFlow-`search_template`-Auflösung toleriert ältere RAGFlow-Versionen ohne
+  Search-App-Endpunkte und fällt kontrolliert auf Chat- oder Built-in-Defaults
+  zurück.
+- OpenWebUI-Pipe zeigt im Deny-Fall nur die knappe Nutzerantwort
+  `Kein Zugriff auf diese Bibliothek.`.
+
 ## 2.4.3 - 2026-06-18
 
 ### Fixed
