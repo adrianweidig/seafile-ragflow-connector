@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 
+import httpx
+
 from seafile_ragflow_connector.domain.ragflow_search_settings import (
     RagflowRetrievalOverrides,
     RagflowSearchTemplateConfig,
@@ -146,6 +148,22 @@ class RagflowSearchSettingsTests(unittest.TestCase):
         self.assertEqual(client.created_searches[0]["name"], "search_template")
         self.assertEqual(client.created_searches[0]["search_config"]["top_k"], 1024)
 
+    def test_search_app_request_error_falls_back_to_builtin(self) -> None:
+        client = _FakeRAGFlowClient(search_error=httpx.ConnectError("connection refused"))
+
+        resolved = resolve_search_template(client, RagflowSearchTemplateConfig())
+
+        self.assertEqual(resolved.source, "builtin")
+        self.assertIn("search_app_api_unavailable", resolved.warnings)
+
+    def test_chat_request_error_falls_back_to_builtin(self) -> None:
+        client = _FakeRAGFlowClient(chat_error=httpx.ConnectError("connection refused"))
+
+        resolved = resolve_search_template(client, RagflowSearchTemplateConfig())
+
+        self.assertEqual(resolved.source, "builtin")
+        self.assertIn("chat_template_api_unavailable", resolved.warnings)
+
 
 class _FakeRAGFlowClient:
     def __init__(
@@ -153,13 +171,19 @@ class _FakeRAGFlowClient:
         *,
         search_apps: list[dict[str, object]] | None = None,
         chats: list[dict[str, object]] | None = None,
+        search_error: Exception | None = None,
+        chat_error: Exception | None = None,
     ) -> None:
         self.search_apps = search_apps or []
         self.chats = chats or []
+        self.search_error = search_error
+        self.chat_error = chat_error
         self.created_searches: list[dict[str, object]] = []
 
     def list_searches(self, *, keywords: str | None = None, page_size: int | None = None):
         _ = page_size
+        if self.search_error is not None:
+            raise self.search_error
         if keywords:
             return [item for item in self.search_apps if item.get("name") == keywords]
         return self.search_apps
@@ -174,6 +198,8 @@ class _FakeRAGFlowClient:
         return search
 
     def list_chats(self, *, name: str | None = None):
+        if self.chat_error is not None:
+            raise self.chat_error
         if name:
             return [item for item in self.chats if item.get("name") == name]
         return self.chats
