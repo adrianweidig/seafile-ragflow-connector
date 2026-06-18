@@ -62,12 +62,49 @@ SEARCH_RAGFLOW_BASE_URL=http://ragflow:9380
 SEARCH_RAGFLOW_API_KEY=change-me
 SEARCH_RAGFLOW_VERIFY_SSL=true
 SEARCH_RAGFLOW_CA_BUNDLE=
+RAGFLOW_SEARCH_TEMPLATE_NAME=search_template
+SEARCH_RAGFLOW_TEMPLATE_SOURCE_ORDER=search_app,chat,builtin
 ```
 
 RAGFlow wird pro erlaubtem Dataset abgefragt. Ergebnisse werden
 zusammengeführt, dedupliziert und nutzerfreundlich ausgegeben. RAGFlow bekommt
 keine Information über verbotene Datasets, weil diese vor dem Aufruf entfernt
 werden.
+
+Die Retrieval-Qualität kommt aus einem zentralen `search_template`:
+
+1. RAGFlow Search App mit Name `search_template`.
+2. RAGFlow Chat Assistant mit Name `search_template`.
+3. Built-in Standard, falls kein Template gefunden wird.
+
+Aus dem Template werden nur Suchparameter übernommen. Datasets, `kb_ids` oder
+Dokumentlisten aus RAGFlow werden ignoriert, damit die Seafile-ACL-Auswahl
+immer die einzige Berechtigungsgrenze bleibt.
+
+Die UI-Einstellung "Treffer" steuert die sichtbare Ergebnisanzahl. RAGFlows
+`top_k` ist dagegen der interne Kandidatenpool und bleibt standardmäßig `1024`.
+Dadurch kann RAGFlow sauber hybrid suchen, während die Oberfläche trotzdem nur
+eine kompakte Ergebnisliste zeigt.
+
+Optionale Overrides:
+
+```env
+SEARCH_RAGFLOW_CANDIDATE_TOP_K=
+SEARCH_RAGFLOW_TOP_N=
+SEARCH_RAGFLOW_SIMILARITY_THRESHOLD=
+SEARCH_RAGFLOW_VECTOR_SIMILARITY_WEIGHT=
+SEARCH_RAGFLOW_RERANK_ID=
+SEARCH_RAGFLOW_KEYWORD=
+SEARCH_RAGFLOW_HIGHLIGHT=
+SEARCH_RAGFLOW_CROSS_LANGUAGES=
+SEARCH_RAGFLOW_USE_KG=
+SEARCH_RAGFLOW_TOC_ENHANCE=
+```
+
+Leere Werte bedeuten: Wert aus `search_template` oder Built-in Standard nutzen.
+Reranker, Knowledge Graph und TOC Enhance können gute Ergebnisse verbessern,
+erhöhen aber Latenz und Betriebsanforderungen. Deshalb sind sie im Built-in
+Standard deaktiviert und sollten bewusst im Template aktiviert werden.
 
 ## Quellenlinks
 

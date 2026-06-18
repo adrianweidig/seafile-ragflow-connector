@@ -73,6 +73,7 @@ class SearchServerTests(unittest.TestCase):
         search_server._authz_filter_profiles = fake_authz
         search_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
         _FakeRAGFlowClient.calls = []
+        _FakeRAGFlowClient.retrieval_options = []
         try:
             result = _handle_query(
                 settings,
@@ -88,9 +89,15 @@ class SearchServerTests(unittest.TestCase):
             search_server.RAGFlowClient = original_client  # type: ignore[assignment]
 
         self.assertEqual(_FakeRAGFlowClient.calls, ["dataset-anleitungen"])
+        self.assertEqual(_FakeRAGFlowClient.retrieval_options[0]["top_k"], 1024)
+        self.assertEqual(_FakeRAGFlowClient.retrieval_options[0]["page_size"], 10)
+        self.assertTrue(_FakeRAGFlowClient.retrieval_options[0]["keyword"])
+        self.assertTrue(_FakeRAGFlowClient.retrieval_options[0]["highlight"])
         self.assertEqual(seen_profile_ids, [["repo-anleitungen", "repo-geheim"]])
         self.assertEqual(result["diagnostics"]["profiles_allowed"], 1)
         self.assertEqual(result["diagnostics"]["profiles_denied"], 1)
+        self.assertEqual(result["diagnostics"]["search_template_source"], "builtin")
+        self.assertEqual(result["diagnostics"]["candidate_top_k"], 1024)
         self.assertEqual(result["results"][0]["document_name"], "Handbuch FI Typ B.pdf")
         self.assertEqual(result["results"][0]["source_id"], "S1")
         self.assertEqual(result["results"][0]["citation_label"], "S1")
@@ -128,6 +135,7 @@ class SearchServerTests(unittest.TestCase):
         search_server._authz_filter_profiles = fake_authz
         search_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
         _FakeRAGFlowClient.calls = []
+        _FakeRAGFlowClient.retrieval_options = []
         try:
             result = _handle_query(
                 settings,
@@ -164,6 +172,7 @@ class SearchServerTests(unittest.TestCase):
         search_server._authz_filter_profiles = fake_authz
         search_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
         _FakeRAGFlowClient.calls = []
+        _FakeRAGFlowClient.retrieval_options = []
         try:
             with self.assertRaises(SearchPermissionError):
                 _handle_query(
@@ -192,6 +201,7 @@ class SearchServerTests(unittest.TestCase):
         }
         search_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
         _FakeRAGFlowClient.calls = []
+        _FakeRAGFlowClient.retrieval_options = []
         try:
             with self.assertRaises(SearchPermissionError):
                 _handle_query(
@@ -315,6 +325,7 @@ def _settings() -> SearchServiceSettings:
 
 class _FakeRAGFlowClient:
     calls: list[str] = []
+    retrieval_options: list[dict[str, object]] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         pass
@@ -322,6 +333,7 @@ class _FakeRAGFlowClient:
     def retrieve_chunks(self, **kwargs: object) -> dict[str, object]:
         dataset_id = str(kwargs["dataset_id"])
         self.__class__.calls.append(dataset_id)
+        self.__class__.retrieval_options.append(dict(kwargs.get("retrieval_options") or {}))
         return {
             "chunks": [
                 {

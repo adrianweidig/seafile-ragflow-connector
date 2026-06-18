@@ -71,6 +71,15 @@ Er benötigt keinen Seafile-Admin- oder Sync-Token.
 | `SEARCH_RAGFLOW_BASE_URL` | ja | RAGFlow-URL aus Sicht des Search-Containers. |
 | `SEARCH_RAGFLOW_API_KEY` | ja | RAGFlow-API-Key für erlaubte Abfragen. |
 | `SEARCH_RAGFLOW_VERIFY_SSL`, `SEARCH_RAGFLOW_CA_BUNDLE` | optional | TLS-Prüfung und optionales CA-Bundle für Search -> RAGFlow. |
+| `RAGFLOW_SEARCH_TEMPLATE_ENABLED`, `RAGFLOW_SEARCH_TEMPLATE_NAME` | optional | Aktiviert die Template-Auflösung; Default-Name ist `search_template`. |
+| `SEARCH_RAGFLOW_TEMPLATE_SOURCE_ORDER` | optional | Reihenfolge der Template-Quellen. Default `search_app,chat,builtin`. |
+| `SEARCH_RAGFLOW_CANDIDATE_TOP_K` | optional | Override für RAGFlows internen Kandidatenpool; leer nutzt Template oder Built-in `1024`. |
+| `SEARCH_RAGFLOW_TOP_N` | optional | Override für Quellen-/Kontextanzahl; leer nutzt Template oder Built-in `8`. |
+| `SEARCH_RAGFLOW_SIMILARITY_THRESHOLD`, `SEARCH_RAGFLOW_VECTOR_SIMILARITY_WEIGHT` | optional | Overrides für RAGFlow Hybrid Search; Werte zwischen `0` und `1`. |
+| `SEARCH_RAGFLOW_RERANK_ID` | optional | Optionaler Reranker aus RAGFlow; bei ungültigem Modell wird einmal ohne Reranker wiederholt. |
+| `SEARCH_RAGFLOW_KEYWORD`, `SEARCH_RAGFLOW_HIGHLIGHT` | optional | Overrides für Keyword-Matching und Highlighting. |
+| `SEARCH_RAGFLOW_CROSS_LANGUAGES` | optional | CSV-Liste für Cross-Language Retrieval. |
+| `SEARCH_RAGFLOW_USE_KG`, `SEARCH_RAGFLOW_TOC_ENHANCE` | optional | Overrides für Knowledge Graph und PageIndex/TOC Enhance; nur aktivieren, wenn die Datasets entsprechend vorbereitet sind. |
 | `SEARCH_SEAFILE_PUBLIC_BASE_URL`, `SEARCH_SEAFILE_FILE_URL_TEMPLATE` | optional | Browserseitige Seafile-Links für "Quelle öffnen"; kein Seafile-Token. |
 | `SEARCH_DEFAULT_TOP_K`, `SEARCH_MAX_TOP_K` | optional | Trefferzahl-Defaults und Obergrenze. |
 | `SEARCH_MAX_SELECTED_PROFILES` | optional | Maximale Anzahl gleichzeitig ausgewählter Bibliotheken. |
@@ -159,6 +168,11 @@ installierten System-CAs.
 | `RAGFLOW_TEMPLATE_AUTO_CREATE` | optional | Default `true`; fehlende Dataset-Templates werden beim Provisioning automatisch angelegt. |
 | `RAGFLOW_TEMPLATE_REQUIRED` | optional | Default `true`; Healthcheck warnt nur noch, wenn Auto-Create deaktiviert ist und das Template fehlt. |
 | `RAGFLOW_TEMPLATE_CHAT_NAME` | optional | Default `connector_template_chat`; Template-Chat für die OpenWebUI/RAGFlow-Chat-Defaults. |
+| `RAGFLOW_SEARCH_TEMPLATE_ENABLED` | optional | Default `true`; aktiviert `search_template` als Suchqualitäts-Vorlage. |
+| `RAGFLOW_SEARCH_TEMPLATE_NAME` | optional | Default `search_template`; Name der RAGFlow Search App oder des Chat-Fallbacks. |
+| `RAGFLOW_SEARCH_TEMPLATE_AUTO_CREATE` | optional | Default `true`; der Controller legt die Search App mit Built-in-Defaults an, wenn RAGFlow die API unterstützt. |
+| `RAGFLOW_SEARCH_TEMPLATE_REQUIRED` | optional | Default `false`; bei `true` schlägt die Template-Auflösung fehl, wenn keine passende Vorlage existiert. |
+| `RAGFLOW_SEARCH_TEMPLATE_REFRESH_SECONDS` | optional | Default `300` Sekunden; Intervall für die Search-Template-Prüfung im Controller. Werte unter 60 Sekunden werden abgelehnt. |
 | `RAGFLOW_TEMPLATE_REFRESH_SECONDS` | optional | Intervall für Aktualisierung der Dataset-Einstellungen. Default `1800` Sekunden, also 30 Minuten. Werte unter 60 Sekunden werden abgelehnt. |
 | `RAGFLOW_PUBLIC_BASE_URL`, `RAGFLOW_DOCUMENT_URL_TEMPLATE` | optional | öffentliche RAGFlow-Links in Quellen. |
 | `CONNECTOR_DASHBOARD_ENABLED` | optional | Dashboard starten; für OpenWebUI-Proxy nötig. |

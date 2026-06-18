@@ -229,6 +229,51 @@ class RAGFlowClient:
         msg = f"unexpected chat update response for {chat_id}"
         raise TypeError(msg)
 
+    def list_searches(
+        self,
+        *,
+        keywords: str | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, str] = {}
+        if keywords:
+            params["keywords"] = keywords
+        if page is not None:
+            params["page"] = str(page)
+        if page_size is not None:
+            params["page_size"] = str(page_size)
+        data = unwrap_response(self._client.get("/api/v1/searches", params=params))
+        if isinstance(data, dict) and "search_apps" in data:
+            return list(data["search_apps"])
+        return list(data or [])
+
+    def get_search(self, search_id: str) -> dict[str, Any] | None:
+        try:
+            data = unwrap_response(self._client.get(f"/api/v1/searches/{search_id}"))
+        except ApiError as exc:
+            if _is_missing_search_response(exc.payload):
+                return None
+            raise
+        if isinstance(data, dict):
+            return data
+        msg = f"unexpected search app response for {search_id}"
+        raise TypeError(msg)
+
+    def create_search(self, payload: dict[str, Any]) -> dict[str, Any]:
+        data = unwrap_response(self._client.post("/api/v1/searches", json=payload))
+        if isinstance(data, dict):
+            return data
+        msg = "unexpected search app create response"
+        raise TypeError(msg)
+
+    def update_search(self, search_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        data = unwrap_response(self._client.put(f"/api/v1/searches/{search_id}", json=payload))
+        if isinstance(data, dict):
+            return data
+        msg = f"unexpected search app update response for {search_id}"
+        raise TypeError(msg)
+
     def retrieve_chunks(
         self,
         *,
@@ -236,18 +281,74 @@ class RAGFlowClient:
         question: str,
         top_k: int = 5,
         page_size: int | None = None,
+        retrieval_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "question": question,
             "dataset_ids": [dataset_id],
-            "top_k": top_k,
         }
-        if page_size is not None:
-            payload["page_size"] = page_size
-        data = unwrap_response(self._client.post("/api/v1/retrieval", json=payload))
+        if retrieval_options:
+            payload.update(
+                {
+                    key: value
+                    for key, value in retrieval_options.items()
+                    if value not in (None, "", [], {})
+                }
+            )
+        else:
+            payload["top_k"] = top_k
+            if page_size is not None:
+                payload["page_size"] = page_size
+        data = self._retrieve_chunks_with_retries(payload)
         if isinstance(data, dict):
             return data
         return {"chunks": list(data or [])}
+
+    def _retrieve_chunks_with_retries(self, payload: dict[str, Any]) -> dict[str, Any] | list[Any]:
+        diagnostics: dict[str, Any] = {
+            "rerank_retry": False,
+            "compatibility_retry": False,
+            "retrieval_payload_top_k": payload.get("top_k"),
+            "retrieval_payload_page_size": payload.get("page_size"),
+        }
+        try:
+            data = unwrap_response(self._client.post("/api/v1/retrieval", json=payload))
+            return _with_retrieval_diagnostics(data, diagnostics)
+        except ApiError as exc:
+            if not payload.get("rerank_id") or not _is_rerank_retrieval_error(exc.payload):
+                if not _is_retrieval_option_error(exc.payload):
+                    raise
+            else:
+                retry_payload = dict(payload)
+                retry_payload.pop("rerank_id", None)
+                diagnostics["rerank_retry"] = True
+                try:
+                    data = unwrap_response(
+                        self._client.post("/api/v1/retrieval", json=retry_payload)
+                    )
+                    return _with_retrieval_diagnostics(data, diagnostics)
+                except ApiError as retry_exc:
+                    if not _is_retrieval_option_error(retry_exc.payload):
+                        raise
+                    payload = retry_payload
+
+        compatibility_payload = {
+            key: payload[key]
+            for key in (
+                "question",
+                "dataset_ids",
+                "document_ids",
+                "page",
+                "page_size",
+                "similarity_threshold",
+                "vector_similarity_weight",
+                "top_k",
+            )
+            if key in payload
+        }
+        diagnostics["compatibility_retry"] = True
+        data = unwrap_response(self._client.post("/api/v1/retrieval", json=compatibility_payload))
+        return _with_retrieval_diagnostics(data, diagnostics)
 
     def chat_completion(
         self,
@@ -453,6 +554,60 @@ def _is_missing_chat_response(payload: Any) -> bool:
         return False
     message = str(payload.get("message", ""))
     return "chat" in message.lower() and "not found" in message.lower()
+
+
+def _is_missing_search_response(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("code") not in (102, "102", 404, "404"):
+        return False
+    message = str(payload.get("message", "")).lower()
+    return "search" in message and ("not found" in message or "can't find" in message)
+
+
+def _with_retrieval_diagnostics(
+    data: Any,
+    diagnostics: dict[str, Any],
+) -> dict[str, Any] | list[Any]:
+    if isinstance(data, dict):
+        data.setdefault("_connector_retrieval_diagnostics", diagnostics)
+        return data
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def _is_rerank_retrieval_error(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    message = str(payload.get("message", "")).lower()
+    return "rerank" in message or "reranker" in message or (
+        "model" in message and ("authorized" in message or "not found" in message)
+    )
+
+
+def _is_retrieval_option_error(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    message = str(payload.get("message", "")).lower()
+    if payload.get("code") not in (100, 101, 102, 400, "100", "101", "102", "400"):
+        return False
+    return any(
+        marker in message
+        for marker in (
+            "unexpected",
+            "unknown",
+            "invalid",
+            "not allowed",
+            "unsupported",
+            "keyword",
+            "highlight",
+            "cross_languages",
+            "metadata_condition",
+            "use_kg",
+            "toc_enhance",
+        )
+    )
 
 
 def _is_missing_openai_chat_completion_endpoint(exc: ApiError) -> bool:

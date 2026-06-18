@@ -100,6 +100,28 @@ class Settings(BaseSettings):
     ragflow_template_auto_create: bool = True
     ragflow_template_required: bool = True
     ragflow_template_chat_name: str = "connector_template_chat"
+    ragflow_search_template_enabled: bool = True
+    ragflow_search_template_name: str = "search_template"
+    ragflow_search_template_auto_create: bool = True
+    ragflow_search_template_required: bool = False
+    ragflow_search_template_refresh_seconds: int = 300
+    search_ragflow_template_source_order_csv: str = Field(
+        default="search_app,chat,builtin",
+        validation_alias="SEARCH_RAGFLOW_TEMPLATE_SOURCE_ORDER",
+    )
+    search_ragflow_candidate_top_k: int | None = None
+    search_ragflow_top_n: int | None = None
+    search_ragflow_similarity_threshold: float | None = None
+    search_ragflow_vector_similarity_weight: float | None = None
+    search_ragflow_rerank_id: str | None = None
+    search_ragflow_keyword: bool | None = None
+    search_ragflow_highlight: bool | None = None
+    search_ragflow_cross_languages_csv: str = Field(
+        default="",
+        validation_alias="SEARCH_RAGFLOW_CROSS_LANGUAGES",
+    )
+    search_ragflow_use_kg: bool | None = None
+    search_ragflow_toc_enhance: bool | None = None
     ragflow_verify_ssl: bool = True
     ragflow_ca_bundle: str | None = None
     ragflow_template_refresh_seconds: int = DEFAULT_AUTOMATION_INTERVAL_SECONDS
@@ -233,6 +255,12 @@ class Settings(BaseSettings):
     def strip_url(cls, value: str | None) -> str | None:
         return value.rstrip("/") if value else value
 
+    @field_validator("ragflow_search_template_name")
+    @classmethod
+    def strip_required_name(cls, value: str) -> str:
+        stripped = value.strip()
+        return stripped or "search_template"
+
     @field_validator("seafile_file_url_template")
     @classmethod
     def strip_optional_template(cls, value: str | None) -> str | None:
@@ -255,6 +283,7 @@ class Settings(BaseSettings):
         "seafile_client_key_file",
         "connector_proxy_client_cert_file",
         "connector_proxy_client_key_file",
+        "search_ragflow_rerank_id",
         mode="before",
     )
     @classmethod
@@ -262,6 +291,24 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             stripped = value.strip()
             return stripped or None
+        return value
+
+    @field_validator(
+        "search_ragflow_candidate_top_k",
+        "search_ragflow_top_n",
+        "search_ragflow_similarity_threshold",
+        "search_ragflow_vector_similarity_weight",
+        "search_ragflow_rerank_id",
+        "search_ragflow_keyword",
+        "search_ragflow_highlight",
+        "search_ragflow_use_kg",
+        "search_ragflow_toc_enhance",
+        mode="before",
+    )
+    @classmethod
+    def blank_search_override_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
         return value
 
     @field_validator("connector_language")
@@ -296,6 +343,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "ragflow_template_refresh_seconds",
+        "ragflow_search_template_refresh_seconds",
         "openwebui_sync_interval_seconds",
         "search_acl_sync_interval_seconds",
         "discovery_interval_seconds",
@@ -309,6 +357,25 @@ class Settings(BaseSettings):
                 "automation interval settings must be at least "
                 f"{MIN_AUTOMATION_INTERVAL_SECONDS} seconds"
             )
+            raise ValueError(msg)
+        return value
+
+    @field_validator("search_ragflow_candidate_top_k", "search_ragflow_top_n")
+    @classmethod
+    def validate_optional_positive_int(cls, value: int | None) -> int | None:
+        if value is not None and value <= 0:
+            msg = "optional RAGFlow search numeric settings must be positive"
+            raise ValueError(msg)
+        return value
+
+    @field_validator(
+        "search_ragflow_similarity_threshold",
+        "search_ragflow_vector_similarity_weight",
+    )
+    @classmethod
+    def validate_optional_ratio(cls, value: float | None) -> float | None:
+        if value is not None and (value < 0 or value > 1):
+            msg = "optional RAGFlow search ratio settings must be between 0 and 1"
             raise ValueError(msg)
         return value
 
@@ -565,6 +632,27 @@ class SearchServiceSettings(BaseSettings):
     search_ragflow_api_key: str = "change-me"
     search_ragflow_verify_ssl: bool = True
     search_ragflow_ca_bundle: str | None = None
+    ragflow_search_template_enabled: bool = True
+    ragflow_search_template_name: str = "search_template"
+    ragflow_search_template_auto_create: bool = False
+    ragflow_search_template_required: bool = False
+    search_ragflow_template_source_order_csv: str = Field(
+        default="search_app,chat,builtin",
+        validation_alias="SEARCH_RAGFLOW_TEMPLATE_SOURCE_ORDER",
+    )
+    search_ragflow_candidate_top_k: int | None = None
+    search_ragflow_top_n: int | None = None
+    search_ragflow_similarity_threshold: float | None = None
+    search_ragflow_vector_similarity_weight: float | None = None
+    search_ragflow_rerank_id: str | None = None
+    search_ragflow_keyword: bool | None = None
+    search_ragflow_highlight: bool | None = None
+    search_ragflow_cross_languages_csv: str = Field(
+        default="",
+        validation_alias="SEARCH_RAGFLOW_CROSS_LANGUAGES",
+    )
+    search_ragflow_use_kg: bool | None = None
+    search_ragflow_toc_enhance: bool | None = None
     search_seafile_public_base_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("SEARCH_SEAFILE_PUBLIC_BASE_URL", "SEAFILE_PUBLIC_BASE_URL"),
@@ -593,6 +681,12 @@ class SearchServiceSettings(BaseSettings):
     @classmethod
     def validate_connector_language(cls, value: str | None) -> str | None:
         return normalize_language(value)
+
+    @field_validator("ragflow_search_template_name")
+    @classmethod
+    def strip_search_template_name(cls, value: str) -> str:
+        stripped = value.strip()
+        return stripped or "search_template"
 
     @field_validator(
         "search_authz_base_url",
@@ -629,6 +723,24 @@ class SearchServiceSettings(BaseSettings):
         return value
 
     @field_validator(
+        "search_ragflow_candidate_top_k",
+        "search_ragflow_top_n",
+        "search_ragflow_similarity_threshold",
+        "search_ragflow_vector_similarity_weight",
+        "search_ragflow_rerank_id",
+        "search_ragflow_keyword",
+        "search_ragflow_highlight",
+        "search_ragflow_use_kg",
+        "search_ragflow_toc_enhance",
+        mode="before",
+    )
+    @classmethod
+    def blank_search_override_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator(
         "search_default_top_k",
         "search_max_top_k",
         "search_max_selected_profiles",
@@ -639,6 +751,25 @@ class SearchServiceSettings(BaseSettings):
     def validate_search_positive_int(cls, value: int) -> int:
         if value <= 0:
             msg = "search numeric settings must be positive"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("search_ragflow_candidate_top_k", "search_ragflow_top_n")
+    @classmethod
+    def validate_optional_search_positive_int(cls, value: int | None) -> int | None:
+        if value is not None and value <= 0:
+            msg = "optional RAGFlow search numeric settings must be positive"
+            raise ValueError(msg)
+        return value
+
+    @field_validator(
+        "search_ragflow_similarity_threshold",
+        "search_ragflow_vector_similarity_weight",
+    )
+    @classmethod
+    def validate_optional_search_ratio(cls, value: float | None) -> float | None:
+        if value is not None and (value < 0 or value > 1):
+            msg = "optional RAGFlow search ratio settings must be between 0 and 1"
             raise ValueError(msg)
         return value
 

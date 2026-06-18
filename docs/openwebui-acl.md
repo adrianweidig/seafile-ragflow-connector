@@ -17,6 +17,14 @@ OpenWebUI Nutzerfrage
 Der Connector-Core kennt das OpenWebUI-Mapping, löst daraus Dataset und Repo
 auf und ruft dieselbe Access-Control-Entscheidung wie der Search-Service auf.
 
+Für reine Retrieval-Abfragen und den Retrieval-Fallback im Chat nutzt der
+Connector-Core dieselbe RAGFlow-Suchqualitätsvorlage wie der Search-Service:
+zuerst eine RAGFlow Search App `search_template`, danach einen Chat Assistant
+`search_template`, danach den Built-in Standard. Die Vorlage darf nur
+Suchparameter wie Threshold, Vektor-Gewicht, Kandidatenpool, Reranker oder
+Highlighting bestimmen. Datasets werden weiterhin ausschließlich aus dem
+OpenWebUI-Mapping und der ACL-Entscheidung abgeleitet.
+
 ## Nutzeridentität
 
 Die Pipe sendet die verfügbare OpenWebUI-Nutzeridentität im Payload:
