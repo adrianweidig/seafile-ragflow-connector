@@ -31,6 +31,11 @@ from seafile_ragflow_connector.dashboard.export import audit_export_filename, bu
 from seafile_ragflow_connector.dashboard.health import collect_dashboard_health, collect_tls_health
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore
 from seafile_ragflow_connector.dashboard.ui import DASHBOARD_HTML
+from seafile_ragflow_connector.domain.ragflow_search_settings import (
+    ResolvedSearchTemplate,
+    config_from_settings,
+    resolve_search_template,
+)
 from seafile_ragflow_connector.i18n import localizer_for
 from seafile_ragflow_connector.openwebui.sources import (
     annotate_answer_citations,
@@ -1142,7 +1147,14 @@ def _handle_openwebui_query(
         verify=context.settings.ragflow_httpx_verify,
     )
     try:
-        result = ragflow.retrieve_chunks(dataset_id=dataset_id, question=question, top_k=top_k, page_size=top_k)
+        search_template = resolve_search_template(ragflow, config_from_settings(context.settings))
+        result = ragflow.retrieve_chunks(
+            dataset_id=dataset_id,
+            question=question,
+            retrieval_options=search_template.settings.to_retrieval_options(
+                requested_results=top_k,
+            ),
+        )
     finally:
         ragflow.close()
     sources = normalize_sources(
@@ -1165,6 +1177,8 @@ def _handle_openwebui_query(
             "reference_path": "retrieval.chunks",
             "provider": "ragflow",
             "source_count_after_dedup": len(sources),
+            "top_k": top_k,
+            **search_template.diagnostics(),
         },
     }
 
@@ -1199,6 +1213,7 @@ def _handle_openwebui_chat(
     try:
         files_by_document_id = _files_by_document_id(context.store, mapping.repo_id)
         question = _last_user_message(messages)
+        search_template = resolve_search_template(ragflow, config_from_settings(context.settings))
         try:
             result = ragflow.chat_completion(
                 chat_id=chat_id,
@@ -1229,11 +1244,13 @@ def _handle_openwebui_chat(
                 question=question,
                 top_k=top_k,
                 files_by_document_id=files_by_document_id,
+                search_template=search_template,
             )
             diagnostics["reference_path"] = "retrieval.chunks" if sources else ""
             diagnostics["reference_path_detected"] = "retrieval.chunks" if sources else None
             diagnostics["source_count_after_dedup"] = len(sources)
             diagnostics["latency_ms"] = int((time.perf_counter() - started_at) * 1000)
+            diagnostics.update(search_template.diagnostics())
             return {
                 "answer": "",
                 "sources": sources,
@@ -1262,6 +1279,7 @@ def _handle_openwebui_chat(
                     question=question,
                     top_k=top_k,
                     files_by_document_id=files_by_document_id,
+                    search_template=search_template,
                 )
             except ApiError as exc:
                 structlog.get_logger(__name__).warning(
@@ -1293,6 +1311,7 @@ def _handle_openwebui_chat(
         sources=sources,
         latency_ms=int((time.perf_counter() - started_at) * 1000),
     )
+    diagnostics.update(search_template.diagnostics())
     return {
         "answer": answer,
         "sources": sources,
@@ -1523,12 +1542,18 @@ def _retrieve_openwebui_sources(
     question: str,
     top_k: int,
     files_by_document_id: dict[str, dict[str, Any]],
+    search_template: ResolvedSearchTemplate | None = None,
 ) -> list[dict[str, Any]]:
+    resolved = search_template or resolve_search_template(
+        ragflow,
+        config_from_settings(context.settings),
+    )
     retrieval_result = ragflow.retrieve_chunks(
         dataset_id=dataset_id,
         question=question,
-        top_k=top_k,
-        page_size=top_k,
+        retrieval_options=resolved.settings.to_retrieval_options(
+            requested_results=top_k,
+        ),
     )
     return normalize_sources(
         retrieval_result,

@@ -17,6 +17,10 @@ import structlog
 from seafile_ragflow_connector.clients.http import ApiError
 from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
 from seafile_ragflow_connector.config.settings import SearchServiceSettings
+from seafile_ragflow_connector.domain.ragflow_search_settings import (
+    config_from_settings,
+    resolve_search_template,
+)
 from seafile_ragflow_connector.openwebui.sources import extract_references, sign_preview_payload
 from seafile_ragflow_connector.search.ui import SEARCH_HTML
 from seafile_ragflow_connector.sources.evidence import (
@@ -299,7 +303,12 @@ def _handle_query(
     denied = filtered["denied"]
     if not allowed:
         raise SearchPermissionError("Kein Zugriff auf diese Bibliothek.")
-    results = _retrieve_allowed_profiles(settings, allowed, question=question, top_k=top_k)
+    results, template_diagnostics, retrieval_diagnostics = _retrieve_allowed_profiles(
+        settings,
+        allowed,
+        question=question,
+        top_k=top_k,
+    )
     return {
         "query": question,
         "results": results,
@@ -307,6 +316,8 @@ def _handle_query(
             "profiles_allowed": len(allowed),
             "profiles_denied": len(denied),
             "retrieval_mode": "multi_dataset" if len(allowed) > 1 else "single_dataset",
+            **template_diagnostics,
+            "ragflow_retrieval": retrieval_diagnostics,
         },
     }
 
@@ -389,14 +400,17 @@ def _retrieve_allowed_profiles(
     *,
     question: str,
     top_k: int,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
     client = RAGFlowClient(
         settings.search_ragflow_base_url,
         settings.search_ragflow_api_key,
         verify=settings.search_ragflow_httpx_verify,
     )
     try:
+        template = resolve_search_template(client, config_from_settings(settings))
+        retrieval_options = template.settings.to_retrieval_options(requested_results=top_k)
         results: list[dict[str, Any]] = []
+        retrieval_diagnostics: list[dict[str, Any]] = []
         for profile in allowed:
             dataset_id = str(profile.get("ragflow_dataset_id") or "")
             if not dataset_id:
@@ -404,15 +418,28 @@ def _retrieve_allowed_profiles(
             raw = client.retrieve_chunks(
                 dataset_id=dataset_id,
                 question=question,
-                top_k=top_k,
-                page_size=top_k,
+                retrieval_options=retrieval_options,
             )
+            if isinstance(raw, dict) and isinstance(
+                raw.get("_connector_retrieval_diagnostics"),
+                dict,
+            ):
+                retrieval_diagnostics.append(
+                    {
+                        "dataset_id": dataset_id,
+                        **dict(raw["_connector_retrieval_diagnostics"]),
+                    }
+                )
             results.extend(_search_results_from_ragflow(raw, profile, settings=settings))
     finally:
         client.close()
-    return _finalize_search_results(
-        _deduplicate_results(results)[:top_k],
-        settings=settings,
+    return (
+        _finalize_search_results(
+            _deduplicate_results(results)[:top_k],
+            settings=settings,
+        ),
+        template.diagnostics(),
+        retrieval_diagnostics,
     )
 
 

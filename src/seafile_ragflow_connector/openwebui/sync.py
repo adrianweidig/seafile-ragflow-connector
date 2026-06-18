@@ -15,6 +15,12 @@ from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore, new_sync_id, safe_text
 from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.domain.ragflow_defaults import build_chat_payload
+from seafile_ragflow_connector.domain.ragflow_search_settings import (
+    ResolvedSearchTemplate,
+    apply_retrieval_settings_to_chat_payload,
+    config_from_settings,
+    resolve_search_template,
+)
 from seafile_ragflow_connector.openwebui.artifacts import (
     ARTIFACT_VERSION,
     DatasetArtifactInputs,
@@ -68,6 +74,7 @@ class OpenWebUISyncService:
         self.openwebui_client = openwebui_client
         self.dashboard_store = dashboard_store
         self.log = structlog.get_logger(__name__)
+        self._search_template_cache: ResolvedSearchTemplate | None = None
 
     def sync_once(
         self,
@@ -75,6 +82,7 @@ class OpenWebUISyncService:
         mode_override: Literal["disabled", "dry-run", "sync", "repair"] | None = None,
         repo_ids: set[str] | None = None,
     ) -> OpenWebUISyncSummary:
+        self._search_template_cache = None
         mode = mode_override or self.settings.openwebui_effective_sync_mode
         summary = OpenWebUISyncSummary(dry_run=mode == "dry-run")
         if mode == "disabled":
@@ -403,7 +411,9 @@ class OpenWebUISyncService:
         dataset_id: str,
         mode: str,
     ) -> tuple[str | None, str]:
-        payload = build_chat_payload(chat_name, dataset_id=dataset_id)
+        payload = self._chat_payload_with_search_template(
+            build_chat_payload(chat_name, dataset_id=dataset_id)
+        )
         if mapping.ragflow_chat_id:
             chat = self.ragflow_client.get_chat(mapping.ragflow_chat_id)
             if chat and _chat_has_dataset(chat, dataset_id):
@@ -431,7 +441,7 @@ class OpenWebUISyncService:
 
     def _ensure_template_chat(self, *, mode: str, sync_id: str) -> None:
         chat_name = self.settings.ragflow_template_chat_name
-        payload = build_chat_payload(chat_name)
+        payload = self._chat_payload_with_search_template(build_chat_payload(chat_name))
         existing = self.ragflow_client.list_chats(name=chat_name)
         if len(existing) > 1:
             self.log.warning(
@@ -462,6 +472,28 @@ class OpenWebUISyncService:
             ragflow_chat_id=created.get("id"),
             ragflow_chat_name=chat_name,
         )
+
+    def _chat_payload_with_search_template(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            resolved = self._resolved_search_template()
+        except RuntimeError:
+            config = config_from_settings(self.settings)
+            if config.required:
+                raise
+            self.log.warning(
+                "openwebui.sync.search_template_unavailable",
+                ragflow_search_template_name=config.name,
+            )
+            return payload
+        return apply_retrieval_settings_to_chat_payload(payload, resolved)
+
+    def _resolved_search_template(self) -> ResolvedSearchTemplate:
+        if self._search_template_cache is None:
+            self._search_template_cache = resolve_search_template(
+                self.ragflow_client,
+                config_from_settings(self.settings),
+            )
+        return self._search_template_cache
 
     def _sync_tool(
         self,

@@ -247,8 +247,10 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         )
         self.assertNotIn("dataset_ids", template_chat)
         self.assertEqual(dataset_chat["dataset_ids"], ["dataset-1"])
-        self.assertEqual(dataset_chat["top_n"], 10)
-        self.assertEqual(dataset_chat["vector_similarity_weight"], 0.35)
+        self.assertEqual(dataset_chat["top_n"], 8)
+        self.assertEqual(dataset_chat["top_k"], 1024)
+        self.assertEqual(dataset_chat["similarity_threshold"], 0.2)
+        self.assertEqual(dataset_chat["vector_similarity_weight"], 0.3)
         prompt_config = dataset_chat["prompt_config"]
         self.assertIsInstance(prompt_config, dict)
         self.assertTrue(prompt_config["quote"])
@@ -261,6 +263,58 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         with session_factory() as session:
             mapping = session.query(OpenWebUIDatasetMapping).one()
             self.assertEqual(mapping.artifact_version, "26")
+
+    def test_sync_merges_search_template_chat_settings_into_dataset_chat(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Demo Dataset",
+                    status="active",
+                )
+            )
+            session.commit()
+        ragflow = _FakeRAGFlowClient()
+        ragflow.chats["search-template"] = {
+            "id": "search-template",
+            "name": "search_template",
+            "top_n": 14,
+            "top_k": 2048,
+            "similarity_threshold": 0.07,
+            "vector_similarity_weight": 0.42,
+            "rerank_id": "reranker@provider",
+            "prompt_config": {
+                "keyword": False,
+                "toc_enhance": True,
+                "use_kg": False,
+            },
+        }
+        openwebui = _FakeOpenWebUIClient()
+        service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=ragflow,  # type: ignore[arg-type]
+            openwebui_client=openwebui,  # type: ignore[arg-type]
+        )
+
+        service.sync_once()
+
+        dataset_chat = next(
+            payload
+            for payload in ragflow.created_chats
+            if str(payload["name"]).startswith("RAG_demo_dataset_")
+        )
+        self.assertEqual(dataset_chat["top_n"], 14)
+        self.assertEqual(dataset_chat["top_k"], 2048)
+        self.assertEqual(dataset_chat["similarity_threshold"], 0.07)
+        self.assertEqual(dataset_chat["vector_similarity_weight"], 0.42)
+        self.assertEqual(dataset_chat["rerank_id"], "reranker@provider")
+        self.assertFalse(dataset_chat["prompt_config"]["keyword"])
+        self.assertTrue(dataset_chat["prompt_config"]["toc_enhance"])
 
     def test_sync_can_be_scoped_to_selected_repo_ids(self) -> None:
         session_factory = _session_factory(self)

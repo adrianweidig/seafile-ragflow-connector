@@ -311,6 +311,30 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.search_auth_mode, "trusted_header")
         self.assertEqual(settings.search_default_top_k, 8)
         self.assertEqual(settings.search_max_top_k, 20)
+        self.assertTrue(settings.ragflow_search_template_enabled)
+        self.assertEqual(settings.ragflow_search_template_name, "search_template")
+        self.assertEqual(
+            settings.search_ragflow_template_source_order_csv,
+            "search_app,chat,builtin",
+        )
+        self.assertIsNone(settings.search_ragflow_candidate_top_k)
+        self.assertIsNone(settings.search_ragflow_similarity_threshold)
+
+        blank_overrides = SearchServiceSettings(
+            search_authz_base_url="http://connector-controller:8080",
+            search_authz_shared_secret="authz-secret",
+            search_ragflow_base_url="http://ragflow:9380",
+            search_ragflow_api_key="ragflow-key",
+            search_ragflow_candidate_top_k="",
+            search_ragflow_top_n="",
+            search_ragflow_similarity_threshold="",
+            search_ragflow_vector_similarity_weight="",
+            search_ragflow_rerank_id="",
+            search_ragflow_keyword="",
+            search_ragflow_highlight="",
+        )
+        self.assertIsNone(blank_overrides.search_ragflow_candidate_top_k)
+        self.assertIsNone(blank_overrides.search_ragflow_keyword)
 
     def test_global_dry_run_forces_openwebui_dry_run(self) -> None:
         values = self.base_values()

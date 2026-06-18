@@ -42,6 +42,46 @@ Die pro Dataset erzeugten Chats übernehmen dieselben RAG-Defaults:
   `vector_similarity_weight=0.35` bevorzugen Recall, ohne offensichtlich
   schwache Treffer ungebremst durchzulassen.
 
+## Search-Template
+
+Für die nutzernahe Search-Webseite und den OpenWebUI-Proxy-Fallback gibt es ein
+separates Suchqualitäts-Template mit `RAGFLOW_SEARCH_TEMPLATE_NAME`,
+standardmäßig `search_template`.
+
+Die Auflösung ist bewusst ACL-neutral:
+
+1. RAGFlow Search App `search_template` über `/api/v1/searches`.
+2. RAGFlow Chat Assistant `search_template` über `/api/v1/chats`.
+3. Built-in Standard des Connectors.
+
+Aus dem Template werden nur Retrieval-Qualitätswerte übernommen, zum Beispiel
+`similarity_threshold`, `vector_similarity_weight`, `top_n`, `top_k`,
+`rerank_id`, `keyword`, `highlight`, `cross_languages`, `use_kg` und
+`toc_enhance`. Dataset- oder Dokumentlisten aus dem Template werden ignoriert.
+Die tatsächlich abgefragten Datasets kommen immer erst aus der
+ACL-gefilterten Bibliotheksauswahl.
+
+Der Built-in Standard folgt RAGFlows dokumentierter Hybrid Search:
+
+- `similarity_threshold=0.2`
+- `vector_similarity_weight=0.3`
+- `top_n=8`
+- `top_k=1024`
+- `keyword=true`
+- `highlight=true`
+- `use_kg=false`
+- `toc_enhance=false`
+
+Wichtig: Das Suchfeld "Treffer" in der Connector-UI steuert nur die sichtbare
+Ergebnisanzahl. RAGFlows `top_k` bleibt der interne Kandidatenpool und wird
+deshalb aus `search_template` oder dem Built-in Standard übernommen. Dadurch
+wird nicht mehr versehentlich nur mit acht Kandidaten gesucht.
+
+Wenn `RAGFLOW_SEARCH_TEMPLATE_AUTO_CREATE=true` gesetzt ist, legt der
+Controller eine Search App `search_template` mit den Built-in-Defaults an,
+sofern die RAGFlow-Version die Search-App-API unterstützt. Der separate
+Search-Service liest nur und erstellt keine RAGFlow-Artefakte.
+
 ## Create-Payload-Whitelist
 
 - `avatar`

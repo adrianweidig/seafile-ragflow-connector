@@ -34,6 +34,10 @@ from seafile_ragflow_connector.demo.lifecycle import (
     dumps_summary,
     write_demo_testset,
 )
+from seafile_ragflow_connector.domain.ragflow_search_settings import (
+    config_from_settings,
+    ensure_search_template,
+)
 from seafile_ragflow_connector.i18n import localizer_for, t
 from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
 from seafile_ragflow_connector.jobs.scheduler import PeriodicTask, SimpleScheduler
@@ -372,6 +376,21 @@ def controller() -> None:
         _enqueue_specs(runtime.job_store, runtime.signal_queue, specs)
         log.info("controller.settings_refresh.enqueued", count=len(specs))
 
+    def search_template() -> None:
+        if not settings.ragflow_search_template_enabled:
+            return
+        resolved = ensure_search_template(
+            runtime.ragflow_client,
+            config_from_settings(settings),
+        )
+        log.info(
+            "ragflow.search_template.ready",
+            source=resolved.source,
+            template_name=resolved.name,
+            template_id=resolved.template_id,
+            warnings=list(resolved.warnings),
+        )
+
     def openwebui() -> None:
         if runtime.openwebui_sync_service is None:
             return
@@ -381,6 +400,7 @@ def controller() -> None:
         summary = _sync_acl_snapshot(runtime)
         log.info("controller.acl_snapshot.synced", **summary)
 
+    search_template()
     if (
         settings.openwebui_sync_on_startup
         and settings.openwebui_effective_sync_mode != "disabled"
@@ -392,6 +412,11 @@ def controller() -> None:
         PeriodicTask("discovery", settings.discovery_interval_seconds, discover),
         PeriodicTask("delta", settings.delta_sync_interval_seconds, delta),
         PeriodicTask("template", settings.ragflow_template_refresh_seconds, template),
+        PeriodicTask(
+            "search_template",
+            settings.ragflow_search_template_refresh_seconds,
+            search_template,
+        ),
     ]
     if settings.search_acl_sync_enabled:
         tasks.append(

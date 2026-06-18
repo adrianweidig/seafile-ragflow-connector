@@ -67,6 +67,7 @@ class _ChatHttpClient:
         self.deleted_payloads: list[tuple[str, dict[str, object]]] = []
         self.post_paths: list[str] = []
         self.put_payloads: list[tuple[str, dict[str, object]]] = []
+        self.retrieval_payloads: list[dict[str, object]] = []
 
     def get(self, path: str, *, params: dict[str, str] | None = None) -> httpx.Response:
         request = httpx.Request("GET", f"http://ragflow.local{path}")
@@ -82,6 +83,36 @@ class _ChatHttpClient:
                             "dataset_ids": ["ds-1"],
                         }
                     ],
+                },
+                request=request,
+            )
+        if path == "/api/v1/searches":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "search_apps": [
+                            {
+                                "id": "search-1",
+                                "name": params.get("keywords"),
+                                "search_config": {"top_k": 1024},
+                            }
+                        ]
+                    },
+                },
+                request=request,
+            )
+        if path == "/api/v1/searches/search-1":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "id": "search-1",
+                        "name": "search_template",
+                        "search_config": {"top_k": 1024},
+                    },
                 },
                 request=request,
             )
@@ -101,7 +132,14 @@ class _ChatHttpClient:
                 json={"code": 0, "data": {"id": "chat-new", **json}},
                 request=request,
             )
+        if path == "/api/v1/searches":
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"id": "search-new", **json}},
+                request=request,
+            )
         if path == "/api/v1/retrieval":
+            self.retrieval_payloads.append(json)
             return httpx.Response(
                 200,
                 json={"code": 0, "data": {"chunks": [{"id": "chunk-1", "document_id": "doc-1"}]}},
@@ -167,12 +205,44 @@ class _ChatHttpClient:
                 json={"code": 0, "data": {"metadata": json["metadata"]}},
                 request=request,
             )
+        if path == "/api/v1/searches/search-1":
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"id": "search-1", **json}},
+                request=request,
+            )
         raise AssertionError(path)
 
     def request(self, method: str, path: str, *, json: dict[str, object]) -> httpx.Response:
         request = httpx.Request(method, f"http://ragflow.local{path}")
         self.deleted_payloads.append((path, json))
         return httpx.Response(200, json={"code": 0, "data": True}, request=request)
+
+    def close(self) -> None:
+        return None
+
+
+class _RerankErrorHttpClient:
+    def __init__(self) -> None:
+        self.payloads: list[dict[str, object]] = []
+
+    def post(self, path: str, *, json: dict[str, object]) -> httpx.Response:
+        request = httpx.Request("POST", f"http://ragflow.local{path}")
+        self.payloads.append(json)
+        if len(self.payloads) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "code": 100,
+                    "message": "LookupError('Model(vllm/reranker) not authorized')",
+                },
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"chunks": [{"id": "chunk-1"}]}},
+            request=request,
+        )
 
     def close(self) -> None:
         return None
@@ -221,10 +291,29 @@ class RAGFlowClientTests(unittest.TestCase):
             client.update_chat("chat-1", {"dataset_ids": ["ds-1"]})["id"],
             "chat-1",
         )
+        self.assertEqual(client.list_searches(keywords="search_template")[0]["id"], "search-1")
+        self.assertEqual(client.get_search("search-1")["search_config"]["top_k"], 1024)
+        self.assertEqual(client.create_search({"name": "search_template"})["id"], "search-new")
+        self.assertEqual(
+            client.update_search("search-1", {"search_config": {"top_k": 2048}})["id"],
+            "search-1",
+        )
         self.assertEqual(
             client.retrieve_chunks(dataset_id="ds-1", question="q")["chunks"][0]["id"],
             "chunk-1",
         )
+        self.assertEqual(http_client.retrieval_payloads[-1]["top_k"], 5)
+        self.assertEqual(
+            client.retrieve_chunks(
+                dataset_id="ds-1",
+                question="q",
+                retrieval_options={"top_k": 1024, "page_size": 8, "highlight": True},
+            )["chunks"][0]["id"],
+            "chunk-1",
+        )
+        self.assertEqual(http_client.retrieval_payloads[-1]["top_k"], 1024)
+        self.assertEqual(http_client.retrieval_payloads[-1]["page_size"], 8)
+        self.assertTrue(http_client.retrieval_payloads[-1]["highlight"])
         response = client.chat_completion(
             chat_id="chat-1",
             messages=[{"role": "user", "content": "q"}],
@@ -247,6 +336,27 @@ class RAGFlowClientTests(unittest.TestCase):
                 ("/api/v1/datasets", {"ids": ["ds-1"]}),
             ],
         )
+
+    def test_retrieve_chunks_retries_once_without_invalid_reranker(self) -> None:
+        http_client = _RerankErrorHttpClient()
+        client = RAGFlowClient("http://ragflow.local", "token")
+        client._client = http_client  # type: ignore[assignment]
+
+        result = client.retrieve_chunks(
+            dataset_id="ds-1",
+            question="q",
+            retrieval_options={
+                "top_k": 1024,
+                "page_size": 8,
+                "rerank_id": "vllm/reranker",
+            },
+        )
+
+        self.assertEqual(result["chunks"][0]["id"], "chunk-1")
+        self.assertEqual(len(http_client.payloads), 2)
+        self.assertEqual(http_client.payloads[0]["rerank_id"], "vllm/reranker")
+        self.assertNotIn("rerank_id", http_client.payloads[1])
+        self.assertTrue(result["_connector_retrieval_diagnostics"]["rerank_retry"])
 
 
 class _StreamResponse:

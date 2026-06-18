@@ -38,15 +38,33 @@ HOST_ONLY_ENV_KEYS = {
     "SEARCH_SERVICE_PUBLISHED_PORT",
 }
 
+CONNECTOR_SHARED_SEARCH_KEYS = {
+    "SEARCH_RAGFLOW_CANDIDATE_TOP_K",
+    "SEARCH_RAGFLOW_CROSS_LANGUAGES",
+    "SEARCH_RAGFLOW_HIGHLIGHT",
+    "SEARCH_RAGFLOW_KEYWORD",
+    "SEARCH_RAGFLOW_RERANK_ID",
+    "SEARCH_RAGFLOW_SIMILARITY_THRESHOLD",
+    "SEARCH_RAGFLOW_TEMPLATE_SOURCE_ORDER",
+    "SEARCH_RAGFLOW_TOC_ENHANCE",
+    "SEARCH_RAGFLOW_TOP_N",
+    "SEARCH_RAGFLOW_USE_KG",
+    "SEARCH_RAGFLOW_VECTOR_SIMILARITY_WEIGHT",
+}
+
 
 def main() -> int:
     env_keys = _connector_env_example_keys()
     search_service_keys = {
-        key for key in env_keys
-        if key.startswith("SEARCH_") and not key.startswith("SEARCH_ACL_")
+        key
+        for key in env_keys
+        if key.startswith("SEARCH_")
+        and not key.startswith("SEARCH_ACL_")
+        and key not in CONNECTOR_SHARED_SEARCH_KEYS
     }
+    shared_search_keys = env_keys & CONNECTOR_SHARED_SEARCH_KEYS
     expected = env_keys - HOST_ONLY_ENV_KEYS - search_service_keys
-    expected_search = search_service_keys - HOST_ONLY_ENV_KEYS
+    expected_search = (search_service_keys | shared_search_keys) - HOST_ONLY_ENV_KEYS
     failed = False
     for compose_file in COMPOSE_FILES:
         actual = _compose_connector_env_keys(compose_file)
