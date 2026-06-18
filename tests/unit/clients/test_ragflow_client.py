@@ -248,6 +248,32 @@ class _RerankErrorHttpClient:
         return None
 
 
+class _KeywordCompatibilityErrorHttpClient:
+    def __init__(self) -> None:
+        self.payloads: list[dict[str, object]] = []
+
+    def post(self, path: str, *, json: dict[str, object]) -> httpx.Response:
+        request = httpx.Request("POST", f"http://ragflow.local{path}")
+        self.payloads.append(json)
+        if len(self.payloads) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "code": 100,
+                    "message": "Exception('No default chat model is set.')",
+                },
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"chunks": [{"id": "chunk-1"}]}},
+            request=request,
+        )
+
+    def close(self) -> None:
+        return None
+
+
 class RAGFlowClientTests(unittest.TestCase):
     def test_missing_named_dataset_is_empty_list(self) -> None:
         client = RAGFlowClient("http://ragflow.local", "token")
@@ -357,6 +383,34 @@ class RAGFlowClientTests(unittest.TestCase):
         self.assertEqual(http_client.payloads[0]["rerank_id"], "vllm/reranker")
         self.assertNotIn("rerank_id", http_client.payloads[1])
         self.assertTrue(result["_connector_retrieval_diagnostics"]["rerank_retry"])
+
+    def test_retrieve_chunks_retries_without_keyword_when_chat_model_missing(self) -> None:
+        http_client = _KeywordCompatibilityErrorHttpClient()
+        client = RAGFlowClient("http://ragflow.local", "token")
+        client._client = http_client  # type: ignore[assignment]
+
+        result = client.retrieve_chunks(
+            dataset_id="ds-1",
+            question="q",
+            retrieval_options={
+                "top_k": 1024,
+                "page_size": 8,
+                "similarity_threshold": 0.2,
+                "vector_similarity_weight": 0.3,
+                "keyword": True,
+                "highlight": True,
+            },
+        )
+
+        self.assertEqual(result["chunks"][0]["id"], "chunk-1")
+        self.assertEqual(len(http_client.payloads), 2)
+        self.assertTrue(http_client.payloads[0]["keyword"])
+        self.assertTrue(http_client.payloads[0]["highlight"])
+        self.assertNotIn("keyword", http_client.payloads[1])
+        self.assertNotIn("highlight", http_client.payloads[1])
+        self.assertEqual(http_client.payloads[1]["top_k"], 1024)
+        self.assertEqual(http_client.payloads[1]["page_size"], 8)
+        self.assertTrue(result["_connector_retrieval_diagnostics"]["compatibility_retry"])
 
 
 class _StreamResponse:

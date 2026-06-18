@@ -606,6 +606,7 @@ def _is_retrieval_option_error(payload: Any) -> bool:
             "metadata_condition",
             "use_kg",
             "toc_enhance",
+            "default chat model",
         )
     )
 
