@@ -392,9 +392,7 @@ def controller() -> None:
         )
 
     def openwebui() -> None:
-        if runtime.openwebui_sync_service is None:
-            return
-        runtime.openwebui_sync_service.sync_once()
+        _sync_openwebui_controller_guarded(runtime, log)
 
     def acl_snapshot() -> None:
         summary = _sync_acl_snapshot(runtime)
@@ -693,6 +691,19 @@ def _sync_openwebui_if_enabled(runtime: Runtime) -> dict[str, Any] | None:
         return None
     summary = runtime.openwebui_sync_service.sync_once()
     return dict(summary.__dict__)
+
+
+def _sync_openwebui_controller_guarded(runtime: Runtime, log: Any) -> None:
+    if not _openwebui_sync_enabled(runtime) or runtime.openwebui_sync_service is None:
+        return
+    try:
+        runtime.openwebui_sync_service.sync_once()
+    except Exception as exc:
+        log.warning(
+            "controller.openwebui_sync.failed",
+            error=str(exc),
+            error_class=type(exc).__name__,
+        )
 
 
 def _sync_acl_snapshot_if_enabled(runtime: Runtime) -> dict[str, Any] | None:
