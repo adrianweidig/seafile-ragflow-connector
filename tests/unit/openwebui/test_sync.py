@@ -262,7 +262,7 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         self.assertEqual(ragflow.updated_chats, [])
         with session_factory() as session:
             mapping = session.query(OpenWebUIDatasetMapping).one()
-            self.assertEqual(mapping.artifact_version, "26")
+            self.assertEqual(mapping.artifact_version, "27")
 
     def test_sync_merges_search_template_chat_settings_into_dataset_chat(self) -> None:
         session_factory = _session_factory(self)
