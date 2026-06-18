@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from seafile_ragflow_connector.app.cli import (
     _discover_job_specs,
     _format_payload,
+    _sync_openwebui_controller_guarded,
     _sync_openwebui_if_enabled,
 )
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
@@ -24,6 +25,23 @@ class _FakeOpenWebUIService:
     def sync_once(self):
         self.calls += 1
         return SimpleNamespace(datasets_seen=1, tools_created=1, pipes_created=1)
+
+
+class _FailingOpenWebUIService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def sync_once(self):
+        self.calls += 1
+        raise ConnectionError("ragflow unavailable")
+
+
+class _FakeLog:
+    def __init__(self) -> None:
+        self.warnings: list[tuple[str, dict[str, object]]] = []
+
+    def warning(self, event: str, **kwargs: object) -> None:
+        self.warnings.append((event, kwargs))
 
 
 def _runtime(mode: str, service: _FakeOpenWebUIService | None = None):
@@ -72,6 +90,43 @@ class CliSyncHelpersTests(unittest.TestCase):
 
         self.assertIsNone(summary)
         self.assertEqual(service.calls, 0)
+
+    def test_controller_guard_runs_openwebui_sync_when_enabled(self) -> None:
+        service = _FakeOpenWebUIService()
+        log = _FakeLog()
+
+        _sync_openwebui_controller_guarded(
+            _runtime("sync", service),  # type: ignore[arg-type]
+            log,
+        )
+
+        self.assertEqual(service.calls, 1)
+        self.assertEqual(log.warnings, [])
+
+    def test_controller_guard_logs_openwebui_sync_failure(self) -> None:
+        service = _FailingOpenWebUIService()
+        log = _FakeLog()
+
+        _sync_openwebui_controller_guarded(
+            _runtime("sync", service),  # type: ignore[arg-type]
+            log,
+        )
+
+        self.assertEqual(service.calls, 1)
+        self.assertEqual(log.warnings[0][0], "controller.openwebui_sync.failed")
+        self.assertEqual(log.warnings[0][1]["error_class"], "ConnectionError")
+
+    def test_controller_guard_skips_openwebui_when_disabled(self) -> None:
+        service = _FakeOpenWebUIService()
+        log = _FakeLog()
+
+        _sync_openwebui_controller_guarded(
+            _runtime("disabled", service),  # type: ignore[arg-type]
+            log,
+        )
+
+        self.assertEqual(service.calls, 0)
+        self.assertEqual(log.warnings, [])
 
 
 if __name__ == "__main__":
