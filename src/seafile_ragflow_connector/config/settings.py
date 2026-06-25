@@ -105,6 +105,13 @@ class Settings(BaseSettings):
     ragflow_search_template_auto_create: bool = True
     ragflow_search_template_required: bool = False
     ragflow_search_template_refresh_seconds: int = 300
+    search_answer_generation_mode: Literal[
+        "ragflow_chat", "retrieval_summary", "disabled"
+    ] = "ragflow_chat"
+    ragflow_search_answer_chat_name: str = "connector_search_answer"
+    ragflow_search_answer_chat_auto_create: bool = True
+    search_document_viewer_enabled: bool = True
+    search_document_viewer_max_mb: int = 100
     search_ragflow_template_source_order_csv: str = Field(
         default="search_app,chat,builtin",
         validation_alias="SEARCH_RAGFLOW_TEMPLATE_SOURCE_ORDER",
@@ -261,6 +268,12 @@ class Settings(BaseSettings):
         stripped = value.strip()
         return stripped or "search_template"
 
+    @field_validator("ragflow_search_answer_chat_name")
+    @classmethod
+    def strip_search_answer_chat_name(cls, value: str) -> str:
+        stripped = value.strip()
+        return stripped or "connector_search_answer"
+
     @field_validator("seafile_file_url_template")
     @classmethod
     def strip_optional_template(cls, value: str | None) -> str | None:
@@ -322,6 +335,14 @@ class Settings(BaseSettings):
     def validate_max_file_size(cls, value: int) -> int:
         if value <= 0:
             msg = "max_file_size_mb must be positive"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("search_document_viewer_max_mb")
+    @classmethod
+    def validate_search_document_viewer_max_mb(cls, value: int) -> int:
+        if value <= 0:
+            msg = "SEARCH_DOCUMENT_VIEWER_MAX_MB must be positive"
             raise ValueError(msg)
         return value
 
@@ -636,6 +657,10 @@ class SearchServiceSettings(BaseSettings):
     ragflow_search_template_name: str = "search_template"
     ragflow_search_template_auto_create: bool = False
     ragflow_search_template_required: bool = False
+    search_answer_generation_mode: Literal[
+        "ragflow_chat", "retrieval_summary", "disabled"
+    ] = "ragflow_chat"
+    ragflow_search_answer_chat_name: str = "connector_search_answer"
     search_ragflow_template_source_order_csv: str = Field(
         default="search_app,chat,builtin",
         validation_alias="SEARCH_RAGFLOW_TEMPLATE_SOURCE_ORDER",
@@ -676,6 +701,8 @@ class SearchServiceSettings(BaseSettings):
     search_result_snippet_context_chars: int = 420
     search_answer_max_sources: int = 8
     search_source_preview_secret: str | None = None
+    search_document_viewer_enabled: bool = True
+    search_document_viewer_max_mb: int = 100
 
     @field_validator("connector_language")
     @classmethod
@@ -687,6 +714,12 @@ class SearchServiceSettings(BaseSettings):
     def strip_search_template_name(cls, value: str) -> str:
         stripped = value.strip()
         return stripped or "search_template"
+
+    @field_validator("ragflow_search_answer_chat_name")
+    @classmethod
+    def strip_search_answer_chat_name(cls, value: str) -> str:
+        stripped = value.strip()
+        return stripped or "connector_search_answer"
 
     @field_validator(
         "search_authz_base_url",
@@ -746,6 +779,7 @@ class SearchServiceSettings(BaseSettings):
         "search_max_selected_profiles",
         "search_result_snippet_context_chars",
         "search_answer_max_sources",
+        "search_document_viewer_max_mb",
     )
     @classmethod
     def validate_search_positive_int(cls, value: int) -> int:

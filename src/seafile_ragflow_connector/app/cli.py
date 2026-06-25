@@ -34,6 +34,7 @@ from seafile_ragflow_connector.demo.lifecycle import (
     dumps_summary,
     write_demo_testset,
 )
+from seafile_ragflow_connector.domain.ragflow_defaults import build_search_answer_chat_payload
 from seafile_ragflow_connector.domain.ragflow_search_settings import (
     config_from_settings,
     ensure_search_template,
@@ -378,6 +379,7 @@ def controller() -> None:
 
     def search_template() -> None:
         if not settings.ragflow_search_template_enabled:
+            _ensure_search_answer_chat(runtime, log)
             return
         resolved = ensure_search_template(
             runtime.ragflow_client,
@@ -390,6 +392,7 @@ def controller() -> None:
             template_id=resolved.template_id,
             warnings=list(resolved.warnings),
         )
+        _ensure_search_answer_chat(runtime, log)
 
     def openwebui() -> None:
         _sync_openwebui_controller_guarded(runtime, log)
@@ -677,6 +680,73 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
         JobType.RECONCILE_RAGFLOW_DATASET: check_parse,
         JobType.SYNC_OPENWEBUI: sync_openwebui,
     }
+
+
+def _ensure_search_answer_chat(runtime: Runtime, log: Any) -> None:
+    settings = runtime.settings
+    if settings.search_answer_generation_mode != "ragflow_chat":
+        return
+    if not settings.ragflow_search_answer_chat_auto_create:
+        log.info(
+            "ragflow.search_answer_chat.skipped",
+            reason="auto_create_disabled",
+            chat_name=settings.ragflow_search_answer_chat_name,
+        )
+        return
+    payload = build_search_answer_chat_payload(settings.ragflow_search_answer_chat_name)
+    try:
+        existing = runtime.ragflow_client.list_chats(name=settings.ragflow_search_answer_chat_name)
+    except Exception as exc:  # pragma: no cover - deployment-specific startup guard
+        log.warning(
+            "ragflow.search_answer_chat.lookup_failed",
+            chat_name=settings.ragflow_search_answer_chat_name,
+            error=str(exc),
+            error_class=type(exc).__name__,
+        )
+        return
+    matching = [
+        item
+        for item in existing
+        if str(item.get("name") or "").strip() == settings.ragflow_search_answer_chat_name
+    ]
+    if len(matching) > 1:
+        log.warning(
+            "ragflow.search_answer_chat.ambiguous",
+            chat_name=settings.ragflow_search_answer_chat_name,
+            count=len(matching),
+        )
+        return
+    if matching:
+        log.info(
+            "ragflow.search_answer_chat.ready",
+            chat_name=settings.ragflow_search_answer_chat_name,
+            chat_id=_mapping_id(matching[0]),
+            created=False,
+        )
+        return
+    try:
+        created = runtime.ragflow_client.create_chat(payload)
+    except Exception as exc:  # pragma: no cover - deployment-specific startup guard
+        log.warning(
+            "ragflow.search_answer_chat.create_failed",
+            chat_name=settings.ragflow_search_answer_chat_name,
+            error=str(exc),
+            error_class=type(exc).__name__,
+        )
+        return
+    log.info(
+        "ragflow.search_answer_chat.ready",
+        chat_name=settings.ragflow_search_answer_chat_name,
+        chat_id=_mapping_id(created),
+        created=True,
+    )
+
+
+def _mapping_id(value: dict[str, Any]) -> str | None:
+    raw = value.get("id") or value.get("chat_id")
+    if raw in (None, ""):
+        return None
+    return str(raw)
 
 
 def _discover_job_specs(runtime: Runtime) -> list[JobSpec]:

@@ -10,6 +10,19 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.4.6 - 2026-06-25
+
+### Added
+
+- Search-Service erzeugt aus gefundenen Quellen eine RAGFlow-gestützte Antwort
+  mit Quellenmarkern und fällt bei RAGFlow-Problemen auf eine kurze
+  quellengestützte Antwort zurück.
+- Wissenssuche erhält einen mittigen Dokumentviewer mit sicherem
+  Connector-Proxy, Quellen-Auswahl, Antwortbereich und Chatfeld am unteren
+  Rand.
+- Lokaler HTTPS-Edge unterstützt zusätzlich `https://search.top.secret/search`
+  für Portainer-/Compose-Tests.
+
 ## 2.4.5 - 2026-06-18
 
 ### Fixed

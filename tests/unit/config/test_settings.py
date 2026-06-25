@@ -313,6 +313,10 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.search_max_top_k, 20)
         self.assertTrue(settings.ragflow_search_template_enabled)
         self.assertEqual(settings.ragflow_search_template_name, "search_template")
+        self.assertEqual(settings.search_answer_generation_mode, "ragflow_chat")
+        self.assertEqual(settings.ragflow_search_answer_chat_name, "connector_search_answer")
+        self.assertTrue(settings.search_document_viewer_enabled)
+        self.assertEqual(settings.search_document_viewer_max_mb, 100)
         self.assertEqual(
             settings.search_ragflow_template_source_order_csv,
             "search_app,chat,builtin",

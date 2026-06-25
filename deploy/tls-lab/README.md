@@ -5,6 +5,7 @@ Dieses Lab erzeugt eine lokale Root-CA und HTTPS-Testziele mit den Domains:
 - `rag.top.secret`
 - `seafile.top.secret`
 - `connector.top.secret`
+- `search.top.secret`
 - `selfsigned-rag.top.secret`
 - `wronghost.top.secret`
 - `expired-rag.top.secret`
@@ -52,6 +53,8 @@ Erzeugte Dateien:
 | `certs/seafile.top.secret.key.pem` | Test-Private-Key für Seafile-Mock. |
 | `certs/connector.top.secret.cert.pem` | Leaf-Zertifikat für Connector-Proxy-Mock. |
 | `certs/connector.top.secret.key.pem` | Test-Private-Key für Connector-Proxy-Mock. |
+| `certs/search.top.secret.cert.pem` | Leaf-Zertifikat für den lokalen Search-HTTPS-Edge. |
+| `certs/search.top.secret.key.pem` | Test-Private-Key für den lokalen Search-HTTPS-Edge. |
 | `certs/selfsigned-rag.top.secret.cert.pem` | Self-signed Server-Zertifikat für Vergleichstests. |
 | `certs/wronghost.top.secret.cert.pem` | Zertifikat mit absichtlich falschem SAN. |
 | `certs/expired-rag.top.secret.cert.pem` | Abgelaufenes CA-signiertes Server-Zertifikat. |
@@ -72,6 +75,7 @@ auf. Für Browser-Tests auf dem Host müssen die Domains zusätzlich lokal auf
 127.0.0.1 rag.top.secret
 127.0.0.1 seafile.top.secret
 127.0.0.1 connector.top.secret
+127.0.0.1 search.top.secret
 ```
 
 ## Erwartete Bewertung

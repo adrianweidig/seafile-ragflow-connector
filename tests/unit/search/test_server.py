@@ -5,11 +5,13 @@ from urllib.parse import unquote
 
 import seafile_ragflow_connector.search.server as search_server
 from seafile_ragflow_connector.config.settings import SearchServiceSettings
-from seafile_ragflow_connector.openwebui.sources import verify_preview_token
+from seafile_ragflow_connector.openwebui.sources import sign_preview_payload, verify_preview_token
 from seafile_ragflow_connector.search.server import (
     SearchPermissionError,
     SearchUser,
     _compose_answer_from_sources,
+    _handle_chat,
+    _handle_document_proxy,
     _handle_query,
     _search_results_from_ragflow,
 )
@@ -35,6 +37,10 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn("sourceRail", SEARCH_HTML)
         self.assertIn("sourceHover", SEARCH_HTML)
         self.assertIn("Passage suchen", SEARCH_HTML)
+        self.assertIn("documentViewer", SEARCH_HTML)
+        self.assertIn("viewerFrame", SEARCH_HTML)
+        self.assertIn("viewerExcerpt", SEARCH_HTML)
+        self.assertIn("composer", SEARCH_HTML)
 
     def test_query_calls_ragflow_only_for_allowed_profiles(self) -> None:
         settings = _settings()
@@ -108,6 +114,20 @@ class SearchServerTests(unittest.TestCase):
         preview = verify_preview_token(token, settings.effective_search_source_preview_secret)
         self.assertEqual(preview["document_name"], "Handbuch FI Typ B.pdf")
         self.assertEqual(preview["citation_label"], "S1")
+        self.assertTrue(
+            result["results"][0]["viewer_url"].startswith("/api/search/source/document?token=")
+        )
+        viewer_token = unquote(
+            result["results"][0]["viewer_url"].rsplit("token=", 1)[1].split("#", 1)[0]
+        )
+        viewer_payload = verify_preview_token(
+            viewer_token,
+            settings.effective_search_source_preview_secret,
+        )
+        self.assertEqual(viewer_payload["repo_id"], "repo-anleitungen")
+        self.assertEqual(viewer_payload["source_path"], "/Anleitungen/FI/Handbuch FI Typ B.pdf")
+        self.assertEqual(result["results"][0]["viewer_kind"], "pdf")
+        self.assertIn("native", result["results"][0]["viewer_message"])
 
     def test_subset_selection_queries_only_checked_libraries(self) -> None:
         settings = _settings()
@@ -302,6 +322,7 @@ class SearchServerTests(unittest.TestCase):
             "Test",
             [
                 {
+                    "citation_label": "S1",
                     "document_name": "admin-handbuch-test.md",
                     "dataset_name": "Anleitungen",
                     "snippet": "TESTNETZADMIN-HANDBUCH-20260617 Wartungsintervall.",
@@ -309,9 +330,110 @@ class SearchServerTests(unittest.TestCase):
             ],
         )
 
-        self.assertIn("1 passende Quelle", answer)
-        self.assertNotIn("[S1]", answer)
-        self.assertNotIn("TESTNETZADMIN-HANDBUCH-20260617", answer)
+        self.assertIn("TESTNETZADMIN-HANDBUCH-20260617", answer)
+        self.assertIn("[S1]", answer)
+        self.assertNotIn("Ich habe noch keinen separaten KI-Antworttext generiert", answer)
+
+    def test_chat_uses_ragflow_answer_chat_after_retrieval(self) -> None:
+        settings = _settings()
+        original_authz = search_server._authz_filter_profiles
+        original_client = search_server.RAGFlowClient
+        search_server._authz_filter_profiles = lambda _settings, _user, _profile_ids: {
+            "allowed": [
+                {
+                    "profile_id": "repo-anleitungen",
+                    "repo_id": "repo-anleitungen",
+                    "ragflow_dataset_id": "dataset-anleitungen",
+                    "display_name": "Anleitungen",
+                }
+            ],
+            "denied": [],
+        }
+        search_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        _FakeRAGFlowClient.calls = []
+        _FakeRAGFlowClient.answer_messages = []
+        _FakeRAGFlowClient.chats = [{"id": "chat-answer", "name": "connector_search_answer"}]
+        _FakeRAGFlowClient.answer_error = None
+        try:
+            result = _handle_chat(
+                settings,
+                SearchUser(username="olaf", email="olaf@example.local", display_name=None),
+                {
+                    "profile_ids": ["repo-anleitungen"],
+                    "question": "Wie oft Wartung?",
+                    "top_k": 8,
+                },
+            )
+        finally:
+            search_server._authz_filter_profiles = original_authz
+            search_server.RAGFlowClient = original_client  # type: ignore[assignment]
+
+        self.assertEqual(result["answer"]["mode"], "ragflow_chat")
+        self.assertIn("6 Monate [S1]", result["answer"]["text"])
+        prompt = _FakeRAGFlowClient.answer_messages[-1][-1]["content"]
+        self.assertIn("[S1]", prompt)
+        self.assertIn("Wartungsintervall alle 6 Monate.", prompt)
+
+    def test_chat_falls_back_to_source_summary_when_answer_chat_missing(self) -> None:
+        settings = _settings()
+        original_authz = search_server._authz_filter_profiles
+        original_client = search_server.RAGFlowClient
+        search_server._authz_filter_profiles = lambda _settings, _user, _profile_ids: {
+            "allowed": [
+                {
+                    "profile_id": "repo-anleitungen",
+                    "repo_id": "repo-anleitungen",
+                    "ragflow_dataset_id": "dataset-anleitungen",
+                    "display_name": "Anleitungen",
+                }
+            ],
+            "denied": [],
+        }
+        search_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        _FakeRAGFlowClient.calls = []
+        _FakeRAGFlowClient.answer_messages = []
+        _FakeRAGFlowClient.chats = []
+        _FakeRAGFlowClient.answer_error = None
+        try:
+            result = _handle_chat(
+                settings,
+                SearchUser(username="olaf", email="olaf@example.local", display_name=None),
+                {
+                    "profile_ids": ["repo-anleitungen"],
+                    "question": "Wie oft Wartung?",
+                    "top_k": 8,
+                },
+            )
+        finally:
+            search_server._authz_filter_profiles = original_authz
+            search_server.RAGFlowClient = original_client  # type: ignore[assignment]
+
+        self.assertEqual(result["answer"]["mode"], "source_summary_fallback")
+        self.assertIn("Wartungsintervall alle 6 Monate.", result["answer"]["text"])
+        self.assertIn("[S1]", result["answer"]["text"])
+        self.assertEqual(
+            result["diagnostics"]["answer_generation"]["fallback_reason"],
+            "answer_chat_not_found",
+        )
+
+    def test_document_proxy_rejects_expired_viewer_token_before_authz(self) -> None:
+        settings = _settings()
+        token = sign_preview_payload(
+            {
+                "repo_id": "repo-anleitungen",
+                "source_path": "/report.pdf",
+                "dataset_id": "dataset-anleitungen",
+                "expires_at": 1,
+            },
+            settings.effective_search_source_preview_secret,
+        )
+
+        with self.assertRaises(ValueError):
+            _handle_document_proxy(
+                settings,
+                SearchUser(username="olaf", email="olaf@example.local", display_name=None),
+                token,
+            )
 
 
 def _settings() -> SearchServiceSettings:
@@ -326,6 +448,9 @@ def _settings() -> SearchServiceSettings:
 class _FakeRAGFlowClient:
     calls: list[str] = []
     retrieval_options: list[dict[str, object]] = []
+    chats: list[dict[str, str]] = [{"id": "chat-answer", "name": "connector_search_answer"}]
+    answer_messages: list[list[dict[str, object]]] = []
+    answer_error: Exception | None = None
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         pass
@@ -342,6 +467,39 @@ class _FakeRAGFlowClient:
                     "path": "/Anleitungen/FI/Handbuch FI Typ B.pdf",
                     "score": 0.82,
                     "page": 12,
+                }
+            ]
+        }
+
+    def list_chats(
+        self,
+        *,
+        name: str | None = None,
+        chat_id: str | None = None,
+    ) -> list[dict[str, str]]:
+        del chat_id
+        if name is None:
+            return list(self.__class__.chats)
+        return [chat for chat in self.__class__.chats if chat.get("name") == name]
+
+    def chat_completion(
+        self,
+        *,
+        chat_id: str,
+        messages: list[dict[str, object]],
+        model: str = "model",
+        stream: bool = False,
+    ) -> dict[str, object]:
+        del chat_id, model, stream
+        self.__class__.answer_messages.append(messages)
+        if self.__class__.answer_error is not None:
+            raise self.__class__.answer_error
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Das Wartungsintervall beträgt 6 Monate [S1].",
+                    }
                 }
             ]
         }

@@ -94,3 +94,49 @@ def build_chat_payload(name: str, *, dataset_id: str | None = None) -> dict[str,
     if dataset_id is not None:
         payload["dataset_ids"] = [dataset_id]
     return payload
+
+
+def build_search_answer_chat_payload(name: str) -> dict[str, Any]:
+    """Build a RAGFlow chat used only for Search answer synthesis."""
+    return {
+        "name": name,
+        "description": (
+            "Connector-verwalteter Antwort-Chat für die Wissenssuche. "
+            "Die Suche liefert Quellen bereits ACL-geprüft; dieser Chat "
+            "formuliert daraus eine knappe Antwort mit Quellenmarkern."
+        ),
+        "top_n": 1,
+        "top_k": 1,
+        "similarity_threshold": 0.99,
+        "vector_similarity_weight": 0.3,
+        "llm_setting": {
+            "temperature": 0.05,
+            "top_p": 0.2,
+            "presence_penalty": 0.0,
+            "frequency_penalty": 0.2,
+            "max_tokens": 900,
+        },
+        "prompt_config": {
+            "system": (
+                "Du bist ein präziser Antwort-Assistent für eine interne Wissenssuche. "
+                "Antworte ausschließlich aus den vom Connector bereitgestellten "
+                "Quellenblöcken. Nutze keine externen Annahmen. Wenn die Quellen die "
+                "Frage nicht beantworten, sage das klar und nenne, welche Quellen nur "
+                "teilweise passen. Belege jede fachliche Aussage mit Quellenmarkern "
+                "wie [S1] oder [S2]. Antworte in der Sprache der Nutzerfrage.\n\n"
+                "Quellenblöcke:\n{knowledge}\n"
+            ),
+            "prologue": "Ich beantworte die Frage auf Basis der geprüften Quellen.",
+            "parameters": [{"key": "knowledge", "optional": False}],
+            "empty_response": (
+                "Die bereitgestellten Quellen enthalten keine belastbare Antwort."
+            ),
+            "quote": False,
+            "keyword": False,
+            "refine_multiturn": False,
+            "toc_enhance": False,
+            "tts": False,
+            "use_kg": False,
+            "reasoning": False,
+        },
+    }

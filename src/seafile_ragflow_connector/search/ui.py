@@ -217,8 +217,14 @@ SEARCH_HTML = r"""<!doctype html>
     .profile-row input { width: 17px; height: 17px; margin-top: 3px; accent-color: var(--accent); }
     .profile-name { display: block; color: var(--strong); font-weight: 800; overflow-wrap: anywhere; }
     .profile-kind { display: block; margin-top: 2px; color: var(--muted); font-size: .82rem; }
-    .search-panel { overflow: hidden; }
-    .query-area { padding: 18px; display: grid; gap: 14px; border-bottom: 1px solid var(--border); background: var(--surface); }
+    .search-panel {
+      overflow: hidden;
+      min-height: calc(100vh - 118px);
+      display: grid;
+      grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+    }
+    .query-area { padding: 18px; display: grid; gap: 14px; border-top: 1px solid var(--border); background: var(--surface); }
+    .composer { position: sticky; bottom: 0; z-index: 4; box-shadow: 0 -18px 34px rgba(15, 23, 42, .08); }
     .query-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
     .primary {
       min-height: 62px;
@@ -249,6 +255,57 @@ SEARCH_HTML = r"""<!doctype html>
     }
     .answer h2 { margin: 0; color: var(--strong); font-size: 1.08rem; }
     .answer-text { margin: 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 1.02rem; }
+    .viewer {
+      min-height: 42vh;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-2);
+      display: grid;
+      grid-template-rows: auto minmax(260px, 46vh) auto;
+    }
+    .viewer-head {
+      padding: 14px 16px;
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .viewer-title { min-width: 0; display: grid; gap: 3px; }
+    .viewer-title strong { color: var(--strong); overflow-wrap: anywhere; }
+    .viewer-title span { color: var(--muted); font-size: .86rem; overflow-wrap: anywhere; }
+    .viewer-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: end; }
+    .viewer-frame {
+      width: 100%;
+      height: 100%;
+      min-height: 260px;
+      border: 0;
+      background: #fff;
+    }
+    .viewer-empty {
+      min-height: 260px;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .viewer-excerpt {
+      padding: 13px 16px;
+      display: grid;
+      gap: 8px;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+    }
+    .viewer-excerpt mark {
+      background: #fde68a;
+      color: #251a00;
+      border-radius: 4px;
+      padding: 0 2px;
+    }
+    .viewer-excerpt p { margin: 0; overflow-wrap: anywhere; }
+    .viewer-message { color: var(--muted); font-size: .86rem; }
     .citation-strip { display: flex; flex-wrap: wrap; gap: 8px; }
     .citation-button {
       min-height: 34px;
@@ -336,6 +393,10 @@ SEARCH_HTML = r"""<!doctype html>
       .header-actions, .theme-toggle { width: 100%; }
       .toolbar { display: grid; }
       .segments { width: 100%; }
+      .viewer { grid-template-rows: auto minmax(220px, 42vh) auto; }
+      .viewer-head { display: grid; }
+      .viewer-actions { justify-content: stretch; }
+      .viewer-actions .secondary { width: 100%; }
       .result-top { display: grid; }
       .actions .secondary { width: 100%; }
       .source-rail { grid-template-columns: 1fr; }
@@ -384,22 +445,36 @@ SEARCH_HTML = r"""<!doctype html>
         <div class="profile-list" id="profileList"></div>
       </aside>
       <section class="panel search-panel" aria-label="Suche">
-        <div class="query-area">
+        <section class="viewer" id="documentViewer" aria-label="Dokumentviewer">
+          <div class="viewer-head">
+            <div class="viewer-title">
+              <strong id="viewerTitle">Kein Dokument ausgewählt</strong>
+              <span id="viewerMeta">Wähle rechts eine Quelle aus oder starte eine Suche.</span>
+            </div>
+            <div class="viewer-actions" id="viewerActions"></div>
+          </div>
+          <div id="viewerEmpty" class="viewer-empty">Nach der Suche wird hier die beste Quelle im nativen Browserviewer geladen.</div>
+          <iframe id="viewerFrame" class="viewer-frame" title="Dokumentviewer" hidden></iframe>
+          <div class="viewer-excerpt" id="viewerExcerpt">
+            <span class="viewer-message">Trefferpassage und Suchhilfe erscheinen hier.</span>
+          </div>
+        </section>
+        <div id="state" class="state" aria-live="polite">Wähle Bibliotheken aus und starte eine Suche.</div>
+        <div id="answer" class="answer" hidden></div>
+        <div id="results" class="results"></div>
+        <div class="query-area composer" id="composer">
           <form class="query-form" id="queryForm">
             <input class="query-input" id="question" name="question" autocomplete="off" placeholder="Was möchtest du in deinen Bibliotheken wissen?" aria-label="Suchfrage">
             <button class="primary" type="submit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 18a7.5 7.5 0 1 1 5.3-12.8A7.5 7.5 0 0 1 10.5 18Zm6-1.5 4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Suchen</button>
           </form>
           <div class="toolbar">
             <div class="segments" role="group" aria-label="Suchmodus">
-              <button class="segment" type="button" data-mode="retrieval" aria-pressed="true">Dokumente finden</button>
-              <button class="segment" type="button" data-mode="chat" aria-pressed="false">Antwort mit Quellen</button>
+              <button class="segment" type="button" data-mode="retrieval" aria-pressed="false">Dokumente finden</button>
+              <button class="segment" type="button" data-mode="chat" aria-pressed="true">Antwort mit Quellen</button>
             </div>
             <label class="topk">Treffer <input id="topK" type="number" min="1" max="20" value="8"></label>
           </div>
         </div>
-        <div id="state" class="state" aria-live="polite">Wähle Bibliotheken aus und starte eine Suche.</div>
-        <div id="answer" class="answer" hidden></div>
-        <div id="results" class="results"></div>
       </section>
       <aside class="panel sources-panel" aria-label="Quellen">
         <div class="panel-head">
@@ -432,8 +507,14 @@ SEARCH_HTML = r"""<!doctype html>
     const sourceSummaryEl = document.getElementById('sourceSummary');
     const sourceCountEl = document.getElementById('sourceCount');
     const hoverEl = document.getElementById('sourceHover');
+    const viewerTitleEl = document.getElementById('viewerTitle');
+    const viewerMetaEl = document.getElementById('viewerMeta');
+    const viewerActionsEl = document.getElementById('viewerActions');
+    const viewerFrameEl = document.getElementById('viewerFrame');
+    const viewerEmptyEl = document.getElementById('viewerEmpty');
+    const viewerExcerptEl = document.getElementById('viewerExcerpt');
     let profiles = [];
-    let mode = 'retrieval';
+    let mode = 'chat';
     let latestSources = [];
 
     function setState(text, kind = '') {
@@ -517,6 +598,7 @@ SEARCH_HTML = r"""<!doctype html>
       answerEl.innerHTML = '';
       resultsEl.innerHTML = '';
       renderSourceRail([]);
+      selectSource(null);
       const question = questionEl.value.trim();
       if (!question) {
         setState('Gib eine Suchfrage ein.', 'error');
@@ -542,6 +624,7 @@ SEARCH_HTML = r"""<!doctype html>
         if (data.answer) renderAnswer(data.answer, results);
         renderResults(results, question);
         renderSourceRail(results);
+        if (results.length) selectSource(results[0]);
         const denied = data.diagnostics && data.diagnostics.profiles_denied ? data.diagnostics.profiles_denied : 0;
         const allowed = data.diagnostics && data.diagnostics.profiles_allowed ? data.diagnostics.profiles_allowed : profile_ids.length;
         const resultText = `${results.length} Treffer aus ${allowed} Bibliothek${allowed === 1 ? '' : 'en'}.`;
@@ -557,6 +640,8 @@ SEARCH_HTML = r"""<!doctype html>
         label: source.citation_label || source.source_id,
         source_id: source.source_id,
         document_name: source.document_name,
+        viewer_url: source.viewer_url,
+        viewer_kind: source.viewer_kind,
         preview_url: source.preview_url,
         open_url: source.open_url
       }));
@@ -579,6 +664,7 @@ SEARCH_HTML = r"""<!doctype html>
           button.className = 'citation-button answer-source-link';
           button.textContent = `${citation.label || source.source_id} · ${source.document_name || 'Quelle'}`;
           bindSourceInteractions(button, source);
+          button.addEventListener('click', () => selectSource(source));
           strip.appendChild(button);
         }
         answerEl.appendChild(strip);
@@ -612,9 +698,19 @@ SEARCH_HTML = r"""<!doctype html>
           <p class="snippet">${highlightSnippet(item.snippet || 'Kein Snippet verfügbar.', query)}</p>
           <div class="path">${escapeHtml(item.source_path || '')}</div>
           <div class="actions">
+            <button class="secondary" type="button" data-viewer-source="${escapeAttr(item.source_id || '')}">${iconEye()}Quelle öffnen</button>
+            <button class="secondary" type="button" data-copy-source="${escapeAttr(item.source_id || '')}">Passage suchen</button>
             ${item.preview_url ? `<a class="secondary" href="${escapeAttr(item.preview_url)}" target="_blank" rel="noreferrer noopener" title="Vorschau im Evidence-Viewer öffnen">${iconEye()}Vorschau</a>` : '<span class="secondary" aria-disabled="true" title="Keine Vorschau verfügbar.">Vorschau</span>'}
             ${item.open_url ? `<a class="secondary" href="${escapeAttr(item.open_url)}" target="_blank" rel="noreferrer noopener" title="Originallink öffnen">${iconExternal()}${openLabel(item)}</a>` : '<span class="secondary" aria-disabled="true" title="Für diesen Treffer ist kein Originallink vorhanden.">Originallink</span>'}
           </div>`;
+        card.querySelector('[data-viewer-source]').addEventListener('click', event => {
+          event.stopPropagation();
+          selectSource(item);
+        });
+        card.querySelector('[data-copy-source]').addEventListener('click', event => {
+          event.stopPropagation();
+          copyPassage(item);
+        });
         bindSourceInteractions(card, item);
         resultsEl.appendChild(card);
       }
@@ -639,7 +735,7 @@ SEARCH_HTML = r"""<!doctype html>
           <span>${escapeHtml(source.dataset_name || 'Bibliothek')}${location ? ` · ${escapeHtml(location)}` : ''}</span>
           <p>${escapeHtml(compact(source.snippet || '', 150))}</p>`;
         bindSourceInteractions(button, source);
-        button.addEventListener('click', () => focusSource(source));
+        button.addEventListener('click', () => selectSource(source));
         sourceRailEl.appendChild(button);
       }
     }
@@ -649,9 +745,6 @@ SEARCH_HTML = r"""<!doctype html>
       element.addEventListener('focus', event => showHover(event.currentTarget, source));
       element.addEventListener('mouseleave', hideHover);
       element.addEventListener('blur', hideHover);
-      if (element.tagName === 'BUTTON' && element.classList.contains('citation-button')) {
-        element.addEventListener('click', () => openPreview(source));
-      }
     }
 
     function showHover(target, source) {
@@ -672,17 +765,80 @@ SEARCH_HTML = r"""<!doctype html>
       hoverEl.setAttribute('aria-hidden', 'true');
     }
 
+    function selectSource(source) {
+      if (!source) {
+        viewerTitleEl.textContent = 'Kein Dokument ausgewählt';
+        viewerMetaEl.textContent = 'Wähle rechts eine Quelle aus oder starte eine Suche.';
+        viewerActionsEl.innerHTML = '';
+        viewerFrameEl.hidden = true;
+        viewerFrameEl.removeAttribute('src');
+        viewerEmptyEl.hidden = false;
+        viewerEmptyEl.textContent = 'Nach der Suche wird hier die beste Quelle im nativen Browserviewer geladen.';
+        viewerExcerptEl.innerHTML = '<span class="viewer-message">Trefferpassage und Suchhilfe erscheinen hier.</span>';
+        document.querySelectorAll('.result-card,.source-card').forEach(item => item.classList.remove('is-active'));
+        return;
+      }
+      renderViewer(source);
+      focusSource(source);
+    }
+
+    function renderViewer(source) {
+      const location = source.locator && source.locator.label ? source.locator.label : '';
+      viewerTitleEl.textContent = `${source.citation_label || source.source_id || 'Quelle'} · ${source.document_name || 'Dokument'}`;
+      viewerMetaEl.textContent = `${source.dataset_name || 'Bibliothek'}${location ? ` · ${location}` : ''}`;
+      const actions = [];
+      if (source.viewer_url) actions.push(`<a class="secondary" href="${escapeAttr(source.viewer_url)}" target="_blank" rel="noreferrer noopener">${iconEye()}Datei öffnen</a>`);
+      if (source.preview_url) actions.push(`<a class="secondary" href="${escapeAttr(source.preview_url)}" target="_blank" rel="noreferrer noopener">Vorschau</a>`);
+      if (source.open_url) actions.push(`<a class="secondary" href="${escapeAttr(source.open_url)}" target="_blank" rel="noreferrer noopener">Originallink</a>`);
+      actions.push('<button class="secondary" type="button" id="copyActivePassage">Passage suchen</button>');
+      viewerActionsEl.innerHTML = actions.join('');
+      const copyButton = document.getElementById('copyActivePassage');
+      if (copyButton) copyButton.addEventListener('click', () => copyPassage(source));
+
+      const message = source.viewer_message || 'Nutze Strg+F im Viewer und suche nach dem markierten Auszug.';
+      const snippet = compact(source.snippet || '', 520);
+      viewerExcerptEl.innerHTML = `
+        <span class="viewer-message">${escapeHtml(message)} Nutze bei Bedarf Strg+F mit dem kopierbaren Passage-Text.</span>
+        <p>${snippet ? `<mark>${escapeHtml(snippet)}</mark>` : 'Kein Textauszug verfügbar.'}</p>`;
+
+      const inlineTarget = source.viewer_url && source.viewer_url.startsWith('/') && source.viewer_kind !== 'download';
+      if (inlineTarget) {
+        viewerFrameEl.src = source.viewer_url;
+        viewerFrameEl.hidden = false;
+        viewerEmptyEl.hidden = true;
+      } else {
+        viewerFrameEl.hidden = true;
+        viewerFrameEl.removeAttribute('src');
+        viewerEmptyEl.hidden = false;
+        viewerEmptyEl.textContent = source.viewer_url
+          ? 'Diese Quelle ist für den nativen Inline-Viewer nicht geeignet. Öffne sie über „Datei öffnen“ oder nutze den Auszug.'
+          : 'Für diese Quelle ist kein sicherer Dokumentviewer-Link verfügbar. Nutze Vorschau, Originallink oder den Auszug.';
+      }
+    }
+
     function focusSource(source) {
       document.querySelectorAll('.result-card,.source-card').forEach(item => item.classList.remove('is-active'));
       const selector = `[data-source-id="${cssEscape(source.source_id || '')}"]`;
       document.querySelectorAll(selector).forEach(item => item.classList.add('is-active'));
-      const result = document.getElementById(`result-${safeDomId(source.source_id || '')}`);
-      if (result) result.scrollIntoView({behavior: 'smooth', block: 'center'});
     }
 
     function openPreview(source) {
       const target = source.preview_url || source.open_url;
       if (target) window.open(target, '_blank', 'noopener,noreferrer');
+    }
+
+    async function copyPassage(source) {
+      const passage = compact(source.snippet || source.document_name || '', 500);
+      if (!passage) {
+        setState('Für diese Quelle gibt es keinen kopierbaren Passage-Text.', 'error');
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(passage);
+        setState('Passage kopiert. Nutze Strg+F im Dokumentviewer und füge den Text ein.', 'success');
+      } catch (_error) {
+        setState('Passage konnte nicht automatisch kopiert werden. Markiere den gelben Auszug manuell und nutze Strg+F.', 'error');
+      }
     }
 
     function openLabel(item) {

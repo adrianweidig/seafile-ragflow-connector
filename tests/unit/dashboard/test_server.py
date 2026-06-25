@@ -76,6 +76,33 @@ def _store(test_case: unittest.TestCase) -> DashboardEventStore:
     return DashboardEventStore(session_factory, DashboardLimits(page_size=10))
 
 
+def _add_search_profile_with_acl(store: DashboardEventStore, *, user_email: str) -> None:
+    now = utcnow()
+    with store.session_factory() as session:
+        session.add(
+            SearchProfile(
+                repo_id="repo-1",
+                ragflow_dataset_id="dataset-1",
+                ragflow_dataset_name="Anleitungen",
+                display_name="Anleitungen",
+                kind="documents",
+                enabled=True,
+                status="ready",
+                last_acl_sync_at=now,
+            )
+        )
+        session.add(
+            LibraryACLEffectiveUser(
+                repo_id="repo-1",
+                user_email=user_email,
+                permission="r",
+                sources=["user_share"],
+                last_seen_at=now,
+            )
+        )
+        session.commit()
+
+
 @unittest.skipIf(
     create_engine is None,
     "pydantic or sqlalchemy is not installed in this Python environment",
@@ -314,6 +341,83 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(result["allowed"][0]["kind"], "documents")
         self.assertEqual(result["allowed"][0]["status"], "ready")
         self.assertEqual(result["allowed"][0]["permission"], "rw")
+
+    def test_search_document_proxy_does_not_call_seafile_on_authz_deny(self) -> None:
+        store = _store(self)
+        _add_search_profile_with_acl(store, user_email="olaf@example.local")
+        settings = _settings(0)
+        settings.authz_api_shared_secret = "authz-secret"
+        original_client = dashboard_server.SeafileSyncClient
+        dashboard_server.SeafileSyncClient = _FakeDocumentSeafileClient  # type: ignore[assignment]
+        _FakeDocumentSeafileClient.downloads = []
+        try:
+            body, status, _headers = dashboard_server._handle_search_document(
+                DashboardContext(store=store, settings=settings, started_at=utcnow()),
+                {"repo_id": ["repo-1"], "path": ["/report.pdf"]},
+                "Bearer authz-secret",
+                "127.0.0.1",
+                "alfred",
+                "alfred@example.local",
+            )
+        finally:
+            dashboard_server.SeafileSyncClient = original_client  # type: ignore[assignment]
+
+        self.assertEqual(status.value, 403)
+        self.assertIn(b"forbidden", body)
+        self.assertEqual(_FakeDocumentSeafileClient.downloads, [])
+
+    def test_search_document_proxy_serves_pdf_inline_after_authz_allow(self) -> None:
+        store = _store(self)
+        _add_search_profile_with_acl(store, user_email="olaf@example.local")
+        settings = _settings(0)
+        settings.authz_api_shared_secret = "authz-secret"
+        original_client = dashboard_server.SeafileSyncClient
+        dashboard_server.SeafileSyncClient = _FakeDocumentSeafileClient  # type: ignore[assignment]
+        _FakeDocumentSeafileClient.downloads = []
+        _FakeDocumentSeafileClient.body = b"%PDF-1.7"
+        try:
+            body, status, headers = dashboard_server._handle_search_document(
+                DashboardContext(store=store, settings=settings, started_at=utcnow()),
+                {"repo_id": ["repo-1"], "path": ["/report.pdf"]},
+                "Bearer authz-secret",
+                "127.0.0.1",
+                "olaf",
+                "olaf@example.local",
+            )
+        finally:
+            dashboard_server.SeafileSyncClient = original_client  # type: ignore[assignment]
+
+        self.assertEqual(status.value, 200)
+        self.assertEqual(body, b"%PDF-1.7")
+        self.assertEqual(headers["Content-Type"], "application/pdf")
+        self.assertIn("inline", headers["Content-Disposition"])
+        self.assertEqual(_FakeDocumentSeafileClient.downloads, [("repo-1", "/report.pdf")])
+
+    def test_search_document_proxy_serves_html_as_plain_text(self) -> None:
+        store = _store(self)
+        _add_search_profile_with_acl(store, user_email="olaf@example.local")
+        settings = _settings(0)
+        settings.authz_api_shared_secret = "authz-secret"
+        original_client = dashboard_server.SeafileSyncClient
+        dashboard_server.SeafileSyncClient = _FakeDocumentSeafileClient  # type: ignore[assignment]
+        _FakeDocumentSeafileClient.downloads = []
+        _FakeDocumentSeafileClient.body = b"<html><script>alert(1)</script></html>"
+        try:
+            body, status, headers = dashboard_server._handle_search_document(
+                DashboardContext(store=store, settings=settings, started_at=utcnow()),
+                {"repo_id": ["repo-1"], "path": ["/index.html"]},
+                "Bearer authz-secret",
+                "127.0.0.1",
+                "olaf",
+                "olaf@example.local",
+            )
+        finally:
+            dashboard_server.SeafileSyncClient = original_client  # type: ignore[assignment]
+
+        self.assertEqual(status.value, 200)
+        self.assertEqual(body, b"<html><script>alert(1)</script></html>")
+        self.assertEqual(headers["Content-Type"], "text/plain; charset=utf-8")
+        self.assertIn("inline", headers["Content-Disposition"])
 
     def test_workflow_libraries_lists_api_visible_libraries_with_control_state(self) -> None:
         store = _store(self)
@@ -1376,6 +1480,21 @@ class _FakeWorkflowOpenWebUISummary:
     pipes_created: int = 1
     failed: int = 0
     dry_run: bool = False
+
+
+class _FakeDocumentSeafileClient:
+    downloads: list[tuple[str, str]] = []
+    body: bytes = b"%PDF-1.7"
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def download_file(self, repo_id: str, path: str) -> bytes:
+        self.__class__.downloads.append((repo_id, path))
+        return self.__class__.body
+
+    def close(self) -> None:
+        pass
 
 
 class _FakeWorkflowOrchestrator:

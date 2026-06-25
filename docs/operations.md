@@ -124,7 +124,7 @@ können ebenfalls mit `--env-file connector.env` gestartet werden:
 | Seafile/RAGFlow im bestehenden Docker-Netz | `deploy/compose/shared-network.compose.yml` |
 | Seafile/RAGFlow/OpenWebUI im gemeinsamen Docker-Netz | `deploy/compose/openwebui.compose.yml` |
 | Unternehmensnetz mit eigener Root-CA | zusätzlich `deploy/compose/enterprise-ca.compose.yml` |
-| Lokaler HTTPS-Edge für Windows/WSL unter `connector.top.secret` | zusätzlich `deploy/compose/connector-top-secret.compose.yml` |
+| Lokaler HTTPS-Edge für Windows/WSL unter `connector.top.secret` und `search.top.secret` | zusätzlich `deploy/compose/connector-top-secret.compose.yml` |
 
 Beispiel:
 
@@ -158,10 +158,11 @@ OpenWebUI-Variante bleibt standardmäßig im Minimalmodus, solange
 gesetzt ist. Für echte Tool-/Pipe-Synchronisation müssen die OpenWebUI-Keys
 und Proxy-Werte ergänzt werden.
 
-Für den lokalen Windows-/WSL-Zugriff über `https://connector.top.secret` kann
-das Overlay `deploy/compose/connector-top-secret.compose.yml` ergänzt werden.
-Es aktiviert das Dashboard im Controller und startet einen Nginx-Edge mit
-lokalem Zertifikat aus `CONNECTOR_CERTS_HOST_DIR`. Die vollständige
+Für den lokalen Windows-/WSL-Zugriff über `https://connector.top.secret` und
+`https://search.top.secret/search` kann das Overlay
+`deploy/compose/connector-top-secret.compose.yml` ergänzt werden. Es aktiviert
+das Dashboard im Controller, hält den Search-Service erreichbar und startet
+einen Nginx-Edge mit lokalen Zertifikaten aus `CONNECTOR_CERTS_HOST_DIR`. Die vollständige
 Runbook-Anleitung einschließlich Windows-Hosts-Eintrag, Root-CA-Import,
 Update-Test und Rollback steht in `docs/local-https-compose.md`.
 

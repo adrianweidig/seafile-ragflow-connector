@@ -22,6 +22,7 @@ auf. Nur erlaubte SearchProfiles werden an RAGFlow weitergegeben.
 | `POST /api/search/query` | Retrieval-Suche über erlaubte Datasets |
 | `POST /api/search/chat` | Antwortmodus mit Quellen aus erlaubten Datasets |
 | `GET /api/search/source/preview?token=...` | signierter Evidence-Viewer für eine Trefferpassage |
+| `GET /api/search/source/document?token=...` | authz-geprüfter same-origin Dokumentproxy für den nativen Browserviewer |
 
 ## Authentifizierung
 
@@ -64,6 +65,9 @@ SEARCH_RAGFLOW_VERIFY_SSL=true
 SEARCH_RAGFLOW_CA_BUNDLE=
 RAGFLOW_SEARCH_TEMPLATE_NAME=search_template
 SEARCH_RAGFLOW_TEMPLATE_SOURCE_ORDER=search_app,chat,builtin
+SEARCH_ANSWER_GENERATION_MODE=ragflow_chat
+RAGFLOW_SEARCH_ANSWER_CHAT_NAME=connector_search_answer
+RAGFLOW_SEARCH_ANSWER_CHAT_AUTO_CREATE=true
 ```
 
 RAGFlow wird pro erlaubtem Dataset abgefragt. Ergebnisse werden
@@ -106,6 +110,15 @@ Reranker, Knowledge Graph und TOC Enhance können gute Ergebnisse verbessern,
 erhöhen aber Latenz und Betriebsanforderungen. Deshalb sind sie im Built-in
 Standard deaktiviert und sollten bewusst im Template aktiviert werden.
 
+Der Antwortmodus (`/api/search/chat`) nutzt Retrieval weiterhin als erste
+Berechtigungs- und Quellenstufe. Danach baut der Search-Service einen kompakten
+Quellenprompt aus `S1` bis `Sn` und ruft den benannten RAGFlow-Answer-Chat über
+OpenAI-kompatible Chat Completions auf. Der Prompt erlaubt nur Aussagen aus den
+bereitgestellten Quellen und erwartet Quellenmarker wie `[S1]`. Wenn der Chat
+fehlt, leer antwortet oder RAGFlow nicht erreichbar ist, fällt die API auf eine
+gekennzeichnete quellengestützte Kurzantwort zurück; Quellen und Diagnostics
+bleiben erhalten.
+
 ## Quellenlinks
 
 Für den Button "Quelle öffnen" braucht der Search-Service nur eine öffentliche
@@ -130,10 +143,20 @@ Snippet, Score und den bestmöglichen Originallink. Dafür werden nur die bereit
 autorisierten RAGFlow-Treffer- und Metadaten in einem signierten Token genutzt;
 der Search-Service wird dadurch nicht zu einem generischen Seafile-Daten-Tunnel.
 
+Der zusätzliche Dokumentviewer verwendet `viewer_url` und ruft das Original über
+den Connector-Core ab. Der Search-Service speichert keinen Seafile-Admin- oder
+Sync-Token; er prüft Preview-Token und Nutzerheader, fragt die Authz-API und
+streamt die Datei nur bei `allow` weiter. Der Core lädt über den bestehenden
+Seafile-Sync-Client und liefert PDF, Text und Bilder inline aus. HTML und
+Markdown werden nicht als aktives same-origin HTML ausgeliefert, sondern als
+Text. Office-Dateien erhalten einen Download-/Fallback-Hinweis.
+
 ```env
 SEARCH_SOURCE_PREVIEW_ENABLED=true
 SEARCH_SOURCE_HOVER_ENABLED=true
 SEARCH_TEXT_FRAGMENT_LINKS_ENABLED=true
+SEARCH_DOCUMENT_VIEWER_ENABLED=true
+SEARCH_DOCUMENT_VIEWER_MAX_MB=100
 SEARCH_RESULT_SNIPPET_CONTEXT_CHARS=420
 SEARCH_ANSWER_MAX_SOURCES=8
 SEARCH_SOURCE_PREVIEW_SECRET=
@@ -148,6 +171,10 @@ Originalsprünge sind bestmöglich, aber nicht garantiert exakt:
 - PDF-Treffer bekommen bei bekannter Seite einen `#page=`-Anker.
 - Text-/HTML-Treffer ohne Seitenanker können zusätzlich einen Browser
   Text-Fragment-Link (`#:~:text=`) erhalten.
+- Exaktes gelbes In-PDF-Highlighting ist mit dem nativen Browserviewer nicht
+  zuverlässig steuerbar. Die UI zeigt deshalb die Trefferpassage gelb neben
+  dem Viewer und bietet "Passage suchen" zum Kopieren des stabilen Suchtexts
+  für `Strg+F`.
 - Wenn Browser, Seafile-Viewer oder Login-Redirect das Fragment nicht
   unterstützen, bleibt der Evidence-Viewer die verlässliche Fundstelle.
 
@@ -156,12 +183,14 @@ Originalsprünge sind bestmöglich, aber nicht garantiert exakt:
 Die GUI unter `/search` ist als Arbeitsoberfläche für Endnutzer gebaut:
 
 - Kopfzeile "Wissenssuche"
-- großes zentrales Suchfeld
+- mittiger Dokumentviewer über Antwort und Chatfeld
+- sticky Chatfeld am unteren Rand der Arbeitsfläche
 - Bibliotheksauswahl mit Checkboxen
 - Filterfeld für Bibliotheken
 - Umschaltung zwischen "Dokumente finden" und "Antwort mit Quellen"
 - dreispaltiges Desktop-Layout mit Quellenpanel
 - Kartenlayout für Ergebnisse mit `S1`-/`S2`-Quellenlabels
+- Quellenchips wählen dieselbe Quelle im Viewer aus
 - Dokumentname, Bibliothek, Pfad, Snippet, Score und Locator-Chip
 - Aktionen "Vorschau", "Quelle öffnen", "Seite öffnen" oder "Passage suchen"
 - Hover-/Fokus-Vorschau für Quellenchips und Trefferkarten

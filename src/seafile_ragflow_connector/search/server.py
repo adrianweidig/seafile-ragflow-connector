@@ -21,7 +21,12 @@ from seafile_ragflow_connector.domain.ragflow_search_settings import (
     config_from_settings,
     resolve_search_template,
 )
-from seafile_ragflow_connector.openwebui.sources import extract_references, sign_preview_payload
+from seafile_ragflow_connector.openwebui.sources import (
+    extract_answer_result,
+    extract_references,
+    sign_preview_payload,
+    verify_preview_token,
+)
 from seafile_ragflow_connector.search.ui import SEARCH_HTML
 from seafile_ragflow_connector.sources.evidence import (
     EvidenceHit,
@@ -38,6 +43,7 @@ SEARCH_CONTENT_SECURITY_POLICY = (
     "frame-ancestors 'none'; "
     "object-src 'none'; "
     "img-src 'self' data:; "
+    "frame-src 'self'; "
     "style-src 'self' 'unsafe-inline'; "
     "script-src 'self' 'unsafe-inline'; "
     "connect-src 'self'; "
@@ -84,6 +90,13 @@ class SearchUser:
     @property
     def display(self) -> str:
         return self.display_name or self.email or self.username or "Unbekannter Nutzer"
+
+
+@dataclass(frozen=True)
+class SearchAnswer:
+    text: str
+    mode: str
+    diagnostics: dict[str, Any]
 
 
 def start_search_server(
@@ -164,6 +177,16 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                             language=context.settings.connector_language or "de",
                         )
                     )
+                    return
+                if parsed.path == "/api/search/source/document":
+                    user = _user_from_headers(context.settings, self.headers)
+                    params = parse_qs(parsed.query)
+                    body, status, headers = _handle_document_proxy(
+                        context.settings,
+                        user,
+                        _one(params, "token"),
+                    )
+                    self._send_binary(body, status=status, headers=headers)
                     return
                 if self.path == "/api/search/profiles":
                     user = _user_from_headers(context.settings, self.headers)
@@ -258,6 +281,23 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_binary(
+            self,
+            body: bytes,
+            *,
+            status: HTTPStatus = HTTPStatus.OK,
+            headers: dict[str, str] | None = None,
+        ) -> None:
+            self.send_response(status.value)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def _send_security_headers(self, *, include_csp: bool = False) -> None:
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
@@ -331,14 +371,15 @@ def _handle_chat(
         raise ValueError("Antwortmodus ist deaktiviert.")
     response = _handle_query(settings, user, payload)
     sources = response["results"]
-    answer_text = _compose_answer_from_sources(str(response["query"]), sources)
+    answer = _generate_answer(settings, str(response["query"]), sources)
     response["answer"] = {
-        "text": answer_text,
-        "mode": "retrieval_summary",
+        "text": answer.text,
+        "mode": answer.mode,
         "citations": _answer_citations(sources, settings),
     }
     response["sources"] = sources
     response["diagnostics"]["retrieval_mode"] = "answer_with_sources"
+    response["diagnostics"]["answer_generation"] = answer.diagnostics
     return response
 
 
@@ -392,6 +433,87 @@ def _authz_headers(settings: SearchServiceSettings, user: SearchUser) -> dict[st
     if user.email:
         headers["X-Authz-Email"] = user.email
     return headers
+
+
+def _authz_check_source(
+    settings: SearchServiceSettings,
+    user: SearchUser,
+    *,
+    repo_id: str,
+    ragflow_dataset_id: str | None,
+) -> None:
+    _require_user_identity(user)
+    payload = {
+        "user": {"username": user.username, "email": user.email},
+        "resource": {"repo_id": repo_id, "ragflow_dataset_id": ragflow_dataset_id},
+        "operation": "search",
+    }
+    with httpx.Client(base_url=settings.search_authz_base_url, timeout=20.0) as client:
+        response = client.post(
+            "/api/authz/check",
+            json=payload,
+            headers=_authz_headers(settings, user),
+        )
+        if response.status_code in {401, 403}:
+            raise SearchPermissionError("Kein Zugriff auf diese Quelle.")
+        response.raise_for_status()
+        data = response.json()
+    if not isinstance(data, dict) or data.get("decision") != "allow":
+        raise SearchPermissionError("Kein Zugriff auf diese Quelle.")
+
+
+def _handle_document_proxy(
+    settings: SearchServiceSettings,
+    user: SearchUser,
+    token: str | None,
+) -> tuple[bytes, HTTPStatus, dict[str, str]]:
+    if not settings.search_document_viewer_enabled:
+        return _json_error_bytes("viewer disabled"), HTTPStatus.NOT_FOUND, {
+            "Content-Type": "application/json; charset=utf-8"
+        }
+    if not token:
+        raise ValueError("token is required")
+    payload = verify_preview_token(token, settings.effective_search_source_preview_secret)
+    _validate_document_token_expiry(payload)
+    repo_id = _required_payload_text(payload, "repo_id")
+    source_path = _normalize_source_path(_required_payload_text(payload, "source_path")) or ""
+    ragflow_dataset_id = _optional_text(payload.get("dataset_id"))
+    if not source_path:
+        raise ValueError("source_path is required")
+    _authz_check_source(
+        settings,
+        user,
+        repo_id=repo_id,
+        ragflow_dataset_id=ragflow_dataset_id,
+    )
+    headers = _authz_headers(settings, user)
+    headers["Accept"] = "*/*"
+    headers.pop("Content-Type", None)
+    with httpx.Client(base_url=settings.search_authz_base_url, timeout=180.0) as client:
+        response = client.get(
+            "/api/search/document",
+            params={"repo_id": repo_id, "path": source_path},
+            headers=headers,
+        )
+    status = _http_status(response.status_code)
+    response_headers = {
+        "Content-Type": response.headers.get("Content-Type", "application/octet-stream"),
+        "Content-Disposition": response.headers.get(
+            "Content-Disposition",
+            f'inline; filename="{_safe_filename(source_path)}"',
+        ),
+    }
+    body = bytes(response.content)
+    if response.status_code in {401, 403}:
+        raise SearchPermissionError("Kein Zugriff auf diese Quelle.")
+    if response.is_error and not body:
+        body = _json_error_bytes("document unavailable")
+        response_headers["Content-Type"] = "application/json; charset=utf-8"
+    if len(body) > settings.search_document_viewer_max_mb * 1024 * 1024:
+        return _json_error_bytes("document too large"), HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {
+            "Content-Type": "application/json; charset=utf-8"
+        }
+    return body, status, response_headers
 
 
 def _retrieve_allowed_profiles(
@@ -643,7 +765,14 @@ def _finalize_search_results(
         )
         preview_url = _search_preview_url(hit, settings)
         hit = replace(hit, preview_url=preview_url)
-        finalized.append(hit.to_search_result())
+        item = hit.to_search_result()
+        item["viewer_url"] = _search_document_viewer_url(hit, settings)
+        item["viewer_kind"] = _viewer_kind(
+            source_path=hit.source_path,
+            document_name=hit.document_name,
+        )
+        item["viewer_message"] = _viewer_message(str(item["viewer_kind"]), hit)
+        finalized.append(item)
     return finalized
 
 
@@ -655,6 +784,47 @@ def _search_preview_url(hit: EvidenceHit, settings: SearchServiceSettings) -> st
         settings.effective_search_source_preview_secret,
     )
     return f"/api/search/source/preview?token={quote(token)}"
+
+
+def _search_document_viewer_url(hit: EvidenceHit, settings: SearchServiceSettings) -> str | None:
+    if not settings.search_document_viewer_enabled or not hit.repo_id or not hit.source_path:
+        return None
+    payload = hit.preview_payload()
+    payload["purpose"] = "document_viewer"
+    payload["expires_at"] = int(datetime.now(UTC).timestamp()) + 900
+    token = sign_preview_payload(
+        payload,
+        settings.effective_search_source_preview_secret,
+    )
+    page = "" if hit.page in (None, "") else f"#page={quote(str(hit.page), safe='')}"
+    return f"/api/search/source/document?token={quote(token)}{page}"
+
+
+def _viewer_kind(*, source_path: str | None, document_name: str | None) -> str:
+    name = (source_path or document_name or "").strip().lower()
+    if name.endswith(".pdf"):
+        return "pdf"
+    if name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg")):
+        return "image"
+    if name.endswith((".txt", ".md", ".rst", ".log", ".json", ".yaml", ".yml", ".xml", ".csv")):
+        return "text"
+    if name.endswith((".html", ".htm")):
+        return "text"
+    if name.endswith((".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp")):
+        return "download"
+    return "unknown"
+
+
+def _viewer_message(kind: str, hit: EvidenceHit) -> str:
+    if kind == "pdf" and hit.page not in (None, ""):
+        return "PDF wird im nativen Browserviewer ungefähr auf die Trefferseite geöffnet."
+    if kind == "text":
+        return "Textdateien werden inline angezeigt; die markierte Passage steht als Auszug bereit."
+    if kind == "image":
+        return "Bilddateien werden inline angezeigt; die Fundstelle ist als Auszug dokumentiert."
+    if kind == "download":
+        return "Office-Dateien können im nativen Browserviewer meist nicht inline angezeigt werden."
+    return "Der Browser entscheidet, ob diese Datei inline angezeigt oder heruntergeladen wird."
 
 
 def _answer_citations(
@@ -671,26 +841,226 @@ def _answer_citations(
                 "dataset_name": source.get("dataset_name"),
                 "location": (source.get("locator") or {}).get("label"),
                 "preview_url": source.get("preview_url"),
+                "viewer_url": source.get("viewer_url"),
+                "viewer_kind": source.get("viewer_kind"),
                 "open_url": source.get("open_url"),
             }
         )
     return citations
 
 
+def _generate_answer(
+    settings: SearchServiceSettings,
+    question: str,
+    sources: list[dict[str, Any]],
+) -> SearchAnswer:
+    requested_mode = settings.search_answer_generation_mode
+    diagnostics: dict[str, Any] = {
+        "requested_mode": requested_mode,
+        "source_count": len(sources),
+    }
+    if not sources:
+        return SearchAnswer(
+            _compose_answer_from_sources(question, sources),
+            "source_summary_fallback",
+            {**diagnostics, "fallback_reason": "no_sources"},
+        )
+    if requested_mode in {"disabled", "retrieval_summary"}:
+        mode = "disabled" if requested_mode == "disabled" else "source_summary_fallback"
+        reason = (
+            "answer_generation_disabled"
+            if requested_mode == "disabled"
+            else "configured_summary"
+        )
+        return SearchAnswer(
+            _compose_answer_from_sources(question, sources),
+            mode,
+            {**diagnostics, "fallback_reason": reason},
+        )
+
+    client = RAGFlowClient(
+        settings.search_ragflow_base_url,
+        settings.search_ragflow_api_key,
+        verify=settings.search_ragflow_httpx_verify,
+    )
+    try:
+        chat, fallback_reason = _resolve_answer_chat(
+            client,
+            settings.ragflow_search_answer_chat_name,
+        )
+        if chat is None:
+            return SearchAnswer(
+                _compose_answer_from_sources(question, sources),
+                "source_summary_fallback",
+                {**diagnostics, "fallback_reason": fallback_reason},
+            )
+        chat_id = _chat_id(chat)
+        if not chat_id:
+            return SearchAnswer(
+                _compose_answer_from_sources(question, sources),
+                "source_summary_fallback",
+                {**diagnostics, "fallback_reason": "answer_chat_without_id"},
+            )
+        completion = client.chat_completion(
+            chat_id=chat_id,
+            messages=_answer_messages(question, sources, settings),
+        )
+        extracted = extract_answer_result(completion)
+        answer = _clean_generated_answer(extracted.answer)
+        if not answer:
+            return SearchAnswer(
+                _compose_answer_from_sources(question, sources),
+                "source_summary_fallback",
+                {
+                    **diagnostics,
+                    "answer_chat_name": settings.ragflow_search_answer_chat_name,
+                    "answer_chat_id": chat_id,
+                    "fallback_reason": "empty_answer",
+                    "answer_origin": extracted.origin,
+                    "answer_warnings": list(extracted.warnings),
+                },
+            )
+        if not _has_source_marker(answer):
+            labels = ", ".join(
+                str(source.get("citation_label") or source.get("source_id"))
+                for source in sources[: settings.search_answer_max_sources]
+                if source.get("citation_label") or source.get("source_id")
+            )
+            if labels:
+                answer = f"{answer}\n\nQuellen: {labels}."
+        return SearchAnswer(
+            answer,
+            "ragflow_chat",
+            {
+                **diagnostics,
+                "answer_chat_name": settings.ragflow_search_answer_chat_name,
+                "answer_chat_id": chat_id,
+                "answer_origin": extracted.origin,
+                "answer_path": extracted.path,
+                "answer_warnings": list(extracted.warnings),
+            },
+        )
+    except (
+        ApiError,
+        httpx.RequestError,
+        AttributeError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        structlog.get_logger(__name__).warning(
+            "search.answer_generation_failed",
+            error_class=type(exc).__name__,
+            chat_name=settings.ragflow_search_answer_chat_name,
+        )
+        return SearchAnswer(
+            _compose_answer_from_sources(question, sources),
+            "source_summary_fallback",
+            {**diagnostics, "fallback_reason": type(exc).__name__},
+        )
+    finally:
+        client.close()
+
+
+def _resolve_answer_chat(
+    client: RAGFlowClient,
+    chat_name: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    chats = client.list_chats(name=chat_name)
+    exact = [item for item in chats if str(item.get("name") or "").strip() == chat_name]
+    if not exact:
+        return None, "answer_chat_not_found"
+    if len(exact) > 1:
+        return None, "answer_chat_ambiguous"
+    return exact[0], None
+
+
+def _chat_id(chat: dict[str, Any]) -> str | None:
+    value = chat.get("id") or chat.get("chat_id")
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def _answer_messages(
+    question: str,
+    sources: list[dict[str, Any]],
+    settings: SearchServiceSettings,
+) -> list[dict[str, Any]]:
+    source_prompt = _answer_source_prompt(sources[: settings.search_answer_max_sources])
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Antworte ausschließlich aus den bereitgestellten Quellen. "
+                "Jede fachliche Aussage braucht Quellenmarker wie [S1]. "
+                "Wenn die Quellen nur Fundstellen liefern, formuliere eine vorsichtige Antwort."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Frage:\n{question}\n\n"
+                f"Quellen:\n{source_prompt}\n\n"
+                "Erstelle eine knappe, hilfreiche Antwort. Nutze nur diese Quellen."
+            ),
+        },
+    ]
+
+
+def _answer_source_prompt(sources: list[dict[str, Any]]) -> str:
+    blocks: list[str] = []
+    for source in sources:
+        label = str(source.get("citation_label") or source.get("source_id") or "S?")
+        raw_locator = source.get("locator")
+        locator = raw_locator if isinstance(raw_locator, dict) else {}
+        location = str(locator.get("label") or "")
+        snippet = _compact(source.get("snippet"), 900)
+        block = [
+            f"[{label}]",
+            f"Dokument: {source.get('document_name') or 'Dokument'}",
+            f"Bibliothek: {source.get('dataset_name') or 'Bibliothek'}",
+        ]
+        if location:
+            block.append(f"Fundstelle: {location}")
+        if source.get("source_path"):
+            block.append(f"Pfad: {source.get('source_path')}")
+        block.append(f"Auszug: {snippet or 'Kein Textauszug verfügbar.'}")
+        blocks.append("\n".join(block))
+    return "\n\n".join(blocks)
+
+
+def _clean_generated_answer(value: str) -> str:
+    clean = "\n".join(line.rstrip() for line in str(value or "").splitlines()).strip()
+    return clean[:4000].strip()
+
+
+def _has_source_marker(value: str) -> bool:
+    return any(f"[S{index}]" in value for index in range(1, 100))
+
+
 def _compose_answer_from_sources(question: str, sources: list[dict[str, Any]]) -> str:
     if not sources:
         return "Ich habe in den freigegebenen Bibliotheken keine belastbaren Quellen gefunden."
-    count = len(sources)
-    library_names = sorted({str(source.get("dataset_name") or "Bibliothek") for source in sources})
-    libraries = ", ".join(library_names[:3])
-    if len(library_names) > 3:
-        libraries += f" und {len(library_names) - 3} weitere"
+    top_sources = sources[:3]
+    bullets: list[str] = []
+    for source in top_sources:
+        label = str(source.get("citation_label") or source.get("source_id") or "S?")
+        snippet = _compact(source.get("snippet"), 260)
+        document = str(source.get("document_name") or "Dokument")
+        raw_locator = source.get("locator")
+        locator = raw_locator if isinstance(raw_locator, dict) else {}
+        location = str(locator.get("label") or "").strip()
+        context = f" aus {document}" if document else ""
+        if location:
+            context += f", {location}"
+        bullets.append(f"- {snippet or 'Passender Treffer ohne Textauszug'}{context} [{label}]")
     return (
-        f"Zur Frage \"{question}\" wurden {count} passende Quelle"
-        f"{'' if count == 1 else 'n'} gefunden. "
-        "Ich habe noch keinen separaten KI-Antworttext generiert; die belastbaren "
-        "Fundstellen stehen unten als Quellenkarten und sind direkt prüfbar"
-        f"{f' aus {libraries}' if libraries else ''}."
+        f"Für die Frage \"{question}\" liefern die freigegebenen Quellen folgende belastbare "
+        "Anhaltspunkte:\n\n"
+        + "\n".join(bullets)
+        + "\n\nDie Antwort ist aus den gefundenen Fundstellen abgeleitet; "
+        "prüfe bei Bedarf die markierten Quellen."
     )
 
 
@@ -885,6 +1255,45 @@ def _optional_text(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _required_payload_text(payload: dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if value in (None, ""):
+        raise ValueError(f"{key} is required")
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{key} is required")
+    return text
+
+
+def _validate_document_token_expiry(payload: dict[str, Any]) -> None:
+    expires_at = payload.get("expires_at")
+    if expires_at is None or expires_at == "":
+        return
+    try:
+        expires_at_int = int(str(expires_at))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid preview token expiry") from exc
+    if expires_at_int < int(datetime.now(UTC).timestamp()):
+        raise ValueError("preview token expired")
+
+
+def _http_status(value: int) -> HTTPStatus:
+    try:
+        return HTTPStatus(value)
+    except ValueError:
+        return HTTPStatus.BAD_GATEWAY
+
+
+def _json_error_bytes(message: str) -> bytes:
+    return json.dumps({"error": message}, ensure_ascii=False).encode("utf-8")
+
+
+def _safe_filename(path: str) -> str:
+    filename = str(path or "document").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    filename = "".join(char for char in filename if char not in {'"', "\r", "\n"}).strip()
+    return filename or "document"
 
 
 def _one(params: dict[str, list[str]], key: str) -> str | None:

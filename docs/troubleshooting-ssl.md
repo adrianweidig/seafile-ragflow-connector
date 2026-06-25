@@ -71,7 +71,8 @@ TLS-Fehler wird pro Upstream mit `error_type` und Hint wie
 
 Das Repository enthält unter `deploy/tls-lab` ein lokales HTTPS-Lab mit eigener
 Root-CA und den Domains `rag.top.secret`, `seafile.top.secret`,
-`connector.top.secret`, `selfsigned-rag.top.secret`, `wronghost.top.secret` und
+`connector.top.secret`, `search.top.secret`, `selfsigned-rag.top.secret`,
+`wronghost.top.secret` und
 `expired-rag.top.secret`.
 
 Zertifikate erzeugen:

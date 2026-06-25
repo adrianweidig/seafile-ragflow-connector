@@ -10,6 +10,18 @@ retroactively.
 
 No entries.
 
+## 2.4.6 - 2026-06-25
+
+### Added
+
+- Search service now generates a RAGFlow-backed answer from retrieved sources
+  with source markers and falls back to a short source-grounded answer when
+  RAGFlow answer generation is unavailable.
+- Knowledge search now includes a centered document viewer with a safe
+  connector proxy, source selection, answer area, and bottom chat composer.
+- The local HTTPS edge now also supports `https://search.top.secret/search`
+  for Portainer/Compose testing.
+
 ## 2.4.5 - 2026-06-18
 
 ### Fixed
