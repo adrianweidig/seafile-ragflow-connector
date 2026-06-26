@@ -41,6 +41,11 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn("viewerFrame", SEARCH_HTML)
         self.assertIn("viewerExcerpt", SEARCH_HTML)
         self.assertIn("composer", SEARCH_HTML)
+        self.assertIn("[hidden] { display: none !important; }", SEARCH_HTML)
+        self.assertIn("results-details", SEARCH_HTML)
+        self.assertIn("Fundstellen prüfen", SEARCH_HTML)
+        self.assertIn("showToast", SEARCH_HTML)
+        self.assertIn('id="toast"', SEARCH_HTML)
 
     def test_query_calls_ragflow_only_for_allowed_profiles(self) -> None:
         settings = _settings()
@@ -330,9 +335,43 @@ class SearchServerTests(unittest.TestCase):
             ],
         )
 
-        self.assertIn("TESTNETZADMIN-HANDBUCH-20260617", answer)
+        self.assertIn("Wartungsintervall.", answer)
         self.assertIn("[S1]", answer)
+        self.assertNotIn("TESTNETZADMIN-HANDBUCH-20260617", answer)
+        self.assertNotIn("liefern die freigegebenen Quellen folgende belastbare", answer)
         self.assertNotIn("Ich habe noch keinen separaten KI-Antworttext generiert", answer)
+
+    def test_chat_answer_fallback_uses_synthesized_source_markers(self) -> None:
+        answer = _compose_answer_from_sources(
+            "test",
+            [
+                {
+                    "citation_label": "S1",
+                    "document_name": "user-handbuch-test.md",
+                    "dataset_name": "Testnetz User Handbuch",
+                    "snippet": (
+                        "# Testnetz User Handbuch TESTNETZUSER-HANDBUCH-20260617 "
+                        "Dieses Dokument dient normalen Testnetz-Nutzern."
+                    ),
+                },
+                {
+                    "citation_label": "S2",
+                    "document_name": "admin-handbuch-test.md",
+                    "dataset_name": "Testnetz Admin Handbuch",
+                    "snippet": (
+                        "# Testnetz Admin Handbuch TESTNETZADMIN-HANDBUCH-20260617 "
+                        "Dieses Labor-Dokument ist nur für die Admin-Gruppe freigegeben."
+                    ),
+                },
+            ],
+        )
+
+        self.assertIn("kurze Zusammenfassung", answer)
+        self.assertIn("[S1]", answer)
+        self.assertIn("[S2]", answer)
+        self.assertIn("Dieses Dokument dient normalen Testnetz-Nutzern.", answer)
+        self.assertNotIn("TESTNETZUSER-HANDBUCH-20260617", answer)
+        self.assertNotIn("TESTNETZADMIN-HANDBUCH-20260617", answer)
 
     def test_chat_uses_ragflow_answer_chat_after_retrieval(self) -> None:
         settings = _settings()
@@ -373,6 +412,46 @@ class SearchServerTests(unittest.TestCase):
         prompt = _FakeRAGFlowClient.answer_messages[-1][-1]["content"]
         self.assertIn("[S1]", prompt)
         self.assertIn("Wartungsintervall alle 6 Monate.", prompt)
+
+    def test_chat_adds_bracketed_sources_to_answer_without_markers(self) -> None:
+        settings = _settings()
+        original_authz = search_server._authz_filter_profiles
+        original_client = search_server.RAGFlowClient
+        search_server._authz_filter_profiles = lambda _settings, _user, _profile_ids: {
+            "allowed": [
+                {
+                    "profile_id": "repo-anleitungen",
+                    "repo_id": "repo-anleitungen",
+                    "ragflow_dataset_id": "dataset-anleitungen",
+                    "display_name": "Anleitungen",
+                }
+            ],
+            "denied": [],
+        }
+        search_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        _FakeRAGFlowClient.calls = []
+        _FakeRAGFlowClient.answer_messages = []
+        _FakeRAGFlowClient.chats = [{"id": "chat-answer", "name": "connector_search_answer"}]
+        _FakeRAGFlowClient.answer_error = None
+        _FakeRAGFlowClient.answer_content = "Das Wartungsintervall beträgt 6 Monate."
+        try:
+            result = _handle_chat(
+                settings,
+                SearchUser(username="olaf", email="olaf@example.local", display_name=None),
+                {
+                    "profile_ids": ["repo-anleitungen"],
+                    "question": "Wie oft Wartung?",
+                    "top_k": 8,
+                },
+            )
+        finally:
+            search_server._authz_filter_profiles = original_authz
+            search_server.RAGFlowClient = original_client  # type: ignore[assignment]
+            _FakeRAGFlowClient.answer_content = "Das Wartungsintervall beträgt 6 Monate [S1]."
+
+        self.assertEqual(result["answer"]["mode"], "ragflow_chat")
+        self.assertIn("Quellen: [S1].", result["answer"]["text"])
+        self.assertNotIn("Quellen: S1.", result["answer"]["text"])
 
     def test_chat_falls_back_to_source_summary_when_answer_chat_missing(self) -> None:
         settings = _settings()
@@ -451,6 +530,7 @@ class _FakeRAGFlowClient:
     chats: list[dict[str, str]] = [{"id": "chat-answer", "name": "connector_search_answer"}]
     answer_messages: list[list[dict[str, object]]] = []
     answer_error: Exception | None = None
+    answer_content: str = "Das Wartungsintervall beträgt 6 Monate [S1]."
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         pass
@@ -498,7 +578,7 @@ class _FakeRAGFlowClient:
             "choices": [
                 {
                     "message": {
-                        "content": "Das Wartungsintervall beträgt 6 Monate [S1].",
+                        "content": self.__class__.answer_content,
                     }
                 }
             ]

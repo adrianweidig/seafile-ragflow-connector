@@ -1,6 +1,6 @@
 [project]
 name = "seafile-ragflow-connector"
-version = "2.4.6"
+version = "2.4.7"
 description = "Offline-fähiger Seafile-zu-RAGFlow-Sync-Orchestrator"
 readme = "README.md"
 requires-python = ">=3.12"

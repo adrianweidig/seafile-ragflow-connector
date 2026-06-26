@@ -10,6 +10,17 @@ retroactively.
 
 No entries.
 
+## 2.4.7 - 2026-06-26
+
+### Fixed
+
+- Knowledge search now reliably hides the empty document-viewer state once a
+  source is loaded in the native viewer.
+- Answer mode now keeps source result cards compact below the answer and uses
+  toast feedback for passage copying so the answer does not jump down.
+- The source-grounded answer fallback now produces a readable summary with
+  source markers instead of technical raw excerpts.
+
 ## 2.4.6 - 2026-06-25
 
 ### Added

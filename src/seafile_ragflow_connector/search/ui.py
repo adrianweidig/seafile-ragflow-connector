@@ -58,6 +58,7 @@ SEARCH_HTML = r"""<!doctype html>
       --focus: 0 0 0 3px rgba(45, 212, 191, .28);
     }
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     html { min-width: 320px; }
     body {
       margin: 0;
@@ -260,7 +261,7 @@ SEARCH_HTML = r"""<!doctype html>
       border-bottom: 1px solid var(--border);
       background: var(--surface-2);
       display: grid;
-      grid-template-rows: auto minmax(260px, 46vh) auto;
+      grid-template-rows: auto minmax(220px, 34vh) auto;
     }
     .viewer-head {
       padding: 14px 16px;
@@ -297,6 +298,8 @@ SEARCH_HTML = r"""<!doctype html>
       border-top: 1px solid var(--border);
       background: var(--surface);
       color: var(--text);
+      max-height: 132px;
+      overflow: auto;
     }
     .viewer-excerpt mark {
       background: #fde68a;
@@ -320,6 +323,30 @@ SEARCH_HTML = r"""<!doctype html>
       gap: 7px;
     }
     .results { padding: 16px; display: grid; gap: 13px; }
+    .results.is-compact { padding-top: 0; }
+    .results-details {
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .results-details summary {
+      min-height: 44px;
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--strong);
+      font-weight: 850;
+      cursor: pointer;
+    }
+    .results-details summary::after {
+      content: "anzeigen";
+      color: var(--muted);
+      font-size: .84rem;
+      font-weight: 760;
+    }
+    .results-details[open] summary::after { content: "ausblenden"; }
+    .results-grid { padding: 0 16px 16px; display: grid; gap: 13px; }
     .result-card {
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -376,6 +403,22 @@ SEARCH_HTML = r"""<!doctype html>
     .hover-card strong { color: var(--strong); overflow-wrap: anywhere; }
     .hover-card span { color: var(--muted); font-size: .84rem; }
     .hover-card p { margin: 0; overflow-wrap: anywhere; }
+    .toast {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      z-index: 40;
+      max-width: min(420px, calc(100vw - 32px));
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 11px 13px;
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: 0 18px 50px rgba(15, 23, 42, .22);
+      font-weight: 760;
+    }
+    .toast.success { border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); background: var(--accent-soft); color: var(--accent-text); }
+    .toast.error { border-color: color-mix(in srgb, var(--danger) 42%, var(--border)); background: var(--danger-soft); color: var(--danger); }
     @media (max-width: 1180px) {
       main { grid-template-columns: minmax(250px, 300px) minmax(0, 1fr); }
       .sources-panel { position: static; grid-column: 1 / -1; max-height: none; }
@@ -393,7 +436,7 @@ SEARCH_HTML = r"""<!doctype html>
       .header-actions, .theme-toggle { width: 100%; }
       .toolbar { display: grid; }
       .segments { width: 100%; }
-      .viewer { grid-template-rows: auto minmax(220px, 42vh) auto; }
+      .viewer { grid-template-rows: auto minmax(200px, 32vh) auto; }
       .viewer-head { display: grid; }
       .viewer-actions { justify-content: stretch; }
       .viewer-actions .secondary { width: 100%; }
@@ -493,6 +536,7 @@ SEARCH_HTML = r"""<!doctype html>
     </main>
   </div>
   <div class="hover-card" id="sourceHover" role="tooltip" aria-hidden="true"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
   <script>
     const stateEl = document.getElementById('state');
     const resultsEl = document.getElementById('results');
@@ -513,14 +557,26 @@ SEARCH_HTML = r"""<!doctype html>
     const viewerFrameEl = document.getElementById('viewerFrame');
     const viewerEmptyEl = document.getElementById('viewerEmpty');
     const viewerExcerptEl = document.getElementById('viewerExcerpt');
+    const toastEl = document.getElementById('toast');
     let profiles = [];
     let mode = 'chat';
     let latestSources = [];
+    let toastTimer = null;
 
     function setState(text, kind = '') {
       stateEl.textContent = text;
       stateEl.className = 'state' + (kind ? ` ${kind}` : '');
       stateEl.hidden = false;
+    }
+
+    function showToast(text, kind = 'success') {
+      if (toastTimer) window.clearTimeout(toastTimer);
+      toastEl.textContent = text;
+      toastEl.className = 'toast' + (kind ? ` ${kind}` : '');
+      toastEl.hidden = false;
+      toastTimer = window.setTimeout(() => {
+        toastEl.hidden = true;
+      }, 3600);
     }
 
     function selectedProfileIds() {
@@ -628,7 +684,13 @@ SEARCH_HTML = r"""<!doctype html>
         const denied = data.diagnostics && data.diagnostics.profiles_denied ? data.diagnostics.profiles_denied : 0;
         const allowed = data.diagnostics && data.diagnostics.profiles_allowed ? data.diagnostics.profiles_allowed : profile_ids.length;
         const resultText = `${results.length} Treffer aus ${allowed} Bibliothek${allowed === 1 ? '' : 'en'}.`;
-        setState(denied ? `${resultText} ${denied} Bibliothek(en) wurden wegen fehlender Berechtigung ausgelassen.` : resultText, 'success');
+        const successText = denied ? `${resultText} ${denied} Bibliothek(en) wurden wegen fehlender Berechtigung ausgelassen.` : resultText;
+        if (mode === 'chat' && data.answer) {
+          stateEl.hidden = true;
+          showToast(successText, 'success');
+        } else {
+          setState(successText, 'success');
+        }
       } catch (error) {
         setState(error.message || 'Suche fehlgeschlagen.', 'error');
       }
@@ -673,10 +735,14 @@ SEARCH_HTML = r"""<!doctype html>
 
     function renderResults(results, query) {
       resultsEl.innerHTML = '';
+      resultsEl.className = 'results' + (mode === 'chat' ? ' is-compact' : '');
       if (!results.length) {
         resultsEl.innerHTML = '<div class="empty">Keine passenden Treffer in den ausgewählten Bibliotheken gefunden.</div>';
         return;
       }
+      const target = mode === 'chat'
+        ? document.createElement('div')
+        : resultsEl;
       for (const item of results) {
         const card = document.createElement('article');
         card.className = 'result-card';
@@ -712,7 +778,16 @@ SEARCH_HTML = r"""<!doctype html>
           copyPassage(item);
         });
         bindSourceInteractions(card, item);
-        resultsEl.appendChild(card);
+        target.appendChild(card);
+      }
+      if (mode === 'chat') {
+        target.className = 'results-grid';
+        const details = document.createElement('details');
+        details.className = 'results-details';
+        const summary = document.createElement('summary');
+        summary.textContent = `Fundstellen prüfen (${results.length})`;
+        details.append(summary, target);
+        resultsEl.appendChild(details);
       }
     }
 
@@ -830,14 +905,14 @@ SEARCH_HTML = r"""<!doctype html>
     async function copyPassage(source) {
       const passage = compact(source.snippet || source.document_name || '', 500);
       if (!passage) {
-        setState('Für diese Quelle gibt es keinen kopierbaren Passage-Text.', 'error');
+        showToast('Für diese Quelle gibt es keinen kopierbaren Passage-Text.', 'error');
         return;
       }
       try {
         await navigator.clipboard.writeText(passage);
-        setState('Passage kopiert. Nutze Strg+F im Dokumentviewer und füge den Text ein.', 'success');
+        showToast('Passage kopiert. Nutze Strg+F im Dokumentviewer und füge den Text ein.', 'success');
       } catch (_error) {
-        setState('Passage konnte nicht automatisch kopiert werden. Markiere den gelben Auszug manuell und nutze Strg+F.', 'error');
+        showToast('Passage konnte nicht automatisch kopiert werden. Markiere den gelben Auszug manuell und nutze Strg+F.', 'error');
       }
     }
 

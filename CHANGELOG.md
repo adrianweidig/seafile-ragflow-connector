@@ -10,6 +10,17 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.4.7 - 2026-06-26
+
+### Fixed
+
+- Wissenssuche blendet den leeren Dokumentviewer-Zustand zuverlässig aus, sobald
+  eine Quelle im nativen Viewer geladen wird.
+- Antwortmodus zeigt Fundstellen kompakt unter der Antwort und nutzt Toast-
+  Feedback für Passage-Kopieren, damit die Antwort nicht nach unten springt.
+- Quellengestützter Antwort-Fallback formuliert eine lesbare Zusammenfassung
+  mit Quellenmarkern statt technischer Roh-Auszüge.
+
 ## 2.4.6 - 2026-06-25
 
 ### Added

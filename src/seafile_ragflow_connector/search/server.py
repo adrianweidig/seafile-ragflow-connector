@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import threading
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -860,10 +861,13 @@ def _generate_answer(
         "source_count": len(sources),
     }
     if not sources:
-        return SearchAnswer(
-            _compose_answer_from_sources(question, sources),
-            "source_summary_fallback",
-            {**diagnostics, "fallback_reason": "no_sources"},
+        return _answer_fallback(
+            settings,
+            question,
+            sources,
+            mode="source_summary_fallback",
+            diagnostics=diagnostics,
+            fallback_reason="no_sources",
         )
     if requested_mode in {"disabled", "retrieval_summary"}:
         mode = "disabled" if requested_mode == "disabled" else "source_summary_fallback"
@@ -872,10 +876,13 @@ def _generate_answer(
             if requested_mode == "disabled"
             else "configured_summary"
         )
-        return SearchAnswer(
-            _compose_answer_from_sources(question, sources),
-            mode,
-            {**diagnostics, "fallback_reason": reason},
+        return _answer_fallback(
+            settings,
+            question,
+            sources,
+            mode=mode,
+            diagnostics=diagnostics,
+            fallback_reason=reason,
         )
 
     client = RAGFlowClient(
@@ -889,17 +896,23 @@ def _generate_answer(
             settings.ragflow_search_answer_chat_name,
         )
         if chat is None:
-            return SearchAnswer(
-                _compose_answer_from_sources(question, sources),
-                "source_summary_fallback",
-                {**diagnostics, "fallback_reason": fallback_reason},
+            return _answer_fallback(
+                settings,
+                question,
+                sources,
+                mode="source_summary_fallback",
+                diagnostics=diagnostics,
+                fallback_reason=fallback_reason or "answer_chat_not_found",
             )
         chat_id = _chat_id(chat)
         if not chat_id:
-            return SearchAnswer(
-                _compose_answer_from_sources(question, sources),
-                "source_summary_fallback",
-                {**diagnostics, "fallback_reason": "answer_chat_without_id"},
+            return _answer_fallback(
+                settings,
+                question,
+                sources,
+                mode="source_summary_fallback",
+                diagnostics=diagnostics,
+                fallback_reason="answer_chat_without_id",
             )
         completion = client.chat_completion(
             chat_id=chat_id,
@@ -908,21 +921,22 @@ def _generate_answer(
         extracted = extract_answer_result(completion)
         answer = _clean_generated_answer(extracted.answer)
         if not answer:
-            return SearchAnswer(
-                _compose_answer_from_sources(question, sources),
-                "source_summary_fallback",
-                {
-                    **diagnostics,
-                    "answer_chat_name": settings.ragflow_search_answer_chat_name,
+            return _answer_fallback(
+                settings,
+                question,
+                sources,
+                mode="source_summary_fallback",
+                diagnostics=diagnostics,
+                fallback_reason="empty_answer",
+                extra={
                     "answer_chat_id": chat_id,
-                    "fallback_reason": "empty_answer",
                     "answer_origin": extracted.origin,
                     "answer_warnings": list(extracted.warnings),
                 },
             )
         if not _has_source_marker(answer):
             labels = ", ".join(
-                str(source.get("citation_label") or source.get("source_id"))
+                _source_marker_label(source)
                 for source in sources[: settings.search_answer_max_sources]
                 if source.get("citation_label") or source.get("source_id")
             )
@@ -953,13 +967,42 @@ def _generate_answer(
             error_class=type(exc).__name__,
             chat_name=settings.ragflow_search_answer_chat_name,
         )
-        return SearchAnswer(
-            _compose_answer_from_sources(question, sources),
-            "source_summary_fallback",
-            {**diagnostics, "fallback_reason": type(exc).__name__},
+        return _answer_fallback(
+            settings,
+            question,
+            sources,
+            mode="source_summary_fallback",
+            diagnostics=diagnostics,
+            fallback_reason=type(exc).__name__,
         )
     finally:
         client.close()
+
+
+def _answer_fallback(
+    settings: SearchServiceSettings,
+    question: str,
+    sources: list[dict[str, Any]],
+    *,
+    mode: str,
+    diagnostics: dict[str, Any],
+    fallback_reason: str,
+    extra: dict[str, Any] | None = None,
+) -> SearchAnswer:
+    details = {
+        **diagnostics,
+        "answer_chat_name": settings.ragflow_search_answer_chat_name,
+        "fallback_reason": fallback_reason,
+        **(extra or {}),
+    }
+    structlog.get_logger(__name__).info(
+        "search.answer_generation_fallback",
+        fallback_reason=fallback_reason,
+        requested_mode=diagnostics.get("requested_mode"),
+        source_count=len(sources),
+        chat_name=settings.ragflow_search_answer_chat_name,
+    )
+    return SearchAnswer(_compose_answer_from_sources(question, sources), mode, details)
 
 
 def _resolve_answer_chat(
@@ -994,7 +1037,9 @@ def _answer_messages(
             "content": (
                 "Antworte ausschließlich aus den bereitgestellten Quellen. "
                 "Jede fachliche Aussage braucht Quellenmarker wie [S1]. "
-                "Wenn die Quellen nur Fundstellen liefern, formuliere eine vorsichtige Antwort."
+                "Kopiere die Auszüge nicht roh, sondern fasse sie zu einer direkten, "
+                "knappen Antwort zusammen. Wenn die Quellen nur Fundstellen liefern, "
+                "formuliere eine vorsichtige Antwort."
             ),
         },
         {
@@ -1002,7 +1047,9 @@ def _answer_messages(
             "content": (
                 f"Frage:\n{question}\n\n"
                 f"Quellen:\n{source_prompt}\n\n"
-                "Erstelle eine knappe, hilfreiche Antwort. Nutze nur diese Quellen."
+                "Erstelle eine knappe, hilfreiche Antwort in 2 bis 5 Sätzen oder kurzen "
+                "Aufzählungspunkten. Nutze nur diese Quellen und vermeide technische IDs, "
+                "außer sie sind fachlich notwendig."
             ),
         },
     ]
@@ -1039,29 +1086,54 @@ def _has_source_marker(value: str) -> bool:
     return any(f"[S{index}]" in value for index in range(1, 100))
 
 
+def _source_marker_label(source: dict[str, Any]) -> str:
+    label = str(source.get("citation_label") or source.get("source_id") or "S?").strip()
+    if label.startswith("[") and label.endswith("]"):
+        return label
+    return f"[{label}]"
+
+
 def _compose_answer_from_sources(question: str, sources: list[dict[str, Any]]) -> str:
     if not sources:
         return "Ich habe in den freigegebenen Bibliotheken keine belastbaren Quellen gefunden."
     top_sources = sources[:3]
     bullets: list[str] = []
     for source in top_sources:
-        label = str(source.get("citation_label") or source.get("source_id") or "S?")
-        snippet = _compact(source.get("snippet"), 260)
+        label = _source_marker_label(source)
+        snippet = _answer_snippet(source.get("snippet"))
         document = str(source.get("document_name") or "Dokument")
         raw_locator = source.get("locator")
         locator = raw_locator if isinstance(raw_locator, dict) else {}
         location = str(locator.get("label") or "").strip()
-        context = f" aus {document}" if document else ""
+        context = document if document else "Dokument"
         if location:
             context += f", {location}"
-        bullets.append(f"- {snippet or 'Passender Treffer ohne Textauszug'}{context} [{label}]")
+        bullets.append(f"- {snippet or 'Passender Treffer ohne Textauszug'} ({context}) {label}")
     return (
-        f"Für die Frage \"{question}\" liefern die freigegebenen Quellen folgende belastbare "
-        "Anhaltspunkte:\n\n"
+        f"Aus den freigegebenen Quellen ergibt sich zur Frage \"{question}\" diese "
+        "kurze Zusammenfassung:\n\n"
         + "\n".join(bullets)
-        + "\n\nDie Antwort ist aus den gefundenen Fundstellen abgeleitet; "
-        "prüfe bei Bedarf die markierten Quellen."
+        + "\n\nDiese Zusammenfassung basiert ausschließlich auf den gefundenen Fundstellen; "
+        "prüfe Details bei Bedarf in den markierten Quellen."
     )
+
+
+def _answer_snippet(value: object) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    text = re.sub(r"^(?:[#>*\-\s]+)", "", text).strip()
+    text = re.sub(
+        r"^[^.!?]{0,140}\b[A-ZÄÖÜ0-9]+-[A-ZÄÖÜ0-9_-]{8,}\s+",
+        "",
+        text,
+    ).strip()
+    text = re.sub(r"^(?:[A-ZÄÖÜ0-9][A-ZÄÖÜ0-9_-]{11,}\s+)+", "", text).strip()
+    text = re.sub(r"^(?:[A-ZÄÖÜ0-9]+-[A-ZÄÖÜ0-9_-]{8,}\s+)+", "", text).strip()
+    if not text:
+        return ""
+    match = re.search(r"(.{40,220}?[.!?])(?:\s|$)", text)
+    if match:
+        return match.group(1).strip()
+    return _compact(text, 220)
 
 
 def _user_from_headers(settings: SearchServiceSettings, headers: Any) -> SearchUser:
