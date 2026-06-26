@@ -140,11 +140,12 @@ SEARCH_HTML = r"""<!doctype html>
       margin: 0 auto;
       padding: 24px;
       display: grid;
-      grid-template-columns: minmax(260px, 310px) minmax(0, 1fr) minmax(280px, 340px);
-      gap: 18px;
+      grid-template-columns: minmax(250px, 300px) minmax(0, 1fr) minmax(260px, 320px);
+      gap: 16px;
       align-items: start;
     }
     .panel {
+      min-width: 0;
       border: 1px solid var(--border);
       border-radius: 8px;
       background: color-mix(in srgb, var(--surface) 98%, transparent);
@@ -159,6 +160,7 @@ SEARCH_HTML = r"""<!doctype html>
       gap: 12px;
     }
     .head-line { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+    .head-actions { display: inline-flex; align-items: center; gap: 8px; }
     .panel h2 { margin: 0; color: var(--strong); font-size: 1rem; line-height: 1.2; }
     .subtle { margin: 3px 0 0; color: var(--muted); font-size: .88rem; }
     .count-pill {
@@ -174,6 +176,18 @@ SEARCH_HTML = r"""<!doctype html>
       font-weight: 850;
       white-space: nowrap;
     }
+    .panel-toggle {
+      display: none;
+      min-height: 30px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0 9px;
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: .8rem;
+      font-weight: 800;
+    }
+    .panel-toggle:hover { border-color: var(--accent); color: var(--accent-text); }
     .profile-search, .query-input {
       width: 100%;
       border: 1px solid var(--border);
@@ -183,7 +197,14 @@ SEARCH_HTML = r"""<!doctype html>
       outline: none;
     }
     .profile-search { min-height: 38px; padding: 0 11px; font-size: .92rem; }
-    .query-input { min-height: 62px; padding: 0 17px; font-size: 1.08rem; background: var(--surface); }
+    .query-input {
+      height: 46px;
+      min-height: 46px;
+      max-height: 96px;
+      padding: 0 14px;
+      font-size: 1rem;
+      background: var(--surface);
+    }
     .profile-search:focus, .query-input:focus { border-color: var(--accent); box-shadow: var(--focus); }
     .profile-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .mini-button, .secondary, .source-chip {
@@ -202,44 +223,57 @@ SEARCH_HTML = r"""<!doctype html>
     }
     .mini-button:hover, .secondary:hover, .source-chip:hover { border-color: var(--accent); color: var(--accent-text); }
     .mini-button:disabled { opacity: .52; cursor: not-allowed; }
-    .profile-list { padding: 10px; display: grid; gap: 7px; overflow: auto; }
+    .profile-list { padding: 9px; display: grid; gap: 6px; overflow: auto; }
     .profile-row {
       display: grid;
       grid-template-columns: 22px minmax(0, 1fr);
-      gap: 10px;
+      gap: 9px;
       align-items: start;
-      padding: 11px 10px;
+      padding: 9px 10px;
       border: 1px solid transparent;
       border-radius: 8px;
       cursor: pointer;
     }
     .profile-row:hover { background: var(--surface-3); }
-    .profile-row:has(input:checked) { background: var(--selected); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-    .profile-row input { width: 17px; height: 17px; margin-top: 3px; accent-color: var(--accent); }
+    .profile-row:has(input:checked) { background: color-mix(in srgb, var(--accent) 13%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 54%, var(--border)); }
+    .profile-row input { width: 16px; height: 16px; margin-top: 3px; accent-color: var(--accent); }
     .profile-name { display: block; color: var(--strong); font-weight: 800; overflow-wrap: anywhere; }
     .profile-kind { display: block; margin-top: 2px; color: var(--muted); font-size: .82rem; }
     .search-panel {
+      min-width: 0;
       overflow: hidden;
-      min-height: calc(100vh - 118px);
-      display: grid;
-      grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
     }
-    .query-area { padding: 18px; display: grid; gap: 14px; border-top: 1px solid var(--border); background: var(--surface); }
+    .search-panel > *,
+    .viewer,
+    .viewer-head,
+    .viewer-title,
+    .viewer-actions,
+    .answer,
+    .inline-sources,
+    .results,
+    .query-area,
+    .inline-source-rail,
+    .citation-strip { min-width: 0; }
+    .query-area { padding: 14px 16px; display: grid; gap: 10px; border-top: 1px solid var(--border); background: var(--surface); }
     .composer { position: sticky; bottom: 0; z-index: 4; box-shadow: 0 -18px 34px rgba(15, 23, 42, .08); }
-    .query-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
+    .query-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; }
     .primary {
-      min-height: 62px;
+      min-height: 46px;
+      height: 46px;
       border: 1px solid var(--accent);
       border-radius: 8px;
-      padding: 0 22px;
+      padding: 0 18px;
       background: var(--accent);
       color: #fff;
       font-weight: 900;
     }
     .primary:hover { background: color-mix(in srgb, var(--accent) 82%, #000); border-color: color-mix(in srgb, var(--accent) 82%, #000); }
-    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
     .segments { display: inline-grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface-2); }
-    .segment { min-height: 40px; border: 0; padding: 0 14px; background: transparent; color: var(--muted); font-weight: 780; }
+    .segment { min-height: 36px; border: 0; padding: 0 13px; background: transparent; color: var(--muted); font-weight: 780; }
     .segment[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); }
     .topk { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .9rem; }
     .topk input { width: 72px; height: 38px; border: 1px solid var(--border); border-radius: 8px; padding: 0 9px; background: var(--surface-2); color: var(--text); }
@@ -248,20 +282,20 @@ SEARCH_HTML = r"""<!doctype html>
     .state.success { color: var(--accent-text); background: var(--accent-soft); }
     .state.error { color: var(--danger); background: var(--danger-soft); }
     .answer {
-      padding: 18px;
+      padding: 16px 18px;
       border-bottom: 1px solid var(--border);
-      background: linear-gradient(180deg, var(--surface), var(--surface-2));
+      background: var(--surface);
       display: grid;
-      gap: 13px;
+      gap: 11px;
     }
     .answer h2 { margin: 0; color: var(--strong); font-size: 1.08rem; }
-    .answer-text { margin: 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 1.02rem; }
+    .answer-text { max-width: 88ch; margin: 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 1rem; line-height: 1.5; }
     .viewer {
-      min-height: 42vh;
+      min-height: 0;
       border-bottom: 1px solid var(--border);
       background: var(--surface-2);
       display: grid;
-      grid-template-rows: auto minmax(220px, 34vh) auto;
+      grid-template-rows: auto clamp(170px, 22vh, 260px) auto;
     }
     .viewer-head {
       padding: 14px 16px;
@@ -276,15 +310,32 @@ SEARCH_HTML = r"""<!doctype html>
     .viewer-title strong { color: var(--strong); overflow-wrap: anywhere; }
     .viewer-title span { color: var(--muted); font-size: .86rem; overflow-wrap: anywhere; }
     .viewer-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: end; }
-    .viewer-frame {
+    .viewer-actions .secondary { min-height: 34px; padding: 0 9px; }
+    .viewer-frame, .viewer-text-preview {
       width: 100%;
       height: 100%;
-      min-height: 260px;
+      min-height: 0;
       border: 0;
+    }
+    .viewer-frame {
       background: #fff;
     }
+    .viewer-text-preview {
+      margin: 0;
+      padding: 16px 18px;
+      background: color-mix(in srgb, var(--surface-2) 92%, #000);
+      color: var(--text);
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font: 500 .9rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    html[data-theme="light"] .viewer-text-preview {
+      background: #fbfdff;
+      color: #111827;
+    }
     .viewer-empty {
-      min-height: 260px;
+      min-height: 0;
       display: grid;
       place-items: center;
       padding: 24px;
@@ -292,17 +343,41 @@ SEARCH_HTML = r"""<!doctype html>
       text-align: center;
     }
     .viewer-excerpt {
-      padding: 13px 16px;
+      padding: 10px 16px 11px;
       display: grid;
-      gap: 8px;
+      gap: 7px;
       border-top: 1px solid var(--border);
       background: var(--surface);
       color: var(--text);
-      max-height: 132px;
-      overflow: auto;
+      max-height: 118px;
+      overflow: hidden;
     }
+    .viewer-excerpt.is-expanded { max-height: 240px; overflow: auto; }
+    .viewer-excerpt-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .viewer-kicker { color: var(--muted); font-size: .76rem; font-weight: 850; text-transform: uppercase; }
+    .viewer-passage-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; justify-content: end; }
+    .passage-action {
+      min-height: 28px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 0 9px;
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: .8rem;
+      font-weight: 780;
+    }
+    .passage-action:hover { border-color: var(--accent); color: var(--accent-text); }
+    .viewer-passage-text {
+      margin: 0;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+    }
+    .viewer-excerpt.is-expanded .viewer-passage-text { display: block; }
     .viewer-excerpt mark {
-      background: #fde68a;
+      background: color-mix(in srgb, #fde68a 76%, transparent);
       color: #251a00;
       border-radius: 4px;
       padding: 0 2px;
@@ -311,18 +386,43 @@ SEARCH_HTML = r"""<!doctype html>
     .viewer-message { color: var(--muted); font-size: .86rem; }
     .citation-strip { display: flex; flex-wrap: wrap; gap: 8px; }
     .citation-button {
-      min-height: 34px;
+      min-height: 30px;
       border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
       border-radius: 999px;
-      padding: 5px 10px;
+      padding: 4px 9px;
       background: var(--accent-soft);
       color: var(--accent-text);
-      font-weight: 850;
+      font-size: .88rem;
+      font-weight: 830;
       display: inline-flex;
       align-items: center;
       gap: 7px;
     }
-    .results { padding: 16px; display: grid; gap: 13px; }
+    .inline-sources {
+      display: none;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .inline-sources-head {
+      min-height: 38px;
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: .86rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .inline-sources-head strong { color: var(--strong); font-size: .94rem; }
+    .inline-source-rail {
+      padding: 10px 12px;
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+    .results { flex: 1 1 auto; min-height: 0; padding: 16px; display: grid; align-content: start; gap: 13px; }
     .results.is-compact { padding-top: 0; }
     .results-details {
       border-top: 1px solid var(--border);
@@ -376,16 +476,29 @@ SEARCH_HTML = r"""<!doctype html>
       text-align: left;
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 11px;
+      padding: 10px;
       background: var(--surface);
       color: var(--text);
       display: grid;
-      gap: 5px;
+      gap: 4px;
     }
-    .source-card:hover, .source-card.is-active { border-color: var(--accent); background: var(--accent-soft); }
+    .source-card:hover, .source-card.is-active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
     .source-card strong { color: var(--strong); overflow-wrap: anywhere; }
     .source-card span { color: var(--muted); font-size: .84rem; overflow-wrap: anywhere; }
-    .source-card p { margin: 2px 0 0; color: var(--text); font-size: .88rem; overflow-wrap: anywhere; }
+    .source-card p {
+      margin: 2px 0 0;
+      color: var(--text);
+      font-size: .86rem;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow-wrap: anywhere;
+    }
+    .inline-source-card {
+      flex: 0 0 min(280px, 72vw);
+      min-height: 78px;
+    }
     .hover-card {
       position: fixed;
       z-index: 30;
@@ -419,10 +532,11 @@ SEARCH_HTML = r"""<!doctype html>
     }
     .toast.success { border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); background: var(--accent-soft); color: var(--accent-text); }
     .toast.error { border-color: color-mix(in srgb, var(--danger) 42%, var(--border)); background: var(--danger-soft); color: var(--danger); }
-    @media (max-width: 1180px) {
+    @media (max-width: 1280px) {
       main { grid-template-columns: minmax(250px, 300px) minmax(0, 1fr); }
-      .sources-panel { position: static; grid-column: 1 / -1; max-height: none; }
-      .source-rail { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); max-height: none; }
+      .sources-panel { display: none; }
+      .inline-sources { display: block; }
+      .viewer { grid-template-rows: auto clamp(150px, 20vh, 220px) auto; }
     }
     @media (max-width: 820px) {
       header { padding: 12px 16px; align-items: flex-start; }
@@ -430,16 +544,25 @@ SEARCH_HTML = r"""<!doctype html>
       .library-panel, .sources-panel { position: static; max-height: none; }
       .query-form { grid-template-columns: 1fr; }
       .primary { width: 100%; }
+      .viewer { grid-template-rows: auto clamp(140px, 24vh, 220px) auto; }
     }
     @media (max-width: 600px) {
       header { display: grid; }
       .header-actions, .theme-toggle { width: 100%; }
       .toolbar { display: grid; }
       .segments { width: 100%; }
-      .viewer { grid-template-rows: auto minmax(200px, 32vh) auto; }
       .viewer-head { display: grid; }
-      .viewer-actions { justify-content: stretch; }
-      .viewer-actions .secondary { width: 100%; }
+      .viewer-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .viewer-actions .secondary { width: auto; min-height: 34px; padding: 0 7px; }
+      .panel-toggle { display: inline-flex; }
+      .library-panel { grid-template-rows: auto; }
+      .library-panel.is-collapsed .profile-search,
+      .library-panel.is-collapsed .profile-actions,
+      .library-panel.is-collapsed .profile-list { display: none; }
+      .library-panel.is-collapsed .panel-head { border-bottom: 0; }
+      .viewer-excerpt { max-height: 136px; }
+      .viewer-excerpt-head { align-items: start; }
+      .viewer-passage-actions { justify-content: start; }
       .result-top { display: grid; }
       .actions .secondary { width: 100%; }
       .source-rail { grid-template-columns: 1fr; }
@@ -477,7 +600,10 @@ SEARCH_HTML = r"""<!doctype html>
               <h2>Bibliotheken</h2>
               <p id="profileSummary" class="subtle">Profile werden geladen …</p>
             </div>
-            <span class="count-pill" id="selectionCount">0/0</span>
+            <div class="head-actions">
+              <button class="panel-toggle" type="button" id="libraryToggle" aria-expanded="true" aria-controls="profileList">Einklappen</button>
+              <span class="count-pill" id="selectionCount">0/0</span>
+            </div>
           </div>
           <input id="profileFilter" class="profile-search" type="search" autocomplete="off" placeholder="Bibliothek suchen" aria-label="Bibliothek suchen">
           <div class="profile-actions" aria-label="Bibliotheksauswahl">
@@ -498,12 +624,20 @@ SEARCH_HTML = r"""<!doctype html>
           </div>
           <div id="viewerEmpty" class="viewer-empty">Nach der Suche wird hier die beste Quelle im nativen Browserviewer geladen.</div>
           <iframe id="viewerFrame" class="viewer-frame" title="Dokumentviewer" hidden></iframe>
+          <pre id="viewerTextPreview" class="viewer-text-preview" aria-label="Textvorschau" hidden></pre>
           <div class="viewer-excerpt" id="viewerExcerpt">
             <span class="viewer-message">Trefferpassage und Suchhilfe erscheinen hier.</span>
           </div>
         </section>
         <div id="state" class="state" aria-live="polite">Wähle Bibliotheken aus und starte eine Suche.</div>
         <div id="answer" class="answer" hidden></div>
+        <section class="inline-sources" id="inlineSources" aria-label="Quellen im Arbeitsbereich" hidden>
+          <div class="inline-sources-head">
+            <strong>Quellen</strong>
+            <span id="inlineSourceSummary">Noch keine Treffer.</span>
+          </div>
+          <div class="inline-source-rail" id="inlineSourceRail"></div>
+        </section>
         <div id="results" class="results"></div>
         <div class="query-area composer" id="composer">
           <form class="query-form" id="queryForm">
@@ -542,12 +676,17 @@ SEARCH_HTML = r"""<!doctype html>
     const resultsEl = document.getElementById('results');
     const answerEl = document.getElementById('answer');
     const profileListEl = document.getElementById('profileList');
+    const libraryPanelEl = document.querySelector('.library-panel');
+    const libraryToggleEl = document.getElementById('libraryToggle');
     const profileSummaryEl = document.getElementById('profileSummary');
     const selectionCountEl = document.getElementById('selectionCount');
     const userLineEl = document.getElementById('userLine');
     const topKEl = document.getElementById('topK');
     const questionEl = document.getElementById('question');
     const sourceRailEl = document.getElementById('sourceRail');
+    const inlineSourcesEl = document.getElementById('inlineSources');
+    const inlineSourceRailEl = document.getElementById('inlineSourceRail');
+    const inlineSourceSummaryEl = document.getElementById('inlineSourceSummary');
     const sourceSummaryEl = document.getElementById('sourceSummary');
     const sourceCountEl = document.getElementById('sourceCount');
     const hoverEl = document.getElementById('sourceHover');
@@ -555,6 +694,7 @@ SEARCH_HTML = r"""<!doctype html>
     const viewerMetaEl = document.getElementById('viewerMeta');
     const viewerActionsEl = document.getElementById('viewerActions');
     const viewerFrameEl = document.getElementById('viewerFrame');
+    const viewerTextPreviewEl = document.getElementById('viewerTextPreview');
     const viewerEmptyEl = document.getElementById('viewerEmpty');
     const viewerExcerptEl = document.getElementById('viewerExcerpt');
     const toastEl = document.getElementById('toast');
@@ -562,6 +702,7 @@ SEARCH_HTML = r"""<!doctype html>
     let mode = 'chat';
     let latestSources = [];
     let toastTimer = null;
+    let viewerRequestId = 0;
 
     function setState(text, kind = '') {
       stateEl.textContent = text;
@@ -793,26 +934,37 @@ SEARCH_HTML = r"""<!doctype html>
 
     function renderSourceRail(sources) {
       sourceRailEl.innerHTML = '';
+      inlineSourceRailEl.innerHTML = '';
       sourceCountEl.textContent = String(sources.length);
       sourceSummaryEl.textContent = sources.length ? `${sources.length} Quellen aus den erlaubten Bibliotheken.` : 'Noch keine Treffer.';
+      inlineSourceSummaryEl.textContent = sources.length ? `${sources.length} Quellen` : 'Noch keine Treffer.';
+      inlineSourcesEl.hidden = !sources.length;
       if (!sources.length) {
         sourceRailEl.innerHTML = '<div class="empty">Nach einer Suche erscheinen hier die wichtigsten Quellen mit Vorschau.</div>';
         return;
       }
       for (const source of sources) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'source-card';
-        button.dataset.sourceId = source.source_id || '';
-        const location = source.locator && source.locator.label ? source.locator.label : '';
-        button.innerHTML = `
-          <strong>${escapeHtml(source.citation_label || source.source_id || 'Quelle')} · ${escapeHtml(source.document_name || 'Dokument')}</strong>
-          <span>${escapeHtml(source.dataset_name || 'Bibliothek')}${location ? ` · ${escapeHtml(location)}` : ''}</span>
-          <p>${escapeHtml(compact(source.snippet || '', 150))}</p>`;
-        bindSourceInteractions(button, source);
-        button.addEventListener('click', () => selectSource(source));
-        sourceRailEl.appendChild(button);
+        sourceRailEl.appendChild(sourceCard(source, 'source-card'));
+        inlineSourceRailEl.appendChild(sourceCard(source, 'source-card inline-source-card'));
       }
+    }
+
+    function sourceCard(source, className) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = className;
+      button.dataset.sourceId = source.source_id || '';
+      const location = source.locator && source.locator.label ? source.locator.label : '';
+      button.innerHTML = `
+        <strong>${escapeHtml(source.citation_label || source.source_id || 'Quelle')} · ${escapeHtml(source.document_name || 'Dokument')}</strong>
+        <span>${escapeHtml(source.dataset_name || 'Bibliothek')}${location ? ` · ${escapeHtml(location)}` : ''}</span>
+        <p>${escapeHtml(compact(source.snippet || '', 150))}</p>`;
+      bindSourceInteractions(button, source);
+      button.addEventListener('click', () => {
+        hideHover();
+        selectSource(source);
+      });
+      return button;
     }
 
     function bindSourceInteractions(element, source) {
@@ -841,14 +993,19 @@ SEARCH_HTML = r"""<!doctype html>
     }
 
     function selectSource(source) {
+      hideHover();
+      viewerRequestId += 1;
       if (!source) {
         viewerTitleEl.textContent = 'Kein Dokument ausgewählt';
         viewerMetaEl.textContent = 'Wähle rechts eine Quelle aus oder starte eine Suche.';
         viewerActionsEl.innerHTML = '';
         viewerFrameEl.hidden = true;
         viewerFrameEl.removeAttribute('src');
+        viewerTextPreviewEl.hidden = true;
+        viewerTextPreviewEl.textContent = '';
         viewerEmptyEl.hidden = false;
         viewerEmptyEl.textContent = 'Nach der Suche wird hier die beste Quelle im nativen Browserviewer geladen.';
+        viewerExcerptEl.classList.remove('is-expanded');
         viewerExcerptEl.innerHTML = '<span class="viewer-message">Trefferpassage und Suchhilfe erscheinen hier.</span>';
         document.querySelectorAll('.result-card,.source-card').forEach(item => item.classList.remove('is-active'));
         return;
@@ -872,22 +1029,64 @@ SEARCH_HTML = r"""<!doctype html>
 
       const message = source.viewer_message || 'Nutze Strg+F im Viewer und suche nach dem markierten Auszug.';
       const snippet = compact(source.snippet || '', 520);
+      viewerExcerptEl.classList.remove('is-expanded');
       viewerExcerptEl.innerHTML = `
-        <span class="viewer-message">${escapeHtml(message)} Nutze bei Bedarf Strg+F mit dem kopierbaren Passage-Text.</span>
-        <p>${snippet ? `<mark>${escapeHtml(snippet)}</mark>` : 'Kein Textauszug verfügbar.'}</p>`;
+        <div class="viewer-excerpt-head">
+          <span class="viewer-kicker">Trefferpassage</span>
+          <span class="viewer-passage-actions">
+            <button class="passage-action" type="button" id="copyViewerPassage">Passage kopieren</button>
+            <button class="passage-action" type="button" id="toggleViewerPassage" hidden>mehr anzeigen</button>
+          </span>
+        </div>
+        <p class="viewer-passage-text">${snippet ? `<mark>${escapeHtml(snippet)}</mark>` : 'Kein Textauszug verfügbar.'}</p>
+        <span class="viewer-message">${escapeHtml(message)} Bei Bedarf Strg+F mit dem kopierten Passage-Text nutzen.</span>`;
+      const copyPassageButton = document.getElementById('copyViewerPassage');
+      if (copyPassageButton) copyPassageButton.addEventListener('click', () => copyPassage(source));
+      const togglePassageButton = document.getElementById('toggleViewerPassage');
+      if (togglePassageButton && snippet.length > 260) {
+        togglePassageButton.hidden = false;
+        togglePassageButton.addEventListener('click', () => {
+          const expanded = viewerExcerptEl.classList.toggle('is-expanded');
+          togglePassageButton.textContent = expanded ? 'weniger anzeigen' : 'mehr anzeigen';
+        });
+      }
 
       const inlineTarget = source.viewer_url && source.viewer_url.startsWith('/') && source.viewer_kind !== 'download';
-      if (inlineTarget) {
+      viewerFrameEl.hidden = true;
+      viewerFrameEl.removeAttribute('src');
+      viewerTextPreviewEl.hidden = true;
+      viewerTextPreviewEl.textContent = '';
+      if (inlineTarget && source.viewer_kind === 'text') {
+        const requestId = viewerRequestId;
+        viewerEmptyEl.hidden = true;
+        viewerTextPreviewEl.hidden = false;
+        viewerTextPreviewEl.textContent = 'Text wird geladen …';
+        loadTextPreview(source.viewer_url, requestId);
+      } else if (inlineTarget) {
         viewerFrameEl.src = source.viewer_url;
         viewerFrameEl.hidden = false;
         viewerEmptyEl.hidden = true;
       } else {
-        viewerFrameEl.hidden = true;
-        viewerFrameEl.removeAttribute('src');
         viewerEmptyEl.hidden = false;
         viewerEmptyEl.textContent = source.viewer_url
           ? 'Diese Quelle ist für den nativen Inline-Viewer nicht geeignet. Öffne sie über „Datei öffnen“ oder nutze den Auszug.'
           : 'Für diese Quelle ist kein sicherer Dokumentviewer-Link verfügbar. Nutze Vorschau, Originallink oder den Auszug.';
+      }
+    }
+
+    async function loadTextPreview(url, requestId) {
+      try {
+        const response = await fetch(url, {headers: {'Accept': 'text/plain, */*'}});
+        if (!response.ok) throw new Error('Text konnte nicht geladen werden.');
+        const text = await response.text();
+        if (requestId !== viewerRequestId) return;
+        viewerTextPreviewEl.textContent = text.length > 24000 ? `${text.slice(0, 24000)}\n\n…` : text;
+      } catch (error) {
+        if (requestId !== viewerRequestId) return;
+        viewerTextPreviewEl.hidden = true;
+        viewerTextPreviewEl.textContent = '';
+        viewerEmptyEl.hidden = false;
+        viewerEmptyEl.textContent = error.message || 'Text konnte nicht geladen werden. Nutze Datei öffnen oder den Auszug.';
       }
     }
 
@@ -950,6 +1149,22 @@ SEARCH_HTML = r"""<!doctype html>
     function iconEye() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6Z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/></svg>'; }
     function iconExternal() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M13 11l7-7M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
 
+    function setLibraryCollapsed(collapsed) {
+      libraryPanelEl.classList.toggle('is-collapsed', collapsed);
+      libraryToggleEl.setAttribute('aria-expanded', String(!collapsed));
+      libraryToggleEl.textContent = collapsed ? 'Ausklappen' : 'Einklappen';
+    }
+
+    function syncLibraryCollapse() {
+      const isMobile = window.matchMedia('(max-width: 600px)').matches;
+      if (isMobile && !libraryPanelEl.dataset.userCollapse) {
+        setLibraryCollapsed(true);
+      } else if (!isMobile) {
+        libraryPanelEl.dataset.userCollapse = '';
+        setLibraryCollapsed(false);
+      }
+    }
+
     function applyTheme(theme) {
       const next = theme === 'dark' ? 'dark' : 'light';
       document.documentElement.dataset.theme = next;
@@ -978,7 +1193,13 @@ SEARCH_HTML = r"""<!doctype html>
     document.getElementById('clearProfiles').addEventListener('click', () => setAllProfiles(false));
     document.getElementById('profileFilter').addEventListener('input', applyProfileFilter);
     document.getElementById('queryForm').addEventListener('submit', runSearch);
+    libraryToggleEl.addEventListener('click', () => {
+      libraryPanelEl.dataset.userCollapse = 'true';
+      setLibraryCollapsed(!libraryPanelEl.classList.contains('is-collapsed'));
+    });
+    window.addEventListener('resize', syncLibraryCollapse);
     applyTheme(initialTheme());
+    syncLibraryCollapse();
     loadProfiles();
   </script>
 </body>

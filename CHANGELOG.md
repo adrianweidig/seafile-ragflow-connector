@@ -10,6 +10,18 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.4.9 - 2026-06-26
+
+### Fixed
+
+- Wissenssuche staffelt Bibliotheken, Arbeitsbereich und Quellen responsiver,
+  sodass Quellen auf mittleren Viewports als kompakte Leiste im Arbeitsbereich
+  erhalten bleiben.
+- Dokumentviewer, Trefferpassage, Antwortbereich und Composer sind kompakter
+  und priorisieren die Antwort direkt unter dem Dokument.
+- Text- und Markdown-Quellen werden als sichere dunkle Textvorschau statt als
+  dominante weiße Browserfläche angezeigt.
+
 ## 2.4.8 - 2026-06-26
 
 ### Added

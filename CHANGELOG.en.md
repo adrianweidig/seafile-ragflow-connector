@@ -10,6 +10,18 @@ retroactively.
 
 No entries.
 
+## 2.4.9 - 2026-06-26
+
+### Fixed
+
+- Knowledge search now stages libraries, workspace, and sources more
+  responsively, keeping sources available as a compact in-workspace strip on
+  medium viewports.
+- The document viewer, hit passage, answer area, and composer are more compact
+  and keep the answer directly below the document.
+- Text and Markdown sources now render as a safe dark text preview instead of a
+  dominant white browser surface.
+
 ## 2.4.8 - 2026-06-26
 
 ### Added
