@@ -10,6 +10,20 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.4.8 - 2026-06-26
+
+### Added
+
+- Wissenssuche kann Antworten optional über einen OpenAI-kompatiblen
+  `/chat/completions`-Endpunkt erzeugen, der per `SEARCH_ANSWER_LLM_*`
+  konfiguriert wird.
+
+### Fixed
+
+- Antwortgenerierung fällt bei nicht konfiguriertem oder fehlerhaftem
+  OpenAI-kompatiblem Modell weiterhin sauber auf RAGFlow beziehungsweise die
+  lokale quellengestützte Kurzantwort zurück.
+
 ## 2.4.7 - 2026-06-26
 
 ### Fixed

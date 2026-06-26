@@ -413,6 +413,167 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn("[S1]", prompt)
         self.assertIn("Wartungsintervall alle 6 Monate.", prompt)
 
+    def test_chat_uses_openai_compatible_answer_when_configured(self) -> None:
+        settings = _settings(
+            search_answer_llm_base_url="http://llm.local/v1",
+            search_answer_llm_model="local-model",
+            search_answer_llm_api_key="llm-key",
+        )
+        original_authz = search_server._authz_filter_profiles
+        original_ragflow_client = search_server.RAGFlowClient
+        original_httpx_client = search_server.httpx.Client
+        search_server._authz_filter_profiles = lambda _settings, _user, _profile_ids: {
+            "allowed": [
+                {
+                    "profile_id": "repo-anleitungen",
+                    "repo_id": "repo-anleitungen",
+                    "ragflow_dataset_id": "dataset-anleitungen",
+                    "display_name": "Anleitungen",
+                }
+            ],
+            "denied": [],
+        }
+        search_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        search_server.httpx.Client = _FakeOpenAIClient  # type: ignore[assignment]
+        _FakeRAGFlowClient.calls = []
+        _FakeRAGFlowClient.answer_messages = []
+        _FakeOpenAIClient.reset()
+        _FakeOpenAIClient.response_payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Das Wartungsintervall beträgt 6 Monate [S1].",
+                    }
+                }
+            ]
+        }
+        try:
+            result = _handle_chat(
+                settings,
+                SearchUser(username="olaf", email="olaf@example.local", display_name=None),
+                {
+                    "profile_ids": ["repo-anleitungen"],
+                    "question": "Wie oft Wartung?",
+                    "top_k": 8,
+                },
+            )
+        finally:
+            search_server._authz_filter_profiles = original_authz
+            search_server.RAGFlowClient = original_ragflow_client  # type: ignore[assignment]
+            search_server.httpx.Client = original_httpx_client  # type: ignore[assignment]
+
+        self.assertEqual(result["answer"]["mode"], "openai_compatible")
+        self.assertIn("6 Monate [S1]", result["answer"]["text"])
+        self.assertEqual(_FakeRAGFlowClient.calls, ["dataset-anleitungen"])
+        self.assertEqual(_FakeRAGFlowClient.answer_messages, [])
+        self.assertEqual(len(_FakeOpenAIClient.requests), 1)
+        request = _FakeOpenAIClient.requests[0]
+        self.assertEqual(request["url"], "http://llm.local/v1/chat/completions")
+        self.assertEqual(request["headers"]["Authorization"], "Bearer llm-key")
+        self.assertEqual(request["json"]["model"], "local-model")
+        self.assertIn("[S1]", request["json"]["messages"][-1]["content"])
+        self.assertTrue(result["diagnostics"]["answer_generation"]["llm_attempted"])
+        self.assertEqual(result["diagnostics"]["answer_generation"]["llm_model"], "local-model")
+
+    def test_chat_adds_bracketed_sources_to_openai_answer_without_markers(self) -> None:
+        settings = _settings(
+            search_answer_llm_base_url="http://llm.local/v1/chat/completions",
+            search_answer_llm_model="local-model",
+        )
+        original_authz = search_server._authz_filter_profiles
+        original_ragflow_client = search_server.RAGFlowClient
+        original_httpx_client = search_server.httpx.Client
+        search_server._authz_filter_profiles = lambda _settings, _user, _profile_ids: {
+            "allowed": [
+                {
+                    "profile_id": "repo-anleitungen",
+                    "repo_id": "repo-anleitungen",
+                    "ragflow_dataset_id": "dataset-anleitungen",
+                    "display_name": "Anleitungen",
+                }
+            ],
+            "denied": [],
+        }
+        search_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        search_server.httpx.Client = _FakeOpenAIClient  # type: ignore[assignment]
+        _FakeOpenAIClient.reset()
+        _FakeOpenAIClient.response_payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Das Wartungsintervall beträgt 6 Monate.",
+                    }
+                }
+            ]
+        }
+        try:
+            result = _handle_chat(
+                settings,
+                SearchUser(username="olaf", email="olaf@example.local", display_name=None),
+                {
+                    "profile_ids": ["repo-anleitungen"],
+                    "question": "Wie oft Wartung?",
+                    "top_k": 8,
+                },
+            )
+        finally:
+            search_server._authz_filter_profiles = original_authz
+            search_server.RAGFlowClient = original_ragflow_client  # type: ignore[assignment]
+            search_server.httpx.Client = original_httpx_client  # type: ignore[assignment]
+
+        self.assertEqual(result["answer"]["mode"], "openai_compatible")
+        self.assertIn("Quellen: [S1].", result["answer"]["text"])
+        self.assertEqual(_FakeOpenAIClient.requests[0]["url"], "http://llm.local/v1/chat/completions")
+
+    def test_chat_llm_error_falls_back_without_losing_sources(self) -> None:
+        settings = _settings(
+            search_answer_llm_base_url="http://llm.local/v1",
+            search_answer_llm_model="local-model",
+        )
+        original_authz = search_server._authz_filter_profiles
+        original_ragflow_client = search_server.RAGFlowClient
+        original_httpx_client = search_server.httpx.Client
+        search_server._authz_filter_profiles = lambda _settings, _user, _profile_ids: {
+            "allowed": [
+                {
+                    "profile_id": "repo-anleitungen",
+                    "repo_id": "repo-anleitungen",
+                    "ragflow_dataset_id": "dataset-anleitungen",
+                    "display_name": "Anleitungen",
+                }
+            ],
+            "denied": [],
+        }
+        search_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        search_server.httpx.Client = _FakeOpenAIClient  # type: ignore[assignment]
+        _FakeOpenAIClient.reset()
+        _FakeOpenAIClient.error = search_server.httpx.ConnectError("unreachable")
+        _FakeRAGFlowClient.chats = []
+        try:
+            result = _handle_chat(
+                settings,
+                SearchUser(username="olaf", email="olaf@example.local", display_name=None),
+                {
+                    "profile_ids": ["repo-anleitungen"],
+                    "question": "Wie oft Wartung?",
+                    "top_k": 8,
+                },
+            )
+        finally:
+            search_server._authz_filter_profiles = original_authz
+            search_server.RAGFlowClient = original_ragflow_client  # type: ignore[assignment]
+            search_server.httpx.Client = original_httpx_client  # type: ignore[assignment]
+            _FakeRAGFlowClient.chats = [
+                {"id": "chat-answer", "name": "connector_search_answer"},
+            ]
+
+        self.assertEqual(result["answer"]["mode"], "source_summary_fallback")
+        self.assertIn("Wartungsintervall alle 6 Monate.", result["answer"]["text"])
+        self.assertIn("[S1]", result["answer"]["text"])
+        diagnostics = result["diagnostics"]["answer_generation"]
+        self.assertEqual(diagnostics["fallback_reason"], "answer_chat_not_found")
+        self.assertEqual(diagnostics["llm_fallback_reason"], "llm_ConnectError")
+
     def test_chat_adds_bracketed_sources_to_answer_without_markers(self) -> None:
         settings = _settings()
         original_authz = search_server._authz_filter_profiles
@@ -515,13 +676,15 @@ class SearchServerTests(unittest.TestCase):
             )
 
 
-def _settings() -> SearchServiceSettings:
-    return SearchServiceSettings(
-        search_authz_base_url="http://connector-controller:8080",
-        search_authz_shared_secret="authz-secret",
-        search_ragflow_base_url="http://ragflow:9380",
-        search_ragflow_api_key="ragflow-key",
-    )
+def _settings(**overrides: object) -> SearchServiceSettings:
+    values: dict[str, object] = {
+        "search_authz_base_url": "http://connector-controller:8080",
+        "search_authz_shared_secret": "authz-secret",
+        "search_ragflow_base_url": "http://ragflow:9380",
+        "search_ragflow_api_key": "ragflow-key",
+    }
+    values.update(overrides)
+    return SearchServiceSettings(**values)
 
 
 class _FakeRAGFlowClient:
@@ -586,6 +749,66 @@ class _FakeRAGFlowClient:
 
     def close(self) -> None:
         pass
+
+
+class _FakeOpenAIResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return self.payload
+
+
+class _FakeOpenAIClient:
+    requests: list[dict[str, object]] = []
+    response_payload: dict[str, object] = {}
+    error: Exception | None = None
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self.args = args
+        self.kwargs = kwargs
+
+    def __enter__(self) -> _FakeOpenAIClient:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+    ) -> _FakeOpenAIResponse:
+        if self.__class__.error is not None:
+            raise self.__class__.error
+        self.__class__.requests.append(
+            {
+                "url": url,
+                "headers": headers,
+                "json": json,
+                "client_kwargs": self.kwargs,
+            }
+        )
+        return _FakeOpenAIResponse(self.__class__.response_payload)
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.requests = []
+        cls.response_payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Das Wartungsintervall beträgt 6 Monate [S1].",
+                    }
+                }
+            ]
+        }
+        cls.error = None
 
 
 if __name__ == "__main__":

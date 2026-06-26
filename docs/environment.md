@@ -73,6 +73,12 @@ Er benötigt keinen Seafile-Admin- oder Sync-Token.
 | `SEARCH_RAGFLOW_VERIFY_SSL`, `SEARCH_RAGFLOW_CA_BUNDLE` | optional | TLS-Prüfung und optionales CA-Bundle für Search -> RAGFlow. |
 | `SEARCH_ANSWER_GENERATION_MODE` | optional | `ragflow_chat`, `retrieval_summary` oder `disabled`; Default `ragflow_chat`. |
 | `RAGFLOW_SEARCH_ANSWER_CHAT_NAME` | optional | Name des RAGFlow-Chats für Antwortgenerierung; Default `connector_search_answer`. |
+| `SEARCH_ANSWER_LLM_BASE_URL` | optional | OpenAI-kompatible Basis-URL für Search-Antwortsynthese, z. B. `http://litellm:4000/v1`; leer deaktiviert diesen bevorzugten Pfad. |
+| `SEARCH_ANSWER_LLM_MODEL` | optional | Modellname für den OpenAI-kompatiblen Search-Antwortpfad; nur zusammen mit `SEARCH_ANSWER_LLM_BASE_URL` aktiv. |
+| `SEARCH_ANSWER_LLM_API_KEY` | optional | Bearer-Token für den OpenAI-kompatiblen Search-Antwortpfad; leer sendet keinen Authorization-Header. |
+| `SEARCH_ANSWER_LLM_TIMEOUT_SECONDS` | optional | Timeout für den OpenAI-kompatiblen Search-Antwortpfad; Default `60`. |
+| `SEARCH_ANSWER_LLM_MAX_TOKENS` | optional | Maximale Antwort-Tokens für den OpenAI-kompatiblen Search-Antwortpfad; Default `900`. |
+| `SEARCH_ANSWER_LLM_TEMPERATURE` | optional | Temperatur für den OpenAI-kompatiblen Search-Antwortpfad; Default `0.2`, erlaubt `0` bis `2`. |
 | `RAGFLOW_SEARCH_TEMPLATE_ENABLED`, `RAGFLOW_SEARCH_TEMPLATE_NAME` | optional | Aktiviert die Template-Auflösung; Default-Name ist `search_template`. |
 | `SEARCH_RAGFLOW_TEMPLATE_SOURCE_ORDER` | optional | Reihenfolge der Template-Quellen. Default `search_app,chat,builtin`. |
 | `SEARCH_RAGFLOW_CANDIDATE_TOP_K` | optional | Override für RAGFlows internen Kandidatenpool; leer nutzt Template oder Built-in `1024`. |
@@ -178,6 +184,7 @@ installierten System-CAs.
 | `RAGFLOW_SEARCH_TEMPLATE_REQUIRED` | optional | Default `false`; bei `true` schlägt die Template-Auflösung fehl, wenn keine passende Vorlage existiert. |
 | `RAGFLOW_SEARCH_TEMPLATE_REFRESH_SECONDS` | optional | Default `300` Sekunden; Intervall für die Search-Template-Prüfung im Controller. Werte unter 60 Sekunden werden abgelehnt. |
 | `RAGFLOW_SEARCH_ANSWER_CHAT_AUTO_CREATE` | optional | Default `true`; der Controller legt den benannten Answer-Chat für `SEARCH_ANSWER_GENERATION_MODE=ragflow_chat` an, wenn er fehlt. |
+| `SEARCH_ANSWER_LLM_*` | optional | Dieselben optionalen OpenAI-kompatiblen Search-Antwortsettings werden an Controller- und Search-Services durchgereicht; Secrets bleiben reine Runtime-Env-Werte. |
 | `RAGFLOW_TEMPLATE_REFRESH_SECONDS` | optional | Intervall für Aktualisierung der Dataset-Einstellungen. Default `1800` Sekunden, also 30 Minuten. Werte unter 60 Sekunden werden abgelehnt. |
 | `RAGFLOW_PUBLIC_BASE_URL`, `RAGFLOW_DOCUMENT_URL_TEMPLATE` | optional | öffentliche RAGFlow-Links in Quellen. |
 | `CONNECTOR_DASHBOARD_ENABLED` | optional | Dashboard starten; für OpenWebUI-Proxy nötig. |

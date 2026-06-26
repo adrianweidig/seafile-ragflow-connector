@@ -110,6 +110,12 @@ class Settings(BaseSettings):
     ] = "ragflow_chat"
     ragflow_search_answer_chat_name: str = "connector_search_answer"
     ragflow_search_answer_chat_auto_create: bool = True
+    search_answer_llm_base_url: str | None = None
+    search_answer_llm_model: str | None = None
+    search_answer_llm_api_key: str | None = None
+    search_answer_llm_timeout_seconds: int = 60
+    search_answer_llm_max_tokens: int = 900
+    search_answer_llm_temperature: float = 0.2
     search_document_viewer_enabled: bool = True
     search_document_viewer_max_mb: int = 100
     search_ragflow_template_source_order_csv: str = Field(
@@ -252,6 +258,7 @@ class Settings(BaseSettings):
         "seafile_public_base_url",
         "ragflow_base_url",
         "ragflow_public_base_url",
+        "search_answer_llm_base_url",
         "openwebui_base_url",
         "openwebui_proxy_public_base_url",
         "openwebui_proxy_internal_base_url",
@@ -316,6 +323,9 @@ class Settings(BaseSettings):
         "search_ragflow_highlight",
         "search_ragflow_use_kg",
         "search_ragflow_toc_enhance",
+        "search_answer_llm_base_url",
+        "search_answer_llm_model",
+        "search_answer_llm_api_key",
         mode="before",
     )
     @classmethod
@@ -338,11 +348,23 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return value
 
-    @field_validator("search_document_viewer_max_mb")
+    @field_validator(
+        "search_document_viewer_max_mb",
+        "search_answer_llm_timeout_seconds",
+        "search_answer_llm_max_tokens",
+    )
     @classmethod
-    def validate_search_document_viewer_max_mb(cls, value: int) -> int:
+    def validate_search_positive_int(cls, value: int) -> int:
         if value <= 0:
-            msg = "SEARCH_DOCUMENT_VIEWER_MAX_MB must be positive"
+            msg = "search numeric settings must be positive"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("search_answer_llm_temperature")
+    @classmethod
+    def validate_search_answer_llm_temperature(cls, value: float) -> float:
+        if value < 0 or value > 2:
+            msg = "SEARCH_ANSWER_LLM_TEMPERATURE must be between 0 and 2"
             raise ValueError(msg)
         return value
 
@@ -471,6 +493,7 @@ class Settings(BaseSettings):
         for name in (
             "seafile_public_base_url",
             "ragflow_public_base_url",
+            "search_answer_llm_base_url",
             "openwebui_proxy_public_base_url",
             "openwebui_proxy_internal_base_url",
             "openwebui_pipe_answer_llm_base_url",
@@ -661,6 +684,12 @@ class SearchServiceSettings(BaseSettings):
         "ragflow_chat", "retrieval_summary", "disabled"
     ] = "ragflow_chat"
     ragflow_search_answer_chat_name: str = "connector_search_answer"
+    search_answer_llm_base_url: str | None = None
+    search_answer_llm_model: str | None = None
+    search_answer_llm_api_key: str | None = None
+    search_answer_llm_timeout_seconds: int = 60
+    search_answer_llm_max_tokens: int = 900
+    search_answer_llm_temperature: float = 0.2
     search_ragflow_template_source_order_csv: str = Field(
         default="search_app,chat,builtin",
         validation_alias="SEARCH_RAGFLOW_TEMPLATE_SOURCE_ORDER",
@@ -724,6 +753,7 @@ class SearchServiceSettings(BaseSettings):
     @field_validator(
         "search_authz_base_url",
         "search_ragflow_base_url",
+        "search_answer_llm_base_url",
         "search_seafile_public_base_url",
     )
     @classmethod
@@ -765,6 +795,9 @@ class SearchServiceSettings(BaseSettings):
         "search_ragflow_highlight",
         "search_ragflow_use_kg",
         "search_ragflow_toc_enhance",
+        "search_answer_llm_base_url",
+        "search_answer_llm_model",
+        "search_answer_llm_api_key",
         mode="before",
     )
     @classmethod
@@ -780,6 +813,8 @@ class SearchServiceSettings(BaseSettings):
         "search_result_snippet_context_chars",
         "search_answer_max_sources",
         "search_document_viewer_max_mb",
+        "search_answer_llm_timeout_seconds",
+        "search_answer_llm_max_tokens",
     )
     @classmethod
     def validate_search_positive_int(cls, value: int) -> int:
@@ -807,6 +842,14 @@ class SearchServiceSettings(BaseSettings):
             raise ValueError(msg)
         return value
 
+    @field_validator("search_answer_llm_temperature")
+    @classmethod
+    def validate_search_answer_llm_temperature(cls, value: float) -> float:
+        if value < 0 or value > 2:
+            msg = "SEARCH_ANSWER_LLM_TEMPERATURE must be between 0 and 2"
+            raise ValueError(msg)
+        return value
+
     @model_validator(mode="after")
     def validate_search_urls_and_limits(self) -> SearchServiceSettings:
         for name in ("search_authz_base_url", "search_ragflow_base_url"):
@@ -814,6 +857,9 @@ class SearchServiceSettings(BaseSettings):
             if not _is_http_url(value):
                 msg = f"{name.upper()} must be an http or https URL"
                 raise ValueError(msg)
+        if self.search_answer_llm_base_url and not _is_http_url(self.search_answer_llm_base_url):
+            msg = "SEARCH_ANSWER_LLM_BASE_URL must be an http or https URL"
+            raise ValueError(msg)
         if self.search_default_top_k > self.search_max_top_k:
             msg = "SEARCH_DEFAULT_TOP_K must be <= SEARCH_MAX_TOP_K"
             raise ValueError(msg)
@@ -831,6 +877,14 @@ class SearchServiceSettings(BaseSettings):
         return build_service_httpx_verify(
             self.search_ragflow_verify_ssl,
             self.search_ragflow_ca_bundle,
+            fallback_ca_bundle=self.connector_ca_bundle,
+        )
+
+    @property
+    def search_answer_llm_httpx_verify(self) -> VerifyConfig:
+        return build_service_httpx_verify(
+            True,
+            None,
             fallback_ca_bundle=self.connector_ca_bundle,
         )
 

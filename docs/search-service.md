@@ -68,6 +68,12 @@ SEARCH_RAGFLOW_TEMPLATE_SOURCE_ORDER=search_app,chat,builtin
 SEARCH_ANSWER_GENERATION_MODE=ragflow_chat
 RAGFLOW_SEARCH_ANSWER_CHAT_NAME=connector_search_answer
 RAGFLOW_SEARCH_ANSWER_CHAT_AUTO_CREATE=true
+SEARCH_ANSWER_LLM_BASE_URL=
+SEARCH_ANSWER_LLM_MODEL=
+SEARCH_ANSWER_LLM_API_KEY=
+SEARCH_ANSWER_LLM_TIMEOUT_SECONDS=60
+SEARCH_ANSWER_LLM_MAX_TOKENS=900
+SEARCH_ANSWER_LLM_TEMPERATURE=0.2
 ```
 
 RAGFlow wird pro erlaubtem Dataset abgefragt. Ergebnisse werden
@@ -112,12 +118,19 @@ Standard deaktiviert und sollten bewusst im Template aktiviert werden.
 
 Der Antwortmodus (`/api/search/chat`) nutzt Retrieval weiterhin als erste
 Berechtigungs- und Quellenstufe. Danach baut der Search-Service einen kompakten
-Quellenprompt aus `S1` bis `Sn` und ruft den benannten RAGFlow-Answer-Chat über
-OpenAI-kompatible Chat Completions auf. Der Prompt erlaubt nur Aussagen aus den
-bereitgestellten Quellen und erwartet Quellenmarker wie `[S1]`. Wenn der Chat
-fehlt, leer antwortet oder RAGFlow nicht erreichbar ist, fällt die API auf eine
-gekennzeichnete quellengestützte Kurzantwort zurück; Quellen und Diagnostics
-bleiben erhalten.
+Quellenprompt aus `S1` bis `Sn`. Wenn `SEARCH_ANSWER_LLM_BASE_URL` und
+`SEARCH_ANSWER_LLM_MODEL` gesetzt sind, ruft der Search-Service zuerst diesen
+OpenAI-kompatiblen `/chat/completions`-Endpunkt auf. `SEARCH_ANSWER_LLM_API_KEY`
+ist optional; bei leerem Wert wird kein Authorization-Header gesendet.
+
+Ist der OpenAI-kompatible Pfad nicht konfiguriert oder schlägt er fehl, bleibt
+`SEARCH_ANSWER_GENERATION_MODE` maßgeblich: Bei `ragflow_chat` wird der
+benannte RAGFlow-Answer-Chat genutzt, bei `retrieval_summary` oder `disabled`
+entsteht direkt eine lokale quellengestützte Kurzantwort. Alle Pfade dürfen nur
+aus den bereitgestellten Quellen argumentieren und sollen Quellenmarker wie
+`[S1]` verwenden. Wenn ein Modell eine Antwort ohne Quellenmarker liefert, hängt
+der Search-Service die genutzten Quellen in eckigen Klammern an. Quellen und
+Diagnostics bleiben auch bei Fallbacks erhalten.
 
 ## Quellenlinks
 

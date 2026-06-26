@@ -259,6 +259,18 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Settings(**values)
 
+    def test_rejects_invalid_search_answer_llm_base_url(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "search_answer_llm_base_url": "litellm:4000/v1",
+            }
+        )
+
+        with self.assertRaises(ValueError):
+            Settings(**values)
+
     def test_openwebui_dry_run_does_not_require_proxy_secret_or_preview_url(self) -> None:
         values = self.base_values()
         values.update(
@@ -315,6 +327,12 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.ragflow_search_template_name, "search_template")
         self.assertEqual(settings.search_answer_generation_mode, "ragflow_chat")
         self.assertEqual(settings.ragflow_search_answer_chat_name, "connector_search_answer")
+        self.assertIsNone(settings.search_answer_llm_base_url)
+        self.assertIsNone(settings.search_answer_llm_model)
+        self.assertIsNone(settings.search_answer_llm_api_key)
+        self.assertEqual(settings.search_answer_llm_timeout_seconds, 60)
+        self.assertEqual(settings.search_answer_llm_max_tokens, 900)
+        self.assertEqual(settings.search_answer_llm_temperature, 0.2)
         self.assertTrue(settings.search_document_viewer_enabled)
         self.assertEqual(settings.search_document_viewer_max_mb, 100)
         self.assertEqual(
@@ -336,9 +354,67 @@ class SettingsTests(unittest.TestCase):
             search_ragflow_rerank_id="",
             search_ragflow_keyword="",
             search_ragflow_highlight="",
+            search_answer_llm_base_url="",
+            search_answer_llm_model="",
+            search_answer_llm_api_key="",
         )
         self.assertIsNone(blank_overrides.search_ragflow_candidate_top_k)
         self.assertIsNone(blank_overrides.search_ragflow_keyword)
+        self.assertIsNone(blank_overrides.search_answer_llm_base_url)
+        self.assertIsNone(blank_overrides.search_answer_llm_model)
+        self.assertIsNone(blank_overrides.search_answer_llm_api_key)
+
+    def test_search_service_accepts_openai_compatible_answer_settings(self) -> None:
+        settings = SearchServiceSettings(
+            search_authz_base_url="http://connector-controller:8080",
+            search_authz_shared_secret="authz-secret",
+            search_ragflow_base_url="http://ragflow:9380",
+            search_ragflow_api_key="ragflow-key",
+            search_answer_llm_base_url="http://litellm:4000/v1/",
+            search_answer_llm_model="local-model",
+            search_answer_llm_api_key="llm-key",
+            search_answer_llm_timeout_seconds=30,
+            search_answer_llm_max_tokens=512,
+            search_answer_llm_temperature=0.1,
+        )
+
+        self.assertEqual(settings.search_answer_llm_base_url, "http://litellm:4000/v1")
+        self.assertEqual(settings.search_answer_llm_model, "local-model")
+        self.assertEqual(settings.search_answer_llm_api_key, "llm-key")
+        self.assertEqual(settings.search_answer_llm_timeout_seconds, 30)
+        self.assertEqual(settings.search_answer_llm_max_tokens, 512)
+        self.assertEqual(settings.search_answer_llm_temperature, 0.1)
+
+    def test_search_service_rejects_invalid_answer_llm_settings(self) -> None:
+        base = {
+            "search_authz_base_url": "http://connector-controller:8080",
+            "search_authz_shared_secret": "authz-secret",
+            "search_ragflow_base_url": "http://ragflow:9380",
+            "search_ragflow_api_key": "ragflow-key",
+        }
+
+        with self.assertRaises(ValueError):
+            SearchServiceSettings(
+                **base,
+                search_answer_llm_base_url="litellm:4000/v1",
+                search_answer_llm_model="local-model",
+            )
+
+        with self.assertRaises(ValueError):
+            SearchServiceSettings(
+                **base,
+                search_answer_llm_base_url="http://litellm:4000/v1",
+                search_answer_llm_model="local-model",
+                search_answer_llm_temperature=2.1,
+            )
+
+        with self.assertRaises(ValueError):
+            SearchServiceSettings(
+                **base,
+                search_answer_llm_base_url="http://litellm:4000/v1",
+                search_answer_llm_model="local-model",
+                search_answer_llm_max_tokens=0,
+            )
 
     def test_global_dry_run_forces_openwebui_dry_run(self) -> None:
         values = self.base_values()

@@ -856,9 +856,13 @@ def _generate_answer(
     sources: list[dict[str, Any]],
 ) -> SearchAnswer:
     requested_mode = settings.search_answer_generation_mode
+    llm_configured = _answer_llm_configured(settings)
     diagnostics: dict[str, Any] = {
         "requested_mode": requested_mode,
         "source_count": len(sources),
+        "llm_configured": llm_configured,
+        "llm_base_url_configured": bool(settings.search_answer_llm_base_url),
+        "llm_model": settings.search_answer_llm_model,
     }
     if not sources:
         return _answer_fallback(
@@ -869,6 +873,31 @@ def _generate_answer(
             diagnostics=diagnostics,
             fallback_reason="no_sources",
         )
+    if llm_configured:
+        diagnostics["llm_attempted"] = True
+        try:
+            return _generate_answer_with_llm(settings, question, sources, diagnostics)
+        except (
+            httpx.HTTPError,
+            AttributeError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            fallback_next = (
+                "ragflow_chat"
+                if requested_mode == "ragflow_chat"
+                else "source_summary_fallback"
+            )
+            llm_fallback_reason = f"llm_{type(exc).__name__}"
+            diagnostics["llm_fallback_reason"] = llm_fallback_reason
+            diagnostics["fallback_next"] = fallback_next
+            structlog.get_logger(__name__).warning(
+                "search.answer_llm_failed",
+                error_class=type(exc).__name__,
+                fallback_next=fallback_next,
+                llm_model=settings.search_answer_llm_model,
+            )
     if requested_mode in {"disabled", "retrieval_summary"}:
         mode = "disabled" if requested_mode == "disabled" else "source_summary_fallback"
         reason = (
@@ -934,14 +963,7 @@ def _generate_answer(
                     "answer_warnings": list(extracted.warnings),
                 },
             )
-        if not _has_source_marker(answer):
-            labels = ", ".join(
-                _source_marker_label(source)
-                for source in sources[: settings.search_answer_max_sources]
-                if source.get("citation_label") or source.get("source_id")
-            )
-            if labels:
-                answer = f"{answer}\n\nQuellen: {labels}."
+        answer = _ensure_source_markers(answer, sources, settings)
         return SearchAnswer(
             answer,
             "ragflow_chat",
@@ -977,6 +999,63 @@ def _generate_answer(
         )
     finally:
         client.close()
+
+
+def _answer_llm_configured(settings: SearchServiceSettings) -> bool:
+    return bool(settings.search_answer_llm_base_url and settings.search_answer_llm_model)
+
+
+def _generate_answer_with_llm(
+    settings: SearchServiceSettings,
+    question: str,
+    sources: list[dict[str, Any]],
+    diagnostics: dict[str, Any],
+) -> SearchAnswer:
+    url = _openai_chat_completions_url(str(settings.search_answer_llm_base_url or ""))
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    if settings.search_answer_llm_api_key:
+        headers["Authorization"] = f"Bearer {settings.search_answer_llm_api_key}"
+    payload = {
+        "model": settings.search_answer_llm_model,
+        "messages": _answer_messages(question, sources, settings),
+        "temperature": settings.search_answer_llm_temperature,
+        "max_tokens": settings.search_answer_llm_max_tokens,
+    }
+    with httpx.Client(
+        timeout=settings.search_answer_llm_timeout_seconds,
+        verify=settings.search_answer_llm_httpx_verify,
+    ) as client:
+        response = client.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        completion = response.json()
+    extracted = extract_answer_result(completion)
+    answer = _clean_generated_answer(extracted.answer)
+    if not answer:
+        raise RuntimeError("empty_llm_answer")
+    answer = _ensure_source_markers(answer, sources, settings)
+    return SearchAnswer(
+        answer,
+        "openai_compatible",
+        {
+            **diagnostics,
+            "llm_attempted": True,
+            "answer_origin": extracted.origin,
+            "answer_path": extracted.path,
+            "answer_warnings": list(extracted.warnings),
+        },
+    )
+
+
+def _openai_chat_completions_url(base_url: str) -> str:
+    cleaned = base_url.strip().rstrip("/")
+    if not cleaned:
+        raise ValueError("SEARCH_ANSWER_LLM_BASE_URL is empty")
+    if cleaned.endswith("/chat/completions"):
+        return cleaned
+    return f"{cleaned}/chat/completions"
 
 
 def _answer_fallback(
@@ -1084,6 +1163,23 @@ def _clean_generated_answer(value: str) -> str:
 
 def _has_source_marker(value: str) -> bool:
     return any(f"[S{index}]" in value for index in range(1, 100))
+
+
+def _ensure_source_markers(
+    answer: str,
+    sources: list[dict[str, Any]],
+    settings: SearchServiceSettings,
+) -> str:
+    if _has_source_marker(answer):
+        return answer
+    labels = ", ".join(
+        _source_marker_label(source)
+        for source in sources[: settings.search_answer_max_sources]
+        if source.get("citation_label") or source.get("source_id")
+    )
+    if not labels:
+        return answer
+    return f"{answer}\n\nQuellen: {labels}."
 
 
 def _source_marker_label(source: dict[str, Any]) -> str:

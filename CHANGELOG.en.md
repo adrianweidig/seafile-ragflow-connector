@@ -10,6 +10,20 @@ retroactively.
 
 No entries.
 
+## 2.4.8 - 2026-06-26
+
+### Added
+
+- Knowledge search can optionally synthesize answers through an
+  OpenAI-compatible `/chat/completions` endpoint configured with
+  `SEARCH_ANSWER_LLM_*`.
+
+### Fixed
+
+- Answer generation now continues to fall back cleanly to RAGFlow or the local
+  source-grounded summary when the OpenAI-compatible model is not configured or
+  fails.
+
 ## 2.4.7 - 2026-06-26
 
 ### Fixed
