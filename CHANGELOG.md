@@ -10,6 +10,18 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.4.10 - 2026-06-26
+
+### Fixed
+
+- Wissenssuche liefert im Antwortmodus weiterhin eine synthetisierte,
+  zitierte Antwort und nutzt für Prompt, Kopieren und Textmarkierung den
+  ungekürzten Passage-Text statt der gekürzten Quellenkarte.
+- Text- und Markdown-Viewer markieren die relevante Passage direkt im
+  Dokument-DOM mit `<mark>` und springen beim Quellenwechsel zur Fundstelle.
+- Quellenmarker wie `[S2]` im Antworttext sind klickbar und synchronisieren
+  Viewer, aktive Quelle und Quellenleisten.
+
 ## 2.4.9 - 2026-06-26
 
 ### Fixed

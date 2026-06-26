@@ -10,6 +10,18 @@ retroactively.
 
 No entries.
 
+## 2.4.10 - 2026-06-26
+
+### Fixed
+
+- Knowledge search answer mode continues to return a synthesized cited answer
+  and now uses the exact passage text for prompting, copying, and text
+  highlighting instead of the shortened source-card snippet.
+- Text and Markdown viewers now mark the relevant passage directly in the
+  document DOM with `<mark>` and scroll to the hit when sources change.
+- Citation markers such as `[S2]` inside the answer are clickable and
+  synchronize the viewer, active source, and source rails.
+
 ## 2.4.9 - 2026-06-26
 
 ### Fixed

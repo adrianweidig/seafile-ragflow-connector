@@ -40,9 +40,19 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn("documentViewer", SEARCH_HTML)
         self.assertIn("viewerFrame", SEARCH_HTML)
         self.assertIn("viewerTextPreview", SEARCH_HTML)
+        self.assertIn('role="document"', SEARCH_HTML)
         self.assertIn("viewerExcerpt", SEARCH_HTML)
         self.assertIn("Trefferpassage", SEARCH_HTML)
         self.assertIn("Passage kopieren", SEARCH_HTML)
+        self.assertIn("Zur Passage", SEARCH_HTML)
+        self.assertIn("answer-citation-marker", SEARCH_HTML)
+        self.assertIn("function renderAnswerText", SEARCH_HTML)
+        self.assertIn("function appendAnswerSegments", SEARCH_HTML)
+        self.assertIn("function findPassageRange", SEARCH_HTML)
+        self.assertIn("function normalizeForMatch", SEARCH_HTML)
+        self.assertIn("sourcePassage(source)", SEARCH_HTML)
+        self.assertIn("requestSubmit", SEARCH_HTML)
+        self.assertIn('id="submitSearch"', SEARCH_HTML)
         self.assertIn("composer", SEARCH_HTML)
         self.assertIn("[hidden] { display: none !important; }", SEARCH_HTML)
         self.assertIn("results-details", SEARCH_HTML)
@@ -131,6 +141,15 @@ class SearchServerTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["document_name"], "Handbuch FI Typ B.pdf")
         self.assertEqual(result["results"][0]["source_id"], "S1")
         self.assertEqual(result["results"][0]["citation_label"], "S1")
+        self.assertEqual(result["results"][0]["id"], "S1")
+        self.assertEqual(result["results"][0]["label"], "S1")
+        self.assertEqual(result["results"][0]["fileName"], "Handbuch FI Typ B.pdf")
+        self.assertEqual(result["results"][0]["libraryName"], "Anleitungen")
+        self.assertEqual(result["results"][0]["contentType"], "application/pdf")
+        self.assertEqual(
+            result["results"][0]["passageTextExact"],
+            "Wartungsintervall alle 6 Monate.",
+        )
         self.assertEqual(result["results"][0]["locator"]["page"], 12)
         self.assertEqual(result["results"][0]["locator"]["quality"], "page")
         self.assertTrue(result["results"][0]["preview_url"].startswith("/api/search/source/preview?token="))
@@ -391,6 +410,28 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn("Dieses Dokument dient normalen Testnetz-Nutzern.", answer)
         self.assertNotIn("TESTNETZUSER-HANDBUCH-20260617", answer)
         self.assertNotIn("TESTNETZADMIN-HANDBUCH-20260617", answer)
+
+    def test_answer_generation_uses_exact_passage_not_display_snippet(self) -> None:
+        sources = [
+            {
+                "citation_label": "S1",
+                "document_name": "admin-handbuch-test.md",
+                "dataset_name": "Testnetz Admin Handbuch",
+                "snippet": "Gekürzte Kartenfassung.",
+                "passage_text_exact": (
+                    "Die vollständige Passage erklärt, dass GS_Testnetz_Admin "
+                    "das Admin-Handbuch sehen darf."
+                ),
+            }
+        ]
+
+        prompt = search_server._answer_source_prompt(sources)
+        answer = _compose_answer_from_sources("Wer darf das sehen?", sources)
+
+        self.assertIn("GS_Testnetz_Admin", prompt)
+        self.assertNotIn("Gekürzte Kartenfassung", prompt)
+        self.assertIn("GS_Testnetz_Admin", answer)
+        self.assertIn("[S1]", answer)
 
     def test_chat_uses_ragflow_answer_chat_after_retrieval(self) -> None:
         settings = _settings()

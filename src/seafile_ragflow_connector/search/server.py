@@ -51,6 +51,14 @@ SEARCH_CONTENT_SECURITY_POLICY = (
     "form-action 'self'"
 )
 
+_SOURCE_MARKER_RE = re.compile(r"\[(S\d+)\]")
+_INVALID_ANSWER_FRAGMENTS = (
+    "Ich habe noch keinen separaten KI-Antworttext generiert",
+    "Zur Frage wurden passende Quellen gefunden",
+    "Die belastbaren Fundstellen stehen unten",
+    "Ich kann keine Antwort generieren",
+)
+
 SOURCE_PATH_LABEL = "Source path:"
 SOURCE_PATH_HASH_LABEL = "Source path hash:"
 SOURCE_BEGIN_MARKER = "----- BEGIN SOURCE CONTENT -----"
@@ -609,6 +617,15 @@ def _search_results_from_ragflow(
         embedded_source_path, snippet = _extract_projected_source(raw_snippet)
         if embedded_source_path:
             source_path = embedded_source_path
+        content_type = _first_text(
+            raw,
+            metadata,
+            "content_type",
+            "mime_type",
+            "mimetype",
+            "file_type",
+            "type",
+        )
         document_name = _friendly_document_name(document_name, source_path)
         if not source_path and document_name:
             source_path = f"/{dataset_name}/{document_name}"
@@ -665,6 +682,7 @@ def _search_results_from_ragflow(
                 "document_name": document_name,
                 "source_path": source_path or "",
                 "snippet": snippet,
+                "passage_text_exact": snippet,
                 "page": page,
                 "line_start": line_start,
                 "line_end": line_end,
@@ -674,6 +692,7 @@ def _search_results_from_ragflow(
                 "score": score,
                 "preview_url": "",
                 "open_url": open_url,
+                "content_type": content_type,
             }
         )
     items.sort(key=lambda item: (item["score"] is None, -(item["score"] or 0.0)))
@@ -698,24 +717,79 @@ def _document_names_by_id(payload: Any) -> dict[str, str]:
 
 
 def _deduplicate_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[tuple[str, str, str, str]] = set()
+    seen_chunks: set[tuple[str, str, str]] = set()
+    seen_passages: set[tuple[str, str, str]] = set()
     deduped: list[dict[str, Any]] = []
     sorted_results = sorted(
         results,
-        key=lambda item: (item["score"] is None, -(item["score"] or 0.0)),
+        key=lambda item: (
+            item["score"] is None,
+            -(item["score"] or 0.0),
+            str(item.get("document_name") or ""),
+            str(item.get("chunk_id") or item.get("document_id") or ""),
+        ),
     )
     for result in sorted_results:
-        key = (
-            str(result.get("ragflow_dataset_id") or ""),
-            str(result.get("document_name") or ""),
-            str(result.get("source_path") or ""),
-            str(result.get("snippet") or "")[:180],
+        document_key = (
+            str(result.get("document_id") or "")
+            or str(result.get("source_path") or "")
+            or str(result.get("document_name") or "")
         )
-        if key in seen:
+        chunk_id = str(result.get("chunk_id") or "")
+        if chunk_id:
+            chunk_key = (
+                str(result.get("ragflow_dataset_id") or ""),
+                document_key,
+                chunk_id,
+            )
+            if chunk_key in seen_chunks:
+                continue
+            seen_chunks.add(chunk_key)
+        passage_key = (
+            str(result.get("ragflow_dataset_id") or ""),
+            document_key,
+            _dedupe_passage_key(
+                result.get("passage_text_exact") or result.get("snippet") or ""
+            ),
+        )
+        if passage_key in seen_passages:
             continue
-        seen.add(key)
+        seen_passages.add(passage_key)
         deduped.append(result)
     return deduped
+
+
+def _dedupe_passage_key(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()[:360]
+
+
+def _passage_text_exact(result: dict[str, Any]) -> str:
+    return re.sub(
+        r"\s+\Z",
+        "",
+        str(result.get("passage_text_exact") or result.get("snippet") or ""),
+    ).strip()
+
+
+def _display_file_name(source_path: str | None, document_name: str | None) -> str:
+    if source_path:
+        candidate = str(source_path).replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if candidate:
+            return candidate
+    return str(document_name or "Dokument")
+
+
+def _source_content_type(result: dict[str, Any], *, viewer_kind: str) -> str | None:
+    configured = _optional_text(result.get("content_type"))
+    if configured:
+        return configured
+    if viewer_kind == "pdf":
+        return "application/pdf"
+    if viewer_kind == "text":
+        return "text/plain"
+    if viewer_kind == "image":
+        return "image/*"
+    return None
 
 
 def _finalize_search_results(
@@ -726,6 +800,7 @@ def _finalize_search_results(
     finalized: list[dict[str, Any]] = []
     for rank, result in enumerate(results, start=1):
         source_id = f"S{rank}"
+        passage_text_exact = _passage_text_exact(result)
         open_url = _safe_http_url(str(result.get("open_url") or "")) or None
         text_fragment_url = None
         if result.get("page") in (None, ""):
@@ -749,7 +824,10 @@ def _finalize_search_results(
             repo_id=_optional_text(result.get("repo_id")),
             ragflow_dataset_id=_optional_text(result.get("ragflow_dataset_id")),
             source_path=_optional_text(result.get("source_path")),
-            snippet=_compact(result.get("snippet"), settings.search_result_snippet_context_chars),
+            snippet=_compact(
+                passage_text_exact or result.get("snippet"),
+                settings.search_result_snippet_context_chars,
+            ),
             page=result.get("page"),
             line_start=result.get("line_start"),
             line_end=result.get("line_end"),
@@ -773,6 +851,28 @@ def _finalize_search_results(
             document_name=hit.document_name,
         )
         item["viewer_message"] = _viewer_message(str(item["viewer_kind"]), hit)
+        content_type = _source_content_type(result, viewer_kind=str(item["viewer_kind"]))
+        item.update(
+            {
+                "id": source_id,
+                "label": source_id,
+                "documentId": hit.document_id,
+                "document_id": hit.document_id,
+                "chunkId": hit.chunk_id,
+                "chunk_id": hit.chunk_id,
+                "title": hit.document_name,
+                "fileName": _display_file_name(hit.source_path, hit.document_name),
+                "file_name": _display_file_name(hit.source_path, hit.document_name),
+                "libraryId": hit.repo_id or hit.ragflow_dataset_id or hit.dataset_name,
+                "libraryName": hit.dataset_name,
+                "contentType": content_type,
+                "content_type": content_type,
+                "previewUrl": item.get("preview_url"),
+                "originalUrl": item.get("open_url"),
+                "passageTextExact": passage_text_exact,
+                "passage_text_exact": passage_text_exact,
+            }
+        )
         finalized.append(item)
     return finalized
 
@@ -964,6 +1064,41 @@ def _generate_answer(
                 },
             )
         answer = _ensure_source_markers(answer, sources, settings)
+        invalid_reason = _invalid_answer_reason(answer, sources)
+        if invalid_reason:
+            completion = client.chat_completion(
+                chat_id=chat_id,
+                messages=_answer_messages(
+                    question,
+                    sources,
+                    settings,
+                    strict_retry=True,
+                ),
+            )
+            retry_extracted = extract_answer_result(completion)
+            retry_answer = _ensure_source_markers(
+                _clean_generated_answer(retry_extracted.answer),
+                sources,
+                settings,
+            )
+            retry_invalid_reason = _invalid_answer_reason(retry_answer, sources)
+            if retry_invalid_reason:
+                return _answer_fallback(
+                    settings,
+                    question,
+                    sources,
+                    mode="source_summary_fallback",
+                    diagnostics=diagnostics,
+                    fallback_reason=f"invalid_answer:{retry_invalid_reason}",
+                    extra={
+                        "answer_chat_id": chat_id,
+                        "answer_origin": retry_extracted.origin,
+                        "answer_warnings": list(retry_extracted.warnings),
+                        "first_invalid_reason": invalid_reason,
+                    },
+                )
+            answer = retry_answer
+            extracted = retry_extracted
         return SearchAnswer(
             answer,
             "ragflow_chat",
@@ -1036,6 +1171,29 @@ def _generate_answer_with_llm(
     if not answer:
         raise RuntimeError("empty_llm_answer")
     answer = _ensure_source_markers(answer, sources, settings)
+    invalid_reason = _invalid_answer_reason(answer, sources)
+    if invalid_reason:
+        retry_payload = {
+            **payload,
+            "messages": _answer_messages(question, sources, settings, strict_retry=True),
+        }
+        with httpx.Client(
+            timeout=settings.search_answer_llm_timeout_seconds,
+            verify=settings.search_answer_llm_httpx_verify,
+        ) as retry_client:
+            response = retry_client.post(url, headers=headers, json=retry_payload)
+            response.raise_for_status()
+            retry_extracted = extract_answer_result(response.json())
+        retry_answer = _ensure_source_markers(
+            _clean_generated_answer(retry_extracted.answer),
+            sources,
+            settings,
+        )
+        retry_invalid_reason = _invalid_answer_reason(retry_answer, sources)
+        if retry_invalid_reason:
+            raise RuntimeError(f"invalid_llm_answer:{retry_invalid_reason}")
+        answer = retry_answer
+        extracted = retry_extracted
     return SearchAnswer(
         answer,
         "openai_compatible",
@@ -1108,26 +1266,39 @@ def _answer_messages(
     question: str,
     sources: list[dict[str, Any]],
     settings: SearchServiceSettings,
+    *,
+    strict_retry: bool = False,
 ) -> list[dict[str, Any]]:
     source_prompt = _answer_source_prompt(sources[: settings.search_answer_max_sources])
+    retry_rules = (
+        "\n- Die vorige Antwort war ungültig. Antworte jetzt zwingend mit vorhandenen "
+        "Quellenmarkern wie [S1] und ohne Platzhaltertext."
+        if strict_retry
+        else ""
+    )
     return [
         {
             "role": "system",
             "content": (
-                "Antworte ausschließlich aus den bereitgestellten Quellen. "
-                "Jede fachliche Aussage braucht Quellenmarker wie [S1]. "
+                "Du bist ein Assistent für eine interne Wissenssuche. "
+                "Beantworte die Nutzerfrage ausschließlich anhand der bereitgestellten "
+                "Fundstellen. Antworte auf Deutsch. Erfinde keine Details. Jede "
+                "fachliche Aussage braucht vorhandene Quellenmarker wie [S1], [S2]. "
                 "Kopiere die Auszüge nicht roh, sondern fasse sie zu einer direkten, "
-                "knappen Antwort zusammen. Wenn die Quellen nur Fundstellen liefern, "
-                "formuliere eine vorsichtige Antwort."
+                "knappen Antwort zusammen. Wenn die Fundstellen keine ausreichende "
+                "Antwort erlauben, sage das klar. Schreibe keine reine Trefferzählung "
+                "und keinen Platzhaltertext."
+                f"{retry_rules}"
             ),
         },
         {
             "role": "user",
             "content": (
                 f"Frage:\n{question}\n\n"
-                f"Quellen:\n{source_prompt}\n\n"
-                "Erstelle eine knappe, hilfreiche Antwort in 2 bis 5 Sätzen oder kurzen "
-                "Aufzählungspunkten. Nutze nur diese Quellen und vermeide technische IDs, "
+                f"Fundstellen:\n{source_prompt}\n\n"
+                "Erstelle eine knappe, hilfreiche Antwort in 1 bis 3 Absätzen. Bei "
+                "einer unspezifischen Frage fasse vorsichtig die relevantesten Inhalte "
+                "zusammen. Nutze nur diese Fundstellen und vermeide technische IDs, "
                 "außer sie sind fachlich notwendig."
             ),
         },
@@ -1141,19 +1312,30 @@ def _answer_source_prompt(sources: list[dict[str, Any]]) -> str:
         raw_locator = source.get("locator")
         locator = raw_locator if isinstance(raw_locator, dict) else {}
         location = str(locator.get("label") or "")
-        snippet = _compact(source.get("snippet"), 900)
+        passage = _answer_source_text(source)
         block = [
             f"[{label}]",
-            f"Dokument: {source.get('document_name') or 'Dokument'}",
+            f"Titel: {source.get('document_name') or source.get('title') or 'Dokument'}",
             f"Bibliothek: {source.get('dataset_name') or 'Bibliothek'}",
         ]
         if location:
             block.append(f"Fundstelle: {location}")
         if source.get("source_path"):
             block.append(f"Pfad: {source.get('source_path')}")
-        block.append(f"Auszug: {snippet or 'Kein Textauszug verfügbar.'}")
+        block.append(f"Text:\n{passage or 'Kein Textauszug verfügbar.'}")
         blocks.append("\n".join(block))
     return "\n\n".join(blocks)
+
+
+def _answer_source_text(source: dict[str, Any]) -> str:
+    text = str(
+        source.get("passageTextExact")
+        or source.get("passage_text_exact")
+        or source.get("text")
+        or source.get("snippet")
+        or ""
+    ).strip()
+    return _compact(text, 2400)
 
 
 def _clean_generated_answer(value: str) -> str:
@@ -1162,7 +1344,29 @@ def _clean_generated_answer(value: str) -> str:
 
 
 def _has_source_marker(value: str) -> bool:
-    return any(f"[S{index}]" in value for index in range(1, 100))
+    return bool(_SOURCE_MARKER_RE.search(value))
+
+
+def _invalid_answer_reason(answer: str, sources: list[dict[str, Any]]) -> str | None:
+    clean = str(answer or "").strip()
+    if not clean:
+        return "empty_answer"
+    lowered = clean.casefold()
+    for fragment in _INVALID_ANSWER_FRAGMENTS:
+        if fragment.casefold() in lowered:
+            return "placeholder_answer"
+    valid_labels = {
+        str(source.get("citation_label") or source.get("source_id") or "").strip()
+        for source in sources
+        if source.get("citation_label") or source.get("source_id")
+    }
+    markers = set(_SOURCE_MARKER_RE.findall(clean))
+    if sources and not markers:
+        return "missing_source_marker"
+    invalid_markers = markers - valid_labels
+    if invalid_markers:
+        return "unknown_source_marker"
+    return None
 
 
 def _ensure_source_markers(
@@ -1170,6 +1374,8 @@ def _ensure_source_markers(
     sources: list[dict[str, Any]],
     settings: SearchServiceSettings,
 ) -> str:
+    if not str(answer or "").strip():
+        return answer
     if _has_source_marker(answer):
         return answer
     labels = ", ".join(
@@ -1196,7 +1402,7 @@ def _compose_answer_from_sources(question: str, sources: list[dict[str, Any]]) -
     bullets: list[str] = []
     for source in top_sources:
         label = _source_marker_label(source)
-        snippet = _answer_snippet(source.get("snippet"))
+        snippet = _answer_snippet(_answer_source_text(source))
         document = str(source.get("document_name") or "Dokument")
         raw_locator = source.get("locator")
         locator = raw_locator if isinstance(raw_locator, dict) else {}

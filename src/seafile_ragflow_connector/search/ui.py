@@ -198,12 +198,13 @@ SEARCH_HTML = r"""<!doctype html>
     }
     .profile-search { min-height: 38px; padding: 0 11px; font-size: .92rem; }
     .query-input {
-      height: 46px;
       min-height: 46px;
       max-height: 96px;
-      padding: 0 14px;
+      padding: 11px 14px;
       font-size: 1rem;
       background: var(--surface);
+      resize: vertical;
+      line-height: 1.35;
     }
     .profile-search:focus, .query-input:focus { border-color: var(--accent); box-shadow: var(--focus); }
     .profile-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -222,7 +223,7 @@ SEARCH_HTML = r"""<!doctype html>
       gap: 7px;
     }
     .mini-button:hover, .secondary:hover, .source-chip:hover { border-color: var(--accent); color: var(--accent-text); }
-    .mini-button:disabled { opacity: .52; cursor: not-allowed; }
+    .mini-button:disabled, .primary:disabled { opacity: .52; cursor: not-allowed; }
     .profile-list { padding: 9px; display: grid; gap: 6px; overflow: auto; }
     .profile-row {
       display: grid;
@@ -289,7 +290,16 @@ SEARCH_HTML = r"""<!doctype html>
       gap: 11px;
     }
     .answer h2 { margin: 0; color: var(--strong); font-size: 1.08rem; }
-    .answer-text { max-width: 88ch; margin: 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 1rem; line-height: 1.5; }
+    .answer-text { max-width: 88ch; color: var(--text); overflow-wrap: anywhere; font-size: 1rem; line-height: 1.5; }
+    .answer-text p { margin: 0 0 10px; }
+    .answer-text p:last-child { margin-bottom: 0; }
+    .answer-citation-marker {
+      min-height: 24px;
+      padding: 1px 7px;
+      vertical-align: baseline;
+      font-size: .86rem;
+      cursor: pointer;
+    }
     .viewer {
       min-height: 0;
       border-bottom: 1px solid var(--border);
@@ -381,6 +391,18 @@ SEARCH_HTML = r"""<!doctype html>
       color: #251a00;
       border-radius: 4px;
       padding: 0 2px;
+    }
+    .viewer-text-preview mark {
+      background: color-mix(in srgb, #fde68a 80%, transparent);
+      color: #251a00;
+      border-radius: 4px;
+      padding: 1px 2px;
+      box-decoration-break: clone;
+      -webkit-box-decoration-break: clone;
+    }
+    html[data-theme="dark"] .viewer-text-preview mark {
+      background: #6d5b1d;
+      color: var(--strong);
     }
     .viewer-excerpt p { margin: 0; overflow-wrap: anywhere; }
     .viewer-message { color: var(--muted); font-size: .86rem; }
@@ -483,6 +505,7 @@ SEARCH_HTML = r"""<!doctype html>
       gap: 4px;
     }
     .source-card:hover, .source-card.is-active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+    .source-card:focus-visible { outline: none; box-shadow: var(--focus); }
     .source-card strong { color: var(--strong); overflow-wrap: anywhere; }
     .source-card span { color: var(--muted); font-size: .84rem; overflow-wrap: anywhere; }
     .source-card p {
@@ -495,6 +518,23 @@ SEARCH_HTML = r"""<!doctype html>
       -webkit-box-orient: vertical;
       overflow-wrap: anywhere;
     }
+    .source-card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+    .source-card-action {
+      min-height: 28px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 0 8px;
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: .78rem;
+      font-weight: 780;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+    }
+    .source-card-action:hover { border-color: var(--accent); color: var(--accent-text); }
     .inline-source-card {
       flex: 0 0 min(280px, 72vw);
       min-height: 78px;
@@ -624,7 +664,7 @@ SEARCH_HTML = r"""<!doctype html>
           </div>
           <div id="viewerEmpty" class="viewer-empty">Nach der Suche wird hier die beste Quelle im nativen Browserviewer geladen.</div>
           <iframe id="viewerFrame" class="viewer-frame" title="Dokumentviewer" hidden></iframe>
-          <pre id="viewerTextPreview" class="viewer-text-preview" aria-label="Textvorschau" hidden></pre>
+          <div id="viewerTextPreview" class="viewer-text-preview" role="document" aria-label="Textvorschau" hidden></div>
           <div class="viewer-excerpt" id="viewerExcerpt">
             <span class="viewer-message">Trefferpassage und Suchhilfe erscheinen hier.</span>
           </div>
@@ -641,8 +681,8 @@ SEARCH_HTML = r"""<!doctype html>
         <div id="results" class="results"></div>
         <div class="query-area composer" id="composer">
           <form class="query-form" id="queryForm">
-            <input class="query-input" id="question" name="question" autocomplete="off" placeholder="Was möchtest du in deinen Bibliotheken wissen?" aria-label="Suchfrage">
-            <button class="primary" type="submit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 18a7.5 7.5 0 1 1 5.3-12.8A7.5 7.5 0 0 1 10.5 18Zm6-1.5 4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Suchen</button>
+            <textarea class="query-input" id="question" name="question" rows="2" placeholder="Was möchtest du in deinen Bibliotheken wissen?" aria-label="Suchfrage"></textarea>
+            <button class="primary" id="submitSearch" type="submit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 18a7.5 7.5 0 1 1 5.3-12.8A7.5 7.5 0 0 1 10.5 18Zm6-1.5 4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Antwort generieren</button>
           </form>
           <div class="toolbar">
             <div class="segments" role="group" aria-label="Suchmodus">
@@ -683,6 +723,7 @@ SEARCH_HTML = r"""<!doctype html>
     const userLineEl = document.getElementById('userLine');
     const topKEl = document.getElementById('topK');
     const questionEl = document.getElementById('question');
+    const submitButtonEl = document.getElementById('submitSearch');
     const sourceRailEl = document.getElementById('sourceRail');
     const inlineSourcesEl = document.getElementById('inlineSources');
     const inlineSourceRailEl = document.getElementById('inlineSourceRail');
@@ -703,6 +744,8 @@ SEARCH_HTML = r"""<!doctype html>
     let latestSources = [];
     let toastTimer = null;
     let viewerRequestId = 0;
+    let isLoading = false;
+    let activeTextMarkEl = null;
 
     function setState(text, kind = '') {
       stateEl.textContent = text;
@@ -724,6 +767,15 @@ SEARCH_HTML = r"""<!doctype html>
       return [...document.querySelectorAll('[data-profile-id]:checked')].map(item => item.value);
     }
 
+    function updateSubmitState() {
+      submitButtonEl.disabled = isLoading || !questionEl.value.trim() || !selectedProfileIds().length;
+    }
+
+    function setLoading(loading) {
+      isLoading = loading;
+      updateSubmitState();
+    }
+
     function updateProfileSelectionState() {
       const selected = selectedProfileIds().length;
       const total = profiles.length;
@@ -733,6 +785,7 @@ SEARCH_HTML = r"""<!doctype html>
         : '0 Bibliotheken';
       document.getElementById('selectAllProfiles').disabled = !total || selected === total;
       document.getElementById('clearProfiles').disabled = !selected;
+      updateSubmitState();
     }
 
     function setAllProfiles(checked) {
@@ -791,6 +844,7 @@ SEARCH_HTML = r"""<!doctype html>
 
     async function runSearch(event) {
       event.preventDefault();
+      if (isLoading) return;
       answerEl.hidden = true;
       answerEl.innerHTML = '';
       resultsEl.innerHTML = '';
@@ -807,7 +861,13 @@ SEARCH_HTML = r"""<!doctype html>
         return;
       }
       const endpoint = mode === 'chat' ? '/api/search/chat' : '/api/search/query';
-      setState(`Suche läuft in ${profile_ids.length} Bibliothek${profile_ids.length === 1 ? '' : 'en'} …`, 'loading');
+      setLoading(true);
+      setState(
+        mode === 'chat'
+          ? `Suche in ${profile_ids.length} Bibliothek${profile_ids.length === 1 ? '' : 'en'} … Antwort wird aus Fundstellen generiert …`
+          : `Suche läuft in ${profile_ids.length} Bibliothek${profile_ids.length === 1 ? '' : 'en'} …`,
+        'loading'
+      );
       try {
         const response = await fetch(endpoint, {
           method: 'POST',
@@ -834,6 +894,8 @@ SEARCH_HTML = r"""<!doctype html>
         }
       } catch (error) {
         setState(error.message || 'Suche fehlgeschlagen.', 'error');
+      } finally {
+        setLoading(false);
       }
     }
 
@@ -852,9 +914,7 @@ SEARCH_HTML = r"""<!doctype html>
       answerEl.innerHTML = '';
       const title = document.createElement('h2');
       title.textContent = 'Antwort mit Quellen';
-      const text = document.createElement('p');
-      text.className = 'answer-text';
-      text.textContent = answerText;
+      const text = renderAnswerText(answerText, sources);
       answerEl.append(title, text);
       if (citations.length) {
         const strip = document.createElement('div');
@@ -872,6 +932,51 @@ SEARCH_HTML = r"""<!doctype html>
         }
         answerEl.appendChild(strip);
       }
+    }
+
+    function renderAnswerText(answerText, sources) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'answer-text';
+      const paragraphs = String(answerText || '').split(/\n{2,}/).filter(Boolean);
+      for (const paragraphText of paragraphs.length ? paragraphs : ['']) {
+        const paragraph = document.createElement('p');
+        appendAnswerSegments(paragraph, paragraphText, sources);
+        wrapper.appendChild(paragraph);
+      }
+      return wrapper;
+    }
+
+    function appendAnswerSegments(target, text, sources) {
+      const markerPattern = /\[(S\d+)\]/g;
+      let lastIndex = 0;
+      let match;
+      while ((match = markerPattern.exec(text)) !== null) {
+        if (match.index > lastIndex) {
+          target.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+        }
+        const source = sourceByLabel(match[1], sources);
+        if (source) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'citation-button answer-citation-marker';
+          button.textContent = `[${match[1]}]`;
+          button.title = `${match[1]} im Dokumentviewer anzeigen`;
+          bindSourceInteractions(button, source);
+          button.addEventListener('click', () => selectSource(source));
+          target.appendChild(button);
+        } else {
+          target.appendChild(document.createTextNode(match[0]));
+        }
+        lastIndex = markerPattern.lastIndex;
+      }
+      if (lastIndex < text.length) {
+        target.appendChild(document.createTextNode(text.slice(lastIndex)));
+      }
+    }
+
+    function sourceByLabel(label, sources = latestSources) {
+      const clean = String(label || '').replace(/^\[|\]$/g, '');
+      return sources.find(item => item.source_id === clean || item.citation_label === clean || item.label === clean);
     }
 
     function renderResults(results, query) {
@@ -950,21 +1055,43 @@ SEARCH_HTML = r"""<!doctype html>
     }
 
     function sourceCard(source, className) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = className;
-      button.dataset.sourceId = source.source_id || '';
+      const card = document.createElement('article');
+      card.className = className;
+      card.dataset.sourceId = source.source_id || '';
+      card.tabIndex = 0;
+      card.setAttribute('role', 'button');
+      card.setAttribute('aria-label', `${source.citation_label || source.source_id || 'Quelle'} anzeigen`);
       const location = source.locator && source.locator.label ? source.locator.label : '';
-      button.innerHTML = `
+      card.innerHTML = `
         <strong>${escapeHtml(source.citation_label || source.source_id || 'Quelle')} · ${escapeHtml(source.document_name || 'Dokument')}</strong>
         <span>${escapeHtml(source.dataset_name || 'Bibliothek')}${location ? ` · ${escapeHtml(location)}` : ''}</span>
-        <p>${escapeHtml(compact(source.snippet || '', 150))}</p>`;
-      bindSourceInteractions(button, source);
-      button.addEventListener('click', () => {
+        <p>${escapeHtml(compact(source.snippet || source.passageTextExact || source.passage_text_exact || '', 150))}</p>
+        <div class="source-card-actions">
+          <button class="source-card-action" type="button" data-source-action="show">Anzeigen</button>
+          <button class="source-card-action" type="button" data-source-action="copy">Kopieren</button>
+          ${source.open_url ? `<a class="source-card-action" href="${escapeAttr(source.open_url)}" target="_blank" rel="noreferrer noopener">Original</a>` : ''}
+        </div>`;
+      const select = () => {
         hideHover();
         selectSource(source);
+      };
+      bindSourceInteractions(card, source);
+      card.addEventListener('click', event => {
+        if (event.target.closest('button,a')) return;
+        select();
       });
-      return button;
+      card.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          select();
+        }
+      });
+      card.querySelector('[data-source-action="show"]').addEventListener('click', select);
+      card.querySelector('[data-source-action="copy"]').addEventListener('click', event => {
+        event.stopPropagation();
+        copyPassage(source);
+      });
+      return card;
     }
 
     function bindSourceInteractions(element, source) {
@@ -996,6 +1123,7 @@ SEARCH_HTML = r"""<!doctype html>
       hideHover();
       viewerRequestId += 1;
       if (!source) {
+        activeTextMarkEl = null;
         viewerTitleEl.textContent = 'Kein Dokument ausgewählt';
         viewerMetaEl.textContent = 'Wähle rechts eine Quelle aus oder starte eine Suche.';
         viewerActionsEl.innerHTML = '';
@@ -1016,19 +1144,23 @@ SEARCH_HTML = r"""<!doctype html>
 
     function renderViewer(source) {
       const location = source.locator && source.locator.label ? source.locator.label : '';
+      activeTextMarkEl = null;
       viewerTitleEl.textContent = `${source.citation_label || source.source_id || 'Quelle'} · ${source.document_name || 'Dokument'}`;
       viewerMetaEl.textContent = `${source.dataset_name || 'Bibliothek'}${location ? ` · ${location}` : ''}`;
       const actions = [];
+      actions.push('<button class="secondary" type="button" id="scrollActivePassage">Zur Passage</button>');
+      actions.push('<button class="secondary" type="button" id="copyActivePassage">Passage kopieren</button>');
       if (source.viewer_url) actions.push(`<a class="secondary" href="${escapeAttr(source.viewer_url)}" target="_blank" rel="noreferrer noopener">${iconEye()}Datei öffnen</a>`);
-      if (source.preview_url) actions.push(`<a class="secondary" href="${escapeAttr(source.preview_url)}" target="_blank" rel="noreferrer noopener">Vorschau</a>`);
-      if (source.open_url) actions.push(`<a class="secondary" href="${escapeAttr(source.open_url)}" target="_blank" rel="noreferrer noopener">Originallink</a>`);
-      actions.push('<button class="secondary" type="button" id="copyActivePassage">Passage suchen</button>');
+      if (source.open_url) actions.push(`<a class="secondary" href="${escapeAttr(source.open_url)}" target="_blank" rel="noreferrer noopener">Original öffnen</a>`);
+      if (source.preview_url && source.preview_url !== source.viewer_url) actions.push(`<a class="secondary" href="${escapeAttr(source.preview_url)}" target="_blank" rel="noreferrer noopener">Vorschau</a>`);
       viewerActionsEl.innerHTML = actions.join('');
+      const scrollButton = document.getElementById('scrollActivePassage');
+      if (scrollButton) scrollButton.addEventListener('click', () => scrollToActivePassage(source));
       const copyButton = document.getElementById('copyActivePassage');
       if (copyButton) copyButton.addEventListener('click', () => copyPassage(source));
 
       const message = source.viewer_message || 'Nutze Strg+F im Viewer und suche nach dem markierten Auszug.';
-      const snippet = compact(source.snippet || '', 520);
+      const snippet = compact(sourcePassage(source) || '', 520);
       viewerExcerptEl.classList.remove('is-expanded');
       viewerExcerptEl.innerHTML = `
         <div class="viewer-excerpt-head">
@@ -1061,7 +1193,7 @@ SEARCH_HTML = r"""<!doctype html>
         viewerEmptyEl.hidden = true;
         viewerTextPreviewEl.hidden = false;
         viewerTextPreviewEl.textContent = 'Text wird geladen …';
-        loadTextPreview(source.viewer_url, requestId);
+        loadTextPreview(source.viewer_url, requestId, source);
       } else if (inlineTarget) {
         viewerFrameEl.src = source.viewer_url;
         viewerFrameEl.hidden = false;
@@ -1074,20 +1206,119 @@ SEARCH_HTML = r"""<!doctype html>
       }
     }
 
-    async function loadTextPreview(url, requestId) {
+    async function loadTextPreview(url, requestId, source) {
       try {
         const response = await fetch(url, {headers: {'Accept': 'text/plain, */*'}});
         if (!response.ok) throw new Error('Text konnte nicht geladen werden.');
         const text = await response.text();
         if (requestId !== viewerRequestId) return;
-        viewerTextPreviewEl.textContent = text.length > 24000 ? `${text.slice(0, 24000)}\n\n…` : text;
+        renderTextPreview(text, source);
       } catch (error) {
         if (requestId !== viewerRequestId) return;
         viewerTextPreviewEl.hidden = true;
-        viewerTextPreviewEl.textContent = '';
+        viewerTextPreviewEl.replaceChildren();
         viewerEmptyEl.hidden = false;
         viewerEmptyEl.textContent = error.message || 'Text konnte nicht geladen werden. Nutze Datei öffnen oder den Auszug.';
       }
+    }
+
+    function renderTextPreview(fullText, source) {
+      const passage = sourcePassage(source);
+      let range = findPassageRange(fullText, passage);
+      let visibleText = fullText;
+      let offset = 0;
+      let prefix = '';
+      let suffix = '';
+      if (fullText.length > 30000) {
+        if (range) {
+          const start = Math.max(0, range.start - 9000);
+          const end = Math.min(fullText.length, range.end + 18000);
+          visibleText = fullText.slice(start, end);
+          offset = start;
+          range = {start: range.start - offset, end: range.end - offset};
+          prefix = start > 0 ? '…\n' : '';
+          suffix = end < fullText.length ? '\n…' : '';
+        } else {
+          visibleText = fullText.slice(0, 30000);
+          suffix = '\n…';
+        }
+      }
+      viewerTextPreviewEl.replaceChildren();
+      if (prefix) viewerTextPreviewEl.appendChild(document.createTextNode(prefix));
+      if (range && range.start >= 0 && range.end > range.start) {
+        viewerTextPreviewEl.appendChild(document.createTextNode(visibleText.slice(0, range.start)));
+        const mark = document.createElement('mark');
+        mark.textContent = visibleText.slice(range.start, range.end);
+        viewerTextPreviewEl.appendChild(mark);
+        viewerTextPreviewEl.appendChild(document.createTextNode(visibleText.slice(range.end)));
+        activeTextMarkEl = mark;
+        window.requestAnimationFrame(() => mark.scrollIntoView({block: 'center'}));
+      } else {
+        viewerTextPreviewEl.appendChild(document.createTextNode(visibleText));
+        activeTextMarkEl = null;
+        if (passage) {
+          showToast('Die Passage konnte im Text nicht automatisch markiert werden. Der Auszug bleibt kopierbar.', 'error');
+        }
+      }
+      if (suffix) viewerTextPreviewEl.appendChild(document.createTextNode(suffix));
+    }
+
+    function findPassageRange(text, passage) {
+      const cleanPassage = String(passage || '').trim();
+      if (!cleanPassage) return null;
+      const exactIndex = text.indexOf(cleanPassage);
+      if (exactIndex >= 0) return {start: exactIndex, end: exactIndex + cleanPassage.length};
+      const normalized = findNormalizedRange(text, cleanPassage);
+      if (normalized) return normalized;
+      const shortened = cleanPassage.slice(0, 240).trim();
+      if (shortened && shortened !== cleanPassage) {
+        const shortExactIndex = text.indexOf(shortened);
+        if (shortExactIndex >= 0) return {start: shortExactIndex, end: shortExactIndex + shortened.length};
+        return findNormalizedRange(text, shortened);
+      }
+      return null;
+    }
+
+    function findNormalizedRange(text, passage) {
+      const normalizedText = normalizeWithMap(text);
+      const normalizedPassage = normalizeForMatch(passage);
+      if (!normalizedPassage) return null;
+      const index = normalizedText.text.indexOf(normalizedPassage);
+      if (index < 0) return null;
+      const last = index + normalizedPassage.length - 1;
+      const start = normalizedText.indexes[index];
+      const end = (normalizedText.indexes[last] ?? start) + 1;
+      return {start, end};
+    }
+
+    function normalizeWithMap(value) {
+      const chars = [];
+      const indexes = [];
+      let inSpace = false;
+      const text = String(value || '');
+      for (let index = 0; index < text.length; index += 1) {
+        const char = text[index];
+        if (/\s/.test(char)) {
+          if (chars.length && !inSpace) {
+            chars.push(' ');
+            indexes.push(index);
+            inSpace = true;
+          }
+        } else {
+          chars.push(char.toLowerCase());
+          indexes.push(index);
+          inSpace = false;
+        }
+      }
+      if (chars[chars.length - 1] === ' ') {
+        chars.pop();
+        indexes.pop();
+      }
+      return {text: chars.join(''), indexes};
+    }
+
+    function normalizeForMatch(value) {
+      return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
     }
 
     function focusSource(source) {
@@ -1101,8 +1332,30 @@ SEARCH_HTML = r"""<!doctype html>
       if (target) window.open(target, '_blank', 'noopener,noreferrer');
     }
 
+    function sourcePassage(source) {
+      return String(
+        source.passageTextExact
+        || source.passage_text_exact
+        || source.text
+        || source.snippet
+        || ''
+      ).trim();
+    }
+
+    function scrollToActivePassage(source) {
+      if (activeTextMarkEl) {
+        activeTextMarkEl.scrollIntoView({block: 'center'});
+        activeTextMarkEl.focus?.();
+        return;
+      }
+      viewerExcerptEl.scrollIntoView({block: 'center'});
+      if (source && source.viewer_kind !== 'text') {
+        showToast('Bei nativen Viewern bleibt der Treffer als kopierbarer Auszug sichtbar.', 'success');
+      }
+    }
+
     async function copyPassage(source) {
-      const passage = compact(source.snippet || source.document_name || '', 500);
+      const passage = sourcePassage(source) || source.document_name || '';
       if (!passage) {
         showToast('Für diese Quelle gibt es keinen kopierbaren Passage-Text.', 'error');
         return;
@@ -1187,11 +1440,19 @@ SEARCH_HTML = r"""<!doctype html>
       button.addEventListener('click', () => {
         mode = button.dataset.mode;
         document.querySelectorAll('.segment').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+        submitButtonEl.lastChild.textContent = mode === 'chat' ? 'Antwort generieren' : 'Suchen';
       });
     });
     document.getElementById('selectAllProfiles').addEventListener('click', () => setAllProfiles(true));
     document.getElementById('clearProfiles').addEventListener('click', () => setAllProfiles(false));
     document.getElementById('profileFilter').addEventListener('input', applyProfileFilter);
+    questionEl.addEventListener('input', updateSubmitState);
+    questionEl.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        document.getElementById('queryForm').requestSubmit();
+      }
+    });
     document.getElementById('queryForm').addEventListener('submit', runSearch);
     libraryToggleEl.addEventListener('click', () => {
       libraryPanelEl.dataset.userCollapse = 'true';
@@ -1200,6 +1461,7 @@ SEARCH_HTML = r"""<!doctype html>
     window.addEventListener('resize', syncLibraryCollapse);
     applyTheme(initialTheme());
     syncLibraryCollapse();
+    updateSubmitState();
     loadProfiles();
   </script>
 </body>
