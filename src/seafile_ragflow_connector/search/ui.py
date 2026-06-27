@@ -384,24 +384,22 @@ SEARCH_HTML = r"""<!doctype html>
       -webkit-box-orient: vertical;
       overflow: hidden;
       overflow-wrap: anywhere;
+      color: var(--strong);
     }
     .viewer-excerpt.is-expanded .viewer-passage-text { display: block; }
-    .viewer-excerpt mark {
-      background: color-mix(in srgb, #fde68a 76%, transparent);
-      color: #251a00;
-      border-radius: 4px;
-      padding: 0 2px;
-    }
+    .viewer-focus-note { color: var(--muted); font-size: .82rem; }
     .viewer-text-preview mark {
       background: color-mix(in srgb, #fde68a 80%, transparent);
       color: #251a00;
       border-radius: 4px;
-      padding: 1px 2px;
+      padding: 0 2px;
       box-decoration-break: clone;
       -webkit-box-decoration-break: clone;
+      outline: 1px solid color-mix(in srgb, #f59e0b 42%, transparent);
+      outline-offset: 1px;
     }
     html[data-theme="dark"] .viewer-text-preview mark {
-      background: #6d5b1d;
+      background: color-mix(in srgb, #fbbf24 42%, transparent);
       color: var(--strong);
     }
     .viewer-excerpt p { margin: 0; overflow-wrap: anywhere; }
@@ -1159,8 +1157,10 @@ SEARCH_HTML = r"""<!doctype html>
       const copyButton = document.getElementById('copyActivePassage');
       if (copyButton) copyButton.addEventListener('click', () => copyPassage(source));
 
-      const message = source.viewer_message || 'Nutze Strg+F im Viewer und suche nach dem markierten Auszug.';
-      const snippet = compact(sourcePassage(source) || '', 520);
+      const message = source.viewer_kind === 'text'
+        ? 'Im Dokument wird nur der relevanteste kurze Treffer markiert. Die vollständige Passage bleibt hier kopierbar.'
+        : (source.viewer_message || 'Bei nativen Viewern ist die Markierung best-effort; die vollständige Passage bleibt hier kopierbar.');
+      const snippet = compact(sourcePassage(source) || '', 420);
       viewerExcerptEl.classList.remove('is-expanded');
       viewerExcerptEl.innerHTML = `
         <div class="viewer-excerpt-head">
@@ -1170,8 +1170,8 @@ SEARCH_HTML = r"""<!doctype html>
             <button class="passage-action" type="button" id="toggleViewerPassage" hidden>mehr anzeigen</button>
           </span>
         </div>
-        <p class="viewer-passage-text">${snippet ? `<mark>${escapeHtml(snippet)}</mark>` : 'Kein Textauszug verfügbar.'}</p>
-        <span class="viewer-message">${escapeHtml(message)} Bei Bedarf Strg+F mit dem kopierten Passage-Text nutzen.</span>`;
+        <p class="viewer-passage-text">${snippet ? escapeHtml(snippet) : 'Kein Textauszug verfügbar.'}</p>
+        <span class="viewer-focus-note">${escapeHtml(message)}</span>`;
       const copyPassageButton = document.getElementById('copyViewerPassage');
       if (copyPassageButton) copyPassageButton.addEventListener('click', () => copyPassage(source));
       const togglePassageButton = document.getElementById('toggleViewerPassage');
@@ -1224,7 +1224,8 @@ SEARCH_HTML = r"""<!doctype html>
 
     function renderTextPreview(fullText, source) {
       const passage = sourcePassage(source);
-      let range = findPassageRange(fullText, passage);
+      const passageRange = findPassageRange(fullText, passage);
+      let range = findFocusedPassageRange(fullText, passage, passageRange, questionEl.value);
       let visibleText = fullText;
       let offset = 0;
       let prefix = '';
@@ -1263,6 +1264,29 @@ SEARCH_HTML = r"""<!doctype html>
       if (suffix) viewerTextPreviewEl.appendChild(document.createTextNode(suffix));
     }
 
+    function findFocusedPassageRange(text, passage, passageRange, query) {
+      if (!passageRange) return null;
+      const passageText = text.slice(passageRange.start, passageRange.end);
+      const queryTerms = focusTerms(query);
+      for (const term of queryTerms) {
+        const termRange = findTermRange(passageText, term);
+        if (termRange) {
+          return {
+            start: passageRange.start + termRange.start,
+            end: passageRange.start + termRange.end,
+          };
+        }
+      }
+      const compactRange = firstReadableSegmentRange(passageText);
+      if (compactRange) {
+        return {
+          start: passageRange.start + compactRange.start,
+          end: passageRange.start + compactRange.end,
+        };
+      }
+      return clampRangeToReadableLength(text, passageRange, 160);
+    }
+
     function findPassageRange(text, passage) {
       const cleanPassage = String(passage || '').trim();
       if (!cleanPassage) return null;
@@ -1289,6 +1313,65 @@ SEARCH_HTML = r"""<!doctype html>
       const start = normalizedText.indexes[index];
       const end = (normalizedText.indexes[last] ?? start) + 1;
       return {start, end};
+    }
+
+    function focusTerms(query) {
+      const stopWords = new Set([
+        'aber', 'alle', 'auch', 'aus', 'bei', 'das', 'den', 'der', 'die', 'ein', 'eine',
+        'einen', 'einer', 'eines', 'für', 'gibt', 'haben', 'ich', 'ist', 'mit', 'nach',
+        'oder', 'sich', 'sind', 'und', 'was', 'welche', 'welchen', 'welcher', 'wer', 'wie',
+        'wird', 'wo', 'zu', 'zum', 'zur',
+      ]);
+      return [...new Set(String(query || '')
+        .toLowerCase()
+        .split(/[^\p{L}\p{N}_-]+/u)
+        .map(term => term.trim())
+        .filter(term => term.length >= 4 && !stopWords.has(term)))]
+        .sort((left, right) => right.length - left.length)
+        .slice(0, 6);
+    }
+
+    function findTermRange(text, term) {
+      const lowerText = String(text || '').toLowerCase();
+      const lowerTerm = String(term || '').toLowerCase();
+      if (!lowerTerm) return null;
+      const index = lowerText.indexOf(lowerTerm);
+      if (index < 0) return null;
+      return expandToReadableToken(text, index, index + lowerTerm.length);
+    }
+
+    function expandToReadableToken(text, start, end) {
+      let nextStart = start;
+      let nextEnd = end;
+      while (nextStart > 0 && /[\p{L}\p{N}_-]/u.test(text[nextStart - 1])) nextStart -= 1;
+      while (nextEnd < text.length && /[\p{L}\p{N}_-]/u.test(text[nextEnd])) nextEnd += 1;
+      if (nextEnd - nextStart > 96) return {start, end};
+      return {start: nextStart, end: nextEnd};
+    }
+
+    function firstReadableSegmentRange(text) {
+      const value = String(text || '');
+      const pattern = /[^\n.!?]{24,180}[.!?]?/g;
+      let match;
+      while ((match = pattern.exec(value)) !== null) {
+        const raw = match[0];
+        const trimmedStart = raw.search(/\S/);
+        if (trimmedStart < 0) continue;
+        const start = match.index + trimmedStart;
+        const segment = raw.trim();
+        if (segment.length < 24) continue;
+        const length = Math.min(segment.length, 180);
+        return {start, end: start + length};
+      }
+      return null;
+    }
+
+    function clampRangeToReadableLength(text, range, limit) {
+      if (!range || range.end <= range.start) return null;
+      if (range.end - range.start <= limit) return range;
+      let start = range.start;
+      while (start < range.end && /\s/.test(text[start])) start += 1;
+      return {start, end: Math.min(range.end, start + limit)};
     }
 
     function normalizeWithMap(value) {

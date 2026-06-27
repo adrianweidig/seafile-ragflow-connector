@@ -49,8 +49,17 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn("function renderAnswerText", SEARCH_HTML)
         self.assertIn("function appendAnswerSegments", SEARCH_HTML)
         self.assertIn("function findPassageRange", SEARCH_HTML)
+        self.assertIn("function findFocusedPassageRange", SEARCH_HTML)
+        self.assertIn("function focusTerms", SEARCH_HTML)
         self.assertIn("function normalizeForMatch", SEARCH_HTML)
         self.assertIn("sourcePassage(source)", SEARCH_HTML)
+        self.assertIn("Im Dokument wird nur der relevanteste kurze Treffer markiert", SEARCH_HTML)
+        self.assertIn("viewer-focus-note", SEARCH_HTML)
+        self.assertIn(
+            '<p class="viewer-passage-text">${snippet ? escapeHtml(snippet)',
+            SEARCH_HTML,
+        )
+        self.assertNotIn("<p class=\"viewer-passage-text\">${snippet ? `<mark>", SEARCH_HTML)
         self.assertIn("requestSubmit", SEARCH_HTML)
         self.assertIn('id="submitSearch"', SEARCH_HTML)
         self.assertIn("composer", SEARCH_HTML)

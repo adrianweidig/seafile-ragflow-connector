@@ -10,6 +10,17 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.4.11 - 2026-06-27
+
+### Fixed
+
+- Wissenssuche markiert im Text-/Markdown-Viewer nur noch einen kurzen,
+  relevanten Fokus-Treffer statt den gesamten RAG-Chunk gelb hervorzuheben.
+- Die Trefferpassage unter dem Viewer bleibt als neutraler, kopierbarer Auszug
+  sichtbar und wiederholt nicht mehr dieselbe große gelbe Markierung.
+- Der Viewer-Hinweis erklärt klarer, dass die vollständige Passage kopierbar
+  bleibt, während im Dokument nur der relevanteste Treffer hervorgehoben wird.
+
 ## 2.4.10 - 2026-06-26
 
 ### Fixed

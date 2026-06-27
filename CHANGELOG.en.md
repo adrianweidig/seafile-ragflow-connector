@@ -10,6 +10,17 @@ retroactively.
 
 No entries.
 
+## 2.4.11 - 2026-06-27
+
+### Fixed
+
+- Knowledge search now highlights only one short, relevant focus hit in the
+  text/Markdown viewer instead of painting the entire RAG chunk yellow.
+- The hit passage below the viewer remains a neutral, copyable excerpt and no
+  longer repeats the same large yellow highlight block.
+- Viewer helper text now states more clearly that the full passage remains
+  copyable while only the most relevant in-document hit is highlighted.
+
 ## 2.4.10 - 2026-06-26
 
 ### Fixed
