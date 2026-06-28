@@ -204,6 +204,19 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("min-height: 40px", DASHBOARD_HTML)
         self.assertIn("min-height: 44px", DASHBOARD_HTML)
 
+    def test_dashboard_uses_quieter_operational_density(self) -> None:
+        self.assertIn("grid-template-columns: 248px minmax(0, 1fr)", DASHBOARD_HTML)
+        self.assertIn("min-height: 196px", DASHBOARD_HTML)
+        self.assertIn("min-height: 96px", DASHBOARD_HTML)
+        self.assertIn("font-size: 21px", DASHBOARD_HTML)
+        self.assertIn("gap: 6px", DASHBOARD_HTML)
+        self.assertIn(
+            "background: color-mix(in srgb, var(--accent) 13%, var(--surface))",
+            DASHBOARD_HTML,
+        )
+        self.assertNotIn("animation: softPulse 4.8s", DASHBOARD_HTML)
+        self.assertNotIn("animation: surfaceIn 420ms", DASHBOARD_HTML)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -53,8 +53,16 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn("function focusTerms", SEARCH_HTML)
         self.assertIn("function normalizeForMatch", SEARCH_HTML)
         self.assertIn("sourcePassage(source)", SEARCH_HTML)
-        self.assertIn("Im Dokument wird nur der relevanteste kurze Treffer markiert", SEARCH_HTML)
+        self.assertIn("kurzer Trefferanker gelb markiert", SEARCH_HTML)
         self.assertIn("viewer-focus-note", SEARCH_HTML)
+        self.assertIn("bestPassageAnchorRange", SEARCH_HTML)
+        self.assertIn("passageLineScore", SEARCH_HTML)
+        self.assertIn("snippetHighlightTerms", SEARCH_HTML)
+        self.assertIn("broadTerms", SEARCH_HTML)
+        self.assertIn("citation.sourceIds", SEARCH_HTML)
+        self.assertIn("citation.source_ids", SEARCH_HTML)
+        self.assertIn("primary-viewer-action", SEARCH_HTML)
+        self.assertIn("border-left: 3px solid", SEARCH_HTML)
         self.assertIn(
             '<p class="viewer-passage-text">${snippet ? escapeHtml(snippet)',
             SEARCH_HTML,

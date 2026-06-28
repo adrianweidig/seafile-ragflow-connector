@@ -10,6 +10,20 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.5.0 - 2026-06-28
+
+### Changed
+
+- Wissenssuche nutzt nach visuellem Review eine ruhigere Arbeitsflächen-Hierarchie
+  mit dezenter Trefferpassage, priorisierter Viewer-Aktion und kompakteren
+  Quellen-/Bibliotheksflächen.
+- Text- und Markdown-Viewer markieren im Dokument nur noch einen kurzen,
+  priorisierten Trefferanker; die vollständige Passage bleibt als kopierbarer
+  Auszug mit linker Akzentlinie sichtbar.
+- Das Dashboard verwendet dichtere operative UI-Tokens mit flacheren Panels,
+  kompakteren Metriken, ruhigeren Statusflächen und stabileren Tablet-/Mobile-
+  Breakpoints.
+
 ## 2.4.11 - 2026-06-27
 
 ### Fixed
