@@ -10,6 +10,20 @@ retroactively.
 
 No entries.
 
+## 2.5.0 - 2026-06-28
+
+### Changed
+
+- Knowledge search now uses a calmer workspace hierarchy after visual review,
+  with a subtler hit passage, prioritized viewer action, and denser source and
+  library panels.
+- Text and Markdown viewers now highlight only one short prioritized in-document
+  hit anchor; the full passage remains visible as a copyable excerpt with a left
+  accent rail.
+- The dashboard now uses denser operational UI tokens with flatter panels,
+  compact metrics, calmer status surfaces, and more stable tablet/mobile
+  breakpoints.
+
 ## 2.4.11 - 2026-06-27
 
 ### Fixed

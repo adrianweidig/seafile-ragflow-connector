@@ -30,6 +30,8 @@ SEARCH_HTML = r"""<!doctype html>
       --danger-soft: #fff1f0;
       --warning: #9a5300;
       --warning-soft: #fff7ed;
+      --hit: #eab308;
+      --hit-soft: rgba(234, 179, 8, .12);
       --shadow: 0 18px 46px rgba(15, 23, 42, .08);
       --focus: 0 0 0 3px rgba(20, 184, 166, .25);
     }
@@ -54,6 +56,8 @@ SEARCH_HTML = r"""<!doctype html>
       --danger-soft: #3b1f24;
       --warning: #fbbf24;
       --warning-soft: #3d2f17;
+      --hit: #facc15;
+      --hit-soft: rgba(250, 204, 21, .12);
       --shadow: 0 24px 70px rgba(0, 0, 0, .34);
       --focus: 0 0 0 3px rgba(45, 212, 191, .28);
     }
@@ -280,7 +284,7 @@ SEARCH_HTML = r"""<!doctype html>
     .topk input { width: 72px; height: 38px; border: 1px solid var(--border); border-radius: 8px; padding: 0 9px; background: var(--surface-2); color: var(--text); }
     .state { padding: 15px 18px; border-bottom: 1px solid var(--border); color: var(--muted); background: var(--surface-2); }
     .state.loading { color: var(--accent-text); background: var(--accent-soft); }
-    .state.success { color: var(--accent-text); background: var(--accent-soft); }
+    .state.success { color: var(--muted); background: var(--surface); }
     .state.error { color: var(--danger); background: var(--danger-soft); }
     .answer {
       padding: 16px 18px;
@@ -321,6 +325,11 @@ SEARCH_HTML = r"""<!doctype html>
     .viewer-title span { color: var(--muted); font-size: .86rem; overflow-wrap: anywhere; }
     .viewer-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: end; }
     .viewer-actions .secondary { min-height: 34px; padding: 0 9px; }
+    .viewer-actions .primary-viewer-action {
+      border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+      background: var(--accent-soft);
+      color: var(--accent-text);
+    }
     .viewer-frame, .viewer-text-preview {
       width: 100%;
       height: 100%;
@@ -385,21 +394,25 @@ SEARCH_HTML = r"""<!doctype html>
       overflow: hidden;
       overflow-wrap: anywhere;
       color: var(--strong);
+      padding: 7px 10px 7px 12px;
+      border-left: 3px solid color-mix(in srgb, var(--hit) 62%, var(--border));
+      border-radius: 7px;
+      background: color-mix(in srgb, var(--hit-soft) 70%, var(--surface));
     }
     .viewer-excerpt.is-expanded .viewer-passage-text { display: block; }
     .viewer-focus-note { color: var(--muted); font-size: .82rem; }
     .viewer-text-preview mark {
-      background: color-mix(in srgb, #fde68a 80%, transparent);
+      background: color-mix(in srgb, var(--hit) 30%, transparent);
       color: #251a00;
-      border-radius: 4px;
-      padding: 0 2px;
+      border-radius: 3px;
+      padding: 0 1px;
       box-decoration-break: clone;
       -webkit-box-decoration-break: clone;
-      outline: 1px solid color-mix(in srgb, #f59e0b 42%, transparent);
+      outline: 1px solid color-mix(in srgb, var(--hit) 30%, transparent);
       outline-offset: 1px;
     }
     html[data-theme="dark"] .viewer-text-preview mark {
-      background: color-mix(in srgb, #fbbf24 42%, transparent);
+      background: color-mix(in srgb, var(--hit) 24%, transparent);
       color: var(--strong);
     }
     .viewer-excerpt p { margin: 0; overflow-wrap: anywhere; }
@@ -483,8 +496,8 @@ SEARCH_HTML = r"""<!doctype html>
     .pill { display: inline-flex; align-items: center; min-height: 25px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-3); color: var(--muted); font-size: .81rem; font-weight: 790; }
     .pill.source { background: var(--accent-soft); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); }
     .snippet { margin: 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
-    .snippet mark { background: #fff4b8; color: #172033; padding: 1px 3px; border-radius: 4px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
-    html[data-theme="dark"] .snippet mark { background: #5b4b15; color: var(--strong); }
+    .snippet mark { background: color-mix(in srgb, var(--hit) 24%, transparent); color: inherit; padding: 0 2px; border-radius: 3px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+    html[data-theme="dark"] .snippet mark { background: color-mix(in srgb, var(--hit) 18%, transparent); color: var(--strong); }
     .path { color: var(--muted); font-size: .88rem; overflow-wrap: anywhere; }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; }
     .secondary[aria-disabled="true"] { opacity: .56; cursor: not-allowed; }
@@ -919,11 +932,17 @@ SEARCH_HTML = r"""<!doctype html>
         strip.className = 'citation-strip answer-sources';
         strip.setAttribute('aria-label', 'Zitierte Quellen');
         for (const citation of citations) {
-          const source = sources.find(item => item.source_id === citation.source_id || item.citation_label === citation.label) || citation;
+          const label = citation.label || citation.marker || '';
+          const citationSourceIds = citation.sourceIds || citation.source_ids || (citation.source_id ? [citation.source_id] : []);
+          const source = sources.find(item =>
+            citationSourceIds.includes(item.source_id)
+            || item.citation_label === label
+            || item.source_id === label
+          ) || citation;
           const button = document.createElement('button');
           button.type = 'button';
           button.className = 'citation-button answer-source-link';
-          button.textContent = `${citation.label || source.source_id} · ${source.document_name || 'Quelle'}`;
+          button.textContent = `${label || source.citation_label || source.source_id || 'Quelle'} · ${source.document_name || 'Quelle'}`;
           bindSourceInteractions(button, source);
           button.addEventListener('click', () => selectSource(source));
           strip.appendChild(button);
@@ -1146,7 +1165,7 @@ SEARCH_HTML = r"""<!doctype html>
       viewerTitleEl.textContent = `${source.citation_label || source.source_id || 'Quelle'} · ${source.document_name || 'Dokument'}`;
       viewerMetaEl.textContent = `${source.dataset_name || 'Bibliothek'}${location ? ` · ${location}` : ''}`;
       const actions = [];
-      actions.push('<button class="secondary" type="button" id="scrollActivePassage">Zur Passage</button>');
+      actions.push('<button class="secondary primary-viewer-action" type="button" id="scrollActivePassage">Zur Passage</button>');
       actions.push('<button class="secondary" type="button" id="copyActivePassage">Passage kopieren</button>');
       if (source.viewer_url) actions.push(`<a class="secondary" href="${escapeAttr(source.viewer_url)}" target="_blank" rel="noreferrer noopener">${iconEye()}Datei öffnen</a>`);
       if (source.open_url) actions.push(`<a class="secondary" href="${escapeAttr(source.open_url)}" target="_blank" rel="noreferrer noopener">Original öffnen</a>`);
@@ -1158,7 +1177,7 @@ SEARCH_HTML = r"""<!doctype html>
       if (copyButton) copyButton.addEventListener('click', () => copyPassage(source));
 
       const message = source.viewer_kind === 'text'
-        ? 'Im Dokument wird nur der relevanteste kurze Treffer markiert. Die vollständige Passage bleibt hier kopierbar.'
+        ? 'Im Dokument ist nur ein kurzer Trefferanker gelb markiert. Die vollständige Passage bleibt hier kopierbar.'
         : (source.viewer_message || 'Bei nativen Viewern ist die Markierung best-effort; die vollständige Passage bleibt hier kopierbar.');
       const snippet = compact(sourcePassage(source) || '', 420);
       viewerExcerptEl.classList.remove('is-expanded');
@@ -1277,7 +1296,7 @@ SEARCH_HTML = r"""<!doctype html>
           };
         }
       }
-      const compactRange = firstReadableSegmentRange(passageText);
+      const compactRange = bestPassageAnchorRange(passageText);
       if (compactRange) {
         return {
           start: passageRange.start + compactRange.start,
@@ -1349,21 +1368,43 @@ SEARCH_HTML = r"""<!doctype html>
       return {start: nextStart, end: nextEnd};
     }
 
-    function firstReadableSegmentRange(text) {
+    function bestPassageAnchorRange(text) {
       const value = String(text || '');
-      const pattern = /[^\n.!?]{24,180}[.!?]?/g;
-      let match;
-      while ((match = pattern.exec(value)) !== null) {
-        const raw = match[0];
-        const trimmedStart = raw.search(/\S/);
-        if (trimmedStart < 0) continue;
-        const start = match.index + trimmedStart;
-        const segment = raw.trim();
-        if (segment.length < 24) continue;
-        const length = Math.min(segment.length, 180);
-        return {start, end: start + length};
+      const candidates = [];
+      let offset = 0;
+      for (const line of value.split('\n')) {
+        const trimmed = line.trim();
+        const localStart = line.search(/\S/);
+        if (trimmed.length >= 18 && localStart >= 0 && !isLowValuePassageLine(trimmed)) {
+          candidates.push({
+            start: offset + localStart,
+            text: trimmed,
+            score: passageLineScore(trimmed),
+          });
+        }
+        offset += line.length + 1;
       }
-      return null;
+      const best = candidates.sort((left, right) => right.score - left.score || left.start - right.start)[0];
+      if (!best) return clampRangeToReadableLength(value, {start: 0, end: Math.min(value.length, 96)}, 96);
+      return clampRangeToReadableLength(value, {start: best.start, end: best.start + best.text.length}, 96);
+    }
+
+    function isLowValuePassageLine(line) {
+      const value = String(line || '').trim();
+      if (!value) return true;
+      if (value.startsWith('#')) return true;
+      if (/^[A-Z0-9_-]{18,}$/.test(value.replace(/\s+/g, ''))) return true;
+      return false;
+    }
+
+    function passageLineScore(line) {
+      const value = String(line || '');
+      let score = 0;
+      if (/GS_[A-Za-z0-9_-]+/.test(value)) score += 6;
+      if (/(ACL|Freigabe|Zugriff|Sichtbarkeit|dürfen|darf|Gruppe|Rolle)/i.test(value)) score += 5;
+      if (/(Handbuch|Dokument|Betrieb|Sicherheit|Nutzer|Admin)/i.test(value)) score += 3;
+      if (/[.!?]$/.test(value.trim())) score += 1;
+      return score;
     }
 
     function clampRangeToReadableLength(text, range, limit) {
@@ -1371,7 +1412,13 @@ SEARCH_HTML = r"""<!doctype html>
       if (range.end - range.start <= limit) return range;
       let start = range.start;
       while (start < range.end && /\s/.test(text[start])) start += 1;
-      return {start, end: Math.min(range.end, start + limit)};
+      const hardEnd = Math.min(range.end, start + limit);
+      const segment = text.slice(start, hardEnd);
+      const punctuation = segment.search(/[.!?]\s/);
+      if (punctuation >= 32) return {start, end: start + punctuation + 1};
+      const lastSpace = segment.lastIndexOf(' ');
+      const end = lastSpace >= 48 ? start + lastSpace : hardEnd;
+      return {start, end};
     }
 
     function normalizeWithMap(value) {
@@ -1459,12 +1506,19 @@ SEARCH_HTML = r"""<!doctype html>
 
     function highlightSnippet(snippet, query) {
       let html = escapeHtml(snippet || '');
-      const terms = [...new Set(String(query || '').split(/\s+/).map(t => t.trim()).filter(t => t.length >= 3).slice(0, 5))];
+      const terms = snippetHighlightTerms(query);
       for (const term of terms) {
         const pattern = new RegExp(`(${escapeRegExp(escapeHtml(term))})`, 'ig');
         html = html.replace(pattern, '<mark>$1</mark>');
       }
       return html;
+    }
+
+    function snippetHighlightTerms(query) {
+      const broadTerms = new Set(['test', 'handbuch', 'dokument', 'quelle', 'suche']);
+      return focusTerms(query)
+        .filter(term => term.length >= 5 && !broadTerms.has(term))
+        .slice(0, 4);
     }
 
     function escapeHtml(value) {

@@ -31,8 +31,8 @@
       --bad: #fb7185;
       --info: #38bdf8;
       --unknown: #94a3b8;
-      --shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
-      --shadow-soft: 0 14px 38px rgba(0, 0, 0, 0.22);
+      --shadow: 0 18px 44px rgba(0, 0, 0, 0.24);
+      --shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.18);
       --radius: 8px;
       --focus: 0 0 0 3px rgba(45, 212, 191, 0.36);
       --primary-bg: linear-gradient(135deg, var(--accent), var(--accent-2));
@@ -63,8 +63,8 @@
       --bad: #be123c;
       --info: #0369a1;
       --unknown: #64748b;
-      --shadow: 0 20px 60px rgba(15, 23, 42, 0.12);
-      --shadow-soft: 0 12px 30px rgba(15, 23, 42, 0.10);
+      --shadow: 0 16px 38px rgba(15, 23, 42, 0.10);
+      --shadow-soft: 0 6px 20px rgba(15, 23, 42, 0.08);
       --focus: 0 0 0 3px rgba(15, 118, 110, 0.30);
       --primary-bg: linear-gradient(135deg, #ccfbf1, #dbeafe);
       --primary-text: #0f172a;
@@ -76,8 +76,8 @@
       margin: 0;
       min-height: 100%;
       background:
-        linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 88%, #000 12%), var(--bg) 38%),
-        linear-gradient(120deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 32%, color-mix(in srgb, var(--accent-2) 10%, transparent) 72%, transparent),
+        linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 84%, #000 16%), var(--bg) 42%),
+        linear-gradient(120deg, color-mix(in srgb, var(--accent) 5%, transparent), transparent 35%, color-mix(in srgb, var(--accent-2) 5%, transparent) 76%, transparent),
         repeating-linear-gradient(90deg, transparent 0 38px, rgba(148, 163, 184, 0.05) 38px 39px);
       color: var(--text);
       font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -149,7 +149,7 @@
     }
     .app-shell {
       display: grid;
-      grid-template-columns: 260px minmax(0, 1fr);
+      grid-template-columns: 248px minmax(0, 1fr);
       min-height: 100vh;
     }
     .sidebar {
@@ -158,8 +158,8 @@
       border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
-      gap: 20px;
-      padding: 18px;
+      gap: 14px;
+      padding: 16px;
       position: sticky;
       top: 0;
       height: 100vh;
@@ -179,8 +179,7 @@
       justify-content: center;
       margin-bottom: 12px;
       width: 34px;
-      animation: softPulse 4.8s ease-in-out infinite;
-      box-shadow: 0 10px 28px color-mix(in srgb, var(--accent) 22%, transparent);
+      box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 16%, transparent);
     }
     .brand h1 {
       font-size: 18px;
@@ -195,13 +194,13 @@
     }
     .nav {
       display: grid;
-      gap: 8px;
+      gap: 6px;
     }
     .tab {
       background: transparent;
       color: var(--muted);
       justify-content: flex-start;
-      min-height: 42px;
+      min-height: 38px;
       position: relative;
       width: 100%;
     }
@@ -212,7 +211,7 @@
       width: 8px;
     }
     .tab[aria-selected="true"] {
-      background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 18%, var(--surface)), color-mix(in srgb, var(--accent-2) 7%, var(--surface)));
+      background: color-mix(in srgb, var(--accent) 13%, var(--surface));
       border-color: color-mix(in srgb, var(--accent) 56%, var(--border));
       color: var(--text);
     }
@@ -232,23 +231,23 @@
     }
     .workspace {
       min-width: 0;
-      padding: 22px;
+      padding: 18px;
     }
     .topbar {
       align-items: center;
       backdrop-filter: blur(12px);
-      background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 78%, transparent), transparent);
+      background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 90%, transparent), color-mix(in srgb, var(--bg) 70%, transparent));
       display: flex;
       gap: 14px;
       justify-content: space-between;
-      margin-bottom: 18px;
+      margin-bottom: 14px;
       position: sticky;
       top: 0;
       z-index: 5;
-      padding-bottom: 12px;
+      padding-bottom: 10px;
     }
     .topbar-title h2 {
-      font-size: 24px;
+      font-size: 21px;
       margin: 0;
     }
     .topbar-title p {
@@ -378,9 +377,9 @@
       border: 1px solid var(--border);
       border-radius: var(--radius);
       box-shadow: var(--shadow);
-      min-height: 230px;
+      min-height: 196px;
       overflow: hidden;
-      padding: 20px;
+      padding: 16px;
       position: relative;
     }
     .status-stage::before {
@@ -395,12 +394,11 @@
       bottom: 0;
       content: "";
       left: 0;
-      opacity: 0.45;
+      opacity: 0.25;
       pointer-events: none;
       position: absolute;
       right: 0;
       top: 0;
-      animation: gridDrift 22s linear infinite;
     }
     .status-stage > * { position: relative; z-index: 1; }
     .status-line {
@@ -415,7 +413,7 @@
       text-transform: uppercase;
     }
     .state-value {
-      font-size: 34px;
+      font-size: 30px;
       font-weight: 800;
       line-height: 1.05;
       margin-top: 8px;
@@ -425,7 +423,7 @@
       color: var(--soft);
       display: grid;
       gap: 8px;
-      margin-top: 24px;
+      margin-top: 18px;
     }
     .status-meta div {
       align-items: center;
@@ -441,8 +439,8 @@
       display: grid;
       gap: 8px;
       grid-template-columns: repeat(8, 1fr);
-      margin-top: 26px;
-      min-height: 62px;
+      margin-top: 20px;
+      min-height: 52px;
     }
     .rail-bar {
       background: linear-gradient(180deg, var(--accent), var(--accent-2));
@@ -455,18 +453,13 @@
     .rail-bar.warn { background: linear-gradient(180deg, var(--accent-3), var(--warn)); }
     .rail-bar.bad { background: linear-gradient(180deg, var(--bad), #f43f5e); }
     .panel, .metric {
-      background: color-mix(in srgb, var(--surface) 94%, transparent);
+      background: color-mix(in srgb, var(--surface) 97%, transparent);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       box-shadow: var(--shadow-soft);
       overflow: hidden;
-      animation: surfaceIn 420ms ease both;
     }
-    .panel:hover, .metric:hover {
-      border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-      transform: translateY(-1px);
-      transition: border-color var(--motion-fast) ease, transform var(--motion-fast) ease;
-    }
+    .panel:hover, .metric:hover { border-color: color-mix(in srgb, var(--accent) 24%, var(--border)); }
     .panel-header {
       align-items: center;
       border-bottom: 1px solid var(--border);
@@ -474,8 +467,8 @@
       display: flex;
       gap: 12px;
       justify-content: space-between;
-      min-height: 54px;
-      padding: 14px 16px;
+      min-height: 48px;
+      padding: 12px 14px;
     }
     .panel-header h3 {
       font-size: 15px;
@@ -485,7 +478,7 @@
       color: var(--muted);
       white-space: nowrap;
     }
-    .panel-body { padding: 14px 16px; }
+    .panel-body { padding: 12px 14px; }
     .metric-grid {
       display: grid;
       gap: 12px;
@@ -493,12 +486,12 @@
       margin-bottom: 14px;
     }
     .metric {
-      min-height: 112px;
-      padding: 14px;
+      min-height: 96px;
+      padding: 12px;
       position: relative;
     }
     .metric::after {
-      background: radial-gradient(circle at 85% 15%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 46%);
+      background: radial-gradient(circle at 88% 12%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 42%);
       content: "";
       inset: 0;
       opacity: 0.75;
@@ -510,9 +503,9 @@
       background: var(--accent);
       content: "";
       height: 3px;
-      left: 14px;
+      left: 12px;
       position: absolute;
-      right: 14px;
+      right: 12px;
       top: 0;
     }
     .metric.warn::before { background: var(--warn); }
@@ -524,14 +517,14 @@
       text-transform: uppercase;
     }
     .metric-value {
-      font-size: 26px;
+      font-size: 23px;
       font-weight: 780;
-      margin-top: 10px;
+      margin-top: 7px;
       overflow-wrap: anywhere;
     }
     .metric-sub {
       color: var(--muted);
-      margin-top: 8px;
+      margin-top: 6px;
       overflow-wrap: anywhere;
     }
     .filters {
@@ -582,7 +575,7 @@
     #change-table th:nth-child(9) { width: 14%; }
     th, td {
       border-bottom: 1px solid var(--border);
-      padding: 10px 12px;
+      padding: 8px 10px;
       text-align: left;
       vertical-align: top;
     }
