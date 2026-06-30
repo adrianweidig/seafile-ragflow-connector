@@ -10,6 +10,16 @@ retroactively.
 
 No entries.
 
+## 2.5.2 - 2026-06-30
+
+### Fixed
+
+- The search service now also receives the connector state database
+  configuration so path repair for PDF, Office, and image sources is active in
+  production.
+- The document viewer can therefore map RAGFlow display names back to real
+  Seafile paths in subfolders from the separate `connector-search` container.
+
 ## 2.5.1 - 2026-06-30
 
 ### Fixed

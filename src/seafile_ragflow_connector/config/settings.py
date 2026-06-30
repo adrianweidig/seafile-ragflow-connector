@@ -660,6 +660,11 @@ class SearchServiceSettings(BaseSettings):
     log_format: Literal["json", "console"] = "json"
     connector_ca_bundle: str | None = None
     database_url: str = ""
+    postgres_host: str = "connector-postgres"
+    postgres_port: int = 5432
+    postgres_db: str = "seafile_ragflow_sync"
+    postgres_user: str = "sync"
+    postgres_password: str = ""
 
     search_service_enabled: bool = True
     search_service_host: str = "0.0.0.0"  # nosec B104
@@ -853,6 +858,14 @@ class SearchServiceSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_search_urls_and_limits(self) -> SearchServiceSettings:
+        if not self.database_url and self.postgres_password:
+            user = quote(self.postgres_user, safe="")
+            password = quote(self.postgres_password, safe="")
+            database = quote(self.postgres_db, safe="")
+            self.database_url = (
+                f"postgresql+psycopg://{user}:{password}@"
+                f"{self.postgres_host}:{self.postgres_port}/{database}"
+            )
         for name in ("search_authz_base_url", "search_ragflow_base_url"):
             value = getattr(self, name)
             if not _is_http_url(value):

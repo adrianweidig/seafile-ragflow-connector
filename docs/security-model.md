@@ -31,6 +31,11 @@ Dateien same-origin zurück. Der eigentliche Seafile-Download passiert im Core
 über den bestehenden Sync-Client; HTML/Markdown werden nicht als aktives HTML
 ausgeliefert.
 
+`connector-search` darf zusätzlich den Connector-State lesen, um RAGFlow-
+Anzeigenamen wieder auf echte Seafile-Pfade abzubilden. Diese Datenbanknutzung
+ist nur Mapping-/Viewer-Infrastruktur; die fachliche Berechtigung bleibt die
+Authz-Prüfung gegen den ACL-Snapshot.
+
 ## Seafile ist Berechtigungsquelle
 
 RAGFlow kennt Seafile-Berechtigungen nicht. Der Connector spiegelt deshalb

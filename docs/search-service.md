@@ -164,6 +164,11 @@ Seafile-Sync-Client und liefert PDF, Text und Bilder inline aus. HTML und
 Markdown werden nicht als aktives same-origin HTML ausgeliefert, sondern als
 Text. Office-Dateien erhalten einen Download-/Fallback-Hinweis.
 
+Damit RAGFlow-Anzeigenamen auf echte Seafile-Pfade in Unterordnern abgebildet
+werden können, hat `connector-search` lesenden Zugriff auf den Connector-State
+über `DATABASE_URL` oder die `POSTGRES_*`-Werte. Dieser Zugriff ersetzt keine
+Seafile-Berechtigungsprüfung und enthält keine Seafile-Admin- oder Sync-Tokens.
+
 ```env
 SEARCH_SOURCE_PREVIEW_ENABLED=true
 SEARCH_SOURCE_HOVER_ENABLED=true

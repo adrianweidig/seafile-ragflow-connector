@@ -10,6 +10,15 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.5.2 - 2026-06-30
+
+### Fixed
+
+- Search-Service erhält jetzt ebenfalls die Connector-State-Datenbankkonfiguration,
+  damit die Pfad-Reparatur für PDF-, Office- und Bildquellen produktiv aktiv ist.
+- Der Dokumentviewer kann dadurch RAGFlow-Anzeigenamen auch im separaten
+  `connector-search`-Container auf echte Seafile-Pfade in Unterordnern abbilden.
+
 ## 2.5.1 - 2026-06-30
 
 ### Fixed

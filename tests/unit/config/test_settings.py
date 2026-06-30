@@ -55,6 +55,22 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.database_url, "postgresql+psycopg://custom/db")
         self.assertEqual(settings.redis_url, "redis://custom-redis:6379/4")
 
+    def test_search_settings_build_database_url_from_postgres_parts(self) -> None:
+        settings = SearchServiceSettings(
+            search_authz_base_url="http://connector-controller:8080",
+            search_authz_shared_secret="authz-secret",
+            search_ragflow_base_url="http://ragflow.local",
+            search_ragflow_api_key="ragflow-token",
+            postgres_host="connector-postgres",
+            postgres_password="pass@word/with spaces",
+        )
+
+        self.assertEqual(
+            settings.database_url,
+            "postgresql+psycopg://sync:pass%40word%2Fwith%20spaces@"
+            "connector-postgres:5432/seafile_ragflow_sync",
+        )
+
     def test_dashboard_defaults_to_disabled_with_bounded_limits(self) -> None:
         values = self.base_values()
         values["database_url"] = "postgresql+psycopg://custom/db"
