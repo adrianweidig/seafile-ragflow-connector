@@ -10,6 +10,14 @@ retroactively.
 
 No entries.
 
+## 2.5.5 - 2026-06-30
+
+### Fixed
+
+- The PDF page preview in the knowledge search document viewer now uses a
+  scrollable fit-to-width container, making PDF pages readable instead of
+  showing them as tiny full-page thumbnails.
+
 ## 2.5.4 - 2026-06-30
 
 ### Fixed

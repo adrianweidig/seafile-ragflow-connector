@@ -10,6 +10,14 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.5.5 - 2026-06-30
+
+### Fixed
+
+- Die PDF-Seitenvorschau im Wissenssuche-Dokumentviewer nutzt jetzt einen
+  scrollbaren Fit-to-width-Container, damit PDF-Seiten lesbar angezeigt werden
+  statt als kleine Gesamtseiten-Miniatur.
+
 ## 2.5.4 - 2026-06-30
 
 ### Fixed

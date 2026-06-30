@@ -330,7 +330,7 @@ SEARCH_HTML = r"""<!doctype html>
       background: var(--accent-soft);
       color: var(--accent-text);
     }
-    .viewer-frame, .viewer-text-preview, .viewer-pdf-page {
+    .viewer-frame, .viewer-text-preview, .viewer-pdf-scroll {
       width: 100%;
       height: 100%;
       min-height: 0;
@@ -339,15 +339,25 @@ SEARCH_HTML = r"""<!doctype html>
     .viewer-frame {
       background: #fff;
     }
-    .viewer-pdf-page {
-      display: block;
+    .viewer-pdf-scroll {
       box-sizing: border-box;
       padding: 10px;
       background: #f8fafc;
-      object-fit: contain;
+      overflow: auto;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
     }
-    html[data-theme="dark"] .viewer-pdf-page {
+    html[data-theme="dark"] .viewer-pdf-scroll {
       background: #0f172a;
+    }
+    .viewer-pdf-page {
+      display: block;
+      width: min(100%, 920px);
+      min-width: min(720px, 100%);
+      height: auto;
+      background: #fff;
+      box-shadow: 0 12px 34px rgba(15, 23, 42, .14);
     }
     .viewer-text-preview {
       margin: 0;
@@ -685,7 +695,9 @@ SEARCH_HTML = r"""<!doctype html>
           </div>
           <div id="viewerEmpty" class="viewer-empty">Nach der Suche wird hier die beste Quelle im Dokumentviewer geladen.</div>
           <iframe id="viewerFrame" class="viewer-frame" title="Dokumentviewer" hidden></iframe>
-          <img id="viewerPdfPage" class="viewer-pdf-page" alt="PDF-Seitenvorschau" hidden>
+          <div id="viewerPdfScroll" class="viewer-pdf-scroll" hidden>
+            <img id="viewerPdfPage" class="viewer-pdf-page" alt="PDF-Seitenvorschau">
+          </div>
           <div id="viewerTextPreview" class="viewer-text-preview" role="document" aria-label="Textvorschau" hidden></div>
           <div class="viewer-excerpt" id="viewerExcerpt">
             <span class="viewer-message">Trefferpassage und Suchhilfe erscheinen hier.</span>
@@ -757,6 +769,7 @@ SEARCH_HTML = r"""<!doctype html>
     const viewerMetaEl = document.getElementById('viewerMeta');
     const viewerActionsEl = document.getElementById('viewerActions');
     const viewerFrameEl = document.getElementById('viewerFrame');
+    const viewerPdfScrollEl = document.getElementById('viewerPdfScroll');
     const viewerPdfPageEl = document.getElementById('viewerPdfPage');
     const viewerTextPreviewEl = document.getElementById('viewerTextPreview');
     const viewerEmptyEl = document.getElementById('viewerEmpty');
@@ -1167,7 +1180,7 @@ SEARCH_HTML = r"""<!doctype html>
         viewerActionsEl.innerHTML = '';
         viewerFrameEl.hidden = true;
         viewerFrameEl.removeAttribute('src');
-        viewerPdfPageEl.hidden = true;
+        viewerPdfScrollEl.hidden = true;
         viewerPdfPageEl.removeAttribute('src');
         viewerTextPreviewEl.hidden = true;
         viewerTextPreviewEl.textContent = '';
@@ -1229,7 +1242,7 @@ SEARCH_HTML = r"""<!doctype html>
       viewerFrameEl.hidden = true;
       viewerFrameEl.removeAttribute('src');
       revokeViewerObjectUrl();
-      viewerPdfPageEl.hidden = true;
+      viewerPdfScrollEl.hidden = true;
       viewerPdfPageEl.removeAttribute('src');
       viewerTextPreviewEl.hidden = true;
       viewerTextPreviewEl.textContent = '';
@@ -1267,12 +1280,13 @@ SEARCH_HTML = r"""<!doctype html>
       const imageUrl = pdfPageImageUrl(target.url, page);
       viewerPdfPageEl.onload = () => {
         if (requestId !== viewerRequestId) return;
-        viewerPdfPageEl.hidden = false;
+        viewerPdfScrollEl.hidden = false;
         viewerEmptyEl.hidden = true;
+        viewerPdfScrollEl.scrollTo({top: 0, left: 0});
       };
       viewerPdfPageEl.onerror = () => {
         if (requestId !== viewerRequestId) return;
-        viewerPdfPageEl.hidden = true;
+        viewerPdfScrollEl.hidden = true;
         viewerPdfPageEl.removeAttribute('src');
         viewerEmptyEl.hidden = false;
         viewerEmptyEl.textContent = 'PDF-Seitenvorschau konnte nicht geladen werden. Nutze Original öffnen oder den kopierbaren Auszug.';

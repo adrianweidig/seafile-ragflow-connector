@@ -91,6 +91,7 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn("function loadTextPreview", SEARCH_HTML)
         self.assertIn("function loadBinaryPreview", SEARCH_HTML)
         self.assertIn("function loadPdfPagePreview", SEARCH_HTML)
+        self.assertIn('id="viewerPdfScroll"', SEARCH_HTML)
         self.assertIn('id="viewerPdfPage"', SEARCH_HTML)
         self.assertIn("/api/search/source/document/page-image", SEARCH_HTML)
         self.assertIn("URL.createObjectURL", SEARCH_HTML)
