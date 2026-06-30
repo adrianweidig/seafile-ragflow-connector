@@ -659,6 +659,7 @@ class SearchServiceSettings(BaseSettings):
     log_level: str = "INFO"
     log_format: Literal["json", "console"] = "json"
     connector_ca_bundle: str | None = None
+    database_url: str = ""
 
     search_service_enabled: bool = True
     search_service_host: str = "0.0.0.0"  # nosec B104

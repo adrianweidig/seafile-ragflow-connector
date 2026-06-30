@@ -10,6 +10,15 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.5.1 - 2026-06-30
+
+### Fixed
+
+- Wissenssuche repariert RAGFlow-Rückgabepfade gegen die Connector-State-DB,
+  wenn RAGFlow nur einen bibliotheksnamensbasierten Anzeigepfad liefert.
+- Dokumentviewer-Links für PDF-, Office- und Bilddateien bleiben dadurch auch
+  bei Dateien in Unterordnern auf den tatsächlichen Seafile-Pfad gerichtet.
+
 ## 2.5.0 - 2026-06-28
 
 ### Changed

@@ -6,6 +6,7 @@ import re
 import threading
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from functools import lru_cache
 from html.parser import HTMLParser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +15,8 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 import structlog
+from sqlalchemy import or_, select
+from sqlalchemy.exc import SQLAlchemyError
 
 from seafile_ragflow_connector.clients.http import ApiError
 from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
@@ -28,6 +31,8 @@ from seafile_ragflow_connector.openwebui.sources import (
     sign_preview_payload,
     verify_preview_token,
 )
+from seafile_ragflow_connector.persistence import get_session_factory
+from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.search.ui import SEARCH_HTML
 from seafile_ragflow_connector.sources.evidence import (
     EvidenceHit,
@@ -629,6 +634,13 @@ def _search_results_from_ragflow(
         document_name = _friendly_document_name(document_name, source_path)
         if not source_path and document_name:
             source_path = f"/{dataset_name}/{document_name}"
+        source_path = _repair_source_path_from_state(
+            settings,
+            repo_id=repo_id,
+            source_path=source_path,
+            document_name=document_name,
+            document_id=document_id,
+        )
         score = _score_value(_first_value(raw, metadata, "score", "similarity", "weight"))
         chunk_id = _first_text(raw, metadata, "id", "chunk_id", "chunkId")
         page = _first_value(raw, metadata, "page", "page_number") or _first_page(
@@ -714,6 +726,92 @@ def _document_names_by_id(payload: Any) -> dict[str, str]:
         if doc_id not in (None, "") and doc_name not in (None, ""):
             names[str(doc_id)] = str(doc_name)
     return names
+
+
+@lru_cache(maxsize=4)
+def _search_state_session_factory(database_url: str) -> Any:
+    return get_session_factory(database_url)
+
+
+def _repair_source_path_from_state(
+    settings: SearchServiceSettings | None,
+    *,
+    repo_id: str | None,
+    source_path: str | None,
+    document_name: str | None,
+    document_id: str | None,
+) -> str | None:
+    """Prefer the connector's known Seafile path when RAGFlow returns a display path."""
+    if settings is None or not settings.database_url or not repo_id:
+        return source_path
+    normalized = _normalize_source_path(source_path)
+    try:
+        session_factory = _search_state_session_factory(settings.database_url)
+        with session_factory() as session:
+            if normalized:
+                exact = session.scalar(
+                    select(File.normalized_path).where(
+                        File.repo_id == repo_id,
+                        File.normalized_path == normalized,
+                    )
+                )
+                if exact:
+                    return str(exact)
+
+            filename = _display_file_name(normalized, document_name)
+            candidates: list[str] = []
+            if document_id:
+                candidates.extend(
+                    str(path)
+                    for path in session.scalars(
+                        select(File.normalized_path).where(
+                            File.repo_id == repo_id,
+                            File.ragflow_document_id == document_id,
+                        )
+                    )
+                )
+            if document_name:
+                candidates.extend(
+                    str(path)
+                    for path in session.scalars(
+                        select(File.normalized_path).where(
+                            File.repo_id == repo_id,
+                            or_(
+                                File.ragflow_document_name == document_name,
+                                File.ingested_document_name == document_name,
+                            ),
+                        )
+                    )
+                )
+            if filename:
+                candidates.extend(
+                    str(path)
+                    for path in session.scalars(
+                        select(File.normalized_path).where(
+                            File.repo_id == repo_id,
+                            File.normalized_path.endswith(f"/{filename}"),
+                        )
+                    )
+                )
+    except SQLAlchemyError as exc:
+        structlog.get_logger(__name__).warning(
+            "search.source_path_state_repair_failed",
+            repo_id=repo_id,
+            document_name=document_name,
+            error_class=exc.__class__.__name__,
+        )
+        return source_path
+
+    distinct = []
+    seen = set()
+    for candidate in candidates:
+        normalized_candidate = _normalize_source_path(candidate)
+        if normalized_candidate and normalized_candidate not in seen:
+            seen.add(normalized_candidate)
+            distinct.append(normalized_candidate)
+    if len(distinct) == 1:
+        return distinct[0]
+    return source_path
 
 
 def _deduplicate_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:

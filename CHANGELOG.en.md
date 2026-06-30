@@ -10,6 +10,15 @@ retroactively.
 
 No entries.
 
+## 2.5.1 - 2026-06-30
+
+### Fixed
+
+- Knowledge search now repairs RAGFlow-returned source paths against the
+  connector state database when RAGFlow only returns a library-name display path.
+- Document viewer links for PDF, Office, and image files therefore continue to
+  point at the real Seafile path for files in subfolders.
+
 ## 2.5.0 - 2026-06-28
 
 ### Changed

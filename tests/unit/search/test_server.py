@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import gc
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib.parse import unquote
 
 import seafile_ragflow_connector.search.server as search_server
 from seafile_ragflow_connector.config.settings import SearchServiceSettings
 from seafile_ragflow_connector.openwebui.sources import sign_preview_payload, verify_preview_token
+from seafile_ragflow_connector.persistence import Base, get_engine, get_session_factory
+from seafile_ragflow_connector.persistence.models.file import File
+from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.search.server import (
     SearchPermissionError,
     SearchUser,
@@ -332,6 +338,79 @@ class SearchServerTests(unittest.TestCase):
         self.assertEqual(results[0]["page"], 1)
         self.assertEqual(results[1]["document_name"], "aggregated-name.pdf")
         self.assertEqual(results[1]["source_path"], "/Anleitungen/aggregated-name.pdf")
+
+    def test_ragflow_display_path_is_repaired_from_state_db(self) -> None:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db_path = Path(tmp) / "state.db"
+            database_url = f"sqlite:///{db_path.as_posix()}"
+            engine = get_engine(database_url)
+            Base.metadata.create_all(engine)
+            session_factory = get_session_factory(database_url)
+            with session_factory() as session:
+                session.add(
+                    Library(
+                        repo_id="repo-betrieb",
+                        name="Testnetz Admin Betrieb",
+                        name_slug="testnetz-admin-betrieb",
+                    )
+                )
+                session.add(
+                    File(
+                        repo_id="repo-betrieb",
+                        path="/codex-filetype-smoke/codex-dateityp-smoke.pdf",
+                        normalized_path="/codex-filetype-smoke/codex-dateityp-smoke.pdf",
+                        ragflow_document_id="doc-pdf",
+                        ragflow_document_name="codex-dateityp-smoke.pdf",
+                        ingestion_strategy="direct",
+                        sync_status="synced",
+                    )
+                )
+                session.commit()
+
+            search_server._search_state_session_factory.cache_clear()
+            try:
+                results = _search_results_from_ragflow(
+                    {
+                        "chunks": [
+                            {
+                                "document_id": "doc-pdf",
+                                "content": "CODEX-DATEITYP-SMOKE-20260630-PDF",
+                                "similarity": 0.73,
+                            }
+                        ],
+                        "doc_aggs": [
+                            {"doc_id": "doc-pdf", "doc_name": "codex-dateityp-smoke.pdf"},
+                        ],
+                    },
+                    {
+                        "repo_id": "repo-betrieb",
+                        "ragflow_dataset_id": "dataset-betrieb",
+                        "display_name": "Testnetz Admin Betrieb",
+                    },
+                    settings=SearchServiceSettings(
+                        database_url=database_url,
+                        search_authz_base_url="http://connector-controller:8080",
+                        search_authz_shared_secret="authz-secret",
+                        search_ragflow_base_url="http://ragflow:9380",
+                        search_ragflow_api_key="ragflow-key",
+                    ),
+                )
+            finally:
+                state_factory = search_server._search_state_session_factory(database_url)
+                state_bind = getattr(state_factory, "bind", None)
+                if state_bind is not None:
+                    state_bind.dispose()
+                search_server._search_state_session_factory.cache_clear()
+                test_bind = getattr(session_factory, "bind", None)
+                if test_bind is not None:
+                    test_bind.dispose()
+                engine.dispose()
+                gc.collect()
+
+        self.assertEqual(
+            results[0]["source_path"],
+            "/codex-filetype-smoke/codex-dateityp-smoke.pdf",
+        )
 
     def test_projected_text_results_hide_ingestion_header_and_link_to_seafile(self) -> None:
         results = _search_results_from_ragflow(
