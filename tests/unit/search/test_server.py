@@ -87,6 +87,11 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn("is-collapsed", SEARCH_HTML)
         self.assertIn("function syncLibraryCollapse", SEARCH_HTML)
         self.assertIn("function loadTextPreview", SEARCH_HTML)
+        self.assertIn("function loadBinaryPreview", SEARCH_HTML)
+        self.assertIn("URL.createObjectURL", SEARCH_HTML)
+        self.assertIn("source.viewer_kind === 'download'", SEARCH_HTML)
+        self.assertIn("Datei herunterladen", SEARCH_HTML)
+        self.assertNotIn("Datei öffnen", SEARCH_HTML)
         self.assertIn("source.viewer_kind === 'text'", SEARCH_HTML)
         self.assertIn("viewerExcerptEl.classList.toggle('is-expanded')", SEARCH_HTML)
         self.assertIn(".search-panel > *", SEARCH_HTML)
@@ -98,6 +103,7 @@ class SearchServerTests(unittest.TestCase):
         self.assertNotIn("min-height: 62px", SEARCH_HTML)
         self.assertIn("showToast", SEARCH_HTML)
         self.assertIn('id="toast"', SEARCH_HTML)
+        self.assertIn("frame-src 'self' blob:", search_server.SEARCH_CONTENT_SECURITY_POLICY)
 
     def test_query_calls_ragflow_only_for_allowed_profiles(self) -> None:
         settings = _settings()
@@ -830,6 +836,121 @@ class SearchServerTests(unittest.TestCase):
                 SearchUser(username="olaf", email="olaf@example.local", display_name=None),
                 token,
             )
+
+    def test_document_proxy_forces_pdf_inline_even_if_upstream_sends_attachment(self) -> None:
+        settings = _settings()
+        token = sign_preview_payload(
+            {
+                "repo_id": "repo-anleitungen",
+                "source_path": "/Anleitungen/report.pdf",
+                "dataset_id": "dataset-anleitungen",
+            },
+            settings.effective_search_source_preview_secret,
+        )
+        original_authz_check = search_server._authz_check_source
+        original_httpx_client = search_server.httpx.Client
+
+        class _FakeDocumentResponse:
+            status_code = 200
+            headers = {
+                "Content-Type": "application/octet-stream",
+                "Content-Disposition": 'attachment; filename="report.pdf"',
+            }
+            content = b"%PDF-1.3\n"
+            is_error = False
+
+            def raise_for_status(self) -> None:
+                return None
+
+        class _FakeDocumentClient:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            def __enter__(self) -> _FakeDocumentClient:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def get(self, *args: object, **kwargs: object) -> _FakeDocumentResponse:
+                return _FakeDocumentResponse()
+
+        try:
+            search_server._authz_check_source = lambda *args, **kwargs: None  # type: ignore[assignment]
+            search_server.httpx.Client = _FakeDocumentClient  # type: ignore[assignment]
+
+            body, status, headers = _handle_document_proxy(
+                settings,
+                SearchUser(username="olaf", email="olaf@example.local", display_name=None),
+                token,
+            )
+        finally:
+            search_server._authz_check_source = original_authz_check  # type: ignore[assignment]
+            search_server.httpx.Client = original_httpx_client  # type: ignore[assignment]
+
+        self.assertEqual(body, b"%PDF-1.3\n")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/pdf")
+        self.assertEqual(headers["Content-Disposition"], 'inline; filename="report.pdf"')
+
+    def test_document_proxy_keeps_office_files_as_explicit_downloads(self) -> None:
+        settings = _settings()
+        token = sign_preview_payload(
+            {
+                "repo_id": "repo-anleitungen",
+                "source_path": "/Anleitungen/report.docx",
+                "dataset_id": "dataset-anleitungen",
+            },
+            settings.effective_search_source_preview_secret,
+        )
+        original_authz_check = search_server._authz_check_source
+        original_httpx_client = search_server.httpx.Client
+
+        class _FakeDocumentResponse:
+            status_code = 200
+            headers = {
+                "Content-Type": (
+                    "application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
+                "Content-Disposition": 'inline; filename="report.docx"',
+            }
+            content = b"PK\x03\x04"
+            is_error = False
+
+            def raise_for_status(self) -> None:
+                return None
+
+        class _FakeDocumentClient:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            def __enter__(self) -> _FakeDocumentClient:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def get(self, *args: object, **kwargs: object) -> _FakeDocumentResponse:
+                return _FakeDocumentResponse()
+
+        try:
+            search_server._authz_check_source = lambda *args, **kwargs: None  # type: ignore[assignment]
+            search_server.httpx.Client = _FakeDocumentClient  # type: ignore[assignment]
+
+            body, status, headers = _handle_document_proxy(
+                settings,
+                SearchUser(username="olaf", email="olaf@example.local", display_name=None),
+                token,
+            )
+        finally:
+            search_server._authz_check_source = original_authz_check  # type: ignore[assignment]
+            search_server.httpx.Client = original_httpx_client  # type: ignore[assignment]
+
+        self.assertEqual(body, b"PK\x03\x04")
+        self.assertEqual(status, 200)
+        self.assertIn("wordprocessingml.document", headers["Content-Type"])
+        self.assertEqual(headers["Content-Disposition"], 'attachment; filename="report.docx"')
 
 
 def _settings(**overrides: object) -> SearchServiceSettings:

@@ -17,7 +17,7 @@
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml"><img alt="Docker image" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml/badge.svg?branch=master"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml/badge.svg?branch=master"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="pyproject.toml"><img alt="Version 2.5.2" src="https://img.shields.io/badge/version-2.5.2-informational.svg"></a>
+  <a href="pyproject.toml"><img alt="Version 2.5.3" src="https://img.shields.io/badge/version-2.5.3-informational.svg"></a>
 </p>
 
 ## Overview
@@ -176,7 +176,7 @@ For Compose and Portainer, tune the schedule with
 6. Deploy the stack and inspect the logs of `connector-controller`, `connector-worker`, and `connector-reconciler`.
 
 For production-like deployments, pin `CONNECTOR_IMAGE` to a fixed release tag
-such as `ghcr.io/adrianweidig/seafile-ragflow-connector:2.5.2` after that
+such as `ghcr.io/adrianweidig/seafile-ragflow-connector:2.5.3` after that
 release has been published. Treat `latest` as a convenience tag for smoke tests
 and fresh test environments.
 The first acceptance path after deployment is summarized in the

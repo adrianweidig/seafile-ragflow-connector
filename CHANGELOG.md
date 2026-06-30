@@ -10,6 +10,19 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.5.3 - 2026-06-30
+
+### Fixed
+
+- PDFs und Bilder werden im Wissenssuche-Dokumentviewer jetzt per Blob-URL
+  geladen, damit die Quellenauswahl keine direkte Browser-Navigation zum
+  PDF-Download-Endpunkt auslöst.
+- Der Search-Dokumentproxy erzwingt Content-Disposition deterministisch:
+  PDF/Text/Bilder werden inline ausgeliefert, Office-Dateien bleiben explizite
+  Downloads.
+- Die Viewer-Toolbar zeigt den direkten Datei-Download nur noch für
+  Download-Dateitypen; inline-fähige Quellen bleiben im mittleren Viewer.
+
 ## 2.5.2 - 2026-06-30
 
 ### Fixed

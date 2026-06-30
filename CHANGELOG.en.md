@@ -10,6 +10,19 @@ retroactively.
 
 No entries.
 
+## 2.5.3 - 2026-06-30
+
+### Fixed
+
+- PDFs and images are now loaded into the knowledge search document viewer via
+  blob URLs so source selection no longer performs direct browser navigation to
+  the PDF download endpoint.
+- The search document proxy now enforces Content-Disposition deterministically:
+  PDF, text, and images are served inline, while Office files remain explicit
+  downloads.
+- The viewer toolbar only shows the direct file download action for download
+  file types; inline-capable sources stay in the center viewer.
+
 ## 2.5.2 - 2026-06-30
 
 ### Fixed

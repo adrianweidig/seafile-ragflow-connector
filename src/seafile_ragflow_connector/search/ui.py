@@ -757,6 +757,7 @@ SEARCH_HTML = r"""<!doctype html>
     let viewerRequestId = 0;
     let isLoading = false;
     let activeTextMarkEl = null;
+    let activeViewerObjectUrl = null;
 
     function setState(text, kind = '') {
       stateEl.textContent = text;
@@ -1136,11 +1137,19 @@ SEARCH_HTML = r"""<!doctype html>
       hoverEl.setAttribute('aria-hidden', 'true');
     }
 
+    function revokeViewerObjectUrl() {
+      if (activeViewerObjectUrl) {
+        URL.revokeObjectURL(activeViewerObjectUrl);
+        activeViewerObjectUrl = null;
+      }
+    }
+
     function selectSource(source) {
       hideHover();
       viewerRequestId += 1;
       if (!source) {
         activeTextMarkEl = null;
+        revokeViewerObjectUrl();
         viewerTitleEl.textContent = 'Kein Dokument ausgewählt';
         viewerMetaEl.textContent = 'Wähle rechts eine Quelle aus oder starte eine Suche.';
         viewerActionsEl.innerHTML = '';
@@ -1167,7 +1176,7 @@ SEARCH_HTML = r"""<!doctype html>
       const actions = [];
       actions.push('<button class="secondary primary-viewer-action" type="button" id="scrollActivePassage">Zur Passage</button>');
       actions.push('<button class="secondary" type="button" id="copyActivePassage">Passage kopieren</button>');
-      if (source.viewer_url) actions.push(`<a class="secondary" href="${escapeAttr(source.viewer_url)}" target="_blank" rel="noreferrer noopener">${iconEye()}Datei öffnen</a>`);
+      if (source.viewer_url && source.viewer_kind === 'download') actions.push(`<a class="secondary" href="${escapeAttr(source.viewer_url)}" target="_blank" rel="noreferrer noopener">Datei herunterladen</a>`);
       if (source.open_url) actions.push(`<a class="secondary" href="${escapeAttr(source.open_url)}" target="_blank" rel="noreferrer noopener">Original öffnen</a>`);
       if (source.preview_url && source.preview_url !== source.viewer_url) actions.push(`<a class="secondary" href="${escapeAttr(source.preview_url)}" target="_blank" rel="noreferrer noopener">Vorschau</a>`);
       viewerActionsEl.innerHTML = actions.join('');
@@ -1205,6 +1214,7 @@ SEARCH_HTML = r"""<!doctype html>
       const inlineTarget = source.viewer_url && source.viewer_url.startsWith('/') && source.viewer_kind !== 'download';
       viewerFrameEl.hidden = true;
       viewerFrameEl.removeAttribute('src');
+      revokeViewerObjectUrl();
       viewerTextPreviewEl.hidden = true;
       viewerTextPreviewEl.textContent = '';
       if (inlineTarget && source.viewer_kind === 'text') {
@@ -1213,6 +1223,13 @@ SEARCH_HTML = r"""<!doctype html>
         viewerTextPreviewEl.hidden = false;
         viewerTextPreviewEl.textContent = 'Text wird geladen …';
         loadTextPreview(source.viewer_url, requestId, source);
+      } else if (inlineTarget && (source.viewer_kind === 'pdf' || source.viewer_kind === 'image')) {
+        const requestId = viewerRequestId;
+        viewerEmptyEl.hidden = false;
+        viewerEmptyEl.textContent = source.viewer_kind === 'pdf'
+          ? 'PDF wird im Dokumentviewer geladen …'
+          : 'Bild wird im Dokumentviewer geladen …';
+        loadBinaryPreview(source.viewer_url, requestId, source);
       } else if (inlineTarget) {
         viewerFrameEl.src = source.viewer_url;
         viewerFrameEl.hidden = false;
@@ -1220,14 +1237,38 @@ SEARCH_HTML = r"""<!doctype html>
       } else {
         viewerEmptyEl.hidden = false;
         viewerEmptyEl.textContent = source.viewer_url
-          ? 'Diese Quelle ist für den nativen Inline-Viewer nicht geeignet. Öffne sie über „Datei öffnen“ oder nutze den Auszug.'
+          ? 'Diese Quelle ist für den Inline-Viewer nicht geeignet. Nutze „Original öffnen“ oder den Auszug.'
           : 'Für diese Quelle ist kein sicherer Dokumentviewer-Link verfügbar. Nutze Vorschau, Originallink oder den Auszug.';
+      }
+    }
+
+    async function loadBinaryPreview(url, requestId, source) {
+      try {
+        const target = splitUrlFragment(url);
+        const accept = source.viewer_kind === 'pdf' ? 'application/pdf, */*' : 'image/*, */*';
+        const response = await fetch(target.url, {headers: {'Accept': accept}});
+        if (!response.ok) throw new Error('Dokument konnte nicht im Viewer geladen werden.');
+        const blob = await response.blob();
+        if (requestId !== viewerRequestId) return;
+        revokeViewerObjectUrl();
+        activeViewerObjectUrl = URL.createObjectURL(blob);
+        viewerFrameEl.src = `${activeViewerObjectUrl}${target.fragment}`;
+        viewerFrameEl.hidden = false;
+        viewerEmptyEl.hidden = true;
+      } catch (error) {
+        if (requestId !== viewerRequestId) return;
+        revokeViewerObjectUrl();
+        viewerFrameEl.hidden = true;
+        viewerFrameEl.removeAttribute('src');
+        viewerEmptyEl.hidden = false;
+        viewerEmptyEl.textContent = error.message || 'Dokument konnte nicht im Viewer geladen werden. Nutze Original öffnen oder den Auszug.';
       }
     }
 
     async function loadTextPreview(url, requestId, source) {
       try {
-        const response = await fetch(url, {headers: {'Accept': 'text/plain, */*'}});
+        const target = splitUrlFragment(url);
+        const response = await fetch(target.url, {headers: {'Accept': 'text/plain, */*'}});
         if (!response.ok) throw new Error('Text konnte nicht geladen werden.');
         const text = await response.text();
         if (requestId !== viewerRequestId) return;
@@ -1237,8 +1278,15 @@ SEARCH_HTML = r"""<!doctype html>
         viewerTextPreviewEl.hidden = true;
         viewerTextPreviewEl.replaceChildren();
         viewerEmptyEl.hidden = false;
-        viewerEmptyEl.textContent = error.message || 'Text konnte nicht geladen werden. Nutze Datei öffnen oder den Auszug.';
+        viewerEmptyEl.textContent = error.message || 'Text konnte nicht geladen werden. Nutze Original öffnen oder den Auszug.';
       }
+    }
+
+    function splitUrlFragment(url) {
+      const value = String(url || '');
+      const index = value.indexOf('#');
+      if (index < 0) return {url: value, fragment: ''};
+      return {url: value.slice(0, index), fragment: value.slice(index)};
     }
 
     function renderTextPreview(fullText, source) {

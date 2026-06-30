@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import mimetypes
 import re
 import threading
 from dataclasses import dataclass, replace
@@ -48,8 +49,8 @@ SEARCH_CONTENT_SECURITY_POLICY = (
     "base-uri 'none'; "
     "frame-ancestors 'none'; "
     "object-src 'none'; "
-    "img-src 'self' data:; "
-    "frame-src 'self'; "
+    "img-src 'self' data: blob:; "
+    "frame-src 'self' blob:; "
     "style-src 'self' 'unsafe-inline'; "
     "script-src 'self' 'unsafe-inline'; "
     "connect-src 'self'; "
@@ -510,13 +511,7 @@ def _handle_document_proxy(
             headers=headers,
         )
     status = _http_status(response.status_code)
-    response_headers = {
-        "Content-Type": response.headers.get("Content-Type", "application/octet-stream"),
-        "Content-Disposition": response.headers.get(
-            "Content-Disposition",
-            f'inline; filename="{_safe_filename(source_path)}"',
-        ),
-    }
+    response_headers = _document_proxy_headers(source_path, response.headers)
     body = bytes(response.content)
     if response.status_code in {401, 403}:
         raise SearchPermissionError("Kein Zugriff auf diese Quelle.")
@@ -528,6 +523,34 @@ def _handle_document_proxy(
             "Content-Type": "application/json; charset=utf-8"
         }
     return body, status, response_headers
+
+
+def _document_proxy_headers(source_path: str, upstream_headers: Any) -> dict[str, str]:
+    content_type, disposition_mode = _document_proxy_content_type(source_path, upstream_headers)
+    return {
+        "Content-Type": content_type,
+        "Content-Disposition": f'{disposition_mode}; filename="{_safe_filename(source_path)}"',
+    }
+
+
+def _document_proxy_content_type(source_path: str, upstream_headers: Any) -> tuple[str, str]:
+    lower = str(source_path or "").lower()
+    upstream_content_type = str(upstream_headers.get("Content-Type") or "").strip()
+    guessed, _ = mimetypes.guess_type(source_path)
+    if lower.endswith((".html", ".htm", ".md", ".markdown")):
+        return "text/plain; charset=utf-8", "inline"
+    if lower.endswith(".pdf"):
+        return "application/pdf", "inline"
+    if guessed and guessed.startswith("image/"):
+        return guessed, "inline"
+    if guessed and (
+        guessed.startswith("text/")
+        or guessed in {"application/json", "application/xml", "text/csv"}
+    ):
+        return guessed, "inline"
+    if lower.endswith((".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp")):
+        return upstream_content_type or guessed or "application/octet-stream", "attachment"
+    return upstream_content_type or guessed or "application/octet-stream", "inline"
 
 
 def _retrieve_allowed_profiles(
