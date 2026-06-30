@@ -330,7 +330,7 @@ SEARCH_HTML = r"""<!doctype html>
       background: var(--accent-soft);
       color: var(--accent-text);
     }
-    .viewer-frame, .viewer-text-preview {
+    .viewer-frame, .viewer-text-preview, .viewer-pdf-page {
       width: 100%;
       height: 100%;
       min-height: 0;
@@ -338,6 +338,16 @@ SEARCH_HTML = r"""<!doctype html>
     }
     .viewer-frame {
       background: #fff;
+    }
+    .viewer-pdf-page {
+      display: block;
+      box-sizing: border-box;
+      padding: 10px;
+      background: #f8fafc;
+      object-fit: contain;
+    }
+    html[data-theme="dark"] .viewer-pdf-page {
+      background: #0f172a;
     }
     .viewer-text-preview {
       margin: 0;
@@ -673,8 +683,9 @@ SEARCH_HTML = r"""<!doctype html>
             </div>
             <div class="viewer-actions" id="viewerActions"></div>
           </div>
-          <div id="viewerEmpty" class="viewer-empty">Nach der Suche wird hier die beste Quelle im nativen Browserviewer geladen.</div>
+          <div id="viewerEmpty" class="viewer-empty">Nach der Suche wird hier die beste Quelle im Dokumentviewer geladen.</div>
           <iframe id="viewerFrame" class="viewer-frame" title="Dokumentviewer" hidden></iframe>
+          <img id="viewerPdfPage" class="viewer-pdf-page" alt="PDF-Seitenvorschau" hidden>
           <div id="viewerTextPreview" class="viewer-text-preview" role="document" aria-label="Textvorschau" hidden></div>
           <div class="viewer-excerpt" id="viewerExcerpt">
             <span class="viewer-message">Trefferpassage und Suchhilfe erscheinen hier.</span>
@@ -746,6 +757,7 @@ SEARCH_HTML = r"""<!doctype html>
     const viewerMetaEl = document.getElementById('viewerMeta');
     const viewerActionsEl = document.getElementById('viewerActions');
     const viewerFrameEl = document.getElementById('viewerFrame');
+    const viewerPdfPageEl = document.getElementById('viewerPdfPage');
     const viewerTextPreviewEl = document.getElementById('viewerTextPreview');
     const viewerEmptyEl = document.getElementById('viewerEmpty');
     const viewerExcerptEl = document.getElementById('viewerExcerpt');
@@ -1155,10 +1167,12 @@ SEARCH_HTML = r"""<!doctype html>
         viewerActionsEl.innerHTML = '';
         viewerFrameEl.hidden = true;
         viewerFrameEl.removeAttribute('src');
+        viewerPdfPageEl.hidden = true;
+        viewerPdfPageEl.removeAttribute('src');
         viewerTextPreviewEl.hidden = true;
         viewerTextPreviewEl.textContent = '';
         viewerEmptyEl.hidden = false;
-        viewerEmptyEl.textContent = 'Nach der Suche wird hier die beste Quelle im nativen Browserviewer geladen.';
+        viewerEmptyEl.textContent = 'Nach der Suche wird hier die beste Quelle im Dokumentviewer geladen.';
         viewerExcerptEl.classList.remove('is-expanded');
         viewerExcerptEl.innerHTML = '<span class="viewer-message">Trefferpassage und Suchhilfe erscheinen hier.</span>';
         document.querySelectorAll('.result-card,.source-card').forEach(item => item.classList.remove('is-active'));
@@ -1215,6 +1229,8 @@ SEARCH_HTML = r"""<!doctype html>
       viewerFrameEl.hidden = true;
       viewerFrameEl.removeAttribute('src');
       revokeViewerObjectUrl();
+      viewerPdfPageEl.hidden = true;
+      viewerPdfPageEl.removeAttribute('src');
       viewerTextPreviewEl.hidden = true;
       viewerTextPreviewEl.textContent = '';
       if (inlineTarget && source.viewer_kind === 'text') {
@@ -1223,12 +1239,15 @@ SEARCH_HTML = r"""<!doctype html>
         viewerTextPreviewEl.hidden = false;
         viewerTextPreviewEl.textContent = 'Text wird geladen …';
         loadTextPreview(source.viewer_url, requestId, source);
-      } else if (inlineTarget && (source.viewer_kind === 'pdf' || source.viewer_kind === 'image')) {
+      } else if (inlineTarget && source.viewer_kind === 'pdf') {
         const requestId = viewerRequestId;
         viewerEmptyEl.hidden = false;
-        viewerEmptyEl.textContent = source.viewer_kind === 'pdf'
-          ? 'PDF wird im Dokumentviewer geladen …'
-          : 'Bild wird im Dokumentviewer geladen …';
+        viewerEmptyEl.textContent = 'PDF-Seite wird im Dokumentviewer gerendert …';
+        loadPdfPagePreview(source.viewer_url, requestId, source);
+      } else if (inlineTarget && source.viewer_kind === 'image') {
+        const requestId = viewerRequestId;
+        viewerEmptyEl.hidden = false;
+        viewerEmptyEl.textContent = 'Bild wird im Dokumentviewer geladen …';
         loadBinaryPreview(source.viewer_url, requestId, source);
       } else if (inlineTarget) {
         viewerFrameEl.src = source.viewer_url;
@@ -1242,11 +1261,30 @@ SEARCH_HTML = r"""<!doctype html>
       }
     }
 
+    function loadPdfPagePreview(url, requestId, source) {
+      const target = splitUrlFragment(url);
+      const page = pdfPageFromFragment(target.fragment) || source.page || 1;
+      const imageUrl = pdfPageImageUrl(target.url, page);
+      viewerPdfPageEl.onload = () => {
+        if (requestId !== viewerRequestId) return;
+        viewerPdfPageEl.hidden = false;
+        viewerEmptyEl.hidden = true;
+      };
+      viewerPdfPageEl.onerror = () => {
+        if (requestId !== viewerRequestId) return;
+        viewerPdfPageEl.hidden = true;
+        viewerPdfPageEl.removeAttribute('src');
+        viewerEmptyEl.hidden = false;
+        viewerEmptyEl.textContent = 'PDF-Seitenvorschau konnte nicht geladen werden. Nutze Original öffnen oder den kopierbaren Auszug.';
+      };
+      viewerPdfPageEl.alt = `${source.document_name || 'PDF'} · Seite ${page}`;
+      viewerPdfPageEl.src = imageUrl;
+    }
+
     async function loadBinaryPreview(url, requestId, source) {
       try {
         const target = splitUrlFragment(url);
-        const accept = source.viewer_kind === 'pdf' ? 'application/pdf, */*' : 'image/*, */*';
-        const response = await fetch(target.url, {headers: {'Accept': accept}});
+        const response = await fetch(target.url, {headers: {'Accept': 'image/*, */*'}});
         if (!response.ok) throw new Error('Dokument konnte nicht im Viewer geladen werden.');
         const blob = await response.blob();
         if (requestId !== viewerRequestId) return;
@@ -1287,6 +1325,23 @@ SEARCH_HTML = r"""<!doctype html>
       const index = value.indexOf('#');
       if (index < 0) return {url: value, fragment: ''};
       return {url: value.slice(0, index), fragment: value.slice(index)};
+    }
+
+    function pdfPageFromFragment(fragment) {
+      const clean = String(fragment || '').replace(/^#/, '');
+      if (!clean) return 1;
+      const params = new URLSearchParams(clean);
+      const value = params.get('page') || clean.match(/page=([^&]+)/)?.[1];
+      const page = Number.parseInt(value || '1', 10);
+      return Number.isFinite(page) && page > 0 ? page : 1;
+    }
+
+    function pdfPageImageUrl(url, page) {
+      const target = new URL(url, window.location.origin);
+      target.pathname = '/api/search/source/document/page-image';
+      target.searchParams.set('page', String(page || 1));
+      target.hash = '';
+      return `${target.pathname}${target.search}`;
     }
 
     function renderTextPreview(fullText, source) {

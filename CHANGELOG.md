@@ -10,6 +10,18 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.5.4 - 2026-06-30
+
+### Fixed
+
+- PDF-Quellen werden in der Wissenssuche jetzt serverseitig als Seitenbild
+  gerendert, damit Browser ohne aktivierten nativen PDF-Viewer die Quelle nicht
+  automatisch herunterladen.
+- Der neue PDF-Seitenbild-Endpunkt nutzt denselben Preview-Token und dieselbe
+  serverseitige Authz-Prüfung wie der Dokumentproxy.
+- Die PDF-Passage bleibt weiterhin kopierbar sichtbar; Original und Preview
+  bleiben als bewusste Nutzeraktionen verfügbar.
+
 ## 2.5.3 - 2026-06-30
 
 ### Fixed

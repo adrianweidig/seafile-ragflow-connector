@@ -10,6 +10,18 @@ retroactively.
 
 No entries.
 
+## 2.5.4 - 2026-06-30
+
+### Fixed
+
+- PDF sources in knowledge search are now rendered server-side as page images
+  so browsers without an enabled native PDF viewer no longer download the source
+  automatically.
+- The new PDF page-image endpoint uses the same preview token and server-side
+  authorization check as the document proxy.
+- The PDF passage remains visible and copyable; original and preview links stay
+  available as explicit user actions.
+
 ## 2.5.3 - 2026-06-30
 
 ### Fixed

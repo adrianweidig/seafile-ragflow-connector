@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import unittest
+from http import HTTPStatus
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import unquote
@@ -18,6 +19,7 @@ from seafile_ragflow_connector.search.server import (
     _compose_answer_from_sources,
     _handle_chat,
     _handle_document_proxy,
+    _handle_pdf_page_image_proxy,
     _handle_query,
     _search_results_from_ragflow,
 )
@@ -88,6 +90,9 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn("function syncLibraryCollapse", SEARCH_HTML)
         self.assertIn("function loadTextPreview", SEARCH_HTML)
         self.assertIn("function loadBinaryPreview", SEARCH_HTML)
+        self.assertIn("function loadPdfPagePreview", SEARCH_HTML)
+        self.assertIn('id="viewerPdfPage"', SEARCH_HTML)
+        self.assertIn("/api/search/source/document/page-image", SEARCH_HTML)
         self.assertIn("URL.createObjectURL", SEARCH_HTML)
         self.assertIn("source.viewer_kind === 'download'", SEARCH_HTML)
         self.assertIn("Datei herunterladen", SEARCH_HTML)
@@ -199,7 +204,7 @@ class SearchServerTests(unittest.TestCase):
         self.assertEqual(viewer_payload["repo_id"], "repo-anleitungen")
         self.assertEqual(viewer_payload["source_path"], "/Anleitungen/FI/Handbuch FI Typ B.pdf")
         self.assertEqual(result["results"][0]["viewer_kind"], "pdf")
-        self.assertIn("native", result["results"][0]["viewer_message"])
+        self.assertIn("Bildvorschau", result["results"][0]["viewer_message"])
 
     def test_subset_selection_queries_only_checked_libraries(self) -> None:
         settings = _settings()
@@ -892,6 +897,54 @@ class SearchServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(headers["Content-Type"], "application/pdf")
         self.assertEqual(headers["Content-Disposition"], 'inline; filename="report.pdf"')
+
+    def test_pdf_page_image_proxy_renders_png_after_authz_document_fetch(self) -> None:
+        settings = _settings()
+        original_document_proxy = search_server._handle_document_proxy
+        original_renderer = search_server._render_pdf_page_png
+        seen: dict[str, object] = {}
+
+        def fake_document_proxy(
+            _settings: SearchServiceSettings,
+            _user: SearchUser,
+            token: str | None,
+        ) -> tuple[bytes, HTTPStatus, dict[str, str]]:
+            seen["token"] = token
+            return (
+                b"%PDF-1.3\n",
+                HTTPStatus.OK,
+                {
+                    "Content-Type": "application/pdf",
+                    "Content-Disposition": 'inline; filename="report.pdf"',
+                },
+            )
+
+        def fake_renderer(body: bytes, page: int) -> bytes:
+            seen["body"] = body
+            seen["page"] = page
+            return b"\x89PNG\r\n\x1a\n"
+
+        try:
+            search_server._handle_document_proxy = fake_document_proxy  # type: ignore[assignment]
+            search_server._render_pdf_page_png = fake_renderer  # type: ignore[assignment]
+
+            body, status, headers = _handle_pdf_page_image_proxy(
+                settings,
+                SearchUser(username="olaf", email="olaf@example.local", display_name=None),
+                "signed-token",
+                "2",
+            )
+        finally:
+            search_server._handle_document_proxy = original_document_proxy  # type: ignore[assignment]
+            search_server._render_pdf_page_png = original_renderer  # type: ignore[assignment]
+
+        self.assertEqual(seen["token"], "signed-token")
+        self.assertEqual(seen["body"], b"%PDF-1.3\n")
+        self.assertEqual(seen["page"], 2)
+        self.assertEqual(body, b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(headers["Content-Type"], "image/png")
+        self.assertEqual(headers["Content-Disposition"], 'inline; filename="pdf-page-2.png"')
 
     def test_document_proxy_keeps_office_files_as_explicit_downloads(self) -> None:
         settings = _settings()

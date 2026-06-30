@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import html
+import importlib
+import io
 import json
 import mimetypes
 import re
@@ -200,6 +202,17 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                         context.settings,
                         user,
                         _one(params, "token"),
+                    )
+                    self._send_binary(body, status=status, headers=headers)
+                    return
+                if parsed.path == "/api/search/source/document/page-image":
+                    user = _user_from_headers(context.settings, self.headers)
+                    params = parse_qs(parsed.query)
+                    body, status, headers = _handle_pdf_page_image_proxy(
+                        context.settings,
+                        user,
+                        _one(params, "token"),
+                        _one(params, "page"),
                     )
                     self._send_binary(body, status=status, headers=headers)
                     return
@@ -523,6 +536,72 @@ def _handle_document_proxy(
             "Content-Type": "application/json; charset=utf-8"
         }
     return body, status, response_headers
+
+
+def _handle_pdf_page_image_proxy(
+    settings: SearchServiceSettings,
+    user: SearchUser,
+    token: str | None,
+    page: str | None,
+) -> tuple[bytes, HTTPStatus, dict[str, str]]:
+    body, status, headers = _handle_document_proxy(settings, user, token)
+    if status != HTTPStatus.OK:
+        return body, status, headers
+    if not str(headers.get("Content-Type", "")).lower().startswith("application/pdf"):
+        raise ValueError("source is not a PDF")
+    page_number = _parse_pdf_page_number(page)
+    png = _render_pdf_page_png(body, page_number)
+    return png, HTTPStatus.OK, {
+        "Content-Type": "image/png",
+        "Content-Disposition": f'inline; filename="pdf-page-{page_number}.png"',
+        "Cache-Control": "no-store",
+    }
+
+
+def _parse_pdf_page_number(value: str | None) -> int:
+    if value in (None, ""):
+        return 1
+    try:
+        page = int(str(value))
+    except ValueError as exc:
+        raise ValueError("page must be a positive integer") from exc
+    if page < 1:
+        raise ValueError("page must be a positive integer")
+    return page
+
+
+def _render_pdf_page_png(pdf_bytes: bytes, page_number: int) -> bytes:
+    try:
+        pdfium = importlib.import_module("pypdfium2")
+    except Exception as exc:  # pragma: no cover - dependency is part of runtime image
+        raise RuntimeError("PDF renderer is not available") from exc
+
+    try:
+        document = pdfium.PdfDocument(pdf_bytes)
+        page_count = len(document)
+        if page_count <= 0:
+            raise ValueError("PDF has no pages")
+        page_index = min(page_number, page_count) - 1
+        page = document[page_index]
+        try:
+            bitmap = page.render(scale=1.6)
+            image = bitmap.to_pil()
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG", optimize=True)
+            return buffer.getvalue()
+        finally:
+            close_page = getattr(page, "close", None)
+            if callable(close_page):
+                close_page()
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("PDF page could not be rendered") from exc
+    finally:
+        close_document = locals().get("document")
+        close = getattr(close_document, "close", None)
+        if callable(close):
+            close()
 
 
 def _document_proxy_headers(source_path: str, upstream_headers: Any) -> dict[str, str]:
@@ -1039,7 +1118,15 @@ def _viewer_kind(*, source_path: str | None, document_name: str | None) -> str:
 
 def _viewer_message(kind: str, hit: EvidenceHit) -> str:
     if kind == "pdf" and hit.page not in (None, ""):
-        return "PDF wird im nativen Browserviewer ungefähr auf die Trefferseite geöffnet."
+        return (
+            "PDF-Seite wird als sichere Bildvorschau angezeigt; "
+            "die vollständige Passage bleibt kopierbar."
+        )
+    if kind == "pdf":
+        return (
+            "PDF wird als sichere Bildvorschau angezeigt; "
+            "die vollständige Passage bleibt kopierbar."
+        )
     if kind == "text":
         return "Textdateien werden inline angezeigt; die markierte Passage steht als Auszug bereit."
     if kind == "image":
