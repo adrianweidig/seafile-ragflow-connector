@@ -53,7 +53,7 @@ dev = [
   "pytest>=9.1.0",
   "pytest-asyncio>=1.4.0",
   "respx>=0.21",
-  "ruff>=0.15.17",
+  "ruff>=0.15.20",
 ]
 demo-recording = [
   "numpy>=2.1",
