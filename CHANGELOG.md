@@ -10,6 +10,14 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.5.6 - 2026-07-04
+
+### Removed
+
+- Repo-interne Codex-Readiness- und Zielzustandsnotizen wurden entfernt, damit
+  die veröffentlichte Projektwurzel nur noch nutzerrelevante Projektdateien
+  enthält.
+
 ## 2.5.5 - 2026-06-30
 
 ### Fixed
