@@ -30,7 +30,7 @@ classifiers = [
 ]
 dependencies = [
   "alembic>=1.13",
-  "dramatiq[redis]>=2.1.0",
+  "dramatiq[redis]>=2.2.0",
   "httpx>=0.27",
   "pillow>=11.0",
   "prometheus-client>=0.20",
