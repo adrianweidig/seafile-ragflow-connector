@@ -10,6 +10,13 @@ retroactively.
 
 No entries.
 
+## 2.5.6 - 2026-07-04
+
+### Removed
+
+- Removed repo-internal Codex readiness and goal-state notes so the published
+  project root only contains user-relevant project files.
+
 ## 2.5.5 - 2026-06-30
 
 ### Fixed
