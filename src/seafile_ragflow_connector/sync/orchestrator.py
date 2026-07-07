@@ -192,8 +192,6 @@ class SyncOrchestrator:
             db_library.ragflow_dataset_id = result.dataset_id
             db_library.ragflow_dataset_name = result.dataset_name
             db_library.template_hash = result.template_hash or db_library.template_hash
-            db_library.status = "active"
-            db_library.last_error = None
             self._record_dataset_snapshot(
                 session,
                 repo_id=repo_id,
@@ -248,7 +246,11 @@ class SyncOrchestrator:
 
     def sync_library_full(self, repo_id: str, *, scope: str = "/") -> SyncSummary:
         sync_id = new_sync_id(repo_id)
-        dataset_id = self.ensure_dataset_for_repo(repo_id)
+        try:
+            dataset_id = self.ensure_dataset_for_repo(repo_id)
+        except Exception as exc:
+            self._mark_library_error(repo_id, exc)
+            raise
         bind_contextvars(sync_id=sync_id)
         self._create_dashboard_sync_run(sync_id, repo_id, dataset_id, scope)
         self.log.info(
@@ -356,6 +358,7 @@ class SyncOrchestrator:
             )
             return summary
         except Exception as exc:
+            self._mark_library_error(repo_id, exc)
             self._finish_dashboard_sync_run(
                 sync_id=sync_id,
                 status="failed",
