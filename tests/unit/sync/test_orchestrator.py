@@ -31,6 +31,11 @@ class _FakeSeafileSyncClient:
         return self.items if path == "/" else []
 
 
+class _FailingSeafileSyncClient(_FakeSeafileSyncClient):
+    def list_dir(self, repo_id: str, path: str):
+        raise RuntimeError("HTTP 403")
+
+
 class _FakeSeafileAdminClient:
     def __init__(self, libraries: list[dict[str, object]] | None = None) -> None:
         self.libraries = libraries or []
@@ -292,8 +297,48 @@ class OrchestratorUploadTests(unittest.TestCase):
             self.assertIsNotNone(library)
             assert library is not None
             self.assertEqual(library.ragflow_dataset_name, "seafile__demo__repo")
-            self.assertEqual(library.status, "active")
-            self.assertIsNone(library.last_error)
+            self.assertEqual(library.status, "error")
+            self.assertEqual(library.last_error, "previous failure")
+
+    def test_sync_library_failure_marks_library_error_after_dataset_reuse(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo",
+                    name="Demo",
+                    name_slug="demo",
+                    status="active",
+                    ragflow_dataset_id="dataset-old",
+                    ragflow_dataset_name="seafile__demo__repo",
+                )
+            )
+            session.commit()
+
+        ragflow_client = _FakeRAGFlowClient()
+        ragflow_client.datasets_by_id["dataset-old"] = {
+            "id": "dataset-old",
+            "name": "seafile__demo__repo",
+        }
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FailingSeafileSyncClient(b"%PDF-1.4\ncontent"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
+            orchestrator.sync_library_full("repo")
+
+        with session_factory() as session:
+            library = session.get(Library, "repo")
+            self.assertIsNotNone(library)
+            assert library is not None
+            self.assertEqual(library.status, "error")
+            self.assertEqual(library.last_error, "HTTP 403")
 
     def test_missing_template_dataset_is_created_with_rag_defaults(self) -> None:
         session_factory = _session_factory(self)
