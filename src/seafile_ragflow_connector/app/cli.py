@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal, cast
 
 import structlog
 import typer
+from sqlalchemy import select
 
 from seafile_ragflow_connector.app.logging import configure_logging
 from seafile_ragflow_connector.app.runtime import (
@@ -45,6 +46,7 @@ from seafile_ragflow_connector.jobs.scheduler import PeriodicTask, SimpleSchedul
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 from seafile_ragflow_connector.jobs.worker import WorkerRunner
 from seafile_ragflow_connector.persistence.db import init_database
+from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.search.server import SearchServiceContext, serve_search_forever
 from seafile_ragflow_connector.security.access_control import ACLSnapshotService
 from seafile_ragflow_connector.sync.target_cleanup import LibrarySourceLike, TargetCleanupService
@@ -806,9 +808,8 @@ def _wait_for_parse(runtime: Runtime, timeout_seconds: int) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         active = False
-        for library in runtime.orchestrator.discover_libraries():
-            dataset_id = runtime.orchestrator.ensure_dataset_for_repo(library.repo_id)
-            updated = runtime.orchestrator.check_parse_status(library.repo_id, dataset_id)
+        for repo_id, dataset_id in _active_dataset_bindings(runtime):
+            updated = runtime.orchestrator.check_parse_status(repo_id, dataset_id)
             if updated:
                 documents = runtime.ragflow_client.list_documents(dataset_id)
                 active = any(
@@ -817,6 +818,16 @@ def _wait_for_parse(runtime: Runtime, timeout_seconds: int) -> None:
         if not active:
             return
         time.sleep(5)
+
+
+def _active_dataset_bindings(runtime: Runtime) -> list[tuple[str, str]]:
+    with runtime.orchestrator.session_factory() as session:
+        rows = session.execute(
+            select(Library.repo_id, Library.ragflow_dataset_id)
+            .where(Library.status == "active")
+            .where(Library.ragflow_dataset_id.is_not(None))
+        ).all()
+    return [(str(repo_id), str(dataset_id)) for repo_id, dataset_id in rows if dataset_id]
 
 
 if __name__ == "__main__":
