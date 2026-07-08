@@ -10,6 +10,152 @@ werden keine historischen Releases nachträglich erfunden.
 
 Keine Einträge.
 
+## 2.5.6 - 2026-07-04
+
+### Removed
+
+- Repo-interne Codex-Readiness- und Zielzustandsnotizen wurden entfernt, damit
+  die veröffentlichte Projektwurzel nur noch nutzerrelevante Projektdateien
+  enthält.
+
+## 2.5.5 - 2026-06-30
+
+### Fixed
+
+- Die PDF-Seitenvorschau im Wissenssuche-Dokumentviewer nutzt jetzt einen
+  scrollbaren Fit-to-width-Container, damit PDF-Seiten lesbar angezeigt werden
+  statt als kleine Gesamtseiten-Miniatur.
+
+## 2.5.4 - 2026-06-30
+
+### Fixed
+
+- PDF-Quellen werden in der Wissenssuche jetzt serverseitig als Seitenbild
+  gerendert, damit Browser ohne aktivierten nativen PDF-Viewer die Quelle nicht
+  automatisch herunterladen.
+- Der neue PDF-Seitenbild-Endpunkt nutzt denselben Preview-Token und dieselbe
+  serverseitige Authz-Prüfung wie der Dokumentproxy.
+- Die PDF-Passage bleibt weiterhin kopierbar sichtbar; Original und Preview
+  bleiben als bewusste Nutzeraktionen verfügbar.
+
+## 2.5.3 - 2026-06-30
+
+### Fixed
+
+- PDFs und Bilder werden im Wissenssuche-Dokumentviewer jetzt per Blob-URL
+  geladen, damit die Quellenauswahl keine direkte Browser-Navigation zum
+  PDF-Download-Endpunkt auslöst.
+- Der Search-Dokumentproxy erzwingt Content-Disposition deterministisch:
+  PDF/Text/Bilder werden inline ausgeliefert, Office-Dateien bleiben explizite
+  Downloads.
+- Die Viewer-Toolbar zeigt den direkten Datei-Download nur noch für
+  Download-Dateitypen; inline-fähige Quellen bleiben im mittleren Viewer.
+
+## 2.5.2 - 2026-06-30
+
+### Fixed
+
+- Search-Service erhält jetzt ebenfalls die Connector-State-Datenbankkonfiguration,
+  damit die Pfad-Reparatur für PDF-, Office- und Bildquellen produktiv aktiv ist.
+- Der Dokumentviewer kann dadurch RAGFlow-Anzeigenamen auch im separaten
+  `connector-search`-Container auf echte Seafile-Pfade in Unterordnern abbilden.
+
+## 2.5.1 - 2026-06-30
+
+### Fixed
+
+- Wissenssuche repariert RAGFlow-Rückgabepfade gegen die Connector-State-DB,
+  wenn RAGFlow nur einen bibliotheksnamensbasierten Anzeigepfad liefert.
+- Dokumentviewer-Links für PDF-, Office- und Bilddateien bleiben dadurch auch
+  bei Dateien in Unterordnern auf den tatsächlichen Seafile-Pfad gerichtet.
+
+## 2.5.0 - 2026-06-28
+
+### Changed
+
+- Wissenssuche nutzt nach visuellem Review eine ruhigere Arbeitsflächen-Hierarchie
+  mit dezenter Trefferpassage, priorisierter Viewer-Aktion und kompakteren
+  Quellen-/Bibliotheksflächen.
+- Text- und Markdown-Viewer markieren im Dokument nur noch einen kurzen,
+  priorisierten Trefferanker; die vollständige Passage bleibt als kopierbarer
+  Auszug mit linker Akzentlinie sichtbar.
+- Das Dashboard verwendet dichtere operative UI-Tokens mit flacheren Panels,
+  kompakteren Metriken, ruhigeren Statusflächen und stabileren Tablet-/Mobile-
+  Breakpoints.
+
+## 2.4.11 - 2026-06-27
+
+### Fixed
+
+- Wissenssuche markiert im Text-/Markdown-Viewer nur noch einen kurzen,
+  relevanten Fokus-Treffer statt den gesamten RAG-Chunk gelb hervorzuheben.
+- Die Trefferpassage unter dem Viewer bleibt als neutraler, kopierbarer Auszug
+  sichtbar und wiederholt nicht mehr dieselbe große gelbe Markierung.
+- Der Viewer-Hinweis erklärt klarer, dass die vollständige Passage kopierbar
+  bleibt, während im Dokument nur der relevanteste Treffer hervorgehoben wird.
+
+## 2.4.10 - 2026-06-26
+
+### Fixed
+
+- Wissenssuche liefert im Antwortmodus weiterhin eine synthetisierte,
+  zitierte Antwort und nutzt für Prompt, Kopieren und Textmarkierung den
+  ungekürzten Passage-Text statt der gekürzten Quellenkarte.
+- Text- und Markdown-Viewer markieren die relevante Passage direkt im
+  Dokument-DOM mit `<mark>` und springen beim Quellenwechsel zur Fundstelle.
+- Quellenmarker wie `[S2]` im Antworttext sind klickbar und synchronisieren
+  Viewer, aktive Quelle und Quellenleisten.
+
+## 2.4.9 - 2026-06-26
+
+### Fixed
+
+- Wissenssuche staffelt Bibliotheken, Arbeitsbereich und Quellen responsiver,
+  sodass Quellen auf mittleren Viewports als kompakte Leiste im Arbeitsbereich
+  erhalten bleiben.
+- Dokumentviewer, Trefferpassage, Antwortbereich und Composer sind kompakter
+  und priorisieren die Antwort direkt unter dem Dokument.
+- Text- und Markdown-Quellen werden als sichere dunkle Textvorschau statt als
+  dominante weiße Browserfläche angezeigt.
+
+## 2.4.8 - 2026-06-26
+
+### Added
+
+- Wissenssuche kann Antworten optional über einen OpenAI-kompatiblen
+  `/chat/completions`-Endpunkt erzeugen, der per `SEARCH_ANSWER_LLM_*`
+  konfiguriert wird.
+
+### Fixed
+
+- Antwortgenerierung fällt bei nicht konfiguriertem oder fehlerhaftem
+  OpenAI-kompatiblem Modell weiterhin sauber auf RAGFlow beziehungsweise die
+  lokale quellengestützte Kurzantwort zurück.
+
+## 2.4.7 - 2026-06-26
+
+### Fixed
+
+- Wissenssuche blendet den leeren Dokumentviewer-Zustand zuverlässig aus, sobald
+  eine Quelle im nativen Viewer geladen wird.
+- Antwortmodus zeigt Fundstellen kompakt unter der Antwort und nutzt Toast-
+  Feedback für Passage-Kopieren, damit die Antwort nicht nach unten springt.
+- Quellengestützter Antwort-Fallback formuliert eine lesbare Zusammenfassung
+  mit Quellenmarkern statt technischer Roh-Auszüge.
+
+## 2.4.6 - 2026-06-25
+
+### Added
+
+- Search-Service erzeugt aus gefundenen Quellen eine RAGFlow-gestützte Antwort
+  mit Quellenmarkern und fällt bei RAGFlow-Problemen auf eine kurze
+  quellengestützte Antwort zurück.
+- Wissenssuche erhält einen mittigen Dokumentviewer mit sicherem
+  Connector-Proxy, Quellen-Auswahl, Antwortbereich und Chatfeld am unteren
+  Rand.
+- Lokaler HTTPS-Edge unterstützt zusätzlich `https://search.top.secret/search`
+  für Portainer-/Compose-Tests.
+
 ## 2.4.5 - 2026-06-18
 
 ### Fixed

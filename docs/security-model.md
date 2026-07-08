@@ -24,7 +24,17 @@ keinen Seafile-Sync-Token. Sie fragen den Connector-Core nur:
 Darf Nutzer X auf Bibliothek/Dataset Y suchen?
 ```
 
-Erst bei `decision=allow` wird RAGFlow abgefragt.
+Erst bei `decision=allow` wird RAGFlow abgefragt. Der Dokumentviewer folgt
+derselben Grenze: `connector-search` prüft nur signierte Preview-Tokens und
+Nutzerheader, ruft den Core mit Bearer-Secret auf und streamt freigegebene
+Dateien same-origin zurück. Der eigentliche Seafile-Download passiert im Core
+über den bestehenden Sync-Client; HTML/Markdown werden nicht als aktives HTML
+ausgeliefert.
+
+`connector-search` darf zusätzlich den Connector-State lesen, um RAGFlow-
+Anzeigenamen wieder auf echte Seafile-Pfade abzubilden. Diese Datenbanknutzung
+ist nur Mapping-/Viewer-Infrastruktur; die fachliche Berechtigung bleibt die
+Authz-Prüfung gegen den ACL-Snapshot.
 
 ## Seafile ist Berechtigungsquelle
 

@@ -75,6 +75,7 @@ docker compose -f deploy/tls-lab/docker-compose.yml run --rm tls-probe
 
 Das Lab erzeugt unter `deploy/tls-lab/certs` Testzertifikate für
 `rag.top.secret`, `seafile.top.secret`, `connector.top.secret`,
+`search.top.secret`,
 `selfsigned-rag.top.secret`, `wronghost.top.secret` und
 `expired-rag.top.secret`. Die Zertifikate sind reine Testartefakte.
 

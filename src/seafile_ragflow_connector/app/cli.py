@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal, cast
 
 import structlog
 import typer
+from sqlalchemy import select
 
 from seafile_ragflow_connector.app.logging import configure_logging
 from seafile_ragflow_connector.app.runtime import (
@@ -34,6 +35,7 @@ from seafile_ragflow_connector.demo.lifecycle import (
     dumps_summary,
     write_demo_testset,
 )
+from seafile_ragflow_connector.domain.ragflow_defaults import build_search_answer_chat_payload
 from seafile_ragflow_connector.domain.ragflow_search_settings import (
     config_from_settings,
     ensure_search_template,
@@ -44,6 +46,7 @@ from seafile_ragflow_connector.jobs.scheduler import PeriodicTask, SimpleSchedul
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 from seafile_ragflow_connector.jobs.worker import WorkerRunner
 from seafile_ragflow_connector.persistence.db import init_database
+from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.search.server import SearchServiceContext, serve_search_forever
 from seafile_ragflow_connector.security.access_control import ACLSnapshotService
 from seafile_ragflow_connector.sync.target_cleanup import LibrarySourceLike, TargetCleanupService
@@ -378,6 +381,7 @@ def controller() -> None:
 
     def search_template() -> None:
         if not settings.ragflow_search_template_enabled:
+            _ensure_search_answer_chat(runtime, log)
             return
         resolved = ensure_search_template(
             runtime.ragflow_client,
@@ -390,6 +394,7 @@ def controller() -> None:
             template_id=resolved.template_id,
             warnings=list(resolved.warnings),
         )
+        _ensure_search_answer_chat(runtime, log)
 
     def openwebui() -> None:
         _sync_openwebui_controller_guarded(runtime, log)
@@ -679,6 +684,73 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
     }
 
 
+def _ensure_search_answer_chat(runtime: Runtime, log: Any) -> None:
+    settings = runtime.settings
+    if settings.search_answer_generation_mode != "ragflow_chat":
+        return
+    if not settings.ragflow_search_answer_chat_auto_create:
+        log.info(
+            "ragflow.search_answer_chat.skipped",
+            reason="auto_create_disabled",
+            chat_name=settings.ragflow_search_answer_chat_name,
+        )
+        return
+    payload = build_search_answer_chat_payload(settings.ragflow_search_answer_chat_name)
+    try:
+        existing = runtime.ragflow_client.list_chats(name=settings.ragflow_search_answer_chat_name)
+    except Exception as exc:  # pragma: no cover - deployment-specific startup guard
+        log.warning(
+            "ragflow.search_answer_chat.lookup_failed",
+            chat_name=settings.ragflow_search_answer_chat_name,
+            error=str(exc),
+            error_class=type(exc).__name__,
+        )
+        return
+    matching = [
+        item
+        for item in existing
+        if str(item.get("name") or "").strip() == settings.ragflow_search_answer_chat_name
+    ]
+    if len(matching) > 1:
+        log.warning(
+            "ragflow.search_answer_chat.ambiguous",
+            chat_name=settings.ragflow_search_answer_chat_name,
+            count=len(matching),
+        )
+        return
+    if matching:
+        log.info(
+            "ragflow.search_answer_chat.ready",
+            chat_name=settings.ragflow_search_answer_chat_name,
+            chat_id=_mapping_id(matching[0]),
+            created=False,
+        )
+        return
+    try:
+        created = runtime.ragflow_client.create_chat(payload)
+    except Exception as exc:  # pragma: no cover - deployment-specific startup guard
+        log.warning(
+            "ragflow.search_answer_chat.create_failed",
+            chat_name=settings.ragflow_search_answer_chat_name,
+            error=str(exc),
+            error_class=type(exc).__name__,
+        )
+        return
+    log.info(
+        "ragflow.search_answer_chat.ready",
+        chat_name=settings.ragflow_search_answer_chat_name,
+        chat_id=_mapping_id(created),
+        created=True,
+    )
+
+
+def _mapping_id(value: dict[str, Any]) -> str | None:
+    raw = value.get("id") or value.get("chat_id")
+    if raw in (None, ""):
+        return None
+    return str(raw)
+
+
 def _discover_job_specs(runtime: Runtime) -> list[JobSpec]:
     specs = runtime.orchestrator.discover_job_specs()
     if _openwebui_sync_enabled(runtime):
@@ -736,9 +808,8 @@ def _wait_for_parse(runtime: Runtime, timeout_seconds: int) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         active = False
-        for library in runtime.orchestrator.discover_libraries():
-            dataset_id = runtime.orchestrator.ensure_dataset_for_repo(library.repo_id)
-            updated = runtime.orchestrator.check_parse_status(library.repo_id, dataset_id)
+        for repo_id, dataset_id in _active_dataset_bindings(runtime):
+            updated = runtime.orchestrator.check_parse_status(repo_id, dataset_id)
             if updated:
                 documents = runtime.ragflow_client.list_documents(dataset_id)
                 active = any(
@@ -747,6 +818,16 @@ def _wait_for_parse(runtime: Runtime, timeout_seconds: int) -> None:
         if not active:
             return
         time.sleep(5)
+
+
+def _active_dataset_bindings(runtime: Runtime) -> list[tuple[str, str]]:
+    with runtime.orchestrator.session_factory() as session:
+        rows = session.execute(
+            select(Library.repo_id, Library.ragflow_dataset_id)
+            .where(Library.status == "active")
+            .where(Library.ragflow_dataset_id.is_not(None))
+        ).all()
+    return [(str(repo_id), str(dataset_id)) for repo_id, dataset_id in rows if dataset_id]
 
 
 if __name__ == "__main__":

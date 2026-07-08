@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import html
+import importlib
+import io
 import json
+import mimetypes
+import re
 import threading
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from functools import lru_cache
 from html.parser import HTMLParser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,6 +18,8 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 import structlog
+from sqlalchemy import or_, select
+from sqlalchemy.exc import SQLAlchemyError
 
 from seafile_ragflow_connector.clients.http import ApiError
 from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
@@ -21,7 +28,14 @@ from seafile_ragflow_connector.domain.ragflow_search_settings import (
     config_from_settings,
     resolve_search_template,
 )
-from seafile_ragflow_connector.openwebui.sources import extract_references, sign_preview_payload
+from seafile_ragflow_connector.openwebui.sources import (
+    extract_answer_result,
+    extract_references,
+    sign_preview_payload,
+    verify_preview_token,
+)
+from seafile_ragflow_connector.persistence import get_session_factory
+from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.search.ui import SEARCH_HTML
 from seafile_ragflow_connector.sources.evidence import (
     EvidenceHit,
@@ -37,11 +51,20 @@ SEARCH_CONTENT_SECURITY_POLICY = (
     "base-uri 'none'; "
     "frame-ancestors 'none'; "
     "object-src 'none'; "
-    "img-src 'self' data:; "
+    "img-src 'self' data: blob:; "
+    "frame-src 'self' blob:; "
     "style-src 'self' 'unsafe-inline'; "
     "script-src 'self' 'unsafe-inline'; "
     "connect-src 'self'; "
     "form-action 'self'"
+)
+
+_SOURCE_MARKER_RE = re.compile(r"\[(S\d+)\]")
+_INVALID_ANSWER_FRAGMENTS = (
+    "Ich habe noch keinen separaten KI-Antworttext generiert",
+    "Zur Frage wurden passende Quellen gefunden",
+    "Die belastbaren Fundstellen stehen unten",
+    "Ich kann keine Antwort generieren",
 )
 
 SOURCE_PATH_LABEL = "Source path:"
@@ -84,6 +107,13 @@ class SearchUser:
     @property
     def display(self) -> str:
         return self.display_name or self.email or self.username or "Unbekannter Nutzer"
+
+
+@dataclass(frozen=True)
+class SearchAnswer:
+    text: str
+    mode: str
+    diagnostics: dict[str, Any]
 
 
 def start_search_server(
@@ -164,6 +194,27 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                             language=context.settings.connector_language or "de",
                         )
                     )
+                    return
+                if parsed.path == "/api/search/source/document":
+                    user = _user_from_headers(context.settings, self.headers)
+                    params = parse_qs(parsed.query)
+                    body, status, headers = _handle_document_proxy(
+                        context.settings,
+                        user,
+                        _one(params, "token"),
+                    )
+                    self._send_binary(body, status=status, headers=headers)
+                    return
+                if parsed.path == "/api/search/source/document/page-image":
+                    user = _user_from_headers(context.settings, self.headers)
+                    params = parse_qs(parsed.query)
+                    body, status, headers = _handle_pdf_page_image_proxy(
+                        context.settings,
+                        user,
+                        _one(params, "token"),
+                        _one(params, "page"),
+                    )
+                    self._send_binary(body, status=status, headers=headers)
                     return
                 if self.path == "/api/search/profiles":
                     user = _user_from_headers(context.settings, self.headers)
@@ -258,6 +309,23 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_binary(
+            self,
+            body: bytes,
+            *,
+            status: HTTPStatus = HTTPStatus.OK,
+            headers: dict[str, str] | None = None,
+        ) -> None:
+            self.send_response(status.value)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def _send_security_headers(self, *, include_csp: bool = False) -> None:
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
@@ -331,14 +399,15 @@ def _handle_chat(
         raise ValueError("Antwortmodus ist deaktiviert.")
     response = _handle_query(settings, user, payload)
     sources = response["results"]
-    answer_text = _compose_answer_from_sources(str(response["query"]), sources)
+    answer = _generate_answer(settings, str(response["query"]), sources)
     response["answer"] = {
-        "text": answer_text,
-        "mode": "retrieval_summary",
+        "text": answer.text,
+        "mode": answer.mode,
         "citations": _answer_citations(sources, settings),
     }
     response["sources"] = sources
     response["diagnostics"]["retrieval_mode"] = "answer_with_sources"
+    response["diagnostics"]["answer_generation"] = answer.diagnostics
     return response
 
 
@@ -392,6 +461,175 @@ def _authz_headers(settings: SearchServiceSettings, user: SearchUser) -> dict[st
     if user.email:
         headers["X-Authz-Email"] = user.email
     return headers
+
+
+def _authz_check_source(
+    settings: SearchServiceSettings,
+    user: SearchUser,
+    *,
+    repo_id: str,
+    ragflow_dataset_id: str | None,
+) -> None:
+    _require_user_identity(user)
+    payload = {
+        "user": {"username": user.username, "email": user.email},
+        "resource": {"repo_id": repo_id, "ragflow_dataset_id": ragflow_dataset_id},
+        "operation": "search",
+    }
+    with httpx.Client(base_url=settings.search_authz_base_url, timeout=20.0) as client:
+        response = client.post(
+            "/api/authz/check",
+            json=payload,
+            headers=_authz_headers(settings, user),
+        )
+        if response.status_code in {401, 403}:
+            raise SearchPermissionError("Kein Zugriff auf diese Quelle.")
+        response.raise_for_status()
+        data = response.json()
+    if not isinstance(data, dict) or data.get("decision") != "allow":
+        raise SearchPermissionError("Kein Zugriff auf diese Quelle.")
+
+
+def _handle_document_proxy(
+    settings: SearchServiceSettings,
+    user: SearchUser,
+    token: str | None,
+) -> tuple[bytes, HTTPStatus, dict[str, str]]:
+    if not settings.search_document_viewer_enabled:
+        return _json_error_bytes("viewer disabled"), HTTPStatus.NOT_FOUND, {
+            "Content-Type": "application/json; charset=utf-8"
+        }
+    if not token:
+        raise ValueError("token is required")
+    payload = verify_preview_token(token, settings.effective_search_source_preview_secret)
+    _validate_document_token_expiry(payload)
+    repo_id = _required_payload_text(payload, "repo_id")
+    source_path = _normalize_source_path(_required_payload_text(payload, "source_path")) or ""
+    ragflow_dataset_id = _optional_text(payload.get("dataset_id"))
+    if not source_path:
+        raise ValueError("source_path is required")
+    _authz_check_source(
+        settings,
+        user,
+        repo_id=repo_id,
+        ragflow_dataset_id=ragflow_dataset_id,
+    )
+    headers = _authz_headers(settings, user)
+    headers["Accept"] = "*/*"
+    headers.pop("Content-Type", None)
+    with httpx.Client(base_url=settings.search_authz_base_url, timeout=180.0) as client:
+        response = client.get(
+            "/api/search/document",
+            params={"repo_id": repo_id, "path": source_path},
+            headers=headers,
+        )
+    status = _http_status(response.status_code)
+    response_headers = _document_proxy_headers(source_path, response.headers)
+    body = bytes(response.content)
+    if response.status_code in {401, 403}:
+        raise SearchPermissionError("Kein Zugriff auf diese Quelle.")
+    if response.is_error and not body:
+        body = _json_error_bytes("document unavailable")
+        response_headers["Content-Type"] = "application/json; charset=utf-8"
+    if len(body) > settings.search_document_viewer_max_mb * 1024 * 1024:
+        return _json_error_bytes("document too large"), HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {
+            "Content-Type": "application/json; charset=utf-8"
+        }
+    return body, status, response_headers
+
+
+def _handle_pdf_page_image_proxy(
+    settings: SearchServiceSettings,
+    user: SearchUser,
+    token: str | None,
+    page: str | None,
+) -> tuple[bytes, HTTPStatus, dict[str, str]]:
+    body, status, headers = _handle_document_proxy(settings, user, token)
+    if status != HTTPStatus.OK:
+        return body, status, headers
+    if not str(headers.get("Content-Type", "")).lower().startswith("application/pdf"):
+        raise ValueError("source is not a PDF")
+    page_number = _parse_pdf_page_number(page)
+    png = _render_pdf_page_png(body, page_number)
+    return png, HTTPStatus.OK, {
+        "Content-Type": "image/png",
+        "Content-Disposition": f'inline; filename="pdf-page-{page_number}.png"',
+        "Cache-Control": "no-store",
+    }
+
+
+def _parse_pdf_page_number(value: str | None) -> int:
+    if value in (None, ""):
+        return 1
+    try:
+        page = int(str(value))
+    except ValueError as exc:
+        raise ValueError("page must be a positive integer") from exc
+    if page < 1:
+        raise ValueError("page must be a positive integer")
+    return page
+
+
+def _render_pdf_page_png(pdf_bytes: bytes, page_number: int) -> bytes:
+    try:
+        pdfium = importlib.import_module("pypdfium2")
+    except Exception as exc:  # pragma: no cover - dependency is part of runtime image
+        raise RuntimeError("PDF renderer is not available") from exc
+
+    try:
+        document = pdfium.PdfDocument(pdf_bytes)
+        page_count = len(document)
+        if page_count <= 0:
+            raise ValueError("PDF has no pages")
+        page_index = min(page_number, page_count) - 1
+        page = document[page_index]
+        try:
+            bitmap = page.render(scale=1.6)
+            image = bitmap.to_pil()
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG", optimize=True)
+            return buffer.getvalue()
+        finally:
+            close_page = getattr(page, "close", None)
+            if callable(close_page):
+                close_page()
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("PDF page could not be rendered") from exc
+    finally:
+        close_document = locals().get("document")
+        close = getattr(close_document, "close", None)
+        if callable(close):
+            close()
+
+
+def _document_proxy_headers(source_path: str, upstream_headers: Any) -> dict[str, str]:
+    content_type, disposition_mode = _document_proxy_content_type(source_path, upstream_headers)
+    return {
+        "Content-Type": content_type,
+        "Content-Disposition": f'{disposition_mode}; filename="{_safe_filename(source_path)}"',
+    }
+
+
+def _document_proxy_content_type(source_path: str, upstream_headers: Any) -> tuple[str, str]:
+    lower = str(source_path or "").lower()
+    upstream_content_type = str(upstream_headers.get("Content-Type") or "").strip()
+    guessed, _ = mimetypes.guess_type(source_path)
+    if lower.endswith((".html", ".htm", ".md", ".markdown")):
+        return "text/plain; charset=utf-8", "inline"
+    if lower.endswith(".pdf"):
+        return "application/pdf", "inline"
+    if guessed and guessed.startswith("image/"):
+        return guessed, "inline"
+    if guessed and (
+        guessed.startswith("text/")
+        or guessed in {"application/json", "application/xml", "text/csv"}
+    ):
+        return guessed, "inline"
+    if lower.endswith((".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp")):
+        return upstream_content_type or guessed or "application/octet-stream", "attachment"
+    return upstream_content_type or guessed or "application/octet-stream", "inline"
 
 
 def _retrieve_allowed_profiles(
@@ -486,9 +724,25 @@ def _search_results_from_ragflow(
         embedded_source_path, snippet = _extract_projected_source(raw_snippet)
         if embedded_source_path:
             source_path = embedded_source_path
+        content_type = _first_text(
+            raw,
+            metadata,
+            "content_type",
+            "mime_type",
+            "mimetype",
+            "file_type",
+            "type",
+        )
         document_name = _friendly_document_name(document_name, source_path)
         if not source_path and document_name:
             source_path = f"/{dataset_name}/{document_name}"
+        source_path = _repair_source_path_from_state(
+            settings,
+            repo_id=repo_id,
+            source_path=source_path,
+            document_name=document_name,
+            document_id=document_id,
+        )
         score = _score_value(_first_value(raw, metadata, "score", "similarity", "weight"))
         chunk_id = _first_text(raw, metadata, "id", "chunk_id", "chunkId")
         page = _first_value(raw, metadata, "page", "page_number") or _first_page(
@@ -542,6 +796,7 @@ def _search_results_from_ragflow(
                 "document_name": document_name,
                 "source_path": source_path or "",
                 "snippet": snippet,
+                "passage_text_exact": snippet,
                 "page": page,
                 "line_start": line_start,
                 "line_end": line_end,
@@ -551,6 +806,7 @@ def _search_results_from_ragflow(
                 "score": score,
                 "preview_url": "",
                 "open_url": open_url,
+                "content_type": content_type,
             }
         )
     items.sort(key=lambda item: (item["score"] is None, -(item["score"] or 0.0)))
@@ -574,25 +830,166 @@ def _document_names_by_id(payload: Any) -> dict[str, str]:
     return names
 
 
+@lru_cache(maxsize=4)
+def _search_state_session_factory(database_url: str) -> Any:
+    return get_session_factory(database_url)
+
+
+def _repair_source_path_from_state(
+    settings: SearchServiceSettings | None,
+    *,
+    repo_id: str | None,
+    source_path: str | None,
+    document_name: str | None,
+    document_id: str | None,
+) -> str | None:
+    """Prefer the connector's known Seafile path when RAGFlow returns a display path."""
+    if settings is None or not settings.database_url or not repo_id:
+        return source_path
+    normalized = _normalize_source_path(source_path)
+    try:
+        session_factory = _search_state_session_factory(settings.database_url)
+        with session_factory() as session:
+            if normalized:
+                exact = session.scalar(
+                    select(File.normalized_path).where(
+                        File.repo_id == repo_id,
+                        File.normalized_path == normalized,
+                    )
+                )
+                if exact:
+                    return str(exact)
+
+            filename = _display_file_name(normalized, document_name)
+            candidates: list[str] = []
+            if document_id:
+                candidates.extend(
+                    str(path)
+                    for path in session.scalars(
+                        select(File.normalized_path).where(
+                            File.repo_id == repo_id,
+                            File.ragflow_document_id == document_id,
+                        )
+                    )
+                )
+            if document_name:
+                candidates.extend(
+                    str(path)
+                    for path in session.scalars(
+                        select(File.normalized_path).where(
+                            File.repo_id == repo_id,
+                            or_(
+                                File.ragflow_document_name == document_name,
+                                File.ingested_document_name == document_name,
+                            ),
+                        )
+                    )
+                )
+            if filename:
+                candidates.extend(
+                    str(path)
+                    for path in session.scalars(
+                        select(File.normalized_path).where(
+                            File.repo_id == repo_id,
+                            File.normalized_path.endswith(f"/{filename}"),
+                        )
+                    )
+                )
+    except SQLAlchemyError as exc:
+        structlog.get_logger(__name__).warning(
+            "search.source_path_state_repair_failed",
+            repo_id=repo_id,
+            document_name=document_name,
+            error_class=exc.__class__.__name__,
+        )
+        return source_path
+
+    distinct = []
+    seen = set()
+    for candidate in candidates:
+        normalized_candidate = _normalize_source_path(candidate)
+        if normalized_candidate and normalized_candidate not in seen:
+            seen.add(normalized_candidate)
+            distinct.append(normalized_candidate)
+    if len(distinct) == 1:
+        return distinct[0]
+    return source_path
+
+
 def _deduplicate_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[tuple[str, str, str, str]] = set()
+    seen_chunks: set[tuple[str, str, str]] = set()
+    seen_passages: set[tuple[str, str, str]] = set()
     deduped: list[dict[str, Any]] = []
     sorted_results = sorted(
         results,
-        key=lambda item: (item["score"] is None, -(item["score"] or 0.0)),
+        key=lambda item: (
+            item["score"] is None,
+            -(item["score"] or 0.0),
+            str(item.get("document_name") or ""),
+            str(item.get("chunk_id") or item.get("document_id") or ""),
+        ),
     )
     for result in sorted_results:
-        key = (
-            str(result.get("ragflow_dataset_id") or ""),
-            str(result.get("document_name") or ""),
-            str(result.get("source_path") or ""),
-            str(result.get("snippet") or "")[:180],
+        document_key = (
+            str(result.get("document_id") or "")
+            or str(result.get("source_path") or "")
+            or str(result.get("document_name") or "")
         )
-        if key in seen:
+        chunk_id = str(result.get("chunk_id") or "")
+        if chunk_id:
+            chunk_key = (
+                str(result.get("ragflow_dataset_id") or ""),
+                document_key,
+                chunk_id,
+            )
+            if chunk_key in seen_chunks:
+                continue
+            seen_chunks.add(chunk_key)
+        passage_key = (
+            str(result.get("ragflow_dataset_id") or ""),
+            document_key,
+            _dedupe_passage_key(
+                result.get("passage_text_exact") or result.get("snippet") or ""
+            ),
+        )
+        if passage_key in seen_passages:
             continue
-        seen.add(key)
+        seen_passages.add(passage_key)
         deduped.append(result)
     return deduped
+
+
+def _dedupe_passage_key(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()[:360]
+
+
+def _passage_text_exact(result: dict[str, Any]) -> str:
+    return re.sub(
+        r"\s+\Z",
+        "",
+        str(result.get("passage_text_exact") or result.get("snippet") or ""),
+    ).strip()
+
+
+def _display_file_name(source_path: str | None, document_name: str | None) -> str:
+    if source_path:
+        candidate = str(source_path).replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if candidate:
+            return candidate
+    return str(document_name or "Dokument")
+
+
+def _source_content_type(result: dict[str, Any], *, viewer_kind: str) -> str | None:
+    configured = _optional_text(result.get("content_type"))
+    if configured:
+        return configured
+    if viewer_kind == "pdf":
+        return "application/pdf"
+    if viewer_kind == "text":
+        return "text/plain"
+    if viewer_kind == "image":
+        return "image/*"
+    return None
 
 
 def _finalize_search_results(
@@ -603,6 +1000,7 @@ def _finalize_search_results(
     finalized: list[dict[str, Any]] = []
     for rank, result in enumerate(results, start=1):
         source_id = f"S{rank}"
+        passage_text_exact = _passage_text_exact(result)
         open_url = _safe_http_url(str(result.get("open_url") or "")) or None
         text_fragment_url = None
         if result.get("page") in (None, ""):
@@ -626,7 +1024,10 @@ def _finalize_search_results(
             repo_id=_optional_text(result.get("repo_id")),
             ragflow_dataset_id=_optional_text(result.get("ragflow_dataset_id")),
             source_path=_optional_text(result.get("source_path")),
-            snippet=_compact(result.get("snippet"), settings.search_result_snippet_context_chars),
+            snippet=_compact(
+                passage_text_exact or result.get("snippet"),
+                settings.search_result_snippet_context_chars,
+            ),
             page=result.get("page"),
             line_start=result.get("line_start"),
             line_end=result.get("line_end"),
@@ -643,7 +1044,36 @@ def _finalize_search_results(
         )
         preview_url = _search_preview_url(hit, settings)
         hit = replace(hit, preview_url=preview_url)
-        finalized.append(hit.to_search_result())
+        item = hit.to_search_result()
+        item["viewer_url"] = _search_document_viewer_url(hit, settings)
+        item["viewer_kind"] = _viewer_kind(
+            source_path=hit.source_path,
+            document_name=hit.document_name,
+        )
+        item["viewer_message"] = _viewer_message(str(item["viewer_kind"]), hit)
+        content_type = _source_content_type(result, viewer_kind=str(item["viewer_kind"]))
+        item.update(
+            {
+                "id": source_id,
+                "label": source_id,
+                "documentId": hit.document_id,
+                "document_id": hit.document_id,
+                "chunkId": hit.chunk_id,
+                "chunk_id": hit.chunk_id,
+                "title": hit.document_name,
+                "fileName": _display_file_name(hit.source_path, hit.document_name),
+                "file_name": _display_file_name(hit.source_path, hit.document_name),
+                "libraryId": hit.repo_id or hit.ragflow_dataset_id or hit.dataset_name,
+                "libraryName": hit.dataset_name,
+                "contentType": content_type,
+                "content_type": content_type,
+                "previewUrl": item.get("preview_url"),
+                "originalUrl": item.get("open_url"),
+                "passageTextExact": passage_text_exact,
+                "passage_text_exact": passage_text_exact,
+            }
+        )
+        finalized.append(item)
     return finalized
 
 
@@ -655,6 +1085,55 @@ def _search_preview_url(hit: EvidenceHit, settings: SearchServiceSettings) -> st
         settings.effective_search_source_preview_secret,
     )
     return f"/api/search/source/preview?token={quote(token)}"
+
+
+def _search_document_viewer_url(hit: EvidenceHit, settings: SearchServiceSettings) -> str | None:
+    if not settings.search_document_viewer_enabled or not hit.repo_id or not hit.source_path:
+        return None
+    payload = hit.preview_payload()
+    payload["purpose"] = "document_viewer"
+    payload["expires_at"] = int(datetime.now(UTC).timestamp()) + 900
+    token = sign_preview_payload(
+        payload,
+        settings.effective_search_source_preview_secret,
+    )
+    page = "" if hit.page in (None, "") else f"#page={quote(str(hit.page), safe='')}"
+    return f"/api/search/source/document?token={quote(token)}{page}"
+
+
+def _viewer_kind(*, source_path: str | None, document_name: str | None) -> str:
+    name = (source_path or document_name or "").strip().lower()
+    if name.endswith(".pdf"):
+        return "pdf"
+    if name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg")):
+        return "image"
+    if name.endswith((".txt", ".md", ".rst", ".log", ".json", ".yaml", ".yml", ".xml", ".csv")):
+        return "text"
+    if name.endswith((".html", ".htm")):
+        return "text"
+    if name.endswith((".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp")):
+        return "download"
+    return "unknown"
+
+
+def _viewer_message(kind: str, hit: EvidenceHit) -> str:
+    if kind == "pdf" and hit.page not in (None, ""):
+        return (
+            "PDF-Seite wird als sichere Bildvorschau angezeigt; "
+            "die vollständige Passage bleibt kopierbar."
+        )
+    if kind == "pdf":
+        return (
+            "PDF wird als sichere Bildvorschau angezeigt; "
+            "die vollständige Passage bleibt kopierbar."
+        )
+    if kind == "text":
+        return "Textdateien werden inline angezeigt; die markierte Passage steht als Auszug bereit."
+    if kind == "image":
+        return "Bilddateien werden inline angezeigt; die Fundstelle ist als Auszug dokumentiert."
+    if kind == "download":
+        return "Office-Dateien können im nativen Browserviewer meist nicht inline angezeigt werden."
+    return "Der Browser entscheidet, ob diese Datei inline angezeigt oder heruntergeladen wird."
 
 
 def _answer_citations(
@@ -671,27 +1150,500 @@ def _answer_citations(
                 "dataset_name": source.get("dataset_name"),
                 "location": (source.get("locator") or {}).get("label"),
                 "preview_url": source.get("preview_url"),
+                "viewer_url": source.get("viewer_url"),
+                "viewer_kind": source.get("viewer_kind"),
                 "open_url": source.get("open_url"),
             }
         )
     return citations
 
 
+def _generate_answer(
+    settings: SearchServiceSettings,
+    question: str,
+    sources: list[dict[str, Any]],
+) -> SearchAnswer:
+    requested_mode = settings.search_answer_generation_mode
+    llm_configured = _answer_llm_configured(settings)
+    diagnostics: dict[str, Any] = {
+        "requested_mode": requested_mode,
+        "source_count": len(sources),
+        "llm_configured": llm_configured,
+        "llm_base_url_configured": bool(settings.search_answer_llm_base_url),
+        "llm_model": settings.search_answer_llm_model,
+    }
+    if not sources:
+        return _answer_fallback(
+            settings,
+            question,
+            sources,
+            mode="source_summary_fallback",
+            diagnostics=diagnostics,
+            fallback_reason="no_sources",
+        )
+    if llm_configured:
+        diagnostics["llm_attempted"] = True
+        try:
+            return _generate_answer_with_llm(settings, question, sources, diagnostics)
+        except (
+            httpx.HTTPError,
+            AttributeError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            fallback_next = (
+                "ragflow_chat"
+                if requested_mode == "ragflow_chat"
+                else "source_summary_fallback"
+            )
+            llm_fallback_reason = f"llm_{type(exc).__name__}"
+            diagnostics["llm_fallback_reason"] = llm_fallback_reason
+            diagnostics["fallback_next"] = fallback_next
+            structlog.get_logger(__name__).warning(
+                "search.answer_llm_failed",
+                error_class=type(exc).__name__,
+                fallback_next=fallback_next,
+                llm_model=settings.search_answer_llm_model,
+            )
+    if requested_mode in {"disabled", "retrieval_summary"}:
+        mode = "disabled" if requested_mode == "disabled" else "source_summary_fallback"
+        reason = (
+            "answer_generation_disabled"
+            if requested_mode == "disabled"
+            else "configured_summary"
+        )
+        return _answer_fallback(
+            settings,
+            question,
+            sources,
+            mode=mode,
+            diagnostics=diagnostics,
+            fallback_reason=reason,
+        )
+
+    client = RAGFlowClient(
+        settings.search_ragflow_base_url,
+        settings.search_ragflow_api_key,
+        verify=settings.search_ragflow_httpx_verify,
+    )
+    try:
+        chat, fallback_reason = _resolve_answer_chat(
+            client,
+            settings.ragflow_search_answer_chat_name,
+        )
+        if chat is None:
+            return _answer_fallback(
+                settings,
+                question,
+                sources,
+                mode="source_summary_fallback",
+                diagnostics=diagnostics,
+                fallback_reason=fallback_reason or "answer_chat_not_found",
+            )
+        chat_id = _chat_id(chat)
+        if not chat_id:
+            return _answer_fallback(
+                settings,
+                question,
+                sources,
+                mode="source_summary_fallback",
+                diagnostics=diagnostics,
+                fallback_reason="answer_chat_without_id",
+            )
+        completion = client.chat_completion(
+            chat_id=chat_id,
+            messages=_answer_messages(question, sources, settings),
+        )
+        extracted = extract_answer_result(completion)
+        answer = _clean_generated_answer(extracted.answer)
+        if not answer:
+            return _answer_fallback(
+                settings,
+                question,
+                sources,
+                mode="source_summary_fallback",
+                diagnostics=diagnostics,
+                fallback_reason="empty_answer",
+                extra={
+                    "answer_chat_id": chat_id,
+                    "answer_origin": extracted.origin,
+                    "answer_warnings": list(extracted.warnings),
+                },
+            )
+        answer = _ensure_source_markers(answer, sources, settings)
+        invalid_reason = _invalid_answer_reason(answer, sources)
+        if invalid_reason:
+            completion = client.chat_completion(
+                chat_id=chat_id,
+                messages=_answer_messages(
+                    question,
+                    sources,
+                    settings,
+                    strict_retry=True,
+                ),
+            )
+            retry_extracted = extract_answer_result(completion)
+            retry_answer = _ensure_source_markers(
+                _clean_generated_answer(retry_extracted.answer),
+                sources,
+                settings,
+            )
+            retry_invalid_reason = _invalid_answer_reason(retry_answer, sources)
+            if retry_invalid_reason:
+                return _answer_fallback(
+                    settings,
+                    question,
+                    sources,
+                    mode="source_summary_fallback",
+                    diagnostics=diagnostics,
+                    fallback_reason=f"invalid_answer:{retry_invalid_reason}",
+                    extra={
+                        "answer_chat_id": chat_id,
+                        "answer_origin": retry_extracted.origin,
+                        "answer_warnings": list(retry_extracted.warnings),
+                        "first_invalid_reason": invalid_reason,
+                    },
+                )
+            answer = retry_answer
+            extracted = retry_extracted
+        return SearchAnswer(
+            answer,
+            "ragflow_chat",
+            {
+                **diagnostics,
+                "answer_chat_name": settings.ragflow_search_answer_chat_name,
+                "answer_chat_id": chat_id,
+                "answer_origin": extracted.origin,
+                "answer_path": extracted.path,
+                "answer_warnings": list(extracted.warnings),
+            },
+        )
+    except (
+        ApiError,
+        httpx.RequestError,
+        AttributeError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        structlog.get_logger(__name__).warning(
+            "search.answer_generation_failed",
+            error_class=type(exc).__name__,
+            chat_name=settings.ragflow_search_answer_chat_name,
+        )
+        return _answer_fallback(
+            settings,
+            question,
+            sources,
+            mode="source_summary_fallback",
+            diagnostics=diagnostics,
+            fallback_reason=type(exc).__name__,
+        )
+    finally:
+        client.close()
+
+
+def _answer_llm_configured(settings: SearchServiceSettings) -> bool:
+    return bool(settings.search_answer_llm_base_url and settings.search_answer_llm_model)
+
+
+def _generate_answer_with_llm(
+    settings: SearchServiceSettings,
+    question: str,
+    sources: list[dict[str, Any]],
+    diagnostics: dict[str, Any],
+) -> SearchAnswer:
+    url = _openai_chat_completions_url(str(settings.search_answer_llm_base_url or ""))
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    if settings.search_answer_llm_api_key:
+        headers["Authorization"] = f"Bearer {settings.search_answer_llm_api_key}"
+    payload = {
+        "model": settings.search_answer_llm_model,
+        "messages": _answer_messages(question, sources, settings),
+        "temperature": settings.search_answer_llm_temperature,
+        "max_tokens": settings.search_answer_llm_max_tokens,
+    }
+    with httpx.Client(
+        timeout=settings.search_answer_llm_timeout_seconds,
+        verify=settings.search_answer_llm_httpx_verify,
+    ) as client:
+        response = client.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        completion = response.json()
+    extracted = extract_answer_result(completion)
+    answer = _clean_generated_answer(extracted.answer)
+    if not answer:
+        raise RuntimeError("empty_llm_answer")
+    answer = _ensure_source_markers(answer, sources, settings)
+    invalid_reason = _invalid_answer_reason(answer, sources)
+    if invalid_reason:
+        retry_payload = {
+            **payload,
+            "messages": _answer_messages(question, sources, settings, strict_retry=True),
+        }
+        with httpx.Client(
+            timeout=settings.search_answer_llm_timeout_seconds,
+            verify=settings.search_answer_llm_httpx_verify,
+        ) as retry_client:
+            response = retry_client.post(url, headers=headers, json=retry_payload)
+            response.raise_for_status()
+            retry_extracted = extract_answer_result(response.json())
+        retry_answer = _ensure_source_markers(
+            _clean_generated_answer(retry_extracted.answer),
+            sources,
+            settings,
+        )
+        retry_invalid_reason = _invalid_answer_reason(retry_answer, sources)
+        if retry_invalid_reason:
+            raise RuntimeError(f"invalid_llm_answer:{retry_invalid_reason}")
+        answer = retry_answer
+        extracted = retry_extracted
+    return SearchAnswer(
+        answer,
+        "openai_compatible",
+        {
+            **diagnostics,
+            "llm_attempted": True,
+            "answer_origin": extracted.origin,
+            "answer_path": extracted.path,
+            "answer_warnings": list(extracted.warnings),
+        },
+    )
+
+
+def _openai_chat_completions_url(base_url: str) -> str:
+    cleaned = base_url.strip().rstrip("/")
+    if not cleaned:
+        raise ValueError("SEARCH_ANSWER_LLM_BASE_URL is empty")
+    if cleaned.endswith("/chat/completions"):
+        return cleaned
+    return f"{cleaned}/chat/completions"
+
+
+def _answer_fallback(
+    settings: SearchServiceSettings,
+    question: str,
+    sources: list[dict[str, Any]],
+    *,
+    mode: str,
+    diagnostics: dict[str, Any],
+    fallback_reason: str,
+    extra: dict[str, Any] | None = None,
+) -> SearchAnswer:
+    details = {
+        **diagnostics,
+        "answer_chat_name": settings.ragflow_search_answer_chat_name,
+        "fallback_reason": fallback_reason,
+        **(extra or {}),
+    }
+    structlog.get_logger(__name__).info(
+        "search.answer_generation_fallback",
+        fallback_reason=fallback_reason,
+        requested_mode=diagnostics.get("requested_mode"),
+        source_count=len(sources),
+        chat_name=settings.ragflow_search_answer_chat_name,
+    )
+    return SearchAnswer(_compose_answer_from_sources(question, sources), mode, details)
+
+
+def _resolve_answer_chat(
+    client: RAGFlowClient,
+    chat_name: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    chats = client.list_chats(name=chat_name)
+    exact = [item for item in chats if str(item.get("name") or "").strip() == chat_name]
+    if not exact:
+        return None, "answer_chat_not_found"
+    if len(exact) > 1:
+        return None, "answer_chat_ambiguous"
+    return exact[0], None
+
+
+def _chat_id(chat: dict[str, Any]) -> str | None:
+    value = chat.get("id") or chat.get("chat_id")
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def _answer_messages(
+    question: str,
+    sources: list[dict[str, Any]],
+    settings: SearchServiceSettings,
+    *,
+    strict_retry: bool = False,
+) -> list[dict[str, Any]]:
+    source_prompt = _answer_source_prompt(sources[: settings.search_answer_max_sources])
+    retry_rules = (
+        "\n- Die vorige Antwort war ungültig. Antworte jetzt zwingend mit vorhandenen "
+        "Quellenmarkern wie [S1] und ohne Platzhaltertext."
+        if strict_retry
+        else ""
+    )
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Du bist ein Assistent für eine interne Wissenssuche. "
+                "Beantworte die Nutzerfrage ausschließlich anhand der bereitgestellten "
+                "Fundstellen. Antworte auf Deutsch. Erfinde keine Details. Jede "
+                "fachliche Aussage braucht vorhandene Quellenmarker wie [S1], [S2]. "
+                "Kopiere die Auszüge nicht roh, sondern fasse sie zu einer direkten, "
+                "knappen Antwort zusammen. Wenn die Fundstellen keine ausreichende "
+                "Antwort erlauben, sage das klar. Schreibe keine reine Trefferzählung "
+                "und keinen Platzhaltertext."
+                f"{retry_rules}"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Frage:\n{question}\n\n"
+                f"Fundstellen:\n{source_prompt}\n\n"
+                "Erstelle eine knappe, hilfreiche Antwort in 1 bis 3 Absätzen. Bei "
+                "einer unspezifischen Frage fasse vorsichtig die relevantesten Inhalte "
+                "zusammen. Nutze nur diese Fundstellen und vermeide technische IDs, "
+                "außer sie sind fachlich notwendig."
+            ),
+        },
+    ]
+
+
+def _answer_source_prompt(sources: list[dict[str, Any]]) -> str:
+    blocks: list[str] = []
+    for source in sources:
+        label = str(source.get("citation_label") or source.get("source_id") or "S?")
+        raw_locator = source.get("locator")
+        locator = raw_locator if isinstance(raw_locator, dict) else {}
+        location = str(locator.get("label") or "")
+        passage = _answer_source_text(source)
+        block = [
+            f"[{label}]",
+            f"Titel: {source.get('document_name') or source.get('title') or 'Dokument'}",
+            f"Bibliothek: {source.get('dataset_name') or 'Bibliothek'}",
+        ]
+        if location:
+            block.append(f"Fundstelle: {location}")
+        if source.get("source_path"):
+            block.append(f"Pfad: {source.get('source_path')}")
+        block.append(f"Text:\n{passage or 'Kein Textauszug verfügbar.'}")
+        blocks.append("\n".join(block))
+    return "\n\n".join(blocks)
+
+
+def _answer_source_text(source: dict[str, Any]) -> str:
+    text = str(
+        source.get("passageTextExact")
+        or source.get("passage_text_exact")
+        or source.get("text")
+        or source.get("snippet")
+        or ""
+    ).strip()
+    return _compact(text, 2400)
+
+
+def _clean_generated_answer(value: str) -> str:
+    clean = "\n".join(line.rstrip() for line in str(value or "").splitlines()).strip()
+    return clean[:4000].strip()
+
+
+def _has_source_marker(value: str) -> bool:
+    return bool(_SOURCE_MARKER_RE.search(value))
+
+
+def _invalid_answer_reason(answer: str, sources: list[dict[str, Any]]) -> str | None:
+    clean = str(answer or "").strip()
+    if not clean:
+        return "empty_answer"
+    lowered = clean.casefold()
+    for fragment in _INVALID_ANSWER_FRAGMENTS:
+        if fragment.casefold() in lowered:
+            return "placeholder_answer"
+    valid_labels = {
+        str(source.get("citation_label") or source.get("source_id") or "").strip()
+        for source in sources
+        if source.get("citation_label") or source.get("source_id")
+    }
+    markers = set(_SOURCE_MARKER_RE.findall(clean))
+    if sources and not markers:
+        return "missing_source_marker"
+    invalid_markers = markers - valid_labels
+    if invalid_markers:
+        return "unknown_source_marker"
+    return None
+
+
+def _ensure_source_markers(
+    answer: str,
+    sources: list[dict[str, Any]],
+    settings: SearchServiceSettings,
+) -> str:
+    if not str(answer or "").strip():
+        return answer
+    if _has_source_marker(answer):
+        return answer
+    labels = ", ".join(
+        _source_marker_label(source)
+        for source in sources[: settings.search_answer_max_sources]
+        if source.get("citation_label") or source.get("source_id")
+    )
+    if not labels:
+        return answer
+    return f"{answer}\n\nQuellen: {labels}."
+
+
+def _source_marker_label(source: dict[str, Any]) -> str:
+    label = str(source.get("citation_label") or source.get("source_id") or "S?").strip()
+    if label.startswith("[") and label.endswith("]"):
+        return label
+    return f"[{label}]"
+
+
 def _compose_answer_from_sources(question: str, sources: list[dict[str, Any]]) -> str:
     if not sources:
         return "Ich habe in den freigegebenen Bibliotheken keine belastbaren Quellen gefunden."
-    count = len(sources)
-    library_names = sorted({str(source.get("dataset_name") or "Bibliothek") for source in sources})
-    libraries = ", ".join(library_names[:3])
-    if len(library_names) > 3:
-        libraries += f" und {len(library_names) - 3} weitere"
+    top_sources = sources[:3]
+    bullets: list[str] = []
+    for source in top_sources:
+        label = _source_marker_label(source)
+        snippet = _answer_snippet(_answer_source_text(source))
+        document = str(source.get("document_name") or "Dokument")
+        raw_locator = source.get("locator")
+        locator = raw_locator if isinstance(raw_locator, dict) else {}
+        location = str(locator.get("label") or "").strip()
+        context = document if document else "Dokument"
+        if location:
+            context += f", {location}"
+        bullets.append(f"- {snippet or 'Passender Treffer ohne Textauszug'} ({context}) {label}")
     return (
-        f"Zur Frage \"{question}\" wurden {count} passende Quelle"
-        f"{'' if count == 1 else 'n'} gefunden. "
-        "Ich habe noch keinen separaten KI-Antworttext generiert; die belastbaren "
-        "Fundstellen stehen unten als Quellenkarten und sind direkt prüfbar"
-        f"{f' aus {libraries}' if libraries else ''}."
+        f"Aus den freigegebenen Quellen ergibt sich zur Frage \"{question}\" diese "
+        "kurze Zusammenfassung:\n\n"
+        + "\n".join(bullets)
+        + "\n\nDiese Zusammenfassung basiert ausschließlich auf den gefundenen Fundstellen; "
+        "prüfe Details bei Bedarf in den markierten Quellen."
     )
+
+
+def _answer_snippet(value: object) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    text = re.sub(r"^(?:[#>*\-\s]+)", "", text).strip()
+    text = re.sub(
+        r"^[^.!?]{0,140}\b[A-ZÄÖÜ0-9]+-[A-ZÄÖÜ0-9_-]{8,}\s+",
+        "",
+        text,
+    ).strip()
+    text = re.sub(r"^(?:[A-ZÄÖÜ0-9][A-ZÄÖÜ0-9_-]{11,}\s+)+", "", text).strip()
+    text = re.sub(r"^(?:[A-ZÄÖÜ0-9]+-[A-ZÄÖÜ0-9_-]{8,}\s+)+", "", text).strip()
+    if not text:
+        return ""
+    match = re.search(r"(.{40,220}?[.!?])(?:\s|$)", text)
+    if match:
+        return match.group(1).strip()
+    return _compact(text, 220)
 
 
 def _user_from_headers(settings: SearchServiceSettings, headers: Any) -> SearchUser:
@@ -885,6 +1837,45 @@ def _optional_text(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _required_payload_text(payload: dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if value in (None, ""):
+        raise ValueError(f"{key} is required")
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{key} is required")
+    return text
+
+
+def _validate_document_token_expiry(payload: dict[str, Any]) -> None:
+    expires_at = payload.get("expires_at")
+    if expires_at is None or expires_at == "":
+        return
+    try:
+        expires_at_int = int(str(expires_at))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid preview token expiry") from exc
+    if expires_at_int < int(datetime.now(UTC).timestamp()):
+        raise ValueError("preview token expired")
+
+
+def _http_status(value: int) -> HTTPStatus:
+    try:
+        return HTTPStatus(value)
+    except ValueError:
+        return HTTPStatus.BAD_GATEWAY
+
+
+def _json_error_bytes(message: str) -> bytes:
+    return json.dumps({"error": message}, ensure_ascii=False).encode("utf-8")
+
+
+def _safe_filename(path: str) -> str:
+    filename = str(path or "document").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    filename = "".join(char for char in filename if char not in {'"', "\r", "\n"}).strip()
+    return filename or "document"
 
 
 def _one(params: dict[str, list[str]], key: str) -> str | None:

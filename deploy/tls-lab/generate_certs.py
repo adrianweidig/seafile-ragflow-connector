@@ -28,7 +28,12 @@ def main() -> None:
     _write_crl(out_dir / "top-secret-root-ca.crl", _empty_crl(root_cert, root_key))
     _write_crl_pem(out_dir / "top-secret-root-ca.crl.pem", _empty_crl(root_cert, root_key))
 
-    for name in ("rag.top.secret", "seafile.top.secret", "connector.top.secret"):
+    for name in (
+        "rag.top.secret",
+        "seafile.top.secret",
+        "connector.top.secret",
+        "search.top.secret",
+    ):
         key = _new_key()
         cert = _server_cert(
             name,

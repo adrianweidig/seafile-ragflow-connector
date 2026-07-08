@@ -10,6 +10,151 @@ retroactively.
 
 No entries.
 
+## 2.5.6 - 2026-07-04
+
+### Removed
+
+- Removed repo-internal Codex readiness and goal-state notes so the published
+  project root only contains user-relevant project files.
+
+## 2.5.5 - 2026-06-30
+
+### Fixed
+
+- The PDF page preview in the knowledge search document viewer now uses a
+  scrollable fit-to-width container, making PDF pages readable instead of
+  showing them as tiny full-page thumbnails.
+
+## 2.5.4 - 2026-06-30
+
+### Fixed
+
+- PDF sources in knowledge search are now rendered server-side as page images
+  so browsers without an enabled native PDF viewer no longer download the source
+  automatically.
+- The new PDF page-image endpoint uses the same preview token and server-side
+  authorization check as the document proxy.
+- The PDF passage remains visible and copyable; original and preview links stay
+  available as explicit user actions.
+
+## 2.5.3 - 2026-06-30
+
+### Fixed
+
+- PDFs and images are now loaded into the knowledge search document viewer via
+  blob URLs so source selection no longer performs direct browser navigation to
+  the PDF download endpoint.
+- The search document proxy now enforces Content-Disposition deterministically:
+  PDF, text, and images are served inline, while Office files remain explicit
+  downloads.
+- The viewer toolbar only shows the direct file download action for download
+  file types; inline-capable sources stay in the center viewer.
+
+## 2.5.2 - 2026-06-30
+
+### Fixed
+
+- The search service now also receives the connector state database
+  configuration so path repair for PDF, Office, and image sources is active in
+  production.
+- The document viewer can therefore map RAGFlow display names back to real
+  Seafile paths in subfolders from the separate `connector-search` container.
+
+## 2.5.1 - 2026-06-30
+
+### Fixed
+
+- Knowledge search now repairs RAGFlow-returned source paths against the
+  connector state database when RAGFlow only returns a library-name display path.
+- Document viewer links for PDF, Office, and image files therefore continue to
+  point at the real Seafile path for files in subfolders.
+
+## 2.5.0 - 2026-06-28
+
+### Changed
+
+- Knowledge search now uses a calmer workspace hierarchy after visual review,
+  with a subtler hit passage, prioritized viewer action, and denser source and
+  library panels.
+- Text and Markdown viewers now highlight only one short prioritized in-document
+  hit anchor; the full passage remains visible as a copyable excerpt with a left
+  accent rail.
+- The dashboard now uses denser operational UI tokens with flatter panels,
+  compact metrics, calmer status surfaces, and more stable tablet/mobile
+  breakpoints.
+
+## 2.4.11 - 2026-06-27
+
+### Fixed
+
+- Knowledge search now highlights only one short, relevant focus hit in the
+  text/Markdown viewer instead of painting the entire RAG chunk yellow.
+- The hit passage below the viewer remains a neutral, copyable excerpt and no
+  longer repeats the same large yellow highlight block.
+- Viewer helper text now states more clearly that the full passage remains
+  copyable while only the most relevant in-document hit is highlighted.
+
+## 2.4.10 - 2026-06-26
+
+### Fixed
+
+- Knowledge search answer mode continues to return a synthesized cited answer
+  and now uses the exact passage text for prompting, copying, and text
+  highlighting instead of the shortened source-card snippet.
+- Text and Markdown viewers now mark the relevant passage directly in the
+  document DOM with `<mark>` and scroll to the hit when sources change.
+- Citation markers such as `[S2]` inside the answer are clickable and
+  synchronize the viewer, active source, and source rails.
+
+## 2.4.9 - 2026-06-26
+
+### Fixed
+
+- Knowledge search now stages libraries, workspace, and sources more
+  responsively, keeping sources available as a compact in-workspace strip on
+  medium viewports.
+- The document viewer, hit passage, answer area, and composer are more compact
+  and keep the answer directly below the document.
+- Text and Markdown sources now render as a safe dark text preview instead of a
+  dominant white browser surface.
+
+## 2.4.8 - 2026-06-26
+
+### Added
+
+- Knowledge search can optionally synthesize answers through an
+  OpenAI-compatible `/chat/completions` endpoint configured with
+  `SEARCH_ANSWER_LLM_*`.
+
+### Fixed
+
+- Answer generation now continues to fall back cleanly to RAGFlow or the local
+  source-grounded summary when the OpenAI-compatible model is not configured or
+  fails.
+
+## 2.4.7 - 2026-06-26
+
+### Fixed
+
+- Knowledge search now reliably hides the empty document-viewer state once a
+  source is loaded in the native viewer.
+- Answer mode now keeps source result cards compact below the answer and uses
+  toast feedback for passage copying so the answer does not jump down.
+- The source-grounded answer fallback now produces a readable summary with
+  source markers instead of technical raw excerpts.
+
+## 2.4.6 - 2026-06-25
+
+### Added
+
+- Search service now generates a RAGFlow-backed answer from retrieved sources
+  with source markers and falls back to a short source-grounded answer when
+  RAGFlow answer generation is unavailable.
+- Knowledge search now includes a centered document viewer with a safe
+  connector proxy, source selection, answer area, and bottom chat composer.
+- The local HTTPS edge now also supports `https://search.top.secret/search`
+  for Portainer/Compose testing.
+
 ## 2.4.5 - 2026-06-18
 
 ### Fixed

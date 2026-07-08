@@ -6,6 +6,7 @@ import binascii
 import hmac
 import ipaddress
 import json
+import mimetypes
 import threading
 import time
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from sqlalchemy import select
 from seafile_ragflow_connector.clients.http import ApiError
 from seafile_ragflow_connector.clients.openwebui import OpenWebUIClient
 from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
+from seafile_ragflow_connector.clients.seafile_sync import SeafileSyncClient
 from seafile_ragflow_connector.clients.tls import classify_httpx_error, safe_url_for_logs
 from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.export import audit_export_filename, build_audit_workbook
@@ -146,6 +148,18 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                         self.headers.get("X-Authz-Email"),
                     )
                     self._send_json(payload, status=status)
+                    return
+                if parsed.path == "/api/search/document":
+                    params = parse_qs(parsed.query)
+                    body, status, headers = _handle_search_document(
+                        context,
+                        params,
+                        self.headers.get("Authorization"),
+                        self.client_address[0],
+                        self.headers.get("X-Authz-Username"),
+                        self.headers.get("X-Authz-Email"),
+                    )
+                    self._send_binary(body, status=status, headers=headers)
                     return
                 if parsed.path in {"/api/openwebui/sources/preview", "/api/sources/preview"}:
                     params = parse_qs(parsed.query)
@@ -387,6 +401,23 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_binary(
+            self,
+            body: bytes,
+            *,
+            status: HTTPStatus = HTTPStatus.OK,
+            headers: dict[str, str] | None = None,
+        ) -> None:
+            self.send_response(status.value)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def _send_auth_required(self) -> None:
             body = json.dumps(
                 {"error": "unauthorized", "message": "Dashboard-Anmeldung erforderlich."},
@@ -535,6 +566,66 @@ def _handle_authz_profiles(
     return {"profiles": items, "denied_count": len(denied)}, HTTPStatus.OK
 
 
+def _handle_search_document(
+    context: DashboardContext,
+    params: dict[str, list[str]],
+    authorization: str | None,
+    client_host: str,
+    username: str | None,
+    email: str | None,
+) -> tuple[bytes, HTTPStatus, dict[str, str]]:
+    settings = context.settings
+    if not settings.search_document_viewer_enabled:
+        return _json_error_bytes("viewer disabled"), HTTPStatus.NOT_FOUND, {
+            "Content-Type": "application/json; charset=utf-8"
+        }
+    if not _authz_request_ok(settings, authorization, client_host):
+        return _json_error_bytes("unauthorized"), HTTPStatus.UNAUTHORIZED, {
+            "Content-Type": "application/json; charset=utf-8"
+        }
+    try:
+        repo_id = _required_query_text(params, "repo_id")
+        source_path = _normalize_document_path(_required_query_text(params, "path"))
+    except ValueError as exc:
+        return _json_error_bytes(str(exc)), HTTPStatus.BAD_REQUEST, {
+            "Content-Type": "application/json; charset=utf-8"
+        }
+    service = _access_control_service(context)
+    if service is None:
+        return _json_error_bytes("authz unavailable"), HTTPStatus.SERVICE_UNAVAILABLE, {
+            "Content-Type": "application/json; charset=utf-8"
+        }
+    user = UserIdentity(username=username, email=email)
+    decision = service.check_access(user, AuthzResource(repo_id=repo_id, ragflow_dataset_id=None), "search")
+    _log_authz_decision(user, AuthzResource(repo_id=repo_id, ragflow_dataset_id=None), "search", decision.to_payload())
+    if decision.decision != "allow":
+        return _json_error_bytes("forbidden"), HTTPStatus.FORBIDDEN, {
+            "Content-Type": "application/json; charset=utf-8"
+        }
+    try:
+        body = _download_search_document(settings, repo_id=repo_id, source_path=source_path)
+    except ApiError as exc:
+        status = HTTPStatus.NOT_FOUND if exc.status_code == 404 else HTTPStatus.BAD_GATEWAY
+        return _json_error_bytes("document unavailable"), status, {
+            "Content-Type": "application/json; charset=utf-8"
+        }
+    except httpx.HTTPStatusError as exc:
+        status = HTTPStatus.NOT_FOUND if exc.response.status_code == 404 else HTTPStatus.BAD_GATEWAY
+        return _json_error_bytes("document unavailable"), status, {
+            "Content-Type": "application/json; charset=utf-8"
+        }
+    except httpx.HTTPError:
+        return _json_error_bytes("document unavailable"), HTTPStatus.BAD_GATEWAY, {
+            "Content-Type": "application/json; charset=utf-8"
+        }
+    max_bytes = settings.search_document_viewer_max_mb * 1024 * 1024
+    if len(body) > max_bytes:
+        return _json_error_bytes("document too large"), HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {
+            "Content-Type": "application/json; charset=utf-8"
+        }
+    return body, HTTPStatus.OK, _document_headers(source_path)
+
+
 def _access_control_service(context: DashboardContext) -> AccessControlService | None:
     if context.store is None:
         return None
@@ -603,6 +694,75 @@ def _profile_ids_from_payload(value: Any) -> list[str] | None:
     if not isinstance(value, list):
         raise ValueError("profile_ids must be a list")
     return [str(item) for item in value if item not in (None, "")]
+
+
+def _required_query_text(params: dict[str, list[str]], key: str) -> str:
+    value = _one(params, key)
+    if value in (None, ""):
+        raise ValueError(f"{key} is required")
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{key} is required")
+    return text
+
+
+def _normalize_document_path(value: str) -> str:
+    clean = str(value or "").strip().replace("\\", "/")
+    if not clean:
+        raise ValueError("path is required")
+    return clean if clean.startswith("/") else f"/{clean}"
+
+
+def _download_search_document(settings: Settings, *, repo_id: str, source_path: str) -> bytes:
+    client = SeafileSyncClient(
+        settings.seafile_internal_url or settings.seafile_base_url,
+        settings.seafile_sync_user_token,
+        verify=settings.seafile_httpx_verify,
+        rewrite_download_urls=settings.seafile_rewrite_download_urls,
+        rewrite_from=settings.seafile_download_rewrite_from,
+        rewrite_to=settings.seafile_download_rewrite_to,
+    )
+    try:
+        return client.download_file(repo_id, source_path)
+    finally:
+        client.close()
+
+
+def _document_headers(source_path: str) -> dict[str, str]:
+    content_type, disposition_mode = _document_content_type(source_path)
+    return {
+        "Content-Type": content_type,
+        "Content-Disposition": f'{disposition_mode}; filename="{_safe_filename(source_path)}"',
+    }
+
+
+def _document_content_type(source_path: str) -> tuple[str, str]:
+    lower = source_path.lower()
+    if lower.endswith((".html", ".htm", ".md", ".markdown")):
+        return "text/plain; charset=utf-8", "inline"
+    guessed, _ = mimetypes.guess_type(source_path)
+    if lower.endswith(".pdf"):
+        return "application/pdf", "inline"
+    if guessed and guessed.startswith("image/"):
+        return guessed, "inline"
+    if guessed and (
+        guessed.startswith("text/")
+        or guessed in {"application/json", "application/xml", "text/csv"}
+    ):
+        return guessed, "inline"
+    if lower.endswith((".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp")):
+        return guessed or "application/octet-stream", "attachment"
+    return guessed or "application/octet-stream", "inline"
+
+
+def _json_error_bytes(message: str) -> bytes:
+    return json.dumps({"error": message}, ensure_ascii=False).encode("utf-8")
+
+
+def _safe_filename(path: str) -> str:
+    filename = str(path or "document").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    filename = "".join(char for char in filename if char not in {'"', "\r", "\n"}).strip()
+    return filename or "document"
 
 
 def _search_profile_payload(profile: SearchProfile, *, permission: str | None = None) -> dict[str, Any]:

@@ -38,7 +38,7 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
   Compose-Mounts, den Enterprise-Compose-Assistenten und SSL-Fehlerdiagnose.
 - `local-https-compose.md` beschreibt den produktionsnahen lokalen
   WSL-Docker-Betrieb mit Compose-Updatepfad, lokalen HTTPS-Mocks und
-  `https://connector.top.secret`.
+  `https://connector.top.secret` sowie `https://search.top.secret/search`.
 - `https-edge-testbed.md` dokumentiert den lokal geprüften Nginx-/Root-CA-
   Teststand mit `.top.secret`-Domains, Compose-Stacks und den abgeleiteten
   Connector-Anpassungen.
