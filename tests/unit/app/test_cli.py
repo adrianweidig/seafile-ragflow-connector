@@ -4,13 +4,21 @@ import json
 import unittest
 from types import SimpleNamespace
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
 from seafile_ragflow_connector.app.cli import (
+    _active_dataset_bindings,
     _discover_job_specs,
     _format_payload,
     _sync_openwebui_controller_guarded,
     _sync_openwebui_if_enabled,
+    _wait_for_parse,
 )
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
+from seafile_ragflow_connector.persistence.db import Base
+from seafile_ragflow_connector.persistence.models.library import Library
 
 
 class _FakeOrchestrator:
@@ -42,6 +50,31 @@ class _FakeLog:
 
     def warning(self, event: str, **kwargs: object) -> None:
         self.warnings.append((event, kwargs))
+
+
+class _ParseWaitOrchestrator:
+    def __init__(self, session_factory) -> None:
+        self.session_factory = session_factory
+        self.checked: list[tuple[str, str]] = []
+        self.discover_called = False
+        self.ensure_called = False
+
+    def discover_libraries(self):
+        self.discover_called = True
+        return []
+
+    def ensure_dataset_for_repo(self, repo_id: str) -> str:
+        self.ensure_called = True
+        return f"dataset-{repo_id}"
+
+    def check_parse_status(self, repo_id: str, dataset_id: str) -> int:
+        self.checked.append((repo_id, dataset_id))
+        return 1
+
+
+class _ParseWaitRAGFlow:
+    def list_documents(self, dataset_id: str):
+        return [{"id": f"doc-{dataset_id}", "run": "DONE"}]
 
 
 def _runtime(mode: str, service: _FakeOpenWebUIService | None = None):
@@ -127,6 +160,50 @@ class CliSyncHelpersTests(unittest.TestCase):
 
         self.assertEqual(service.calls, 0)
         self.assertEqual(log.warnings, [])
+
+    def test_wait_for_parse_only_checks_active_dataset_bindings(self) -> None:
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        self.addCleanup(engine.dispose)
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    Library(
+                        repo_id="repo-active",
+                        name="Active",
+                        name_slug="active",
+                        status="active",
+                        ragflow_dataset_id="dataset-active",
+                    ),
+                    Library(
+                        repo_id="repo-error",
+                        name="Error",
+                        name_slug="error",
+                        status="error",
+                        ragflow_dataset_id="dataset-error",
+                        last_error="HTTP 403",
+                    ),
+                ]
+            )
+            session.commit()
+        orchestrator = _ParseWaitOrchestrator(session_factory)
+        runtime = SimpleNamespace(orchestrator=orchestrator, ragflow_client=_ParseWaitRAGFlow())
+
+        self.assertEqual(
+            _active_dataset_bindings(runtime),  # type: ignore[arg-type]
+            [("repo-active", "dataset-active")],
+        )
+
+        _wait_for_parse(runtime, timeout_seconds=1)  # type: ignore[arg-type]
+
+        self.assertEqual(orchestrator.checked, [("repo-active", "dataset-active")])
+        self.assertFalse(orchestrator.discover_called)
+        self.assertFalse(orchestrator.ensure_called)
 
 
 if __name__ == "__main__":
