@@ -54,9 +54,7 @@ class RAGFlowClient:
             if name and _is_missing_dataset_name_response(exc.payload, name):
                 return []
             raise
-        if isinstance(data, dict) and "datasets" in data:
-            return list(data["datasets"])
-        return list(data or [])
+        return _mapping_list(data, endpoint="datasets", container_keys=("datasets",))
 
     def get_dataset(self, dataset_id: str) -> dict[str, Any]:
         data = unwrap_response(self._client.get(f"/api/v1/datasets/{dataset_id}"))
@@ -194,11 +192,11 @@ class RAGFlowClient:
         data = unwrap_response(
             self._client.get(f"/api/v1/datasets/{dataset_id}/documents", params=params)
         )
-        if isinstance(data, dict) and "docs" in data:
-            return list(data["docs"])
-        if isinstance(data, dict) and "documents" in data:
-            return list(data["documents"])
-        return list(data or [])
+        return _mapping_list(
+            data,
+            endpoint="documents",
+            container_keys=("docs", "documents"),
+        )
 
     def list_chats(
         self,
@@ -212,9 +210,7 @@ class RAGFlowClient:
         if chat_id:
             params["id"] = chat_id
         data = unwrap_response(self._client.get("/api/v1/chats", params=params))
-        if isinstance(data, dict) and "chats" in data:
-            return list(data["chats"])
-        return list(data or [])
+        return _mapping_list(data, endpoint="chats", container_keys=("chats",))
 
     def get_chat(self, chat_id: str) -> dict[str, Any] | None:
         try:
@@ -257,9 +253,11 @@ class RAGFlowClient:
         if page_size is not None:
             params["page_size"] = str(page_size)
         data = unwrap_response(self._client.get("/api/v1/searches", params=params))
-        if isinstance(data, dict) and "search_apps" in data:
-            return list(data["search_apps"])
-        return list(data or [])
+        return _mapping_list(
+            data,
+            endpoint="searches",
+            container_keys=("search_apps", "searches"),
+        )
 
     def get_search(self, search_id: str) -> dict[str, Any] | None:
         try:
@@ -481,6 +479,31 @@ def _merge_streamed_answer(answer_parts: list[str], answer: str) -> None:
         answer_parts[:] = [answer]
         return
     answer_parts.append(answer)
+
+
+def _mapping_list(
+    data: Any,
+    *,
+    endpoint: str,
+    container_keys: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    value = data
+    if isinstance(data, dict):
+        matching_key = next((key for key in container_keys if key in data), None)
+        if matching_key is None:
+            raise ApiError(
+                f"unexpected list response from RAGFlow {endpoint} endpoint",
+                payload=data,
+            )
+        value = data[matching_key]
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise ApiError(
+            f"unexpected list response from RAGFlow {endpoint} endpoint",
+            payload=data,
+        )
+    return [dict(item) for item in value]
 
 
 def _streaming_answer_fragment(data: dict[str, Any]) -> str:
