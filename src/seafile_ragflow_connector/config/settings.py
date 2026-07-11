@@ -265,8 +265,10 @@ class Settings(BaseSettings):
 
     @field_validator(
         "seafile_base_url",
+        "seafile_internal_url",
         "seafile_public_base_url",
         "ragflow_base_url",
+        "ragflow_internal_url",
         "ragflow_public_base_url",
         "search_answer_llm_base_url",
         "openwebui_base_url",
@@ -277,7 +279,14 @@ class Settings(BaseSettings):
     )
     @classmethod
     def strip_url(cls, value: str | None) -> str | None:
-        return value.rstrip("/") if value else value
+        return value.strip().rstrip("/") if value else value
+
+    @field_validator("seafile_internal_url", "ragflow_internal_url", mode="before")
+    @classmethod
+    def blank_internal_url_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @field_validator("ragflow_search_template_name")
     @classmethod
@@ -364,6 +373,25 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValueError("JOB_HISTORY_RETENTION_DAYS must be positive")
         return value
+
+    @field_validator(
+        "job_max_attempts",
+        "job_retry_base_seconds",
+        "job_retry_max_seconds",
+    )
+    @classmethod
+    def validate_job_positive_int(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("job attempts and retry delays must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def validate_job_retry_bounds(self) -> Settings:
+        if self.job_retry_base_seconds > self.job_retry_max_seconds:
+            raise ValueError(
+                "JOB_RETRY_BASE_SECONDS must not exceed JOB_RETRY_MAX_SECONDS"
+            )
+        return self
 
     @field_validator(
         "search_document_viewer_max_mb",
@@ -512,7 +540,11 @@ class Settings(BaseSettings):
         if self.openwebui_authz_shared_secret is None:
             self.openwebui_authz_shared_secret = self.authz_api_shared_secret
         for name in (
+            "seafile_base_url",
+            "seafile_internal_url",
             "seafile_public_base_url",
+            "ragflow_base_url",
+            "ragflow_internal_url",
             "ragflow_public_base_url",
             "search_answer_llm_base_url",
             "openwebui_proxy_public_base_url",

@@ -2,10 +2,28 @@ from __future__ import annotations
 
 import unittest
 from types import TracebackType
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from seafile_ragflow_connector.app import runtime
+from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.persistence import db
+
+
+def _settings(**overrides: object) -> Settings:
+    values: dict[str, object] = {
+        "seafile_base_url": "https://files.example.local",
+        "seafile_internal_url": "http://seafile.internal:8082",
+        "seafile_admin_token": "admin-token",
+        "seafile_sync_user_token": "sync-token",
+        "ragflow_base_url": "https://ragflow.example.local",
+        "ragflow_internal_url": "http://ragflow.internal:9380",
+        "ragflow_api_key": "ragflow-token",
+        "database_url": "sqlite://",
+        "redis_url": "redis://127.0.0.1:1/0",
+        "openwebui_integration_enabled": False,
+    }
+    values.update(overrides)
+    return Settings(**values)
 
 
 class _FakeConnection:
@@ -186,6 +204,62 @@ class RuntimeCloseTests(unittest.TestCase):
         self.assertTrue(sync_client.closed)
         self.assertTrue(ragflow_client.closed)
         self.assertTrue(signal_queue.closed)
+
+
+class RuntimeServiceRoutingTests(unittest.TestCase):
+    def test_build_runtime_uses_internal_urls_for_service_clients(self) -> None:
+        settings = _settings()
+        session_factory = MagicMock()
+
+        with (
+            patch.object(runtime, "resolve_service_transports"),
+            patch.object(runtime, "_warn_insecure_tls"),
+            patch.object(runtime, "_retry"),
+            patch.object(runtime, "get_session_factory", return_value=session_factory),
+            patch.object(runtime, "build_dashboard_store", return_value=None),
+            patch.object(runtime, "SeafileAdminClient") as admin_client_class,
+            patch.object(runtime, "SeafileSyncClient") as sync_client_class,
+            patch.object(runtime, "RAGFlowClient") as ragflow_client_class,
+            patch.object(runtime, "SyncOrchestrator"),
+            patch.object(runtime, "JobStore") as job_store_class,
+            patch.object(runtime, "JobSignalQueue"),
+            patch.object(runtime, "OpenWebUISyncService"),
+        ):
+            runtime.build_runtime(settings, initialize_database=False)
+
+        self.assertEqual(admin_client_class.call_args.args[0], "http://seafile.internal:8082")
+        self.assertEqual(sync_client_class.call_args.args[0], "http://seafile.internal:8082")
+        self.assertEqual(ragflow_client_class.call_args.args[0], "http://ragflow.internal:9380")
+        self.assertIn(
+            "https://files.example.local",
+            sync_client_class.call_args.kwargs["allowed_download_origins"],
+        )
+        self.assertEqual(
+            job_store_class.call_args.kwargs["default_max_attempts"],
+            settings.job_max_attempts,
+        )
+
+    def test_warn_insecure_tls_uses_internal_service_routes(self) -> None:
+        settings = _settings(
+            seafile_verify_ssl=False,
+            ragflow_verify_ssl=False,
+        )
+        logger = MagicMock()
+
+        with patch.object(runtime.structlog, "get_logger", return_value=logger):
+            runtime._warn_insecure_tls(settings)
+
+        targets_by_route = {
+            call.kwargs["route"]: call.kwargs["target"] for call in logger.warning.call_args_list
+        }
+        self.assertEqual(
+            targets_by_route["Connector -> Seafile"],
+            "http://seafile.internal:8082",
+        )
+        self.assertEqual(
+            targets_by_route["Connector -> RAGFlow"],
+            "http://ragflow.internal:9380",
+        )
 
 
 if __name__ == "__main__":

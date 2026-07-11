@@ -55,6 +55,36 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.database_url, "postgresql+psycopg://custom/db")
         self.assertEqual(settings.redis_url, "redis://custom-redis:6379/4")
 
+    def test_internal_service_urls_are_normalized_and_validated(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "seafile_internal_url": "  https://seafile.internal:8082/  ",
+                "ragflow_internal_url": "https://ragflow.internal:9380/",
+            }
+        )
+
+        settings = Settings(**values)
+
+        self.assertEqual(settings.seafile_internal_url, "https://seafile.internal:8082")
+        self.assertEqual(settings.ragflow_internal_url, "https://ragflow.internal:9380")
+
+        values["seafile_internal_url"] = "  "
+        values["ragflow_internal_url"] = ""
+        values["seafile_public_base_url"] = ""
+        values["ragflow_public_base_url"] = ""
+        settings = Settings(**values)
+        self.assertIsNone(settings.seafile_internal_url)
+        self.assertIsNone(settings.ragflow_internal_url)
+
+        for field in ("seafile_internal_url", "ragflow_internal_url"):
+            for value in ("ftp://service.internal", "service.internal:8080"):
+                invalid = dict(values)
+                invalid[field] = value
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    Settings(**invalid)
+
     def test_search_settings_build_database_url_from_postgres_parts(self) -> None:
         settings = SearchServiceSettings(
             search_authz_base_url="http://connector-controller:8080",
@@ -123,6 +153,52 @@ class SettingsTests(unittest.TestCase):
 
             with self.subTest(field=field), self.assertRaises(ValueError):
                 Settings(**values)
+
+    def test_job_retry_settings_accept_positive_bounded_values(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "job_max_attempts": 7,
+                "job_retry_base_seconds": 15,
+                "job_retry_max_seconds": 120,
+            }
+        )
+
+        settings = Settings(**values)
+
+        self.assertEqual(settings.job_max_attempts, 7)
+        self.assertEqual(settings.job_retry_base_seconds, 15)
+        self.assertEqual(settings.job_retry_max_seconds, 120)
+
+    def test_job_retry_settings_must_be_positive_and_ordered(self) -> None:
+        for field in (
+            "job_max_attempts",
+            "job_retry_base_seconds",
+            "job_retry_max_seconds",
+        ):
+            values = self.base_values()
+            values.update(
+                {
+                    "database_url": "postgresql+psycopg://custom/db",
+                    field: 0,
+                }
+            )
+
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                Settings(**values)
+
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "job_retry_base_seconds": 61,
+                "job_retry_max_seconds": 60,
+            }
+        )
+
+        with self.assertRaises(ValueError):
+            Settings(**values)
 
     def test_connector_language_accepts_supported_locales_and_drops_unknown_values(self) -> None:
         values = self.base_values()
