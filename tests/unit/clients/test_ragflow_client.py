@@ -57,16 +57,18 @@ class _MalformedListHttpClient:
 
 
 class _DeleteDocumentsHttpClient:
-    def __init__(self) -> None:
+    def __init__(self, *, single_missing_status_code: int = 200) -> None:
         self.deleted: list[list[str]] = []
+        self.single_missing_status_code = single_missing_status_code
 
     def request(self, method: str, path: str, *, json: dict[str, list[str]]) -> httpx.Response:
         request = httpx.Request(method, f"http://ragflow.local{path}")
         ids = json["ids"]
         self.deleted.append(ids)
         if "missing" in ids:
+            status_code = self.single_missing_status_code if len(ids) == 1 else 200
             return httpx.Response(
-                200,
+                status_code,
                 json={
                     "code": 102,
                     "message": (
@@ -77,6 +79,75 @@ class _DeleteDocumentsHttpClient:
                 request=request,
             )
         return httpx.Response(200, json={"code": 0, "data": {"deleted": ids}}, request=request)
+
+    def close(self) -> None:
+        return None
+
+
+class _UploadDocumentHttpClient:
+    def __init__(self, data: object) -> None:
+        self.data = data
+
+    def post(self, path: str, *, files: dict[str, object]) -> httpx.Response:
+        _ = files
+        request = httpx.Request("POST", f"http://ragflow.local{path}")
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": self.data},
+            request=request,
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class _DeleteResponseHttpClient:
+    def __init__(self, status_code: int, payload: dict[str, object]) -> None:
+        self.status_code = status_code
+        self.payload = payload
+        self.calls = 0
+
+    def request(self, method: str, path: str, *, json: dict[str, object]) -> httpx.Response:
+        _ = json
+        self.calls += 1
+        request = httpx.Request(method, f"http://ragflow.local{path}")
+        return httpx.Response(self.status_code, json=self.payload, request=request)
+
+    def close(self) -> None:
+        return None
+
+
+class _PaginatedDocumentsHttpClient:
+    def __init__(
+        self,
+        count: int,
+        *,
+        ignore_page: bool = False,
+        page_cycle: int | None = None,
+    ) -> None:
+        self.documents = [{"id": f"doc-{index}"} for index in range(count)]
+        self.ignore_page = ignore_page
+        self.page_cycle = page_cycle
+        self.params: list[dict[str, str]] = []
+
+    def get(self, path: str, *, params: dict[str, str]) -> httpx.Response:
+        self.params.append(dict(params))
+        requested_page = int(params["page"])
+        page = 1 if self.ignore_page else requested_page
+        if self.page_cycle:
+            page = ((requested_page - 1) % self.page_cycle) + 1
+        page_size = int(params["page_size"])
+        start = (page - 1) * page_size
+        documents = self.documents[start : start + page_size]
+        request = httpx.Request("GET", f"http://ragflow.local{path}")
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {"total": len(self.documents), "docs": documents},
+            },
+            request=request,
+        )
 
     def close(self) -> None:
         return None
@@ -333,6 +404,137 @@ class RAGFlowClientTests(unittest.TestCase):
         client.delete_documents("ds", ["valid", "missing"])
 
         self.assertEqual(http_client.deleted, [["valid", "missing"], ["valid"], ["missing"]])
+
+    def test_upload_document_validates_document_identifier(self) -> None:
+        valid_cases = (
+            ({"id": "doc-1"}, {"id": "doc-1"}),
+            ([{"document_id": "doc-2"}], {"document_id": "doc-2"}),
+        )
+        for response, expected in valid_cases:
+            with self.subTest(response=response):
+                client = RAGFlowClient("http://ragflow.local", "token")
+                client._client = _UploadDocumentHttpClient(response)  # type: ignore[assignment]
+
+                document = client.upload_document(
+                    "dataset",
+                    document_name="report.pdf",
+                    content=b"content",
+                    mime_type="application/pdf",
+                )
+
+                self.assertEqual(document, expected)
+
+        for response in ({}, {"id": ""}, [], [{}], [{"document_id": None}], "doc-1"):
+            with self.subTest(response=response):
+                client = RAGFlowClient("http://ragflow.local", "token")
+                client._client = _UploadDocumentHttpClient(response)  # type: ignore[assignment]
+
+                with self.assertRaisesRegex(ApiError, "did not contain a document id"):
+                    client.upload_document(
+                        "dataset",
+                        document_name="report.pdf",
+                        content=b"content",
+                        mime_type="application/pdf",
+                    )
+
+    def test_missing_delete_suppression_requires_successful_http_envelope(self) -> None:
+        cases = (
+            (
+                "documents",
+                {"code": 102, "message": "Document not found: missing"},
+                lambda client: client.delete_documents("dataset", ["missing"]),
+            ),
+            (
+                "datasets",
+                {"code": 102, "message": "Dataset not found"},
+                lambda client: client.delete_datasets(["dataset"]),
+            ),
+            (
+                "chats",
+                {"code": 102, "message": "Chat not found"},
+                lambda client: client.delete_chats(["chat"]),
+            ),
+        )
+        for endpoint, payload, operation in cases:
+            with self.subTest(endpoint=endpoint, status_code=200):
+                http_client = _DeleteResponseHttpClient(200, payload)
+                client = RAGFlowClient("http://ragflow.local", "token")
+                client._client = http_client  # type: ignore[assignment]
+
+                self.assertEqual(operation(client), payload)
+
+            for status_code in (201, 404, 429, 500):
+                with self.subTest(endpoint=endpoint, status_code=status_code):
+                    http_client = _DeleteResponseHttpClient(status_code, payload)
+                    client = RAGFlowClient("http://ragflow.local", "token")
+                    client._client = http_client  # type: ignore[assignment]
+
+                    with self.assertRaises(ApiError) as raised:
+                        operation(client)
+
+                    self.assertEqual(raised.exception.status_code, status_code)
+                    self.assertEqual(http_client.calls, 1)
+
+            for invalid_payload in (
+                {"code": 101, "message": payload["message"]},
+                {"code": 102, "message": "different error"},
+            ):
+                with self.subTest(endpoint=endpoint, payload=invalid_payload):
+                    http_client = _DeleteResponseHttpClient(200, invalid_payload)
+                    client = RAGFlowClient("http://ragflow.local", "token")
+                    client._client = http_client  # type: ignore[assignment]
+
+                    with self.assertRaises(ApiError):
+                        operation(client)
+
+        http_client = _DeleteDocumentsHttpClient(single_missing_status_code=500)
+        client = RAGFlowClient("http://ragflow.local", "token")
+        client._client = http_client  # type: ignore[assignment]
+
+        with self.assertRaises(ApiError) as raised:
+            client.delete_documents("dataset", ["valid", "missing"])
+
+        self.assertEqual(raised.exception.status_code, 500)
+        self.assertEqual(http_client.deleted, [["valid", "missing"], ["valid"], ["missing"]])
+
+    def test_iter_documents_fetches_all_pages_with_bounded_page_size(self) -> None:
+        http_client = _PaginatedDocumentsHttpClient(205)
+        client = RAGFlowClient("http://ragflow.local", "token")
+        client._client = http_client  # type: ignore[assignment]
+
+        documents = list(
+            client.iter_documents(
+                "dataset",
+                run="RUNNING",
+                keywords="report",
+                page_size=1024,
+            )
+        )
+
+        self.assertEqual(len(documents), 205)
+        self.assertEqual(documents[0]["id"], "doc-0")
+        self.assertEqual(documents[-1]["id"], "doc-204")
+        self.assertEqual([params["page"] for params in http_client.params], ["1", "2", "3"])
+        self.assertTrue(all(params["page_size"] == "100" for params in http_client.params))
+        self.assertTrue(all(params["run"] == "RUNNING" for params in http_client.params))
+        self.assertTrue(all(params["keywords"] == "report" for params in http_client.params))
+
+    def test_iter_documents_rejects_server_that_ignores_page(self) -> None:
+        client = RAGFlowClient("http://ragflow.local", "token")
+        client._client = _PaginatedDocumentsHttpClient(100, ignore_page=True)  # type: ignore[assignment]
+
+        with self.assertRaisesRegex(ApiError, "pagination did not advance"):
+            list(client.iter_documents("dataset"))
+
+    def test_iter_documents_rejects_cyclic_full_pages(self) -> None:
+        client = RAGFlowClient("http://ragflow.local", "token")
+        http_client = _PaginatedDocumentsHttpClient(200, page_cycle=2)
+        client._client = http_client  # type: ignore[assignment]
+
+        with self.assertRaisesRegex(ApiError, "pagination did not advance"):
+            list(client.iter_documents("dataset"))
+
+        self.assertEqual([params["page"] for params in http_client.params], ["1", "2", "3"])
 
     def test_chat_and_retrieval_endpoints_use_current_http_api(self) -> None:
         http_client = _ChatHttpClient()

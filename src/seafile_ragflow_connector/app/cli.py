@@ -835,11 +835,11 @@ def _wait_for_parse(runtime: Runtime, timeout_seconds: int) -> None:
         active = False
         for repo_id, dataset_id in _active_dataset_bindings(runtime):
             updated = runtime.orchestrator.check_parse_status(repo_id, dataset_id)
-            if updated:
-                documents = runtime.ragflow_client.list_documents(dataset_id)
-                active = any(
-                    document.get("run") in {"RUNNING", "UNSTART"} for document in documents
-                )
+            if updated and any(
+                document.get("run") in {"RUNNING", "UNSTART"}
+                for document in runtime.ragflow_client.iter_documents(dataset_id)
+            ):
+                active = True
         if not active:
             return
         time.sleep(5)
