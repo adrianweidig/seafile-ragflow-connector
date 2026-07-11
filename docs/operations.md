@@ -189,6 +189,37 @@ werden. Außerdem veröffentlicht Swarm Dashboard-Ports über das Routing-Mesh;
 zentrale Vorlage noch `127.0.0.1:18080` enthält, muss der Wert für Swarm auf
 `18080` geändert werden.
 
+## Datenbank-Upgrade auf Revision 0005
+
+Revision `0005_sync_job_deduplication` ergänzt die atomische Deduplizierung
+aktiver Sync-Jobs. Vor einem produktiven Upgrade zuerst ein PostgreSQL-Backup
+erstellen. Danach Controller und Reconciler als Job-Produzenten stoppen und
+die Worker vorhandene Jobs abarbeiten lassen:
+
+```bash
+docker compose --env-file connector.env \
+  -f deploy/portainer/docker-compose.yml \
+  stop connector-controller connector-reconciler
+
+docker compose --env-file connector.env \
+  -f deploy/portainer/docker-compose.yml \
+  exec -T connector-postgres sh -s <<'SH'
+psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At <<'SQL'
+SELECT count(*)
+FROM sync_jobs
+WHERE status IN ('queued', 'retrying', 'running');
+SQL
+SH
+```
+
+Erst wenn die Abfrage `0` liefert, auch den Worker stoppen, das neue Image
+bereitstellen und `connector init-db` beziehungsweise den normalen Stackstart
+ausführen. Bestehende Jobs erhalten beim Upgrade eindeutige
+`legacy:<id>`-Schlüssel und werden nicht nachträglich zusammengeführt. Neue
+Jobs werden anschließend atomar über ihren semantischen Schlüssel
+dedupliziert. Ein Rollback erfolgt bevorzugt durch Wiederherstellung des zuvor
+erstellten Backups.
+
 ### Dashboard im Betrieb
 
 Das Dashboard läuft im Controller-Prozess, wenn

@@ -20,3 +20,10 @@ Advisory-Lock aus. Vor produktiven Upgrades ist ein Datenbank-Backup zu
 erstellen. Ein Rollback erfolgt bevorzugt durch Wiederherstellung dieses
 Backups; Alembic-Downgrades sind nur nach Prüfung der jeweiligen Migration
 einzusetzen, da spätere Revisionen bereits produktive Daten verwenden können.
+
+Vor dem Upgrade von `0004_acl_search_profiles` auf
+`0005_sync_job_deduplication` müssen Controller und Reconciler gestoppt und
+aktive Jobs vollständig abgearbeitet werden. Die Migration bewahrt bestehende
+Jobs mit eindeutigen `legacy:<id>`-Schlüsseln, führt bereits vorhandene
+semantisch gleiche Jobs aber bewusst nicht zusammen. Die atomische
+Deduplizierung gilt für Jobs, die nach dem Upgrade neu eingereiht werden.
