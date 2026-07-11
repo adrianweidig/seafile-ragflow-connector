@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -73,8 +74,18 @@ class _ParseWaitOrchestrator:
 
 
 class _ParseWaitRAGFlow:
-    def list_documents(self, dataset_id: str):
-        return [{"id": f"doc-{dataset_id}", "run": "DONE"}]
+    def __init__(self, runs: dict[str, str] | None = None) -> None:
+        self.runs = runs or {}
+
+    def iter_documents(self, dataset_id: str):
+        return iter(
+            [
+                {
+                    "id": f"doc-{dataset_id}",
+                    "run": self.runs.get(dataset_id, "DONE"),
+                }
+            ]
+        )
 
 
 def _runtime(mode: str, service: _FakeOpenWebUIService | None = None):
@@ -204,6 +215,48 @@ class CliSyncHelpersTests(unittest.TestCase):
         self.assertEqual(orchestrator.checked, [("repo-active", "dataset-active")])
         self.assertFalse(orchestrator.discover_called)
         self.assertFalse(orchestrator.ensure_called)
+
+    def test_wait_for_parse_keeps_running_state_across_multiple_datasets(self) -> None:
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        self.addCleanup(engine.dispose)
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    Library(
+                        repo_id="repo-running",
+                        name="Running",
+                        name_slug="running",
+                        status="active",
+                        ragflow_dataset_id="dataset-running",
+                    ),
+                    Library(
+                        repo_id="repo-done",
+                        name="Done",
+                        name_slug="done",
+                        status="active",
+                        ragflow_dataset_id="dataset-done",
+                    ),
+                ]
+            )
+            session.commit()
+        runtime = SimpleNamespace(
+            orchestrator=_ParseWaitOrchestrator(session_factory),
+            ragflow_client=_ParseWaitRAGFlow(
+                {"dataset-running": "RUNNING", "dataset-done": "DONE"}
+            ),
+        )
+
+        with patch(
+            "seafile_ragflow_connector.app.cli.time.sleep",
+            side_effect=RuntimeError("poll requested"),
+        ), self.assertRaisesRegex(RuntimeError, "poll requested"):
+            _wait_for_parse(runtime, timeout_seconds=30)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

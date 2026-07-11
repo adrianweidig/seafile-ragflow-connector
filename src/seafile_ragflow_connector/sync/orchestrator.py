@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -508,36 +507,7 @@ class SyncOrchestrator:
                     change_type="unchanged",
                 )
 
-        stale_document_ids = self._find_stale_document_ids(
-            dataset_id,
-            document_name=artifact.document_name,
-            old_document_id=old_document_id,
-        )
-        if stale_document_ids:
-            self.ragflow_client.delete_documents(dataset_id, stale_document_ids)
-            self.log.info(
-                "ragflow.stale_documents_deleted",
-                sync_id=sync_id,
-                repo_id=repo_id,
-                dataset_id=dataset_id,
-                path=path,
-                document_name=artifact.document_name,
-                document_count=len(stale_document_ids),
-            )
-            self._record_dashboard_change(
-                sync_id=sync_id,
-                action="delete_stale_ragflow_documents",
-                change_type="deleted",
-                status="succeeded",
-                object_name=artifact.document_name,
-                source_path=path,
-                target_path=dataset_id,
-                details={
-                    "repo_id": repo_id,
-                    "dataset_id": dataset_id,
-                    "document_ids": stale_document_ids,
-                },
-            )
+        stale_document_ids = [old_document_id] if old_document_id else []
 
         settings_hash = None
         if self.refresh_dataset_settings:
@@ -598,6 +568,62 @@ class SyncOrchestrator:
             db_file.parse_status = "UNSTART"
             db_file.error_message = None
             session.commit()
+
+        stale_document_ids = [
+            stale_id for stale_id in stale_document_ids if stale_id != document_id
+        ]
+        if stale_document_ids:
+            try:
+                self.ragflow_client.delete_documents(dataset_id, stale_document_ids)
+            except Exception as exc:
+                self.log.warning(
+                    "ragflow.stale_documents_delete_failed",
+                    sync_id=sync_id,
+                    repo_id=repo_id,
+                    dataset_id=dataset_id,
+                    path=path,
+                    document_ids=stale_document_ids,
+                    error_class=type(exc).__name__,
+                )
+                self._record_dashboard_change(
+                    sync_id=sync_id,
+                    action="delete_stale_ragflow_documents",
+                    change_type="deleted",
+                    status="failed",
+                    object_name=artifact.document_name,
+                    source_path=path,
+                    target_path=dataset_id,
+                    error_message=str(exc)[:4000],
+                    details={
+                        "repo_id": repo_id,
+                        "dataset_id": dataset_id,
+                        "document_ids": stale_document_ids,
+                    },
+                )
+            else:
+                self.log.info(
+                    "ragflow.stale_documents_deleted",
+                    sync_id=sync_id,
+                    repo_id=repo_id,
+                    dataset_id=dataset_id,
+                    path=path,
+                    document_name=artifact.document_name,
+                    document_count=len(stale_document_ids),
+                )
+                self._record_dashboard_change(
+                    sync_id=sync_id,
+                    action="delete_stale_ragflow_documents",
+                    change_type="deleted",
+                    status="succeeded",
+                    object_name=artifact.document_name,
+                    source_path=path,
+                    target_path=dataset_id,
+                    details={
+                        "repo_id": repo_id,
+                        "dataset_id": dataset_id,
+                        "document_ids": stale_document_ids,
+                    },
+                )
 
         self.log.info(
             "file.uploaded",
@@ -774,8 +800,12 @@ class SyncOrchestrator:
         return deleted
 
     def check_parse_status(self, repo_id: str, dataset_id: str) -> int:
-        documents = self.ragflow_client.list_documents(dataset_id)
-        by_id = {str(document.get("id")): document for document in documents if document.get("id")}
+        documents = self.ragflow_client.iter_documents(dataset_id)
+        by_id = {
+            document_id: document
+            for document in documents
+            if (document_id := _document_id(document))
+        }
         updated = 0
         with self.session_factory() as session:
             rows = session.scalars(select(File).where(File.repo_id == repo_id)).all()
@@ -785,8 +815,11 @@ class SyncOrchestrator:
                 document = by_id.get(row.ragflow_document_id)
                 if not document:
                     continue
-                row.parse_status = str(document.get("run") or "")
-                if document.get("run") == "FAIL":
+                parse_status = str(document.get("run") or "").strip()
+                if not parse_status:
+                    continue
+                row.parse_status = parse_status
+                if parse_status == "FAIL":
                     row.error_message = str(document.get("progress_msg") or "")[:4000]
                     self._record_dashboard_change(
                         sync_id=None,
@@ -799,6 +832,8 @@ class SyncOrchestrator:
                         error_message=row.error_message,
                         details={"repo_id": repo_id, "dataset_id": dataset_id},
                     )
+                elif parse_status == "DONE":
+                    row.error_message = None
                 updated += 1
             session.commit()
         return updated
@@ -1074,41 +1109,15 @@ class SyncOrchestrator:
             raise KeyError(msg)
         return db_file
 
-    def _find_stale_document_ids(
-        self,
-        dataset_id: str,
-        *,
-        document_name: str,
-        old_document_id: str | None,
-    ) -> list[str]:
-        stale_ids: list[str] = []
-        if old_document_id:
-            stale_ids.append(old_document_id)
-
-        documents = self.ragflow_client.list_documents(
-            dataset_id,
-            keywords=_document_search_keyword(document_name),
-            page_size=1024,
-        )
-        for document in documents:
-            document_id = _document_id(document)
-            if not document_id or document_id in stale_ids:
-                continue
-            existing_name = _document_name(document)
-            if _matches_document_name_or_ragflow_duplicate(existing_name, document_name):
-                stale_ids.append(document_id)
-        return stale_ids
-
     def _ragflow_document_exists(
         self,
         dataset_id: str,
         document_id: str,
         document_name: str,
     ) -> bool:
-        documents = self.ragflow_client.list_documents(
+        documents = self.ragflow_client.iter_documents(
             dataset_id,
             keywords=_document_search_keyword(document_name),
-            page_size=1024,
         )
         return any(_document_id(document) == document_id for document in documents)
 
@@ -1134,22 +1143,6 @@ def _is_directory(item: dict[str, Any]) -> bool:
 def _document_id(document: dict[str, Any]) -> str | None:
     value = document.get("id") or document.get("document_id")
     return str(value) if value else None
-
-
-def _document_name(document: dict[str, Any]) -> str:
-    value = document.get("name") or document.get("document_name") or document.get("filename")
-    return str(value or "")
-
-
-def _matches_document_name_or_ragflow_duplicate(existing_name: str, target_name: str) -> bool:
-    if existing_name == target_name:
-        return True
-
-    existing_stem, existing_suffix = _split_document_name(existing_name)
-    target_stem, target_suffix = _split_document_name(target_name)
-    if existing_suffix != target_suffix:
-        return False
-    return re.fullmatch(rf"{re.escape(target_stem)} ?\([1-9][0-9]*\)", existing_stem) is not None
 
 
 def _document_search_keyword(document_name: str) -> str:

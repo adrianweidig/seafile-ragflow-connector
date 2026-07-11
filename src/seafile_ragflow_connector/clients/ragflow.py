@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Any
 
 from seafile_ragflow_connector.app.metrics import (
@@ -16,6 +17,8 @@ from seafile_ragflow_connector.clients.http import (
     unwrap_response,
 )
 from seafile_ragflow_connector.domain.ragflow_defaults import RAGFLOW_REFERENCE_METADATA_FIELDS
+
+RAGFLOW_MAX_DOCUMENT_PAGE_SIZE = 100
 
 
 class RAGFlowClient:
@@ -90,14 +93,20 @@ class RAGFlowClient:
         data = unwrap_response(
             self._client.post(f"/api/v1/datasets/{dataset_id}/documents", files=files)
         )
+        document: dict[str, Any] | None = None
         if isinstance(data, dict):
-            files_uploaded_total.inc()
-            return data
-        if isinstance(data, list) and data and isinstance(data[0], dict):
-            files_uploaded_total.inc()
-            return data[0]
-        msg = "unexpected document upload response"
-        raise TypeError(msg)
+            document = dict(data)
+        elif isinstance(data, list) and data and isinstance(data[0], dict):
+            document = dict(data[0])
+        document_id = (document or {}).get("id") or (document or {}).get("document_id")
+        if document is None or not str(document_id or "").strip():
+            raise ApiError(
+                "RAGFlow document upload response did not contain a document id",
+                status_code=200,
+                payload=data,
+            )
+        files_uploaded_total.inc()
+        return document
 
     def update_document_metadata(
         self,
@@ -119,7 +128,7 @@ class RAGFlowClient:
         try:
             return self._delete_documents_once(dataset_id, document_ids)
         except ApiError as exc:
-            if not _is_missing_document_delete_response(exc.payload):
+            if exc.status_code != 200 or not _is_missing_document_delete_response(exc.payload):
                 raise
             if len(document_ids) <= 1:
                 return exc.payload
@@ -128,7 +137,9 @@ class RAGFlowClient:
                 try:
                     results.append(self._delete_documents_once(dataset_id, [document_id]))
                 except ApiError as single_exc:
-                    if _is_missing_document_delete_response(single_exc.payload):
+                    if single_exc.status_code == 200 and _is_missing_document_delete_response(
+                        single_exc.payload
+                    ):
                         continue
                     raise
             return results
@@ -139,7 +150,7 @@ class RAGFlowClient:
                 self._client.request("DELETE", "/api/v1/datasets", json={"ids": dataset_ids})
             )
         except ApiError as exc:
-            if _is_missing_dataset_delete_response(exc.payload):
+            if exc.status_code == 200 and _is_missing_dataset_delete_response(exc.payload):
                 return exc.payload
             raise
 
@@ -149,7 +160,7 @@ class RAGFlowClient:
                 self._client.request("DELETE", "/api/v1/chats", json={"ids": chat_ids})
             )
         except ApiError as exc:
-            if _is_missing_chat_response(exc.payload):
+            if exc.status_code == 200 and _is_missing_chat_response(exc.payload):
                 return exc.payload
             raise
 
@@ -180,6 +191,7 @@ class RAGFlowClient:
         *,
         run: str | None = None,
         keywords: str | None = None,
+        page: int | None = None,
         page_size: int | None = None,
     ) -> list[dict[str, Any]]:
         params: dict[str, str] = {}
@@ -187,8 +199,14 @@ class RAGFlowClient:
             params["run"] = run
         if keywords:
             params["keywords"] = keywords
-        if page_size:
-            params["page_size"] = str(page_size)
+        if page is not None:
+            if page < 1:
+                raise ValueError("page must be greater than zero")
+            params["page"] = str(page)
+        if page_size is not None:
+            if page_size < 1:
+                raise ValueError("page_size must be greater than zero")
+            params["page_size"] = str(min(page_size, RAGFLOW_MAX_DOCUMENT_PAGE_SIZE))
         data = unwrap_response(
             self._client.get(f"/api/v1/datasets/{dataset_id}/documents", params=params)
         )
@@ -197,6 +215,45 @@ class RAGFlowClient:
             endpoint="documents",
             container_keys=("docs", "documents"),
         )
+
+    def iter_documents(
+        self,
+        dataset_id: str,
+        *,
+        run: str | None = None,
+        keywords: str | None = None,
+        page_size: int = RAGFLOW_MAX_DOCUMENT_PAGE_SIZE,
+    ) -> Iterator[dict[str, Any]]:
+        if page_size < 1:
+            raise ValueError("page_size must be greater than zero")
+        effective_page_size = min(page_size, RAGFLOW_MAX_DOCUMENT_PAGE_SIZE)
+        seen_pages: set[tuple[str, ...]] = set()
+        page = 1
+        while True:
+            documents = self.list_documents(
+                dataset_id,
+                run=run,
+                keywords=keywords,
+                page=page,
+                page_size=effective_page_size,
+            )
+            if not documents:
+                return
+            page_marker = tuple(
+                json.dumps(document, ensure_ascii=False, sort_keys=True, default=str)
+                for document in documents
+            )
+            if page_marker in seen_pages:
+                raise ApiError(
+                    "RAGFlow document pagination did not advance",
+                    status_code=200,
+                    payload={"dataset_id": dataset_id, "page": page},
+                )
+            yield from documents
+            if len(documents) < effective_page_size:
+                return
+            seen_pages.add(page_marker)
+            page += 1
 
     def list_chats(
         self,

@@ -136,6 +136,17 @@ class _FakeRAGFlowClient:
             return [document for document in documents if keywords in str(document.get("name"))]
         return documents
 
+    def iter_documents(
+        self,
+        dataset_id: str,
+        *,
+        run: str | None = None,
+        keywords: str | None = None,
+        page_size: int = 100,
+    ):
+        _ = (run, page_size)
+        return iter(self.list_documents(dataset_id, keywords=keywords))
+
     def delete_documents(self, dataset_id: str, document_ids: list[str]) -> None:
         documents = self.documents_by_dataset.get(dataset_id, [])
         self.documents_by_dataset[dataset_id] = [
