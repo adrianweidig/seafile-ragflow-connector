@@ -39,29 +39,53 @@ class OpenWebUISourceTests(unittest.TestCase):
             openwebui_source_preview_mode="connector_viewer",
         )
 
-    def test_signed_preview_tokens_roundtrip_and_keep_chat_links_durable(self) -> None:
+    def test_signed_preview_tokens_include_required_claims_and_expire(self) -> None:
         token = sign_preview_payload({"document_id": "doc-1"}, "proxy-secret", now=100)
 
-        self.assertEqual(
-            verify_preview_token(token, "proxy-secret", now=101)["document_id"],
-            "doc-1",
-        )
-        self.assertEqual(
-            verify_preview_token(token, "proxy-secret", now=2000)["document_id"],
-            "doc-1",
-        )
+        payload = verify_preview_token(token, "proxy-secret", now=101)
 
-    def test_legacy_expired_preview_tokens_still_open_saved_chat_sources(self) -> None:
+        self.assertEqual(payload["document_id"], "doc-1")
+        self.assertEqual(payload["iat"], 100)
+        self.assertEqual(payload["exp"], 1000)
+        self.assertEqual(payload["purpose"], "source_preview")
+        self.assertEqual(payload["aud"], "openwebui_proxy")
+        with self.assertRaisesRegex(ValueError, "expired"):
+            verify_preview_token(token, "proxy-secret", now=1000)
+
+    def test_payload_cannot_override_security_claims(self) -> None:
         token = sign_preview_payload(
-            {"document_id": "doc-1", "exp": 101},
+            {
+                "document_id": "doc-1",
+                "iat": 0,
+                "exp": 999999,
+                "purpose": "other",
+                "aud": "other",
+            },
             "proxy-secret",
             now=100,
+            ttl_seconds=10,
         )
 
-        self.assertEqual(
-            verify_preview_token(token, "proxy-secret", now=2000)["document_id"],
-            "doc-1",
-        )
+        with self.assertRaisesRegex(ValueError, "expired"):
+            verify_preview_token(token, "proxy-secret", now=110)
+
+    def test_preview_tokens_are_bound_to_purpose_and_audience(self) -> None:
+        token = sign_preview_payload({"document_id": "doc-1"}, "proxy-secret", now=100)
+
+        with self.assertRaisesRegex(ValueError, "purpose"):
+            verify_preview_token(
+                token,
+                "proxy-secret",
+                now=101,
+                expected_purpose="document_viewer",
+            )
+        with self.assertRaisesRegex(ValueError, "audience"):
+            verify_preview_token(
+                token,
+                "proxy-secret",
+                now=101,
+                expected_audience="search_service",
+            )
 
     def test_normalize_sources_builds_safe_preview_url(self) -> None:
         sources = normalize_sources(
@@ -97,10 +121,10 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual(sources[0]["source_metadata"]["relevance_label"], "hoch")
 
         token = sources[0]["preview_url"].rsplit("token=", 1)[1]
-        preview = verify_preview_token(token, "proxy-secret", now=100)
+        preview = verify_preview_token(token, "proxy-secret")
         self.assertEqual(preview["page"], 3)
         self.assertEqual(preview["position"], [[3, 10, 20, 30, 40]])
-        self.assertLess(len(token), 420)
+        self.assertLess(len(token), 500)
 
     def test_normalize_sources_adds_original_file_url_without_path_leak(self) -> None:
         settings = self._settings()
@@ -139,7 +163,7 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual(sources[0]["source_metadata"]["repo_id"], "repo-1")
 
         token = sources[0]["preview_url"].rsplit("token=", 1)[1]
-        preview = verify_preview_token(token, "proxy-secret", now=100)
+        preview = verify_preview_token(token, "proxy-secret")
         self.assertEqual(preview["source_path"], "/folder/report final.pdf")
         self.assertEqual(preview["original_url"], sources[0]["original_url"])
 
@@ -204,7 +228,7 @@ class OpenWebUISourceTests(unittest.TestCase):
         )
 
         token = sources[0]["preview_url"].rsplit("token=", 1)[1]
-        preview = verify_preview_token(token, "proxy-secret", now=100)
+        preview = verify_preview_token(token, "proxy-secret")
 
         self.assertEqual(sources[0]["snippet"], long_text.strip())
         self.assertLessEqual(len(preview["snippet"]), 123)

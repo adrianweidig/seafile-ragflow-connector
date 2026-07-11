@@ -47,6 +47,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "coverage[toml]>=7.6",
   "cryptography>=49.0.0",
   "mypy>=1.10",
   "playwright>=1.59",
@@ -77,6 +78,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/seafile_ragflow_connector"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"migrations" = "seafile_ragflow_connector/migrations"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -88,6 +92,14 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.12"
 strict = true
 packages = ["seafile_ragflow_connector"]
+
+[tool.coverage.run]
+branch = true
+source = ["seafile_ragflow_connector"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

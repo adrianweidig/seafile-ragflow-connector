@@ -52,7 +52,12 @@ def upgrade() -> None:
 
     op.create_table(
         "files",
-        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            primary_key=True,
+            autoincrement=True,
+        ),
         sa.Column(
             "repo_id",
             sa.Text(),
@@ -111,7 +116,12 @@ def upgrade() -> None:
 
     op.create_table(
         "sync_jobs",
-        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            primary_key=True,
+            autoincrement=True,
+        ),
         sa.Column("job_type", sa.Text(), nullable=False),
         sa.Column("repo_id", sa.Text(), nullable=True),
         sa.Column("file_path", sa.Text(), nullable=True),
@@ -119,7 +129,7 @@ def upgrade() -> None:
             "payload",
             sa.JSON(),
             nullable=False,
-            server_default=sa.text("'{}'::json"),
+            server_default=sa.text("'{}'"),
         ),
         sa.Column("status", sa.Text(), nullable=False, server_default="queued"),
         sa.Column("priority", sa.Integer(), nullable=False, server_default="100"),
@@ -168,7 +178,12 @@ def upgrade() -> None:
 
     op.create_table(
         "dataset_settings_snapshots",
-        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            primary_key=True,
+            autoincrement=True,
+        ),
         sa.Column(
             "repo_id",
             sa.Text(),

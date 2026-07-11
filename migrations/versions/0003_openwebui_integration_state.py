@@ -19,7 +19,12 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "openwebui_dataset_mappings",
-        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            primary_key=True,
+            autoincrement=True,
+        ),
         sa.Column(
             "repo_id",
             sa.Text(),
@@ -45,19 +50,19 @@ def upgrade() -> None:
             "openwebui_tool_payload",
             sa.JSON(),
             nullable=False,
-            server_default=sa.text("'{}'::json"),
+            server_default=sa.text("'{}'"),
         ),
         sa.Column(
             "openwebui_pipe_payload",
             sa.JSON(),
             nullable=False,
-            server_default=sa.text("'{}'::json"),
+            server_default=sa.text("'{}'"),
         ),
         sa.Column(
             "capabilities_snapshot",
             sa.JSON(),
             nullable=False,
-            server_default=sa.text("'{}'::json"),
+            server_default=sa.text("'{}'"),
         ),
         sa.Column(
             "created_at",
@@ -104,15 +109,15 @@ def upgrade() -> None:
             "dry_run_plan",
             sa.JSON(),
             nullable=False,
-            server_default=sa.text("'{}'::json"),
+            server_default=sa.text("'{}'"),
         ),
         sa.Column(
             "capabilities_snapshot",
             sa.JSON(),
             nullable=False,
-            server_default=sa.text("'{}'::json"),
+            server_default=sa.text("'{}'"),
         ),
-        sa.Column("summary", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
+        sa.Column("summary", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

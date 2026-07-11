@@ -4,6 +4,7 @@ import base64
 import hmac
 import json
 import re
+import time
 import zlib
 from dataclasses import dataclass, field, replace
 from hashlib import sha256
@@ -41,6 +42,12 @@ _EXACT_QUERY_TOKEN_RE = re.compile(
 )
 _PREVIEW_SNIPPET_MAX_CHARS = 120
 _SOURCE_SNIPPET_MAX_CHARS = 420
+PREVIEW_TOKEN_TTL_SECONDS = 15 * 60
+PREVIEW_TOKEN_VERSION = 1
+SOURCE_PREVIEW_PURPOSE = "source_preview"
+DOCUMENT_VIEWER_PURPOSE = "document_viewer"
+OPENWEBUI_PREVIEW_AUDIENCE = "openwebui_proxy"
+SEARCH_PREVIEW_AUDIENCE = "search_service"
 _TEXT_PROJECTION_WRAPPER_RE = re.compile(
     r"(?is)^\s*Source path:.*?----- BEGIN SOURCE CONTENT -----\s*(?P<content>.*?)"
     r"\s*----- END SOURCE CONTENT -----\s*$"
@@ -1171,15 +1178,44 @@ def _locator_quality_score(value: str) -> float:
     }.get(str(value or "unknown"), 0.2)
 
 
-def sign_preview_payload(payload: dict[str, Any], secret: str, *, now: int | None = None) -> str:
+def sign_preview_payload(
+    payload: dict[str, Any],
+    secret: str,
+    *,
+    now: int | None = None,
+    ttl_seconds: int = PREVIEW_TOKEN_TTL_SECONDS,
+    purpose: str = SOURCE_PREVIEW_PURPOSE,
+    audience: str = OPENWEBUI_PREVIEW_AUDIENCE,
+) -> str:
+    if ttl_seconds <= 0:
+        raise ValueError("preview token ttl must be positive")
+    if not purpose or not audience:
+        raise ValueError("preview token purpose and audience are required")
+    issued_at = int(time.time()) if now is None else int(now)
     body = dict(payload)
+    body.update(
+        {
+            "v": PREVIEW_TOKEN_VERSION,
+            "iat": issued_at,
+            "exp": issued_at + ttl_seconds,
+            "purpose": purpose,
+            "aud": audience,
+        }
+    )
     raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     encoded = "z" + _b64encode(zlib.compress(raw, level=9))
     signature = hmac.new(secret.encode("utf-8"), encoded.encode("ascii"), sha256).digest()
     return f"{encoded}.{_b64encode(signature)}"
 
 
-def verify_preview_token(token: str, secret: str, *, now: int | None = None) -> dict[str, Any]:
+def verify_preview_token(
+    token: str,
+    secret: str,
+    *,
+    now: int | None = None,
+    expected_purpose: str = SOURCE_PREVIEW_PURPOSE,
+    expected_audience: str = OPENWEBUI_PREVIEW_AUDIENCE,
+) -> dict[str, Any]:
     try:
         encoded, signature = token.split(".", 1)
     except ValueError as exc:
@@ -1199,7 +1235,28 @@ def verify_preview_token(token: str, secret: str, *, now: int | None = None) -> 
     payload = json.loads(raw_payload)
     if not isinstance(payload, dict):
         raise ValueError("invalid preview token payload")
+    version = _preview_token_int_claim(payload, "v")
+    issued_at = _preview_token_int_claim(payload, "iat")
+    expires_at = _preview_token_int_claim(payload, "exp")
+    current_time = int(time.time()) if now is None else int(now)
+    if version != PREVIEW_TOKEN_VERSION:
+        raise ValueError("unsupported preview token version")
+    if issued_at > current_time:
+        raise ValueError("preview token issued in the future")
+    if expires_at <= issued_at or current_time >= expires_at:
+        raise ValueError("preview token expired")
+    if payload.get("purpose") != expected_purpose:
+        raise ValueError("invalid preview token purpose")
+    if payload.get("aud") != expected_audience:
+        raise ValueError("invalid preview token audience")
     return payload
+
+
+def _preview_token_int_claim(payload: dict[str, Any], name: str) -> int:
+    value = payload.get(name)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"invalid preview token {name}")
+    return value
 
 
 def _normalize_reference(
@@ -1416,7 +1473,12 @@ def _preview_url(
             "file_type": file_type,
             "mime_type": mime_type,
         }
-        token = sign_preview_payload(payload, settings.openwebui_proxy_shared_secret)
+        token = sign_preview_payload(
+            payload,
+            settings.openwebui_proxy_shared_secret,
+            purpose=SOURCE_PREVIEW_PURPOSE,
+            audience=OPENWEBUI_PREVIEW_AUDIENCE,
+        )
         base_url = settings.openwebui_proxy_public_base_url
         return f"{base_url}/api/openwebui/sources/preview?token={quote(token)}"
     return None

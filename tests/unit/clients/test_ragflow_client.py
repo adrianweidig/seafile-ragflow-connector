@@ -34,6 +34,28 @@ class _OtherApiErrorHttpClient:
         return None
 
 
+class _MalformedListHttpClient:
+    def __init__(self, data: object) -> None:
+        self.data = data
+
+    def get(
+        self,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        _ = params
+        request = httpx.Request("GET", f"http://ragflow.local{path}")
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": self.data},
+            request=request,
+        )
+
+    def close(self) -> None:
+        return None
+
+
 class _DeleteDocumentsHttpClient:
     def __init__(self) -> None:
         self.deleted: list[list[str]] = []
@@ -287,6 +309,21 @@ class RAGFlowClientTests(unittest.TestCase):
 
         with self.assertRaises(ApiError):
             client.list_datasets(name="missing")
+
+    def test_list_endpoints_reject_non_mapping_items_and_unknown_containers(self) -> None:
+        cases = (
+            ("datasets", {"status": "ok"}, lambda client: client.list_datasets()),
+            ("documents", ["doc-1"], lambda client: client.list_documents("dataset-1")),
+            ("chats", "chat-1", lambda client: client.list_chats()),
+            ("searches", {"status": "ok"}, lambda client: client.list_searches()),
+        )
+        for endpoint, data, operation in cases:
+            with self.subTest(endpoint=endpoint):
+                client = RAGFlowClient("http://ragflow.local", "token")
+                client._client = _MalformedListHttpClient(data)  # type: ignore[assignment]
+
+                with self.assertRaisesRegex(ApiError, f"RAGFlow {endpoint} endpoint"):
+                    operation(client)
 
     def test_delete_documents_ignores_missing_ids_but_retries_valid_ids(self) -> None:
         http_client = _DeleteDocumentsHttpClient()

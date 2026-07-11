@@ -9,6 +9,12 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from seafile_ragflow_connector.app.metrics import (
+    openwebui_artifacts_created_total,
+    openwebui_artifacts_updated_total,
+    openwebui_sync_failures_total,
+    openwebui_sync_runs_total,
+)
 from seafile_ragflow_connector.clients.openwebui import OpenWebUICapabilities, OpenWebUIClient
 from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
 from seafile_ragflow_connector.config.settings import Settings
@@ -90,6 +96,7 @@ class OpenWebUISyncService:
             self.log.info("openwebui.integration.disabled")
             return summary
 
+        openwebui_sync_runs_total.inc()
         sync_id = new_sync_id("openwebui")
         started = time.perf_counter()
         self._write_global_state(status="running", mode=mode, summary=summary, sync_started=True)
@@ -99,6 +106,7 @@ class OpenWebUISyncService:
         blocker = self._sync_blocker(mode, capabilities)
         if blocker:
             summary.failed += 1
+            openwebui_sync_failures_total.inc()
             duration_ms = int((time.perf_counter() - started) * 1000)
             self._write_global_state(
                 status="failed",
@@ -160,6 +168,12 @@ class OpenWebUISyncService:
                         error=str(exc),
                     )
         finally:
+            if summary.failed:
+                openwebui_sync_failures_total.inc()
+            openwebui_artifacts_created_total.labels("tool").inc(summary.tools_created)
+            openwebui_artifacts_created_total.labels("pipe").inc(summary.pipes_created)
+            openwebui_artifacts_updated_total.labels("tool").inc(summary.tools_updated)
+            openwebui_artifacts_updated_total.labels("pipe").inc(summary.pipes_updated)
             if summary.failed:
                 status = "failed"
             elif summary.manual_required:
