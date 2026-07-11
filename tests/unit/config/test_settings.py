@@ -337,6 +337,7 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(settings.search_service_port, 8090)
         self.assertEqual(settings.search_auth_mode, "trusted_header")
+        self.assertEqual(settings.search_trusted_proxy_cidrs, ())
         self.assertEqual(settings.search_default_top_k, 8)
         self.assertEqual(settings.search_max_top_k, 20)
         self.assertTrue(settings.ragflow_search_template_enabled)
@@ -357,6 +358,15 @@ class SettingsTests(unittest.TestCase):
         )
         self.assertIsNone(settings.search_ragflow_candidate_top_k)
         self.assertIsNone(settings.search_ragflow_similarity_threshold)
+
+        with self.assertRaises(ValueError):
+            SearchServiceSettings(
+                search_authz_base_url="http://connector-controller:8080",
+                search_authz_shared_secret="authz-secret",
+                search_ragflow_base_url="http://ragflow:9380",
+                search_ragflow_api_key="ragflow-key",
+                search_trusted_proxy_cidrs_csv="not-a-network",
+            )
 
         blank_overrides = SearchServiceSettings(
             search_authz_base_url="http://connector-controller:8080",

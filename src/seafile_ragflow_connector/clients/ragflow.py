@@ -3,6 +3,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from seafile_ragflow_connector.app.metrics import (
+    datasets_created_total,
+    files_deleted_total,
+    files_uploaded_total,
+    parse_started_total,
+)
 from seafile_ragflow_connector.clients.http import (
     ApiError,
     VerifyConfig,
@@ -62,6 +68,7 @@ class RAGFlowClient:
     def create_dataset(self, payload: dict[str, Any]) -> dict[str, Any]:
         data = unwrap_response(self._client.post("/api/v1/datasets", json=payload))
         if isinstance(data, dict):
+            datasets_created_total.inc()
             return data
         msg = "unexpected dataset create response"
         raise TypeError(msg)
@@ -86,8 +93,10 @@ class RAGFlowClient:
             self._client.post(f"/api/v1/datasets/{dataset_id}/documents", files=files)
         )
         if isinstance(data, dict):
+            files_uploaded_total.inc()
             return data
         if isinstance(data, list) and data and isinstance(data[0], dict):
+            files_uploaded_total.inc()
             return data[0]
         msg = "unexpected document upload response"
         raise TypeError(msg)
@@ -147,21 +156,25 @@ class RAGFlowClient:
             raise
 
     def _delete_documents_once(self, dataset_id: str, document_ids: list[str]) -> Any:
-        return unwrap_response(
+        result = unwrap_response(
             self._client.request(
                 "DELETE",
                 f"/api/v1/datasets/{dataset_id}/documents",
                 json={"ids": document_ids},
             )
         )
+        files_deleted_total.inc(len(document_ids))
+        return result
 
     def parse_documents(self, dataset_id: str, document_ids: list[str]) -> Any:
-        return unwrap_response(
+        result = unwrap_response(
             self._client.post(
                 f"/api/v1/datasets/{dataset_id}/chunks",
                 json={"document_ids": document_ids},
             )
         )
+        parse_started_total.inc(len(document_ids))
+        return result
 
     def list_documents(
         self,

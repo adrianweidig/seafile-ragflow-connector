@@ -45,7 +45,7 @@ from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
 from seafile_ragflow_connector.jobs.scheduler import PeriodicTask, SimpleScheduler
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 from seafile_ragflow_connector.jobs.worker import WorkerRunner
-from seafile_ragflow_connector.persistence.db import init_database
+from seafile_ragflow_connector.persistence.db import database_revisions, init_database
 from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.search.server import SearchServiceContext, serve_search_forever
 from seafile_ragflow_connector.security.access_control import ACLSnapshotService
@@ -91,7 +91,8 @@ def check_live(
     settings = _bootstrap()
     check_database(settings.database_url)
     check_redis(settings.redis_url)
-    runtime = build_runtime(settings)
+    current_revision, expected_revision = database_revisions(settings.database_url)
+    runtime = build_runtime(settings, initialize_database=False)
     try:
         libraries = _retry_until(
             lambda: runtime.admin_client.list_libraries(per_page=1),
@@ -106,6 +107,9 @@ def check_live(
         _emit_payload(
             {
                 "database": "ok",
+                "database_revision_current": current_revision,
+                "database_revision_expected": expected_revision,
+                "database_revision_match": current_revision == expected_revision,
                 "redis": "ok",
                 "seafile_admin_libraries_visible": len(libraries),
                 "ragflow_template_found": bool(templates),
@@ -370,6 +374,10 @@ def controller() -> None:
     def delta() -> None:
         stale = runtime.job_store.requeue_stale_running_jobs()
         log.info("controller.stale_jobs.requeued", count=stale)
+        purged = runtime.job_store.purge_completed_jobs(
+            older_than_days=settings.job_history_retention_days
+        )
+        log.info("controller.completed_jobs.purged", count=purged)
 
     def template() -> None:
         specs = [
@@ -576,11 +584,19 @@ def _enqueue_specs(
 ) -> None:
     log = structlog.get_logger(__name__)
     for spec in specs:
-        job_id = job_store.enqueue(spec)
+        result = job_store.enqueue_with_result(spec)
+        if result.deduplicated:
+            log.info("job.enqueue_deduplicated", job_id=result.job_id, job_type=spec.job_type)
+            continue
         try:
-            signal_queue.signal(job_id)
+            signal_queue.signal(result.job_id)
         except Exception as exc:
-            log.warning("job.signal_failed", job_id=job_id, job_type=spec.job_type, error=str(exc))
+            log.warning(
+                "job.signal_failed",
+                job_id=result.job_id,
+                job_type=spec.job_type,
+                error=str(exc),
+            )
 
 
 def _emit_payload(payload: dict[str, Any], *, json_output: bool = False) -> None:

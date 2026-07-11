@@ -27,6 +27,11 @@ def main() -> int:
         help="Skip Docker Compose configuration validation.",
     )
     parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Forbid uv network access and use only the local dependency cache.",
+    )
+    parser.add_argument(
         "--with-compose",
         action="store_true",
         help="Require Docker Compose configuration validation.",
@@ -42,17 +47,22 @@ def main() -> int:
         help="Run the local Playwright browser smoke check for the dashboard.",
     )
     args = parser.parse_args()
+    uv_run = uv_run_prefix(skip_sync=args.skip_sync, offline=args.offline)
+    if args.offline:
+        os.environ["UV_OFFLINE"] = "1"
 
     checks: list[tuple[str, Sequence[str], dict[str, str] | None]] = []
     if not args.skip_sync:
-        checks.append(("Install dependencies", ("uv", "sync", "--locked", "--all-extras"), None))
+        sync_command = ["uv", "sync", "--locked", "--all-extras"]
+        if args.offline:
+            sync_command.append("--offline")
+        checks.append(("Install dependencies", tuple(sync_command), None))
     checks.extend(
         [
             (
                 "Compile Python sources",
                 (
-                    "uv",
-                    "run",
+                    *uv_run,
                     "python",
                     "-m",
                     "compileall",
@@ -63,17 +73,17 @@ def main() -> int:
                 ),
                 None,
             ),
-            ("Lint", ("uv", "run", "ruff", "check", "."), None),
-            ("Typecheck", ("uv", "run", "mypy", "src"), None),
+            ("Lint", (*uv_run, "ruff", "check", "."), None),
+            ("Typecheck", (*uv_run, "mypy", "src"), None),
             (
                 "Deployment environment drift check",
-                ("uv", "run", "python", "scripts/validate_deployment_env.py"),
+                (*uv_run, "python", "scripts/validate_deployment_env.py"),
                 None,
             ),
-            ("Pytest suite", ("uv", "run", "pytest"), None),
+            ("Pytest suite", (*uv_run, "pytest"), None),
             (
                 "Unit tests via unittest",
-                ("uv", "run", "python", "-m", "unittest", "discover", "-s", "tests/unit"),
+                (*uv_run, "python", "-m", "unittest", "discover", "-s", "tests/unit"),
                 {"PYTHONPATH": "src"},
             ),
         ]
@@ -103,12 +113,12 @@ def main() -> int:
         else:
             run_optional("Docker Compose config", compose_command)
 
-    if args.with_mock_smoke and not run_mock_smoke():
+    if args.with_mock_smoke and not run_mock_smoke(uv_run):
         return 1
 
     if args.with_dashboard_browser_smoke and not run(
         "Dashboard browser smoke",
-        ("uv", "run", "--extra", "dev", "python", "scripts/playwright_dashboard_smoke.py"),
+        (*uv_run, "--extra", "dev", "python", "scripts/playwright_dashboard_smoke.py"),
     ):
         return 1
 
@@ -138,7 +148,16 @@ def run_optional(label: str, command: Sequence[str]) -> bool:
     return run(label, command)
 
 
-def run_mock_smoke() -> bool:
+def uv_run_prefix(*, skip_sync: bool, offline: bool) -> tuple[str, ...]:
+    command = ["uv", "run"]
+    if skip_sync:
+        command.append("--no-sync")
+    if offline:
+        command.append("--offline")
+    return tuple(command)
+
+
+def run_mock_smoke(uv_run: Sequence[str]) -> bool:
     if shutil.which("docker") is None:
         print("\n==> Local HTTPS mock smoke")
         print("FAILED: 'docker' is not available on PATH", file=sys.stderr)
@@ -150,8 +169,7 @@ def run_mock_smoke() -> bool:
     if not run(
         "Generate local TLS lab certificates",
         (
-            "uv",
-            "run",
+            *uv_run,
             "python",
             "deploy/tls-lab/generate_certs.py",
             "--out-dir",

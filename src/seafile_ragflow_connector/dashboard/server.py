@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import structlog
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import select
 
 from seafile_ragflow_connector.clients.http import ApiError
@@ -30,7 +31,11 @@ from seafile_ragflow_connector.clients.seafile_sync import SeafileSyncClient
 from seafile_ragflow_connector.clients.tls import classify_httpx_error, safe_url_for_logs
 from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.export import audit_export_filename, build_audit_workbook
-from seafile_ragflow_connector.dashboard.health import collect_dashboard_health, collect_tls_health
+from seafile_ragflow_connector.dashboard.health import (
+    collect_dashboard_health,
+    collect_dashboard_readiness,
+    collect_tls_health,
+)
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore
 from seafile_ragflow_connector.dashboard.ui import DASHBOARD_HTML
 from seafile_ragflow_connector.domain.ragflow_search_settings import (
@@ -40,6 +45,8 @@ from seafile_ragflow_connector.domain.ragflow_search_settings import (
 )
 from seafile_ragflow_connector.i18n import localizer_for
 from seafile_ragflow_connector.openwebui.sources import (
+    OPENWEBUI_PREVIEW_AUDIENCE,
+    SOURCE_PREVIEW_PURPOSE,
     annotate_answer_citations,
     audit_rank_sources,
     curate_sources_for_answer,
@@ -58,6 +65,8 @@ from seafile_ragflow_connector.security.access_control import (
     UserIdentity,
 )
 from seafile_ragflow_connector.sync.discovery import normalize_library, should_skip_library
+from seafile_ragflow_connector.utils.http_logging import sanitize_http_access_message
+from seafile_ragflow_connector.utils.readiness import ReadinessCache
 from seafile_ragflow_connector.utils.redaction import redact_mapping
 
 DASHBOARD_CONTENT_SECURITY_POLICY = (
@@ -133,12 +142,37 @@ def serve_dashboard_forever(context: DashboardContext) -> None:
 
 
 def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
+    readiness_cache: ReadinessCache[dict[str, Any]] = ReadinessCache(ttl_seconds=5.0)
+
     class DashboardRequestHandler(BaseHTTPRequestHandler):
         server_version = "SeafileRAGFlowConnectorDashboard/1.0"
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             try:
+                if parsed.path == "/livez":
+                    self._send_json({"status": "alive", "service": "connector-controller"})
+                    return
+                if parsed.path == "/readyz":
+                    readiness = readiness_cache.get(
+                        lambda: collect_dashboard_readiness(
+                            store=context.store,
+                            settings=context.settings,
+                        )
+                    )
+                    status = (
+                        HTTPStatus.OK
+                        if readiness["status"] == "ready"
+                        else HTTPStatus.SERVICE_UNAVAILABLE
+                    )
+                    self._send_json(readiness, status=status)
+                    return
+                if parsed.path == "/metrics":
+                    self._send_binary(
+                        generate_latest(),
+                        headers={"Content-Type": CONTENT_TYPE_LATEST},
+                    )
+                    return
                 if parsed.path == "/api/authz/profiles":
                     payload, status = _handle_authz_profiles(
                         context,
@@ -366,7 +400,8 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                 )
 
         def log_message(self, format: str, *args: Any) -> None:
-            structlog.get_logger(__name__).debug("dashboard.http_access", message=format % args)
+            message = sanitize_http_access_message(format % args)
+            structlog.get_logger(__name__).debug("dashboard.http_access", message=message)
 
         def _send_json(self, payload: dict[str, Any], *, status: HTTPStatus = HTTPStatus.OK) -> None:
             body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
@@ -721,6 +756,8 @@ def _download_search_document(settings: Settings, *, repo_id: str, source_path: 
         rewrite_download_urls=settings.seafile_rewrite_download_urls,
         rewrite_from=settings.seafile_download_rewrite_from,
         rewrite_to=settings.seafile_download_rewrite_to,
+        allowed_download_origins=settings.seafile_download_allowed_origins,
+        max_download_bytes=settings.search_document_viewer_max_mb * 1024 * 1024,
     )
     try:
         return client.download_file(repo_id, source_path)
@@ -2227,7 +2264,12 @@ def _preview_html(settings: Settings, token: str | None) -> str:
     if not token or not settings.openwebui_proxy_shared_secret:
         return _preview_unavailable_html(l10n.language)
     try:
-        payload = verify_preview_token(token, settings.openwebui_proxy_shared_secret)
+        payload = verify_preview_token(
+            token,
+            settings.openwebui_proxy_shared_secret,
+            expected_purpose=SOURCE_PREVIEW_PURPOSE,
+            expected_audience=OPENWEBUI_PREVIEW_AUDIENCE,
+        )
     except ValueError:
         return _preview_unavailable_html(l10n.language)
 

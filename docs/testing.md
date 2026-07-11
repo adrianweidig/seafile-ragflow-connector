@@ -162,6 +162,19 @@ uv sync --locked --all-extras
 uv run python scripts/verify.py --skip-sync --skip-compose
 ```
 
+`--skip-sync` verwendet für alle nachfolgenden Prüfungen automatisch
+`uv run --no-sync`. Mit `--offline` wird zusätzlich jeglicher Netzwerkzugriff
+von uv unterbunden; dafür müssen Lockfile-Abhängigkeiten bereits im lokalen
+Cache vorhanden sein.
+
+CI misst zusätzlich Branch-Coverage ohne vorzeitig einen blinden Mindestwert zu
+erzwingen:
+
+```bash
+uv run coverage run -m pytest
+uv run coverage report
+```
+
 Damit bleiben lokale Codex-Prüfung und CI-Reihenfolge konsistent. Compose- und
 Live-Stack-Prüfungen bleiben bewusst manuelle beziehungsweise umgebungsnahe
 Diagnosen.

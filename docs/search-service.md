@@ -16,7 +16,10 @@ auf. Nur erlaubte SearchProfiles werden an RAGFlow weitergegeben.
 
 | Route | Zweck |
 | --- | --- |
-| `GET /health` | Healthcheck für Portainer/Reverse Proxy |
+| `GET /livez` | billige Prozess-/Eventloop-Liveness ohne Upstream-Zugriff |
+| `GET /readyz` | kurz gecachte Readiness für Datenbank, Core-Authz und RAGFlow |
+| `GET /metrics` | Prometheus-Textformat ohne Nutzer-, Repository- oder Pfadlabels |
+| `GET /health` | rückwärtskompatibler Alias für `/livez` |
 | `GET /search` | Weboberfläche "Wissenssuche" |
 | `GET /api/search/profiles` | erlaubte Bibliotheken/Datasets für den Nutzer |
 | `POST /api/search/query` | Retrieval-Suche über erlaubte Datasets |
@@ -35,11 +38,29 @@ SEARCH_AUTH_MODE=trusted_header
 SEARCH_TRUSTED_USERNAME_HEADER=X-Forwarded-User
 SEARCH_TRUSTED_EMAIL_HEADER=X-Forwarded-Email
 SEARCH_TRUSTED_DISPLAY_NAME_HEADER=X-Forwarded-Name
+SEARCH_TRUSTED_PROXY_CIDRS=10.20.30.0/28
 ```
 
 Die E-Mail ist der primäre ACL-Match-Key. Header dürfen nur aus einer
-vertrauenswürdigen Komponente kommen; öffentliche direkte Erreichbarkeit ohne
-Proxy ist für produktive Nutzung nicht geeignet.
+vertrauenswürdigen Komponente kommen. Der Search-Service wertet sie nur aus,
+wenn die unmittelbare Peer-IP in `SEARCH_TRUSTED_PROXY_CIDRS` liegt; ein
+`X-Forwarded-For`-Wert begründet kein Vertrauen. Bei öffentlicher Bindung und
+fehlender Proxy-Allowlist verweigert der Service im Produktionsmodus den Start.
+
+Der Reverse Proxy muss vom Client gelieferte Identitätsheader verwerfen und die
+Header ausschließlich aus seiner authentifizierten Session neu setzen. Eine
+Nginx-Konfiguration darf deshalb beispielsweise nur verifizierte Variablen
+weiterreichen, niemals `$http_x_forwarded_user` oder `$http_x_forwarded_email`:
+
+```nginx
+proxy_set_header X-Forwarded-User  $authenticated_user;
+proxy_set_header X-Forwarded-Email $authenticated_email;
+proxy_set_header X-Forwarded-Name  $authenticated_display_name;
+```
+
+Im Swarm-Stack wird Search nicht direkt über das Routing-Mesh veröffentlicht.
+Der authentifizierende Proxy muss am internen Overlay-Netz hängen; nur sein
+konkretes Netz gehört in die CIDR-Allowlist.
 
 ## Autorisierung
 

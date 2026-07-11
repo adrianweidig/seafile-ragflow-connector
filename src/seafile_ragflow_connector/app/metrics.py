@@ -11,8 +11,27 @@ parse_started_total = Counter(
     "RAGFlow parse requests started",
 )
 jobs_queued = Gauge("sync_jobs_queued", "Queued sync jobs")
+jobs_running = Gauge("sync_jobs_running", "Running sync jobs")
+jobs_oldest_queued_age_seconds = Gauge(
+    "sync_jobs_oldest_queued_age_seconds",
+    "Age of the oldest queued or retrying job",
+)
 jobs_failed = Counter("sync_jobs_failed_total", "Failed sync jobs")
+jobs_deduplicated_total = Counter(
+    "sync_jobs_deduplicated_total",
+    "Semantically identical active jobs coalesced",
+)
 job_duration_seconds = Histogram("sync_job_duration_seconds", "Sync job duration")
+upstream_latency_seconds = Histogram(
+    "connector_upstream_latency_seconds",
+    "Latency of bounded upstream operations",
+    ["service", "operation"],
+)
+authz_denials_total = Counter(
+    "connector_authz_denials_total",
+    "Authorization denials",
+    ["surface"],
+)
 openwebui_sync_runs_total = Counter("openwebui_sync_runs_total", "OpenWebUI sync runs")
 openwebui_artifacts_created_total = Counter(
     "openwebui_artifacts_created_total",
@@ -28,9 +47,3 @@ openwebui_sync_failures_total = Counter(
     "openwebui_sync_failures_total",
     "OpenWebUI sync failures",
 )
-openwebui_mappings = Gauge("openwebui_dataset_mappings", "OpenWebUI dataset mappings")
-openwebui_drifted_artifacts = Gauge(
-    "openwebui_drifted_artifacts",
-    "OpenWebUI mappings requiring manual repair",
-)
-openwebui_api_latency_seconds = Histogram("openwebui_api_latency_seconds", "OpenWebUI API latency")

@@ -82,6 +82,13 @@ Benutzeridentität bleibt Teil des Request-Bodys beziehungsweise der internen
 Authz-Header. Die E-Mail ist der primäre Match-Key; der Username wird für
 Audit, Logging und spätere Mapping-Strategien mitgeführt.
 
+Im Modus `trusted_header` akzeptiert Search diese Identität nur von der
+unmittelbaren Peer-IP eines Netzes aus `SEARCH_TRUSTED_PROXY_CIDRS`. Der
+Reverse Proxy entfernt vom Client gelieferte Identitätsheader und setzt sie
+aus der authentifizierten Session neu. Eine öffentliche Produktionsbindung
+ohne Proxy-Allowlist wird beim Start abgelehnt; der Swarm-Stack veröffentlicht
+Search standardmäßig nicht über das Routing-Mesh.
+
 ## Fail-Closed
 
 Mit `AUTHZ_API_FAIL_CLOSED=true` gilt:
@@ -105,11 +112,24 @@ ab. Treffer erhalten danach signierte Preview-Links. Diese Tokens enthalten nur
 die bereits autorisierte Trefferpassage und Metadaten wie Dokumentname,
 Bibliothek, Seite, Zeile, Score und Originallink.
 
+Jeder Preview- und Dokumentviewer-Token enthält eine Version, `iat`, `exp`,
+`purpose` und `aud`. Signatur, Ablauf, Zweck und Ziel werden zentral geprüft;
+die Standardlebensdauer beträgt 15 Minuten. Fehlende Claims und alte,
+unbegrenzte Tokens werden abgelehnt. HTTP-Access-Logs entfernen sämtliche
+Querystrings, damit weder Token noch Trefferpassagen in Debug-Logs landen.
+
 Der Evidence-Viewer ist damit eine Fundstellenanzeige, kein generischer
 Seafile-Dateidownload. Original-Links zeigen den Browser direkt zu Seafile und
 verwenden nach Möglichkeit `#page=` oder Browser-Textfragmente. Wenn Seafile,
 der Browser oder ein Login-Redirect diese Sprungmarken nicht unterstützt, bleibt
 die signierte Connector-Vorschau die verlässliche Fundstelle.
+
+Vom Seafile-API gelieferte Download-URLs dürfen nur `http` oder `https`
+verwenden und müssen zur normalisierten Seafile-Basis-Origin, zu einem bewusst
+konfigurierten Rewrite-Ziel oder zu `SEAFILE_DOWNLOAD_ALLOWED_ORIGINS` gehören.
+Erst nach dieser Prüfung wird der Sync-Authorization-Header gesetzt. Redirects
+werden nicht verfolgt; Größenlimits werden vorab über `Content-Length` und
+zusätzlich während des Streamings erzwungen.
 
 ## Konfigurationsanker
 

@@ -6,6 +6,9 @@ on:
       - master
       - main
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * 1"
 
 permissions:
   contents: read
@@ -14,11 +17,60 @@ jobs:
   verify:
     name: Python verification
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: connector_test
+          POSTGRES_USER: connector
+          POSTGRES_PASSWORD: connector-test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U connector -d connector_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TEST_POSTGRES_URL: postgresql+psycopg://connector:connector-test-password@127.0.0.1:5432/connector_test
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
-      - uses: astral-sh/setup-uv@v7
+          python-version: "3.12.13"
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
       - run: uv sync --locked --all-extras
       - run: uv run python scripts/verify.py --skip-sync --skip-compose
+      - name: Measure coverage
+        run: |
+          uv run --no-sync coverage run -m pytest
+          uv run --no-sync coverage report
+      - name: Build and install package artifacts
+        shell: bash
+        run: |
+          uv build
+          uv venv .venv-package-smoke
+          uv pip install --python .venv-package-smoke/bin/python dist/*.whl
+          .venv-package-smoke/bin/connector --help
+          DATABASE_URL=sqlite:///package-smoke.db \
+          SEAFILE_BASE_URL=http://seafile.invalid \
+          SEAFILE_ADMIN_TOKEN=package-smoke-admin \
+          SEAFILE_SYNC_USER_TOKEN=package-smoke-sync \
+          RAGFLOW_BASE_URL=http://ragflow.invalid \
+          RAGFLOW_API_KEY=package-smoke-ragflow \
+          OPENWEBUI_INTEGRATION_ENABLED=false \
+          OPENWEBUI_SYNC_MODE=disabled \
+          .venv-package-smoke/bin/connector init-db
+
+  mock-compose-smoke:
+    name: Scheduled HTTPS mock Compose smoke
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12.13"
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - run: uv sync --locked --all-extras
+      - run: uv run --no-sync python scripts/verify.py --skip-sync --skip-compose --with-mock-smoke

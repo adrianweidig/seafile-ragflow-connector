@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from enum import StrEnum
+from hashlib import sha256
 from typing import Any
 
 
@@ -69,3 +71,18 @@ class JobSpec:
         if self.job_type in LOW_PRIORITY_TYPES:
             return JobPriority.LOW
         return JobPriority.NORMAL
+
+    def dedup_key(self) -> str:
+        identity = {
+            "job_type": self.job_type.value,
+            "repo_id": self.repo_id,
+            "file_path": self.file_path.replace("\\", "/") if self.file_path else None,
+            "payload": self.payload,
+        }
+        canonical = json.dumps(
+            identity,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return f"v1:{sha256(canonical).hexdigest()}"

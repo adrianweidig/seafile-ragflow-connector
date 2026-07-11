@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 import structlog
 
+from seafile_ragflow_connector.app.metrics import job_duration_seconds, jobs_failed
 from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 from seafile_ragflow_connector.persistence.models.job import SyncJob
@@ -50,11 +51,14 @@ class WorkerRunner:
         return True
 
     def _handle_job(self, job: SyncJob) -> None:
+        started = time.perf_counter()
         spec = self.job_store.to_spec(job)
         handler = self.handlers.get(spec.job_type)
         if handler is None:
             error = f"no handler registered for {spec.job_type}"
             status = self.job_store.mark_failed(job.id, error)
+            jobs_failed.inc()
+            job_duration_seconds.observe(time.perf_counter() - started)
             self.log.warning(
                 "job.no_handler",
                 job_id=job.id,
@@ -66,6 +70,8 @@ class WorkerRunner:
             handler(spec)
         except Exception as exc:
             status = self.job_store.mark_failed(job.id, str(exc))
+            jobs_failed.inc()
+            job_duration_seconds.observe(time.perf_counter() - started)
             self.log.warning(
                 "job.failed",
                 job_id=job.id,
@@ -74,4 +80,5 @@ class WorkerRunner:
             )
             return
         self.job_store.mark_succeeded(job.id)
+        job_duration_seconds.observe(time.perf_counter() - started)
         self.log.info("job.succeeded", job_id=job.id, job_type=spec.job_type)

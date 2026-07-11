@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from structlog.contextvars import bind_contextvars, unbind_contextvars
 
+from seafile_ragflow_connector.app.metrics import libraries_seen_total
 from seafile_ragflow_connector.clients import RAGFlowClient, SeafileAdminClient, SeafileSyncClient
 from seafile_ragflow_connector.clients.http import ApiError
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore, new_sync_id
@@ -100,6 +101,7 @@ class SyncOrchestrator:
         discovered: list[DiscoveredLibrary] = []
         current_repo_ids: set[str] = set()
         for raw in self.admin_client.iter_libraries():
+            libraries_seen_total.inc()
             library = normalize_library(raw)
             current_repo_ids.add(library.repo_id)
             skipped, reason = should_skip_library(

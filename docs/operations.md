@@ -232,6 +232,13 @@ Dashboard- und Auditmetadaten, keine synchronisierten Dateiinhalte. Logs,
 Änderungsereignisse und Sync-Historie werden begrenzt, damit weder Datenbank
 noch API-Antworten unbegrenzt wachsen.
 
+Für Orchestratoren sind die Proben getrennt: `/livez` bestätigt nur den
+laufenden HTTP-Prozess, `/readyz` prüft mit kurzen Timeouts Datenbank, Redis,
+Seafile, RAGFlow und die Aktualität vorhandener Authz-Snapshots. Das
+Readiness-Ergebnis wird fünf Sekunden gecacht. `/metrics` liefert das echte
+Prometheus-Textformat; `/api/metrics` bleibt die Dashboard-JSON-Ansicht.
+Metriklabels enthalten keine Repository-IDs, Dateipfade oder Nutzer-E-Mails.
+
 ## Offline-Bundle
 
 Ein produktives Release sollte enthalten:

@@ -108,6 +108,25 @@ def _add_search_profile_with_acl(store: DashboardEventStore, *, user_email: str)
     "pydantic or sqlalchemy is not installed in this Python environment",
 )
 class DashboardServerTests(unittest.TestCase):
+    def test_liveness_and_prometheus_metrics_do_not_require_dashboard_auth(self) -> None:
+        store = _store(self)
+        settings = _settings(0)
+        settings.connector_dashboard_auth_username = "admin"
+        settings.connector_dashboard_auth_password = "secret"
+        handle = start_dashboard_server(
+            DashboardContext(store=store, settings=settings, started_at=utcnow())
+        )
+        port = handle.server.server_address[1]
+        try:
+            live = json.loads(_get_text(port, "/livez"))
+            metrics = _get_text(port, "/metrics")
+        finally:
+            handle.stop()
+
+        self.assertEqual(live["status"], "alive")
+        self.assertIn("sync_jobs_deduplicated_total", metrics)
+        self.assertNotIn("user_email", metrics)
+
     def test_health_status_and_log_endpoints_return_bounded_json(self) -> None:
         store = _store(self)
         store.record_log(level="info", message="server-log", component="unit", sync_id="sync-a")
@@ -515,6 +534,7 @@ class DashboardServerTests(unittest.TestCase):
                 SyncJob(
                     job_type=JobType.SYNC_LIBRARY_FULL.value,
                     repo_id="repo-1",
+                    dedup_key="test:dead:server",
                     payload={},
                     status=JobStatus.DEAD.value,
                     error_message="old failure",

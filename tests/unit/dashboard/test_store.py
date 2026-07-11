@@ -153,6 +153,7 @@ class DashboardEventStoreTests(unittest.TestCase):
                 SyncJob(
                     job_type=JobType.SYNC_LIBRARY_FULL.value,
                     repo_id="repo-1",
+                    dedup_key="test:dead:store",
                     payload={},
                     status=JobStatus.DEAD.value,
                     error_message="old failure",
