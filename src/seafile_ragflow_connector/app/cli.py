@@ -372,8 +372,14 @@ def controller() -> None:
         log.info("controller.discovery.enqueued", count=len(specs))
 
     def delta() -> None:
-        stale = runtime.job_store.requeue_stale_running_jobs()
-        log.info("controller.stale_jobs.requeued", count=stale)
+        stale = runtime.job_store.requeue_stale_running_jobs(
+            older_than_seconds=settings.job_lease_seconds
+        )
+        log.info(
+            "controller.stale_jobs.requeued",
+            count=stale.retrying,
+            dead=stale.dead,
+        )
         purged = runtime.job_store.purge_completed_jobs(
             older_than_days=settings.job_history_retention_days
         )
@@ -460,11 +466,14 @@ def worker() -> None:
     log = structlog.get_logger(__name__)
     log.info("worker.started")
     try:
-        runtime.job_store.requeue_stale_running_jobs()
+        runtime.job_store.requeue_stale_running_jobs(
+            older_than_seconds=settings.job_lease_seconds
+        )
         WorkerRunner(
             runtime.job_store,
             handlers=_build_job_handlers(runtime),
             signal_queue=runtime.signal_queue,
+            heartbeat_seconds=settings.job_heartbeat_seconds,
         ).run_forever()
     finally:
         runtime.close()

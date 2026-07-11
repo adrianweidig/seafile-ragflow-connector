@@ -211,9 +211,17 @@ Diese Variablen sind nicht für den ersten Start erforderlich:
 | Scheduling | `DISCOVERY_INTERVAL_SECONDS`, `DELTA_SYNC_INTERVAL_SECONDS`, `RECONCILE_INTERVAL_SECONDS`, `FULL_SYNC_ON_MISSING_COMMIT` |
 | Delete-/Repair-Policy | `DELETE_RAGFLOW_DOCS_ON_SEAFILE_DELETE`, `DELETE_DATASET_WHEN_LIBRARY_DELETED`, `ARCHIVE_DATASET_WHEN_LIBRARY_DELETED` |
 | Durchsatz | `MAX_CONCURRENT_LIBRARIES`, `UPLOAD_WORKERS`, `PARSE_WORKERS`, `RAGFLOW_UPLOAD_BATCH_SIZE`, `RAGFLOW_PARSE_BATCH_SIZE`, `RAGFLOW_MAX_INFLIGHT_DOCUMENTS` |
-| Retry/Retention | `JOB_MAX_ATTEMPTS`, `JOB_RETRY_BASE_SECONDS`, `JOB_RETRY_MAX_SECONDS`, `JOB_HISTORY_RETENTION_DAYS` |
+| Retry/Retention | `JOB_MAX_ATTEMPTS`, `JOB_RETRY_BASE_SECONDS`, `JOB_RETRY_MAX_SECONDS`, `JOB_LEASE_SECONDS`, `JOB_HEARTBEAT_SECONDS`, `JOB_HISTORY_RETENTION_DAYS` |
 | Runtime | `CACHE_DIR`, `TEMP_DIR`, `ALLOW_OUTBOUND_INTERNET`, `DISABLE_TELEMETRY` |
 | Startup | `CONNECTOR_AUTO_INIT_DB`, `CONNECTOR_STARTUP_CHECK`, `CONNECTOR_STARTUP_MAX_WAIT_SECONDS`, `CONNECTOR_STARTUP_SLEEP_SECONDS`, `CONNECTOR_BOOTSTRAP_CHECK_LIVE`, `CONNECTOR_FALLBACK_CACHE_DIR`, `CONNECTOR_FALLBACK_TEMP_DIR` |
+
+Ein Worker aktualisiert mit `JOB_HEARTBEAT_SECONDS` seine Job-Lease. Bleibt dieses
+Heartbeat länger als `JOB_LEASE_SECONDS` aus, übernimmt die Stale-Recovery den
+Job erneut oder markiert ihn nach dem letzten erlaubten Versuch als `dead`.
+`JOB_HEARTBEAT_SECONDS` darf höchstens ein Drittel von `JOB_LEASE_SECONDS`
+betragen. Bereits gestartete externe Operationen lassen sich bei Lease-Verlust
+nicht abbrechen; Upload-, Delete- und Repair-Pfade müssen deshalb weiterhin
+idempotent bleiben und durch Reconciliation reparierbar sein.
 
 Die Controller-Automationen `DISCOVERY_INTERVAL_SECONDS` und
 `DELTA_SYNC_INTERVAL_SECONDS` sowie der Reconciler
