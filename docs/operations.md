@@ -269,6 +269,10 @@ Seafile, RAGFlow und die Aktualität vorhandener Authz-Snapshots. Das
 Readiness-Ergebnis wird fünf Sekunden gecacht. `/metrics` liefert das echte
 Prometheus-Textformat; `/api/metrics` bleibt die Dashboard-JSON-Ansicht.
 Metriklabels enthalten keine Repository-IDs, Dateipfade oder Nutzer-E-Mails.
+Die Docker-/Swarm-Healthchecks des Controllers verwenden `/livez`, damit ein
+vorübergehender Ausfall externer Dienste Dashboard und Diagnosezugriff nicht
+als Prozessausfall markiert. Deployment-Gates, die echte Einsatzbereitschaft
+verlangen, prüfen zusätzlich `/readyz`.
 
 ## Offline-Bundle
 

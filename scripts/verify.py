@@ -337,7 +337,40 @@ def wait_for_compose_services(
             break
         time.sleep(5)
     print("FAILED: local HTTPS mock services did not become healthy", file=sys.stderr)
+    _print_compose_diagnostics(
+        compose_command,
+        services,
+        env_overlay=env_overlay,
+    )
     return False
+
+
+def _print_compose_diagnostics(
+    compose_command: Sequence[str],
+    services: Sequence[str],
+    *,
+    env_overlay: dict[str, str],
+) -> None:
+    run(
+        "Local HTTPS mock Compose status after failure",
+        (*compose_command, "ps", "--all"),
+        env_overlay=env_overlay,
+    )
+    env = os.environ.copy()
+    env.update(env_overlay)
+    for service in services:
+        container_id = _capture((*compose_command, "ps", "-q", service), env=env)
+        if container_id:
+            run(
+                f"Local HTTPS mock health details: {service}",
+                ("docker", "inspect", "-f", "{{json .State.Health}}", container_id),
+                env_overlay=env_overlay,
+            )
+        run(
+            f"Local HTTPS mock logs: {service}",
+            (*compose_command, "logs", "--no-color", "--tail", "200", service),
+            env_overlay=env_overlay,
+        )
 
 
 def _capture(command: Sequence[str], *, env: dict[str, str]) -> str:
