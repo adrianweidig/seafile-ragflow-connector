@@ -97,6 +97,8 @@ Er benötigt keinen Seafile-Admin- oder Sync-Token.
 | `SEARCH_TEXT_FRAGMENT_LINKS_ENABLED` | optional | Erzeugt best-effort Browser-Textfragment-Links, wenn kein Seitenanker vorhanden ist; Default `true`. |
 | `SEARCH_DOCUMENT_VIEWER_ENABLED` | optional | Aktiviert den authz-geprüften Dokumentproxy für den nativen Browserviewer; Default `true`. |
 | `SEARCH_DOCUMENT_VIEWER_MAX_MB` | optional | Größenlimit für ausgelieferte Viewer-Dokumente; Default `100`. |
+| `SEARCH_DOCUMENT_VIEWER_TIMEOUT_SECONDS`, `SEARCH_DOCUMENT_VIEWER_MAX_CONCURRENCY` | optional | Deadline und parallele Downloadgrenze des Dokumentviewers; Defaults `30` Sekunden und `4`. |
+| `SEARCH_PDF_RENDER_MAX_CONCURRENCY`, `SEARCH_PDF_RENDER_MAX_MB` | optional | Begrenzung paralleler PDF-Renderings und maximaler gerenderter PNG-Größe; Defaults `2` und `25` MiB. |
 | `SEARCH_RESULT_SNIPPET_CONTEXT_CHARS` | optional | Maximale Snippet-Länge in Search-Antworten und Preview-Tokens; Default `420`. |
 | `SEARCH_ANSWER_MAX_SOURCES` | optional | Maximale Anzahl Quellenchips im Antwortmodus; Default `8`. |
 | `SEARCH_SOURCE_PREVIEW_SECRET` | optional | Separates Signatur-Secret für Search-Preview-Tokens; fällt auf `SEARCH_AUTHZ_SHARED_SECRET` zurück. |
@@ -173,7 +175,8 @@ installierten System-CAs.
 | `SEAFILE_SKIP_ENCRYPTED_LIBRARIES`, `SEAFILE_SKIP_VIRTUAL_REPOS` | optional | Discovery-Filter für Seafile-Libraries. |
 | `SEAFILE_PUBLIC_BASE_URL` | optional | browserseitige Seafile-Basis-URL für OpenWebUI-Original-Links; fällt auf `SEAFILE_BASE_URL` zurück. |
 | `SEAFILE_FILE_URL_TEMPLATE` | optional | Override für abweichende Seafile-Webrouten; sonst wird der Original-Link automatisch aus Basis-URL, Repo-ID und Pfad erzeugt. |
-| `SEAFILE_REWRITE_DOWNLOAD_URLS`, `SEAFILE_DOWNLOAD_REWRITE_FROM`, `SEAFILE_DOWNLOAD_REWRITE_TO` | optional | Rewrite von Seafile-Download-URLs, z. B. von `127.0.0.1` auf Docker-DNS. |
+| `SEAFILE_REWRITE_DOWNLOAD_URLS`, `SEAFILE_DOWNLOAD_REWRITE_FROM`, `SEAFILE_DOWNLOAD_REWRITE_TO` | optional | Rewrite von Seafile-Download-URLs, z. B. von `127.0.0.1` auf Docker-DNS. Das Rewrite-Ziel wird als vertrauenswürdige Download-Origin behandelt. |
+| `SEAFILE_DOWNLOAD_ALLOWED_ORIGINS` | optional | Kommaseparierte zusätzliche Origins (`https://host[:port]`), an die der Sync-Authorization-Header gesendet werden darf. Standardmäßig sind nur die Seafile-Basis-Origin und ein explizites Rewrite-Ziel erlaubt. |
 | `RAGFLOW_TEMPLATE_DATASET_NAME` | optional | Default ist `connector_template`. |
 | `RAGFLOW_TEMPLATE_AUTO_CREATE` | optional | Default `true`; fehlende Dataset-Templates werden beim Provisioning automatisch angelegt. |
 | `RAGFLOW_TEMPLATE_REQUIRED` | optional | Default `true`; Healthcheck warnt nur noch, wenn Auto-Create deaktiviert ist und das Template fehlt. |
@@ -208,7 +211,7 @@ Diese Variablen sind nicht für den ersten Start erforderlich:
 | Scheduling | `DISCOVERY_INTERVAL_SECONDS`, `DELTA_SYNC_INTERVAL_SECONDS`, `RECONCILE_INTERVAL_SECONDS`, `FULL_SYNC_ON_MISSING_COMMIT` |
 | Delete-/Repair-Policy | `DELETE_RAGFLOW_DOCS_ON_SEAFILE_DELETE`, `DELETE_DATASET_WHEN_LIBRARY_DELETED`, `ARCHIVE_DATASET_WHEN_LIBRARY_DELETED` |
 | Durchsatz | `MAX_CONCURRENT_LIBRARIES`, `UPLOAD_WORKERS`, `PARSE_WORKERS`, `RAGFLOW_UPLOAD_BATCH_SIZE`, `RAGFLOW_PARSE_BATCH_SIZE`, `RAGFLOW_MAX_INFLIGHT_DOCUMENTS` |
-| Retry | `JOB_MAX_ATTEMPTS`, `JOB_RETRY_BASE_SECONDS`, `JOB_RETRY_MAX_SECONDS` |
+| Retry/Retention | `JOB_MAX_ATTEMPTS`, `JOB_RETRY_BASE_SECONDS`, `JOB_RETRY_MAX_SECONDS`, `JOB_HISTORY_RETENTION_DAYS` |
 | Runtime | `CACHE_DIR`, `TEMP_DIR`, `ALLOW_OUTBOUND_INTERNET`, `DISABLE_TELEMETRY` |
 | Startup | `CONNECTOR_AUTO_INIT_DB`, `CONNECTOR_STARTUP_CHECK`, `CONNECTOR_STARTUP_MAX_WAIT_SECONDS`, `CONNECTOR_STARTUP_SLEEP_SECONDS`, `CONNECTOR_BOOTSTRAP_CHECK_LIVE`, `CONNECTOR_FALLBACK_CACHE_DIR`, `CONNECTOR_FALLBACK_TEMP_DIR` |
 

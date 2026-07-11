@@ -276,7 +276,7 @@ In Compose und Portainer sind die Werte über
 2. `deploy/portainer/docker-compose.yml` als Web-Editor-Inhalt einfügen oder dieses Repository als Git-Stack verwenden.
 3. Den Inhalt von `connector.env.example` im Bereich `Environment variables` importieren.
 4. Nur die Pflichtwerte ersetzen; OpenWebUI-Werte nur setzen, wenn die Anbindung aktiviert wird.
-5. Falls Images offline bereitgestellt werden, `CONNECTOR_IMAGE`, `POSTGRES_IMAGE`, `REDIS_IMAGE` und die `*_PULL_POLICY`-Werte auf die lokal vorhandenen Images abstimmen.
+5. `CONNECTOR_IMAGE` produktiv auf einen veröffentlichten Release- oder Digest-Pin setzen. Falls Images offline bereitgestellt werden, außerdem `POSTGRES_IMAGE`, `REDIS_IMAGE` und die `*_PULL_POLICY`-Werte auf die lokal vorhandenen Images abstimmen.
 6. Stack deployen und die Logs von `connector-controller`, `connector-worker` und `connector-reconciler` prüfen.
 
 Wichtig für Portainer-Image-Uploads: Der Stack startet genau das Image, dessen

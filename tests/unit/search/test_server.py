@@ -9,11 +9,18 @@ from urllib.parse import unquote
 
 import seafile_ragflow_connector.search.server as search_server
 from seafile_ragflow_connector.config.settings import SearchServiceSettings
-from seafile_ragflow_connector.openwebui.sources import sign_preview_payload, verify_preview_token
+from seafile_ragflow_connector.openwebui.sources import (
+    DOCUMENT_VIEWER_PURPOSE,
+    SEARCH_PREVIEW_AUDIENCE,
+    SOURCE_PREVIEW_PURPOSE,
+    sign_preview_payload,
+    verify_preview_token,
+)
 from seafile_ragflow_connector.persistence import Base, get_engine, get_session_factory
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.search.server import (
+    SearchBindError,
     SearchPermissionError,
     SearchUser,
     _compose_answer_from_sources,
@@ -22,11 +29,40 @@ from seafile_ragflow_connector.search.server import (
     _handle_pdf_page_image_proxy,
     _handle_query,
     _search_results_from_ragflow,
+    _user_from_headers,
+    _validate_trusted_header_boundary,
 )
 from seafile_ragflow_connector.search.ui import SEARCH_HTML
 
 
 class SearchServerTests(unittest.TestCase):
+    def test_public_production_bind_requires_narrow_trusted_proxy_networks(self) -> None:
+        with self.assertRaisesRegex(SearchBindError, "SEARCH_TRUSTED_PROXY_CIDRS"):
+            _validate_trusted_header_boundary(_settings())
+        with self.assertRaisesRegex(SearchBindError, "must not trust every"):
+            _validate_trusted_header_boundary(
+                _settings(search_trusted_proxy_cidrs_csv="0.0.0.0/0")
+            )
+
+        _validate_trusted_header_boundary(
+            _settings(search_trusted_proxy_cidrs_csv="10.20.30.0/28")
+        )
+
+    def test_identity_headers_are_accepted_only_from_direct_trusted_peer(self) -> None:
+        settings = _settings(search_trusted_proxy_cidrs_csv="10.20.30.0/28")
+        headers = {
+            "X-Forwarded-User": "olaf",
+            "X-Forwarded-Email": "olaf@example.local",
+            "X-Forwarded-For": "10.20.30.5",
+        }
+
+        user = _user_from_headers(settings, headers, "10.20.30.4")
+
+        self.assertEqual(user.username, "olaf")
+        self.assertEqual(user.email, "olaf@example.local")
+        with self.assertRaises(SearchPermissionError):
+            _user_from_headers(settings, headers, "203.0.113.7")
+
     def test_ui_contains_required_search_surface(self) -> None:
         self.assertIn("Wissenssuche", SEARCH_HTML)
         self.assertIn('data-theme-choice="light"', SEARCH_HTML)
@@ -189,7 +225,12 @@ class SearchServerTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["locator"]["quality"], "page")
         self.assertTrue(result["results"][0]["preview_url"].startswith("/api/search/source/preview?token="))
         token = unquote(result["results"][0]["preview_url"].rsplit("token=", 1)[1])
-        preview = verify_preview_token(token, settings.effective_search_source_preview_secret)
+        preview = verify_preview_token(
+            token,
+            settings.effective_search_source_preview_secret,
+            expected_purpose=SOURCE_PREVIEW_PURPOSE,
+            expected_audience=SEARCH_PREVIEW_AUDIENCE,
+        )
         self.assertEqual(preview["document_name"], "Handbuch FI Typ B.pdf")
         self.assertEqual(preview["citation_label"], "S1")
         self.assertTrue(
@@ -201,6 +242,8 @@ class SearchServerTests(unittest.TestCase):
         viewer_payload = verify_preview_token(
             viewer_token,
             settings.effective_search_source_preview_secret,
+            expected_purpose=DOCUMENT_VIEWER_PURPOSE,
+            expected_audience=SEARCH_PREVIEW_AUDIENCE,
         )
         self.assertEqual(viewer_payload["repo_id"], "repo-anleitungen")
         self.assertEqual(viewer_payload["source_path"], "/Anleitungen/FI/Handbuch FI Typ B.pdf")
@@ -834,6 +877,10 @@ class SearchServerTests(unittest.TestCase):
                 "expires_at": 1,
             },
             settings.effective_search_source_preview_secret,
+            now=1,
+            ttl_seconds=1,
+            purpose=DOCUMENT_VIEWER_PURPOSE,
+            audience=SEARCH_PREVIEW_AUDIENCE,
         )
 
         with self.assertRaises(ValueError):
@@ -842,6 +889,62 @@ class SearchServerTests(unittest.TestCase):
                 SearchUser(username="olaf", email="olaf@example.local", display_name=None),
                 token,
             )
+
+    def test_document_proxy_rejects_content_length_before_reading_body(self) -> None:
+        settings = _settings(search_document_viewer_max_mb=1)
+        token = sign_preview_payload(
+            {
+                "repo_id": "repo-anleitungen",
+                "source_path": "/Anleitungen/report.pdf",
+                "dataset_id": "dataset-anleitungen",
+            },
+            settings.effective_search_source_preview_secret,
+            purpose=DOCUMENT_VIEWER_PURPOSE,
+            audience=SEARCH_PREVIEW_AUDIENCE,
+        )
+        original_authz_check = search_server._authz_check_source
+        original_httpx_client = search_server.httpx.Client
+
+        class _OversizedResponse:
+            status_code = 200
+            headers = {"Content-Length": str(1024 * 1024 + 1)}
+
+            def __enter__(self) -> _OversizedResponse:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def iter_bytes(self) -> object:
+                raise AssertionError("oversized response body must not be read")
+
+        class _FakeDocumentClient:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            def __enter__(self) -> _FakeDocumentClient:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def stream(self, *args: object, **kwargs: object) -> _OversizedResponse:
+                return _OversizedResponse()
+
+        try:
+            search_server._authz_check_source = lambda *args, **kwargs: None  # type: ignore[assignment]
+            search_server.httpx.Client = _FakeDocumentClient  # type: ignore[assignment]
+            body, status, _headers = _handle_document_proxy(
+                settings,
+                SearchUser(username="olaf", email="olaf@example.local", display_name=None),
+                token,
+            )
+        finally:
+            search_server._authz_check_source = original_authz_check  # type: ignore[assignment]
+            search_server.httpx.Client = original_httpx_client  # type: ignore[assignment]
+
+        self.assertEqual(status, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+        self.assertIn(b"document too large", body)
 
     def test_document_proxy_forces_pdf_inline_even_if_upstream_sends_attachment(self) -> None:
         settings = _settings()
@@ -852,6 +955,8 @@ class SearchServerTests(unittest.TestCase):
                 "dataset_id": "dataset-anleitungen",
             },
             settings.effective_search_source_preview_secret,
+            purpose=DOCUMENT_VIEWER_PURPOSE,
+            audience=SEARCH_PREVIEW_AUDIENCE,
         )
         original_authz_check = search_server._authz_check_source
         original_httpx_client = search_server.httpx.Client
@@ -865,8 +970,17 @@ class SearchServerTests(unittest.TestCase):
             content = b"%PDF-1.3\n"
             is_error = False
 
+            def __enter__(self) -> _FakeDocumentResponse:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
             def raise_for_status(self) -> None:
                 return None
+
+            def iter_bytes(self) -> object:
+                return iter((self.content,))
 
         class _FakeDocumentClient:
             def __init__(self, *args: object, **kwargs: object) -> None:
@@ -878,7 +992,7 @@ class SearchServerTests(unittest.TestCase):
             def __exit__(self, *args: object) -> None:
                 return None
 
-            def get(self, *args: object, **kwargs: object) -> _FakeDocumentResponse:
+            def stream(self, *args: object, **kwargs: object) -> _FakeDocumentResponse:
                 return _FakeDocumentResponse()
 
         try:
@@ -956,6 +1070,8 @@ class SearchServerTests(unittest.TestCase):
                 "dataset_id": "dataset-anleitungen",
             },
             settings.effective_search_source_preview_secret,
+            purpose=DOCUMENT_VIEWER_PURPOSE,
+            audience=SEARCH_PREVIEW_AUDIENCE,
         )
         original_authz_check = search_server._authz_check_source
         original_httpx_client = search_server.httpx.Client
@@ -972,8 +1088,17 @@ class SearchServerTests(unittest.TestCase):
             content = b"PK\x03\x04"
             is_error = False
 
+            def __enter__(self) -> _FakeDocumentResponse:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
             def raise_for_status(self) -> None:
                 return None
+
+            def iter_bytes(self) -> object:
+                return iter((self.content,))
 
         class _FakeDocumentClient:
             def __init__(self, *args: object, **kwargs: object) -> None:
@@ -985,7 +1110,7 @@ class SearchServerTests(unittest.TestCase):
             def __exit__(self, *args: object) -> None:
                 return None
 
-            def get(self, *args: object, **kwargs: object) -> _FakeDocumentResponse:
+            def stream(self, *args: object, **kwargs: object) -> _FakeDocumentResponse:
                 return _FakeDocumentResponse()
 
         try:

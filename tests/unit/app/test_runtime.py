@@ -104,34 +104,38 @@ class RuntimeDatabaseChecksTests(unittest.TestCase):
 
     def test_init_database_disposes_setup_engine(self) -> None:
         engine = _FakeEngine()
-        create_all_calls: list[object] = []
+        upgrade_calls: list[tuple[object, str]] = []
 
-        def create_all(target_engine: object) -> None:
-            create_all_calls.append(target_engine)
+        def upgrade(config: object, revision: str) -> None:
+            upgrade_calls.append((config, revision))
 
         with (
             patch.object(db, "get_engine", return_value=engine),
-            patch.object(db.Base.metadata, "create_all", side_effect=create_all),
+            patch.object(db.command, "upgrade", side_effect=upgrade),
+            patch.object(db, "_stamp_legacy_schema_if_needed"),
         ):
             db.init_database("sqlite://")
 
-        self.assertEqual(create_all_calls, [engine.connection])
+        self.assertEqual(len(upgrade_calls), 1)
+        self.assertEqual(upgrade_calls[0][1], "head")
         self.assertTrue(engine.disposed)
 
-    def test_init_database_serializes_postgres_schema_creation(self) -> None:
+    def test_init_database_serializes_postgres_alembic_upgrade(self) -> None:
         engine = _FakeEngine(dialect_name="postgresql")
-        create_all_calls: list[object] = []
+        upgrade_calls: list[tuple[object, str]] = []
 
-        def create_all(target_engine: object) -> None:
-            create_all_calls.append(target_engine)
+        def upgrade(config: object, revision: str) -> None:
+            upgrade_calls.append((config, revision))
 
         with (
             patch.object(db, "get_engine", return_value=engine),
-            patch.object(db.Base.metadata, "create_all", side_effect=create_all),
+            patch.object(db.command, "upgrade", side_effect=upgrade),
+            patch.object(db, "_stamp_legacy_schema_if_needed"),
         ):
             db.init_database("postgresql://")
 
-        self.assertEqual(create_all_calls, [engine.connection])
+        self.assertEqual(len(upgrade_calls), 1)
+        self.assertEqual(upgrade_calls[0][1], "head")
         self.assertIn("pg_advisory_lock", engine.connection.statements[0])
         self.assertIn("pg_advisory_unlock", engine.connection.statements[-1])
         self.assertTrue(engine.disposed)

@@ -3,10 +3,13 @@ from __future__ import annotations
 import html
 import importlib
 import io
+import ipaddress
 import json
 import mimetypes
 import re
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -18,9 +21,11 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 import structlog
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import or_, select
 from sqlalchemy.exc import SQLAlchemyError
 
+from seafile_ragflow_connector.app.metrics import authz_denials_total, upstream_latency_seconds
 from seafile_ragflow_connector.clients.http import ApiError
 from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
 from seafile_ragflow_connector.config.settings import SearchServiceSettings
@@ -29,12 +34,15 @@ from seafile_ragflow_connector.domain.ragflow_search_settings import (
     resolve_search_template,
 )
 from seafile_ragflow_connector.openwebui.sources import (
+    DOCUMENT_VIEWER_PURPOSE,
+    SEARCH_PREVIEW_AUDIENCE,
+    SOURCE_PREVIEW_PURPOSE,
     extract_answer_result,
     extract_references,
     sign_preview_payload,
     verify_preview_token,
 )
-from seafile_ragflow_connector.persistence import get_session_factory
+from seafile_ragflow_connector.persistence import get_engine, get_session_factory
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.search.ui import SEARCH_HTML
 from seafile_ragflow_connector.sources.evidence import (
@@ -45,6 +53,8 @@ from seafile_ragflow_connector.sources.evidence import (
     render_preview_html,
     score_value,
 )
+from seafile_ragflow_connector.utils.http_logging import sanitize_http_access_message
+from seafile_ragflow_connector.utils.readiness import ReadinessCache
 
 SEARCH_CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
@@ -78,6 +88,10 @@ class SearchBindError(RuntimeError):
 
 
 class SearchPermissionError(PermissionError):
+    pass
+
+
+class DocumentTooLargeError(ValueError):
     pass
 
 
@@ -126,6 +140,7 @@ def start_search_server(
         if isinstance(context, SearchServiceContext)
         else SearchServiceContext(settings=context, started_at=datetime.now(UTC))
     )
+    _validate_trusted_header_boundary(service_context.settings)
     handler_class = _build_handler(service_context)
     try:
         server = ThreadingHTTPServer(
@@ -161,6 +176,8 @@ def serve_search_forever(context: SearchServiceContext) -> None:
 
 
 def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler]:
+    readiness_cache: ReadinessCache[dict[str, Any]] = ReadinessCache(ttl_seconds=5.0)
+
     class SearchRequestHandler(BaseHTTPRequestHandler):
         server_version = "SeafileRAGFlowConnectorSearch/1.0"
 
@@ -175,16 +192,33 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
-                if self.path == "/health":
+                if self.path in {"/health", "/livez"}:
                     self._send_json(
                         {
-                            "status": "ok",
+                            "status": "alive",
                             "service": "connector-search",
                             "started_at": context.started_at.isoformat(),
                         }
                     )
                     return
                 parsed = urlparse(self.path)
+                if parsed.path == "/readyz":
+                    readiness = readiness_cache.get(
+                        lambda: _collect_search_readiness(context.settings)
+                    )
+                    status = (
+                        HTTPStatus.OK
+                        if readiness["status"] == "ready"
+                        else HTTPStatus.SERVICE_UNAVAILABLE
+                    )
+                    self._send_json(readiness, status=status)
+                    return
+                if parsed.path == "/metrics":
+                    self._send_binary(
+                        generate_latest(),
+                        headers={"Content-Type": CONTENT_TYPE_LATEST},
+                    )
+                    return
                 if parsed.path == "/api/search/source/preview":
                     params = parse_qs(parsed.query)
                     self._send_html(
@@ -192,11 +226,17 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                             _one(params, "token"),
                             context.settings.effective_search_source_preview_secret,
                             language=context.settings.connector_language or "de",
+                            expected_purpose=SOURCE_PREVIEW_PURPOSE,
+                            expected_audience=SEARCH_PREVIEW_AUDIENCE,
                         )
                     )
                     return
                 if parsed.path == "/api/search/source/document":
-                    user = _user_from_headers(context.settings, self.headers)
+                    user = _user_from_headers(
+                        context.settings,
+                        self.headers,
+                        self.client_address[0],
+                    )
                     params = parse_qs(parsed.query)
                     body, status, headers = _handle_document_proxy(
                         context.settings,
@@ -206,7 +246,11 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                     self._send_binary(body, status=status, headers=headers)
                     return
                 if parsed.path == "/api/search/source/document/page-image":
-                    user = _user_from_headers(context.settings, self.headers)
+                    user = _user_from_headers(
+                        context.settings,
+                        self.headers,
+                        self.client_address[0],
+                    )
                     params = parse_qs(parsed.query)
                     body, status, headers = _handle_pdf_page_image_proxy(
                         context.settings,
@@ -217,7 +261,11 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                     self._send_binary(body, status=status, headers=headers)
                     return
                 if self.path == "/api/search/profiles":
-                    user = _user_from_headers(context.settings, self.headers)
+                    user = _user_from_headers(
+                        context.settings,
+                        self.headers,
+                        self.client_address[0],
+                    )
                     self._send_json(_handle_profiles(context.settings, user))
                     return
                 self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
@@ -241,11 +289,19 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
         def do_POST(self) -> None:  # noqa: N802
             try:
                 if self.path == "/api/search/query":
-                    user = _user_from_headers(context.settings, self.headers)
+                    user = _user_from_headers(
+                        context.settings,
+                        self.headers,
+                        self.client_address[0],
+                    )
                     self._send_json(_handle_query(context.settings, user, self._json_body()))
                     return
                 if self.path == "/api/search/chat":
-                    user = _user_from_headers(context.settings, self.headers)
+                    user = _user_from_headers(
+                        context.settings,
+                        self.headers,
+                        self.client_address[0],
+                    )
                     self._send_json(_handle_chat(context.settings, user, self._json_body()))
                     return
                 self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
@@ -282,7 +338,8 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                 )
 
         def log_message(self, format: str, *args: Any) -> None:
-            structlog.get_logger(__name__).debug("search.http_access", message=format % args)
+            message = sanitize_http_access_message(format % args)
+            structlog.get_logger(__name__).debug("search.http_access", message=message)
 
         def _send_json(
             self,
@@ -347,6 +404,61 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
             return payload
 
     return SearchRequestHandler
+
+
+def _collect_search_readiness(settings: SearchServiceSettings) -> dict[str, Any]:
+    checks = [
+        _timed_readiness_check("database", lambda: _search_database_ready(settings)),
+        _timed_readiness_check("authz", lambda: _search_authz_ready(settings)),
+        _timed_readiness_check("ragflow", lambda: _search_ragflow_ready(settings)),
+    ]
+    ready = all(check["status"] == "ok" for check in checks)
+    return {"status": "ready" if ready else "not_ready", "checks": checks}
+
+
+def _timed_readiness_check(name: str, check: Callable[[], None]) -> dict[str, Any]:
+    started = time.perf_counter()
+    try:
+        check()
+        status = "ok"
+    except Exception:
+        status = "error"
+    return {
+        "name": name,
+        "status": status,
+        "latency_ms": int((time.perf_counter() - started) * 1000),
+    }
+
+
+def _search_database_ready(settings: SearchServiceSettings) -> None:
+    engine = get_engine(settings.database_url)
+    try:
+        with engine.connect() as connection:
+            connection.exec_driver_sql("select 1")
+    finally:
+        engine.dispose()
+
+
+def _search_authz_ready(settings: SearchServiceSettings) -> None:
+    with httpx.Client(
+        base_url=settings.search_authz_base_url,
+        timeout=1.5,
+        follow_redirects=False,
+    ) as client:
+        response = client.get("/readyz")
+        response.raise_for_status()
+
+
+def _search_ragflow_ready(settings: SearchServiceSettings) -> None:
+    with httpx.Client(
+        base_url=settings.search_ragflow_base_url,
+        headers={"Authorization": f"Bearer {settings.search_ragflow_api_key}"},
+        timeout=2.0,
+        verify=settings.search_ragflow_httpx_verify,
+        follow_redirects=False,
+    ) as client:
+        response = client.get("/api/v1/datasets", params={"page": 1, "page_size": 1})
+        response.raise_for_status()
 
 
 def _handle_profiles(settings: SearchServiceSettings, user: SearchUser) -> dict[str, Any]:
@@ -415,8 +527,10 @@ def _authz_profiles(settings: SearchServiceSettings, user: SearchUser) -> list[d
     _require_user_identity(user)
     headers = _authz_headers(settings, user)
     with httpx.Client(base_url=settings.search_authz_base_url, timeout=20.0) as client:
-        response = client.get("/api/authz/profiles", headers=headers)
+        with upstream_latency_seconds.labels("authz", "profiles").time():
+            response = client.get("/api/authz/profiles", headers=headers)
         if response.status_code in {401, 403}:
+            authz_denials_total.labels("search_profiles").inc()
             raise SearchPermissionError("Kein Zugriff auf diese Bibliothek.")
         response.raise_for_status()
         data = response.json()
@@ -435,12 +549,14 @@ def _authz_filter_profiles(
         "profile_ids": profile_ids,
     }
     with httpx.Client(base_url=settings.search_authz_base_url, timeout=20.0) as client:
-        response = client.post(
-            "/api/authz/filter-profiles",
-            json=payload,
-            headers=_authz_headers(settings, user),
-        )
+        with upstream_latency_seconds.labels("authz", "filter_profiles").time():
+            response = client.post(
+                "/api/authz/filter-profiles",
+                json=payload,
+                headers=_authz_headers(settings, user),
+            )
         if response.status_code in {401, 403}:
+            authz_denials_total.labels("search_filter_profiles").inc()
             raise SearchPermissionError("Kein Zugriff auf diese Bibliothek.")
         response.raise_for_status()
         data = response.json()
@@ -477,16 +593,19 @@ def _authz_check_source(
         "operation": "search",
     }
     with httpx.Client(base_url=settings.search_authz_base_url, timeout=20.0) as client:
-        response = client.post(
-            "/api/authz/check",
-            json=payload,
-            headers=_authz_headers(settings, user),
-        )
+        with upstream_latency_seconds.labels("authz", "check_source").time():
+            response = client.post(
+                "/api/authz/check",
+                json=payload,
+                headers=_authz_headers(settings, user),
+            )
         if response.status_code in {401, 403}:
+            authz_denials_total.labels("search_document").inc()
             raise SearchPermissionError("Kein Zugriff auf diese Quelle.")
         response.raise_for_status()
         data = response.json()
     if not isinstance(data, dict) or data.get("decision") != "allow":
+        authz_denials_total.labels("search_document").inc()
         raise SearchPermissionError("Kein Zugriff auf diese Quelle.")
 
 
@@ -501,8 +620,12 @@ def _handle_document_proxy(
         }
     if not token:
         raise ValueError("token is required")
-    payload = verify_preview_token(token, settings.effective_search_source_preview_secret)
-    _validate_document_token_expiry(payload)
+    payload = verify_preview_token(
+        token,
+        settings.effective_search_source_preview_secret,
+        expected_purpose=DOCUMENT_VIEWER_PURPOSE,
+        expected_audience=SEARCH_PREVIEW_AUDIENCE,
+    )
     repo_id = _required_payload_text(payload, "repo_id")
     source_path = _normalize_source_path(_required_payload_text(payload, "source_path")) or ""
     ragflow_dataset_id = _optional_text(payload.get("dataset_id"))
@@ -517,24 +640,34 @@ def _handle_document_proxy(
     headers = _authz_headers(settings, user)
     headers["Accept"] = "*/*"
     headers.pop("Content-Type", None)
-    with httpx.Client(base_url=settings.search_authz_base_url, timeout=180.0) as client:
-        response = client.get(
-            "/api/search/document",
-            params={"repo_id": repo_id, "path": source_path},
-            headers=headers,
-        )
-    status = _http_status(response.status_code)
-    response_headers = _document_proxy_headers(source_path, response.headers)
-    body = bytes(response.content)
+    max_bytes = settings.search_document_viewer_max_mb * 1024 * 1024
+    try:
+        with (
+            _viewer_download_semaphore(settings.search_document_viewer_max_concurrency),
+            httpx.Client(
+                base_url=settings.search_authz_base_url,
+                timeout=float(settings.search_document_viewer_timeout_seconds),
+            ) as client,
+            client.stream(
+                "GET",
+                "/api/search/document",
+                params={"repo_id": repo_id, "path": source_path},
+                headers=headers,
+                follow_redirects=False,
+            ) as response,
+        ):
+            status = _http_status(response.status_code)
+            response_headers = _document_proxy_headers(source_path, response.headers)
+            body = _bounded_response_body(response, max_bytes=max_bytes)
+    except DocumentTooLargeError:
+        return _json_error_bytes("document too large"), HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {
+            "Content-Type": "application/json; charset=utf-8"
+        }
     if response.status_code in {401, 403}:
         raise SearchPermissionError("Kein Zugriff auf diese Quelle.")
     if response.is_error and not body:
         body = _json_error_bytes("document unavailable")
         response_headers["Content-Type"] = "application/json; charset=utf-8"
-    if len(body) > settings.search_document_viewer_max_mb * 1024 * 1024:
-        return _json_error_bytes("document too large"), HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {
-            "Content-Type": "application/json; charset=utf-8"
-        }
     return body, status, response_headers
 
 
@@ -550,7 +683,10 @@ def _handle_pdf_page_image_proxy(
     if not str(headers.get("Content-Type", "")).lower().startswith("application/pdf"):
         raise ValueError("source is not a PDF")
     page_number = _parse_pdf_page_number(page)
-    png = _render_pdf_page_png(body, page_number)
+    with _pdf_render_semaphore(settings.search_pdf_render_max_concurrency):
+        png = _render_pdf_page_png(body, page_number)
+    if len(png) > settings.search_pdf_render_max_mb * 1024 * 1024:
+        raise DocumentTooLargeError("rendered PDF page exceeds configured limit")
     return png, HTTPStatus.OK, {
         "Content-Type": "image/png",
         "Content-Disposition": f'inline; filename="pdf-page-{page_number}.png"',
@@ -653,11 +789,12 @@ def _retrieve_allowed_profiles(
             dataset_id = str(profile.get("ragflow_dataset_id") or "")
             if not dataset_id:
                 continue
-            raw = client.retrieve_chunks(
-                dataset_id=dataset_id,
-                question=question,
-                retrieval_options=retrieval_options,
-            )
+            with upstream_latency_seconds.labels("ragflow", "retrieve_chunks").time():
+                raw = client.retrieve_chunks(
+                    dataset_id=dataset_id,
+                    question=question,
+                    retrieval_options=retrieval_options,
+                )
             if isinstance(raw, dict) and isinstance(
                 raw.get("_connector_retrieval_diagnostics"),
                 dict,
@@ -1083,6 +1220,8 @@ def _search_preview_url(hit: EvidenceHit, settings: SearchServiceSettings) -> st
     token = sign_preview_payload(
         hit.preview_payload(),
         settings.effective_search_source_preview_secret,
+        purpose=SOURCE_PREVIEW_PURPOSE,
+        audience=SEARCH_PREVIEW_AUDIENCE,
     )
     return f"/api/search/source/preview?token={quote(token)}"
 
@@ -1091,11 +1230,11 @@ def _search_document_viewer_url(hit: EvidenceHit, settings: SearchServiceSetting
     if not settings.search_document_viewer_enabled or not hit.repo_id or not hit.source_path:
         return None
     payload = hit.preview_payload()
-    payload["purpose"] = "document_viewer"
-    payload["expires_at"] = int(datetime.now(UTC).timestamp()) + 900
     token = sign_preview_payload(
         payload,
         settings.effective_search_source_preview_secret,
+        purpose=DOCUMENT_VIEWER_PURPOSE,
+        audience=SEARCH_PREVIEW_AUDIENCE,
     )
     page = "" if hit.page in (None, "") else f"#page={quote(str(hit.page), safe='')}"
     return f"/api/search/source/document?token={quote(token)}{page}"
@@ -1646,11 +1785,56 @@ def _answer_snippet(value: object) -> str:
     return _compact(text, 220)
 
 
-def _user_from_headers(settings: SearchServiceSettings, headers: Any) -> SearchUser:
+def _user_from_headers(
+    settings: SearchServiceSettings,
+    headers: Any,
+    client_host: str,
+) -> SearchUser:
+    if not _trusted_proxy_peer(settings, client_host):
+        raise SearchPermissionError(
+            "Identitätsheader stammen nicht von einem vertrauenswürdigen Proxy."
+        )
     username = _clean_header(headers.get(settings.search_trusted_username_header))
     email = _clean_header(headers.get(settings.search_trusted_email_header))
     display_name = _clean_header(headers.get(settings.search_trusted_display_name_header))
     return SearchUser(username=username, email=email, display_name=display_name)
+
+
+def _trusted_proxy_peer(settings: SearchServiceSettings, client_host: str) -> bool:
+    try:
+        address = ipaddress.ip_address(client_host)
+    except ValueError:
+        return False
+    addresses: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address | None, ...] = (address,)
+    if isinstance(address, ipaddress.IPv6Address):
+        addresses = (address, address.ipv4_mapped)
+    for raw_network in settings.search_trusted_proxy_cidrs:
+        network = ipaddress.ip_network(raw_network, strict=False)
+        if any(candidate is not None and candidate in network for candidate in addresses):
+            return True
+    return False
+
+
+def _validate_trusted_header_boundary(settings: SearchServiceSettings) -> None:
+    if settings.search_auth_mode != "trusted_header":
+        return
+    networks = tuple(
+        ipaddress.ip_network(raw_network, strict=False)
+        for raw_network in settings.search_trusted_proxy_cidrs
+    )
+    production = settings.app_env.strip().lower() in {"prod", "production"}
+    public_bind = settings.search_service_host.strip().lower() in {
+        "",
+        "0.0.0.0",
+        "::",
+        "[::]",
+    }
+    if production and public_bind and not networks:
+        raise SearchBindError(
+            "trusted_header with a public bind requires SEARCH_TRUSTED_PROXY_CIDRS"
+        )
+    if production and any(network.prefixlen == 0 for network in networks):
+        raise SearchBindError("SEARCH_TRUSTED_PROXY_CIDRS must not trust every address")
 
 
 def _require_user_identity(user: SearchUser) -> None:
@@ -1849,18 +2033,6 @@ def _required_payload_text(payload: dict[str, Any], key: str) -> str:
     return text
 
 
-def _validate_document_token_expiry(payload: dict[str, Any]) -> None:
-    expires_at = payload.get("expires_at")
-    if expires_at is None or expires_at == "":
-        return
-    try:
-        expires_at_int = int(str(expires_at))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("invalid preview token expiry") from exc
-    if expires_at_int < int(datetime.now(UTC).timestamp()):
-        raise ValueError("preview token expired")
-
-
 def _http_status(value: int) -> HTTPStatus:
     try:
         return HTTPStatus(value)
@@ -1870,6 +2042,33 @@ def _http_status(value: int) -> HTTPStatus:
 
 def _json_error_bytes(message: str) -> bytes:
     return json.dumps({"error": message}, ensure_ascii=False).encode("utf-8")
+
+
+def _bounded_response_body(response: httpx.Response, *, max_bytes: int) -> bytes:
+    raw_length = response.headers.get("Content-Length")
+    if raw_length:
+        try:
+            content_length = int(raw_length)
+        except ValueError:
+            content_length = None
+        if content_length is not None and content_length > max_bytes:
+            raise DocumentTooLargeError("document exceeds configured limit")
+    body = bytearray()
+    for chunk in response.iter_bytes():
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            raise DocumentTooLargeError("document exceeds configured limit")
+    return bytes(body)
+
+
+@lru_cache
+def _viewer_download_semaphore(limit: int) -> threading.BoundedSemaphore:
+    return threading.BoundedSemaphore(limit)
+
+
+@lru_cache
+def _pdf_render_semaphore(limit: int) -> threading.BoundedSemaphore:
+    return threading.BoundedSemaphore(limit)
 
 
 def _safe_filename(path: str) -> str:

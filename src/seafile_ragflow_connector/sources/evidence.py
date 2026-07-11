@@ -240,13 +240,25 @@ def compact_text(value: Any, limit: int) -> str:
     return clean[: max(0, limit - 3)].rstrip() + "..."
 
 
-def render_preview_html(token: str | None, secret: str | None, *, language: str = "de") -> str:
+def render_preview_html(
+    token: str | None,
+    secret: str | None,
+    *,
+    language: str = "de",
+    expected_purpose: str = "source_preview",
+    expected_audience: str = "openwebui_proxy",
+) -> str:
     from seafile_ragflow_connector.openwebui.sources import verify_preview_token
 
     if not token or not secret:
         return _preview_unavailable_html(language)
     try:
-        payload = verify_preview_token(token, secret)
+        payload = verify_preview_token(
+            token,
+            secret,
+            expected_purpose=expected_purpose,
+            expected_audience=expected_audience,
+        )
     except ValueError:
         return _preview_unavailable_html(language)
     return render_preview_payload_html(payload, language=language)

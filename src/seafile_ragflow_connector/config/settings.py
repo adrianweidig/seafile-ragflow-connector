@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -84,6 +85,10 @@ class Settings(BaseSettings):
     seafile_rewrite_download_urls: bool = False
     seafile_download_rewrite_from: str | None = None
     seafile_download_rewrite_to: str | None = None
+    seafile_download_allowed_origins_csv: str = Field(
+        default="",
+        validation_alias="SEAFILE_DOWNLOAD_ALLOWED_ORIGINS",
+    )
     seafile_public_base_url: str | None = Field(
         default=None,
         validation_alias="SEAFILE_PUBLIC_BASE_URL",
@@ -118,6 +123,10 @@ class Settings(BaseSettings):
     search_answer_llm_temperature: float = 0.2
     search_document_viewer_enabled: bool = True
     search_document_viewer_max_mb: int = 100
+    search_document_viewer_timeout_seconds: int = 30
+    search_document_viewer_max_concurrency: int = 4
+    search_pdf_render_max_concurrency: int = 2
+    search_pdf_render_max_mb: int = 25
     search_ragflow_template_source_order_csv: str = Field(
         default="search_app,chat,builtin",
         validation_alias="SEARCH_RAGFLOW_TEMPLATE_SOURCE_ORDER",
@@ -247,6 +256,7 @@ class Settings(BaseSettings):
     job_max_attempts: int = 5
     job_retry_base_seconds: int = 30
     job_retry_max_seconds: int = 3600
+    job_history_retention_days: int = 30
 
     cache_dir: Path = Path("/cache")
     temp_dir: Path = Path("/cache/tmp")
@@ -348,8 +358,19 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return value
 
+    @field_validator("job_history_retention_days")
+    @classmethod
+    def validate_job_history_retention_days(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("JOB_HISTORY_RETENTION_DAYS must be positive")
+        return value
+
     @field_validator(
         "search_document_viewer_max_mb",
+        "search_document_viewer_timeout_seconds",
+        "search_document_viewer_max_concurrency",
+        "search_pdf_render_max_concurrency",
+        "search_pdf_render_max_mb",
         "search_answer_llm_timeout_seconds",
         "search_answer_llm_max_tokens",
     )
@@ -591,6 +612,10 @@ class Settings(BaseSettings):
         return _split_csv(self.authz_api_allow_networks_csv)
 
     @property
+    def seafile_download_allowed_origins(self) -> tuple[str, ...]:
+        return _split_csv(self.seafile_download_allowed_origins_csv)
+
+    @property
     def openwebui_effective_sync_mode(self) -> Literal["disabled", "dry-run", "sync", "repair"]:
         if not self.openwebui_integration_enabled or self.openwebui_sync_mode == "disabled":
             return "disabled"
@@ -674,6 +699,10 @@ class SearchServiceSettings(BaseSettings):
     search_trusted_username_header: str = "X-Forwarded-User"
     search_trusted_email_header: str = "X-Forwarded-Email"
     search_trusted_display_name_header: str = "X-Forwarded-Name"
+    search_trusted_proxy_cidrs_csv: str = Field(
+        default="",
+        validation_alias="SEARCH_TRUSTED_PROXY_CIDRS",
+    )
 
     search_authz_base_url: str = "http://connector-controller:8080"
     search_authz_shared_secret: str = "change-me"
@@ -738,6 +767,10 @@ class SearchServiceSettings(BaseSettings):
     search_source_preview_secret: str | None = None
     search_document_viewer_enabled: bool = True
     search_document_viewer_max_mb: int = 100
+    search_document_viewer_timeout_seconds: int = 30
+    search_document_viewer_max_concurrency: int = 4
+    search_pdf_render_max_concurrency: int = 2
+    search_pdf_render_max_mb: int = 25
 
     @field_validator("connector_language")
     @classmethod
@@ -819,6 +852,10 @@ class SearchServiceSettings(BaseSettings):
         "search_result_snippet_context_chars",
         "search_answer_max_sources",
         "search_document_viewer_max_mb",
+        "search_document_viewer_timeout_seconds",
+        "search_document_viewer_max_concurrency",
+        "search_pdf_render_max_concurrency",
+        "search_pdf_render_max_mb",
         "search_answer_llm_timeout_seconds",
         "search_answer_llm_max_tokens",
     )
@@ -854,6 +891,17 @@ class SearchServiceSettings(BaseSettings):
         if value < 0 or value > 2:
             msg = "SEARCH_ANSWER_LLM_TEMPERATURE must be between 0 and 2"
             raise ValueError(msg)
+        return value
+
+    @field_validator("search_trusted_proxy_cidrs_csv")
+    @classmethod
+    def validate_search_trusted_proxy_cidrs(cls, value: str) -> str:
+        for raw_network in _split_csv(value):
+            try:
+                ipaddress.ip_network(raw_network, strict=False)
+            except ValueError as exc:
+                msg = "SEARCH_TRUSTED_PROXY_CIDRS contains an invalid network"
+                raise ValueError(msg) from exc
         return value
 
     @model_validator(mode="after")
@@ -905,6 +953,10 @@ class SearchServiceSettings(BaseSettings):
     @property
     def effective_search_source_preview_secret(self) -> str:
         return self.search_source_preview_secret or self.search_authz_shared_secret
+
+    @property
+    def search_trusted_proxy_cidrs(self) -> tuple[str, ...]:
+        return _split_csv(self.search_trusted_proxy_cidrs_csv)
 
 
 def _is_http_url(value: str) -> bool:

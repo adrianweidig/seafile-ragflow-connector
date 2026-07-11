@@ -82,6 +82,8 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
         rewrite_download_urls=settings.seafile_rewrite_download_urls,
         rewrite_from=settings.seafile_download_rewrite_from,
         rewrite_to=settings.seafile_download_rewrite_to,
+        allowed_download_origins=settings.seafile_download_allowed_origins,
+        max_download_bytes=settings.max_file_size_mb * 1024 * 1024,
     )
     ragflow_client = RAGFlowClient(
         settings.ragflow_base_url,
