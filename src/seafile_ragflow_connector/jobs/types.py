@@ -61,7 +61,7 @@ class JobSpec:
     file_path: str | None = None
     payload: dict[str, Any] = field(default_factory=dict)
     priority: int | None = None
-    max_attempts: int = 5
+    max_attempts: int | None = None
 
     def resolved_priority(self) -> int:
         if self.priority is not None:

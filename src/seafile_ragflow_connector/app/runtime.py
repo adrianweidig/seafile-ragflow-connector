@@ -70,23 +70,28 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
     _retry(lambda: check_redis(settings.redis_url), "redis")
     session_factory = get_session_factory(settings.database_url)
     dashboard_store = build_dashboard_store(settings, session_factory)
+    seafile_url = settings.seafile_internal_url or settings.seafile_base_url
     admin_client = SeafileAdminClient(
-        settings.seafile_base_url,
+        seafile_url,
         settings.seafile_admin_token,
         verify=settings.seafile_httpx_verify,
     )
     sync_client = SeafileSyncClient(
-        settings.seafile_base_url,
+        seafile_url,
         settings.seafile_sync_user_token,
         verify=settings.seafile_httpx_verify,
         rewrite_download_urls=settings.seafile_rewrite_download_urls,
         rewrite_from=settings.seafile_download_rewrite_from,
         rewrite_to=settings.seafile_download_rewrite_to,
-        allowed_download_origins=settings.seafile_download_allowed_origins,
+        allowed_download_origins=(
+            settings.seafile_base_url,
+            *settings.seafile_download_allowed_origins,
+        ),
         max_download_bytes=settings.max_file_size_mb * 1024 * 1024,
     )
+    ragflow_url = settings.ragflow_internal_url or settings.ragflow_base_url
     ragflow_client = RAGFlowClient(
-        settings.ragflow_base_url,
+        ragflow_url,
         settings.ragflow_api_key,
         verify=settings.ragflow_httpx_verify,
     )
@@ -115,6 +120,7 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
         orchestrator=orchestrator,
         job_store=JobStore(
             session_factory,
+            default_max_attempts=settings.job_max_attempts,
             retry_base_seconds=settings.job_retry_base_seconds,
             retry_max_seconds=settings.job_retry_max_seconds,
         ),
@@ -172,8 +178,16 @@ def _build_openwebui_client(settings: Settings) -> OpenWebUIClient | None:
 def _warn_insecure_tls(settings: Settings) -> None:
     logger = structlog.get_logger(__name__)
     checks = (
-        ("Connector -> Seafile", settings.seafile_base_url, settings.seafile_verify_ssl),
-        ("Connector -> RAGFlow", settings.ragflow_base_url, settings.ragflow_verify_ssl),
+        (
+            "Connector -> Seafile",
+            settings.seafile_internal_url or settings.seafile_base_url,
+            settings.seafile_verify_ssl,
+        ),
+        (
+            "Connector -> RAGFlow",
+            settings.ragflow_internal_url or settings.ragflow_base_url,
+            settings.ragflow_verify_ssl,
+        ),
         ("Connector -> OpenWebUI", settings.openwebui_base_url, settings.openwebui_verify_ssl),
         (
             "OpenWebUI Pipe -> Connector Proxy",

@@ -39,10 +39,18 @@ class JobStore:
         self,
         session_factory: sessionmaker[Session],
         *,
+        default_max_attempts: int = 5,
         retry_base_seconds: int = 30,
         retry_max_seconds: int = 3600,
     ) -> None:
+        if default_max_attempts <= 0:
+            raise ValueError("default_max_attempts must be positive")
+        if retry_base_seconds <= 0 or retry_max_seconds <= 0:
+            raise ValueError("retry delays must be positive")
+        if retry_base_seconds > retry_max_seconds:
+            raise ValueError("retry_base_seconds must not exceed retry_max_seconds")
         self.session_factory = session_factory
+        self.default_max_attempts = default_max_attempts
         self.retry_base_seconds = retry_base_seconds
         self.retry_max_seconds = retry_max_seconds
 
@@ -50,6 +58,11 @@ class JobStore:
         return self.enqueue_with_result(spec).job_id
 
     def enqueue_with_result(self, spec: JobSpec) -> EnqueueResult:
+        max_attempts = (
+            self.default_max_attempts if spec.max_attempts is None else spec.max_attempts
+        )
+        if max_attempts <= 0:
+            raise ValueError("max_attempts must be positive")
         values = {
             "job_type": spec.job_type.value,
             "repo_id": spec.repo_id,
@@ -58,7 +71,7 @@ class JobStore:
             "payload": spec.payload,
             "status": JobStatus.QUEUED.value,
             "priority": spec.resolved_priority(),
-            "max_attempts": spec.max_attempts,
+            "max_attempts": max_attempts,
         }
         with self.session_factory() as session:
             dialect_name = session.get_bind().dialect.name
@@ -93,7 +106,7 @@ class JobStore:
                 )
                 if existing is not None:
                     existing.priority = min(existing.priority, spec.resolved_priority())
-                    existing.max_attempts = max(existing.max_attempts, spec.max_attempts)
+                    existing.max_attempts = max(existing.max_attempts, max_attempts)
                     self._refresh_queue_metrics(session)
                     session.commit()
                     jobs_deduplicated_total.inc()

@@ -12,14 +12,66 @@ from seafile_ragflow_connector.persistence import Base
 from seafile_ragflow_connector.persistence.models.job import SyncJob
 
 
-def _store() -> JobStore:
+def _store(
+    *,
+    default_max_attempts: int = 5,
+    retry_base_seconds: int = 30,
+    retry_max_seconds: int = 3600,
+) -> JobStore:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    return JobStore(sessionmaker(bind=engine, class_=Session, expire_on_commit=False))
+    return JobStore(
+        sessionmaker(bind=engine, class_=Session, expire_on_commit=False),
+        default_max_attempts=default_max_attempts,
+        retry_base_seconds=retry_base_seconds,
+        retry_max_seconds=retry_max_seconds,
+    )
+
+
+def test_configured_max_attempts_is_default_and_explicit_override_is_preserved() -> None:
+    store = _store(default_max_attempts=7)
+
+    default_job_id = store.enqueue(JobSpec(JobType.SYNC_LIBRARY_FULL, repo_id="default"))
+    override_job_id = store.enqueue(
+        JobSpec(JobType.SYNC_LIBRARY_FULL, repo_id="override", max_attempts=2)
+    )
+
+    with store.session_factory() as session:
+        default_job = session.get(SyncJob, default_job_id)
+        override_job = session.get(SyncJob, override_job_id)
+        assert default_job is not None and default_job.max_attempts == 7
+        assert override_job is not None and override_job.max_attempts == 2
+
+
+def test_job_store_rejects_invalid_retry_configuration() -> None:
+    invalid_settings = (
+        {"default_max_attempts": 0},
+        {"retry_base_seconds": 0},
+        {"retry_max_seconds": 0},
+        {"retry_base_seconds": 31, "retry_max_seconds": 30},
+    )
+
+    for settings in invalid_settings:
+        try:
+            _store(**settings)
+        except ValueError:
+            continue
+        raise AssertionError(f"expected invalid job store settings to fail: {settings}")
+
+
+def test_job_spec_rejects_non_positive_max_attempts_when_enqueued() -> None:
+    store = _store()
+
+    for max_attempts in (0, -1):
+        try:
+            store.enqueue(JobSpec(JobType.SYNC_LIBRARY_FULL, max_attempts=max_attempts))
+        except ValueError:
+            continue
+        raise AssertionError(f"expected max_attempts={max_attempts} to fail")
 
 
 def test_semantically_identical_active_jobs_are_coalesced() -> None:
