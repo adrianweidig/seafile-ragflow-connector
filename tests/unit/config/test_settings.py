@@ -162,6 +162,8 @@ class SettingsTests(unittest.TestCase):
                 "job_max_attempts": 7,
                 "job_retry_base_seconds": 15,
                 "job_retry_max_seconds": 120,
+                "job_lease_seconds": 300,
+                "job_heartbeat_seconds": 100,
             }
         )
 
@@ -170,12 +172,16 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.job_max_attempts, 7)
         self.assertEqual(settings.job_retry_base_seconds, 15)
         self.assertEqual(settings.job_retry_max_seconds, 120)
+        self.assertEqual(settings.job_lease_seconds, 300)
+        self.assertEqual(settings.job_heartbeat_seconds, 100)
 
     def test_job_retry_settings_must_be_positive_and_ordered(self) -> None:
         for field in (
             "job_max_attempts",
             "job_retry_base_seconds",
             "job_retry_max_seconds",
+            "job_lease_seconds",
+            "job_heartbeat_seconds",
         ):
             values = self.base_values()
             values.update(
@@ -194,6 +200,18 @@ class SettingsTests(unittest.TestCase):
                 "database_url": "postgresql+psycopg://custom/db",
                 "job_retry_base_seconds": 61,
                 "job_retry_max_seconds": 60,
+            }
+        )
+
+        with self.assertRaises(ValueError):
+            Settings(**values)
+
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "job_lease_seconds": 179,
+                "job_heartbeat_seconds": 60,
             }
         )
 

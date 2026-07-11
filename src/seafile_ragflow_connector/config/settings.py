@@ -256,6 +256,8 @@ class Settings(BaseSettings):
     job_max_attempts: int = 5
     job_retry_base_seconds: int = 30
     job_retry_max_seconds: int = 3600
+    job_lease_seconds: int = 900
+    job_heartbeat_seconds: int = 60
     job_history_retention_days: int = 30
 
     cache_dir: Path = Path("/cache")
@@ -378,6 +380,8 @@ class Settings(BaseSettings):
         "job_max_attempts",
         "job_retry_base_seconds",
         "job_retry_max_seconds",
+        "job_lease_seconds",
+        "job_heartbeat_seconds",
     )
     @classmethod
     def validate_job_positive_int(cls, value: int) -> int:
@@ -390,6 +394,10 @@ class Settings(BaseSettings):
         if self.job_retry_base_seconds > self.job_retry_max_seconds:
             raise ValueError(
                 "JOB_RETRY_BASE_SECONDS must not exceed JOB_RETRY_MAX_SECONDS"
+            )
+        if self.job_heartbeat_seconds * 3 > self.job_lease_seconds:
+            raise ValueError(
+                "JOB_HEARTBEAT_SECONDS must not exceed one third of JOB_LEASE_SECONDS"
             )
         return self
 

@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from seafile_ragflow_connector.jobs.job_store import JobStore
-from seafile_ragflow_connector.jobs.types import JobSpec, JobType
+from seafile_ragflow_connector.jobs.types import JobSpec, JobStatus, JobType
 from seafile_ragflow_connector.persistence.db import (
     _alembic_config,
     database_revisions,
@@ -114,3 +114,44 @@ def test_parallel_identical_jobs_are_coalesced_on_postgresql() -> None:
     assert len(job_ids) == 1
     assert inserted == 1
     assert active_jobs == 1
+
+
+@pytest.mark.skipif(
+    not os.environ.get("TEST_POSTGRES_URL"),
+    reason="TEST_POSTGRES_URL is required for the PostgreSQL concurrency test",
+)
+def test_parallel_claim_has_one_owner_and_fences_terminal_update_on_postgresql() -> None:
+    database_url = os.environ["TEST_POSTGRES_URL"]
+    command.downgrade(_alembic_config(database_url), "base")
+    init_database(database_url)
+    engine = create_engine(database_url, pool_pre_ping=True)
+    session_factory = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
+    store = JobStore(session_factory)
+    job_id = store.enqueue(JobSpec(JobType.SYNC_LIBRARY_FULL, repo_id="claim-repo"))
+    workers = 4
+    start = Barrier(workers)
+
+    def acquire(worker_id: str) -> tuple[str, int | None]:
+        start.wait()
+        job = store.acquire_next(worker_id)
+        return worker_id, int(job.id) if job is not None else None
+
+    try:
+        worker_ids = [f"worker-{index}" for index in range(workers)]
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            results = list(executor.map(acquire, worker_ids))
+        claims = [(worker_id, claimed_id) for worker_id, claimed_id in results if claimed_id]
+        assert len(claims) == 1
+        owner, claimed_id = claims[0]
+        assert claimed_id == job_id
+        assert not store.mark_succeeded(job_id, worker_id="wrong-owner")
+        assert store.mark_succeeded(job_id, worker_id=owner)
+        with engine.connect() as connection:
+            status = connection.scalar(
+                text("SELECT status FROM sync_jobs WHERE id = :job_id"),
+                {"job_id": job_id},
+            )
+    finally:
+        engine.dispose()
+
+    assert status == JobStatus.SUCCEEDED.value

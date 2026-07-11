@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import Select, delete, func, select, text
+from sqlalchemy import Select, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
@@ -32,6 +32,16 @@ ACTIVE_JOB_INDEX_PREDICATE = text("status IN ('queued', 'retrying', 'running')")
 class EnqueueResult:
     job_id: int
     deduplicated: bool
+
+
+@dataclass(frozen=True)
+class StaleJobRecoveryResult:
+    retrying: int = 0
+    dead: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.retrying + self.dead
 
 
 class JobStore:
@@ -116,62 +126,152 @@ class JobStore:
     def acquire_next(self, worker_id: str) -> SyncJob | None:
         with self.session_factory() as session:
             now = datetime.now(UTC)
-            stmt: Select[tuple[SyncJob]] = (
-                select(SyncJob)
+            stmt: Select[tuple[int]] = (
+                select(SyncJob.id)
                 .where(SyncJob.status.in_([JobStatus.QUEUED.value, JobStatus.RETRYING.value]))
                 .where(SyncJob.run_after <= now)
                 .order_by(SyncJob.priority.asc(), SyncJob.created_at.asc())
                 .limit(1)
                 .with_for_update(skip_locked=True)
             )
-            job = session.execute(stmt).scalar_one_or_none()
-            if job is None:
+            job_id = session.execute(stmt).scalar_one_or_none()
+            if job_id is None:
                 return None
-            job.status = JobStatus.RUNNING.value
-            job.locked_by = worker_id
-            job.locked_at = now
-            job.attempts += 1
+            job = session.execute(
+                update(SyncJob)
+                .where(SyncJob.id == job_id)
+                .where(
+                    SyncJob.status.in_([JobStatus.QUEUED.value, JobStatus.RETRYING.value])
+                )
+                .where(SyncJob.run_after <= now)
+                .values(
+                    status=JobStatus.RUNNING.value,
+                    locked_by=worker_id,
+                    locked_at=now,
+                    attempts=SyncJob.attempts + 1,
+                )
+                .execution_options(synchronize_session=False)
+                .returning(SyncJob)
+            ).scalar_one_or_none()
+            if job is None:
+                session.rollback()
+                return None
             self._refresh_queue_metrics(session)
             session.commit()
             session.refresh(job)
             session.expunge(job)
             return job
 
-    def mark_succeeded(self, job_id: int) -> None:
+    def heartbeat(self, job_id: int, *, worker_id: str) -> bool:
         with self.session_factory() as session:
-            job = session.get(SyncJob, job_id)
+            result = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(SyncJob)
+                    .where(SyncJob.id == job_id)
+                    .where(SyncJob.status == JobStatus.RUNNING.value)
+                    .where(SyncJob.locked_by == worker_id)
+                    .values(locked_at=datetime.now(UTC))
+                    .execution_options(synchronize_session=False)
+                ),
+            )
+            session.commit()
+            return bool(result.rowcount)
+
+    def mark_succeeded(self, job_id: int, *, worker_id: str) -> bool:
+        with self.session_factory() as session:
+            result = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(SyncJob)
+                    .where(SyncJob.id == job_id)
+                    .where(SyncJob.status == JobStatus.RUNNING.value)
+                    .where(SyncJob.locked_by == worker_id)
+                    .values(
+                        status=JobStatus.SUCCEEDED.value,
+                        error_message=None,
+                        locked_by=None,
+                        locked_at=None,
+                    )
+                    .execution_options(synchronize_session=False)
+                ),
+            )
+            if result.rowcount:
+                self._refresh_queue_metrics(session)
+            session.commit()
+            return bool(result.rowcount)
+
+    def mark_failed(
+        self,
+        job_id: int,
+        error: str,
+        *,
+        worker_id: str,
+        retryable: bool,
+    ) -> JobStatus | None:
+        with self.session_factory() as session:
+            job = session.scalar(
+                select(SyncJob)
+                .where(SyncJob.id == job_id)
+                .where(SyncJob.status == JobStatus.RUNNING.value)
+                .where(SyncJob.locked_by == worker_id)
+                .with_for_update()
+            )
             if job is None:
-                return
-            job.status = JobStatus.SUCCEEDED.value
-            job.error_message = None
-            job.locked_by = None
-            job.locked_at = None
+                return None
+            status = self._mark_failed_job(
+                session,
+                job,
+                error,
+                retryable=retryable,
+                now=datetime.now(UTC),
+            )
+            if status is None:
+                session.rollback()
+                return None
             self._refresh_queue_metrics(session)
             session.commit()
+            return status
 
-    def mark_failed(self, job_id: int, error: str) -> JobStatus:
-        with self.session_factory() as session:
-            job = session.get(SyncJob, job_id)
-            if job is None:
-                return JobStatus.DEAD
-            job.error_message = error[:4000]
-            job.locked_by = None
-            job.locked_at = None
-            if job.attempts >= job.max_attempts:
-                job.status = JobStatus.DEAD.value
-                self._refresh_queue_metrics(session)
-                session.commit()
-                return JobStatus.DEAD
+    def _mark_failed_job(
+        self,
+        session: Session,
+        job: SyncJob,
+        error: str,
+        *,
+        retryable: bool,
+        now: datetime,
+    ) -> JobStatus | None:
+        if not retryable or job.attempts >= job.max_attempts:
+            status = JobStatus.DEAD
+            run_after = now
+        else:
             delay = exponential_backoff_seconds(
                 job.attempts,
                 base_seconds=self.retry_base_seconds,
                 max_seconds=self.retry_max_seconds,
             )
-            job.status = JobStatus.RETRYING.value
-            job.run_after = datetime.now(UTC) + timedelta(seconds=delay)
-            self._refresh_queue_metrics(session)
-            session.commit()
-            return JobStatus.RETRYING
+            status = JobStatus.RETRYING
+            run_after = now + timedelta(seconds=delay)
+        result = cast(
+            CursorResult[Any],
+            session.execute(
+                update(SyncJob)
+                .where(SyncJob.id == job.id)
+                .where(SyncJob.status == JobStatus.RUNNING.value)
+                .where(SyncJob.locked_by == job.locked_by)
+                .where(SyncJob.attempts == job.attempts)
+                .values(
+                    status=status.value,
+                    error_message=error[:4000],
+                    locked_by=None,
+                    locked_at=None,
+                    run_after=run_after,
+                )
+                .execution_options(synchronize_session=False)
+            ),
+        )
+        return status if result.rowcount else None
 
     @staticmethod
     def to_spec(job: SyncJob) -> JobSpec:
@@ -184,24 +284,77 @@ class JobStore:
             max_attempts=job.max_attempts,
         )
 
-    def requeue_stale_running_jobs(self, *, older_than_seconds: int = 900) -> int:
-        cutoff = datetime.now(UTC) - timedelta(seconds=older_than_seconds)
-        count = 0
+    def requeue_stale_running_jobs(
+        self,
+        *,
+        older_than_seconds: int = 900,
+    ) -> StaleJobRecoveryResult:
+        if older_than_seconds <= 0:
+            raise ValueError("older_than_seconds must be positive")
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(seconds=older_than_seconds)
+        retrying = 0
+        dead = 0
         with self.session_factory() as session:
             jobs = session.scalars(
                 select(SyncJob)
                 .where(SyncJob.status == JobStatus.RUNNING.value)
-                .where(SyncJob.locked_at < cutoff)
+                .where(or_(SyncJob.locked_at.is_(None), SyncJob.locked_at < cutoff))
+                .with_for_update(skip_locked=True)
             ).all()
             for job in jobs:
-                job.status = JobStatus.RETRYING.value
-                job.locked_by = None
-                job.locked_at = None
-                job.run_after = datetime.now(UTC)
-                count += 1
+                recovered_status = self._recover_stale_job(
+                    session,
+                    job,
+                    cutoff=cutoff,
+                    now=now,
+                )
+                if recovered_status == JobStatus.DEAD:
+                    dead += 1
+                elif recovered_status == JobStatus.RETRYING:
+                    retrying += 1
             self._refresh_queue_metrics(session)
             session.commit()
-        return count
+        return StaleJobRecoveryResult(retrying=retrying, dead=dead)
+
+    def _recover_stale_job(
+        self,
+        session: Session,
+        job: SyncJob,
+        *,
+        cutoff: datetime,
+        now: datetime,
+    ) -> JobStatus | None:
+        if job.attempts >= job.max_attempts:
+            status = JobStatus.DEAD
+            run_after = now
+        else:
+            status = JobStatus.RETRYING
+            delay = exponential_backoff_seconds(
+                job.attempts,
+                base_seconds=self.retry_base_seconds,
+                max_seconds=self.retry_max_seconds,
+            )
+            run_after = now + timedelta(seconds=delay)
+        result = cast(
+            CursorResult[Any],
+            session.execute(
+                update(SyncJob)
+                .where(SyncJob.id == job.id)
+                .where(SyncJob.status == JobStatus.RUNNING.value)
+                .where(SyncJob.locked_by == job.locked_by)
+                .where(or_(SyncJob.locked_at.is_(None), SyncJob.locked_at < cutoff))
+                .values(
+                    status=status.value,
+                    locked_by=None,
+                    locked_at=None,
+                    error_message="worker_lease_expired",
+                    run_after=run_after,
+                )
+                .execution_options(synchronize_session=False)
+            ),
+        )
+        return status if result.rowcount else None
 
     def purge_completed_jobs(self, *, older_than_days: int = 30) -> int:
         if older_than_days <= 0:
