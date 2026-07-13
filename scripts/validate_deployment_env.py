@@ -17,7 +17,14 @@ COMPOSE_FILES = (
 SEARCH_COMPOSE_FILES = (
     Path("deploy/compose/search.compose.yml"),
     Path("deploy/portainer/docker-compose.yml"),
-    Path("deploy/swarm/docker-stack.yml"),
+    Path("deploy/swarm/search.yml"),
+)
+
+DEPLOYMENT_PROFILE_FILES = (
+    Path("deploy/compose/bundled-state.compose.yml"),
+    Path("deploy/compose/external-state.compose.yml"),
+    Path("deploy/swarm/bundled-state.yml"),
+    Path("deploy/swarm/external-state.yml"),
 )
 
 HOST_ONLY_ENV_KEYS = {
@@ -106,10 +113,36 @@ def main() -> int:
             failed = True
             print(f"{compose_file}: search environment drift detected", file=sys.stderr)
             print("  missing: " + ", ".join(missing), file=sys.stderr)
+    profile_errors = _deployment_profile_errors()
+    if profile_errors:
+        failed = True
+        for error in profile_errors:
+            print(error, file=sys.stderr)
     if failed:
         return 1
     print("Deployment connector environment blocks are aligned.")
     return 0
+
+
+def _deployment_profile_errors() -> list[str]:
+    errors = [
+        f"{path}: deployment profile missing"
+        for path in DEPLOYMENT_PROFILE_FILES
+        if not (ROOT / path).is_file()
+    ]
+    if errors:
+        return errors
+
+    bundled = (ROOT / DEPLOYMENT_PROFILE_FILES[0]).read_text(encoding="utf-8")
+    external = (ROOT / DEPLOYMENT_PROFILE_FILES[1]).read_text(encoding="utf-8")
+    swarm = (ROOT / "deploy/swarm/search.yml").read_text(encoding="utf-8")
+    if "POSTGRES_PASSWORD:?" not in bundled:
+        errors.append("bundled-state compose profile does not require POSTGRES_PASSWORD")
+    if "DATABASE_URL:?" not in external or "REDIS_URL:?" not in external:
+        errors.append("external-state compose profile does not require DATABASE_URL and REDIS_URL")
+    if "published: ${SEARCH_SERVICE_PUBLISHED_PORT:-18090}" not in swarm:
+        errors.append("Swarm search service does not publish SEARCH_SERVICE_PUBLISHED_PORT")
+    return errors
 
 
 def _connector_env_example_keys() -> set[str]:

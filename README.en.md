@@ -70,8 +70,8 @@ browser-friendly derivative of the same recording.
 | --- | --- |
 | Source of truth | Seafile remains authoritative. Target drift is repaired from Seafile, never written back to Seafile. |
 | Dataset lifecycle | Library discovery, dataset creation from `connector_template`, upload, parse control, and state tracking. |
-| Delta and delete | File changes, removed files, and deleted libraries are propagated to RAGFlow and optionally OpenWebUI. |
-| Drift repair | Missing RAGFlow datasets/documents and owned OpenWebUI artifacts can be rebuilt from state and Seafile. |
+| Sync and delete | Commit-pinned snapshots and cursors provide real delta runs. When no trustworthy baseline exists, the connector falls back to a controlled full sync. Deletions are propagated to RAGFlow and optionally OpenWebUI. |
+| Drift repair | A reconciliation plan compares the Seafile snapshot, connector state, and RAGFlow; repairs run as persistent, deduplicated jobs. |
 | OpenWebUI | Auditable `Seafile · <dataset>` custom models with German evidence tables by default, stable `[S1]` source IDs, claim coverage, source roles, scores, locators, and connector preview links. |
 | Operations | PostgreSQL state, Redis jobs, dashboard workflow control, targeted connector-owned artifact deletion, health, metrics, Excel audit export, TLS/CA bundles, GHCR, Portainer, Compose, and Swarm. |
 | Quality | Ruff, strict mypy, pytest, unittest, CodeQL, Docker build workflow, and Dependabot. |
@@ -114,7 +114,8 @@ docker compose \
   config --quiet
 ```
 
-Minimum values for Seafile to RAGFlow with the bundled PostgreSQL service:
+Minimum values for the static Portainer default profile with Search and bundled
+state:
 
 | Variable | Purpose |
 | --- | --- |
@@ -123,7 +124,10 @@ Minimum values for Seafile to RAGFlow with the bundled PostgreSQL service:
 | `SEAFILE_SYNC_USER_TOKEN` | Seafile API token for file downloads |
 | `RAGFLOW_BASE_URL` | RAGFlow API URL reachable from the connector container |
 | `RAGFLOW_API_KEY` | API key of the target RAGFlow user |
-| `POSTGRES_PASSWORD` | Password for the stack database when `DATABASE_URL` is not set |
+| `AUTHZ_API_SHARED_SECRET` | Technical secret used by core and Search |
+| `SEARCH_AUTHZ_SHARED_SECRET` | The same value as `AUTHZ_API_SHARED_SECRET` |
+| `SEARCH_RAGFLOW_BASE_URL`, `SEARCH_RAGFLOW_API_KEY` | RAGFlow target as reached by the Search container |
+| `POSTGRES_PASSWORD` | Password for the bundled stack database |
 
 Start the stack:
 
@@ -147,17 +151,22 @@ curl http://127.0.0.1:18080/api/health
 
 ## Automations
 
-`connector-controller` schedules discovery, delta sync, RAGFlow template
-refresh, and optional OpenWebUI sync. `connector-reconciler` runs the
-reconciliation loop. All periodic runtime automations default to `1800`
-seconds, or 30 minutes, and values below 60 seconds are rejected. The active
-intervals are logged when the processes start.
+`connector-controller` schedules discovery, commit-pinned delta runs, RAGFlow
+template refresh, and optional OpenWebUI sync. Without a complete snapshot or
+cursor it automatically schedules a safe full sync. `connector-reconciler`
+compares the Seafile snapshot, connector state, and RAGFlow documents and
+repairs detected drift through deduplicated jobs. All periodic runtime
+automations default to `1800` seconds, or 30 minutes, and values below 60
+seconds are rejected. The active intervals are logged when the processes start.
 
 Manual checks and syncs remain independent of the schedule:
 
 ```bash
 connector check-live
-connector sync-once
+connector doctor --effective
+connector library status --json
+connector library sync --repo-id <repo-id> --mode auto
+connector library reconcile --repo-id <repo-id>
 connector openwebui-sync-once
 ```
 
@@ -175,6 +184,11 @@ For Compose and Portainer, tune the schedule with
 5. If images are provided offline, align `CONNECTOR_IMAGE`, `POSTGRES_IMAGE`, `REDIS_IMAGE`, and the `*_PULL_POLICY` values with the imported local images.
 6. Deploy the stack and inspect the logs of `connector-controller`, `connector-worker`, and `connector-reconciler`.
 
+Use the enterprise wizard for a core-only or external-state Portainer bundle:
+`ENTERPRISE_WITH_SEARCH=false` omits Search completely;
+`ENTERPRISE_STATE_MODE=external` requires `DATABASE_URL` and `REDIS_URL` and
+removes the local state containers from the started model.
+
 For production-like deployments, pin `CONNECTOR_IMAGE` to a fixed release tag
 such as `ghcr.io/adrianweidig/seafile-ragflow-connector:2.5.6` after that
 release has been published. Treat `latest` as a convenience tag for smoke tests
@@ -189,8 +203,12 @@ The package exposes the `connector` command:
 | Command | Purpose |
 | --- | --- |
 | `connector init-db` | Create or migrate connector state tables |
+| `connector doctor --effective` | Show redacted configuration truth and optional database/Redis diagnostics |
 | `connector check-live` | Check database, Redis, Seafile, and RAGFlow without mutation |
 | `connector sync-once` | Run one full discovery and sync pass |
+| `connector library status`, `plan`, `sync`, `reconcile` | Inspect library state and control delta/full sync or reconciliation |
+| `connector jobs list`, `show`, `cancel`, `retry` | Inspect, cancel, and retry persistent jobs |
+| `connector cleanup list`, `retry` | Inspect failed target cleanups and queue persistent retries |
 | `connector cleanup-orphans` | Plan or delete connector-owned orphan target artifacts |
 | `connector openwebui-sync-once` | Run one OpenWebUI sync pass |
 | `connector dashboard` | Start the standalone status dashboard |

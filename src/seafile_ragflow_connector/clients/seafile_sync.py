@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -56,6 +57,37 @@ class SeafileSyncClient:
         data = unwrap_response(self._client.get(f"/api2/repos/{repo_id}/dir/", params={"p": path}))
         return list(data or [])
 
+    def list_dir_at_commit(
+        self,
+        repo_id: str,
+        commit_id: str,
+        path: str = "/",
+    ) -> list[dict[str, Any]]:
+        data = unwrap_response(
+            self._client.get(
+                f"/api/v2.1/repos/{repo_id}/commits/{commit_id}/dir/",
+                params={"path": path},
+            )
+        )
+        if isinstance(data, list):
+            if not all(isinstance(item, dict) for item in data):
+                raise TypeError(
+                    f"unexpected Seafile commit directory entries for "
+                    f"{repo_id}:{commit_id}:{path}"
+                )
+            return [dict(item) for item in data]
+        if isinstance(data, dict):
+            entries = data.get("entries") or data.get("dirents") or data.get("items")
+            if isinstance(entries, list):
+                if not all(isinstance(item, dict) for item in entries):
+                    raise TypeError(
+                        f"unexpected Seafile commit directory entries for "
+                        f"{repo_id}:{commit_id}:{path}"
+                    )
+                return [dict(item) for item in entries]
+        msg = f"unexpected Seafile commit directory response for {repo_id}:{commit_id}:{path}"
+        raise TypeError(msg)
+
     def get_file_download_url(self, repo_id: str, path: str) -> str:
         data = unwrap_response(self._client.get(f"/api2/repos/{repo_id}/file/", params={"p": path}))
         if isinstance(data, str):
@@ -70,10 +102,50 @@ class SeafileSyncClient:
         return rewritten
 
     def download_file(self, repo_id: str, path: str) -> bytes:
+        return self._download_file_with_url(
+            lambda: self.get_file_download_url(repo_id, path),
+            label=f"{repo_id}:{path}",
+        )
+
+    def get_file_revision_download_url(
+        self,
+        repo_id: str,
+        path: str,
+        commit_id: str,
+    ) -> str:
+        data = unwrap_response(
+            self._client.get(
+                f"/api2/repos/{repo_id}/file/revision/",
+                params={"p": path, "commit_id": commit_id},
+            )
+        )
+        if isinstance(data, str):
+            url = data.strip().strip('"')
+        elif isinstance(data, dict) and "url" in data:
+            url = str(data["url"])
+        else:
+            msg = f"unexpected Seafile revision URL response for {repo_id}:{commit_id}:{path}"
+            raise TypeError(msg)
+        rewritten = self._rewrite_download_url(url)
+        self._require_trusted_download_url(rewritten)
+        return rewritten
+
+    def download_file_revision(self, repo_id: str, path: str, commit_id: str) -> bytes:
+        return self._download_file_with_url(
+            lambda: self.get_file_revision_download_url(repo_id, path, commit_id),
+            label=f"{repo_id}:{commit_id}:{path}",
+        )
+
+    def _download_file_with_url(
+        self,
+        get_url: Callable[[], str],
+        *,
+        label: str,
+    ) -> bytes:
         last_error: Exception | None = None
         for attempt in range(1, 6):
             try:
-                url = self.get_file_download_url(repo_id, path)
+                url = str(get_url())
                 return self._download_url(url)
             except httpx.HTTPStatusError as exc:
                 last_error = exc
@@ -84,12 +156,11 @@ class SeafileSyncClient:
             time.sleep(min(30, 2 * attempt))
         if last_error:
             raise last_error
-        msg = f"failed to download Seafile file after retries: {repo_id}:{path}"
-        raise RuntimeError(msg)
+        raise RuntimeError(f"failed to download Seafile file after retries: {label}")
 
     def get_commit_diff(self, repo_id: str, commit_id: str) -> dict[str, Any]:
-        # Seafile deployments differ in commit detail endpoint availability. Keep the
-        # method isolated so operators can override this client without touching sync logic.
+        # Compatibility alias retained for callers that used the old, misleading name.
+        # This endpoint returns commit information; portable delta sync uses snapshots.
         data = unwrap_response(self._client.get(f"/api/v2.1/repos/{repo_id}/commits/{commit_id}/"))
         if isinstance(data, dict):
             return data

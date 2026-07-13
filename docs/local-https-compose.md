@@ -171,6 +171,7 @@ wsl docker build `
 
 wsl docker compose --env-file connector.env `
   -f deploy/compose/external-services.compose.yml `
+  -f deploy/compose/bundled-state.compose.yml `
   -f deploy/compose/local-mocks.compose.yml `
   -f deploy/compose/search.compose.yml `
   -f deploy/compose/connector-top-secret.compose.yml `
@@ -178,6 +179,7 @@ wsl docker compose --env-file connector.env `
 
 wsl docker compose --env-file connector.env `
   -f deploy/compose/external-services.compose.yml `
+  -f deploy/compose/bundled-state.compose.yml `
   -f deploy/compose/local-mocks.compose.yml `
   -f deploy/compose/search.compose.yml `
   -f deploy/compose/connector-top-secret.compose.yml `
@@ -189,6 +191,7 @@ Prüfen:
 ```powershell
 wsl docker compose --env-file connector.env `
   -f deploy/compose/external-services.compose.yml `
+  -f deploy/compose/bundled-state.compose.yml `
   -f deploy/compose/local-mocks.compose.yml `
   -f deploy/compose/search.compose.yml `
   -f deploy/compose/connector-top-secret.compose.yml `
@@ -196,6 +199,7 @@ wsl docker compose --env-file connector.env `
 
 wsl docker compose --env-file connector.env `
   -f deploy/compose/external-services.compose.yml `
+  -f deploy/compose/bundled-state.compose.yml `
   -f deploy/compose/local-mocks.compose.yml `
   -f deploy/compose/search.compose.yml `
   -f deploy/compose/connector-top-secret.compose.yml `
@@ -234,6 +238,7 @@ Update ausführen:
 ```powershell
 wsl docker compose --env-file connector.env `
   -f deploy/compose/external-services.compose.yml `
+  -f deploy/compose/bundled-state.compose.yml `
   -f deploy/compose/local-mocks.compose.yml `
   -f deploy/compose/search.compose.yml `
   -f deploy/compose/connector-top-secret.compose.yml `
@@ -241,6 +246,7 @@ wsl docker compose --env-file connector.env `
 
 wsl docker compose --env-file connector.env `
   -f deploy/compose/external-services.compose.yml `
+  -f deploy/compose/bundled-state.compose.yml `
   -f deploy/compose/local-mocks.compose.yml `
   -f deploy/compose/search.compose.yml `
   -f deploy/compose/connector-top-secret.compose.yml `
@@ -248,6 +254,7 @@ wsl docker compose --env-file connector.env `
 
 wsl docker compose --env-file connector.env `
   -f deploy/compose/external-services.compose.yml `
+  -f deploy/compose/bundled-state.compose.yml `
   -f deploy/compose/local-mocks.compose.yml `
   -f deploy/compose/search.compose.yml `
   -f deploy/compose/connector-top-secret.compose.yml `
@@ -273,6 +280,7 @@ unverändert.
 ```powershell
 wsl docker compose --env-file connector.env `
   -f deploy/compose/external-services.compose.yml `
+  -f deploy/compose/bundled-state.compose.yml `
   -f deploy/compose/local-mocks.compose.yml `
   -f deploy/compose/search.compose.yml `
   -f deploy/compose/connector-top-secret.compose.yml `

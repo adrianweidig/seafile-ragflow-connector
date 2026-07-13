@@ -206,6 +206,8 @@ def run_mock_smoke(uv_run: Sequence[str]) -> bool:
         "-f",
         "deploy/compose/external-services.compose.yml",
         "-f",
+        "deploy/compose/bundled-state.compose.yml",
+        "-f",
         "deploy/compose/local-mocks.compose.yml",
     )
     try:

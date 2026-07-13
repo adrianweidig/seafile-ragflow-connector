@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -122,6 +122,7 @@ class DashboardEventStore:
         source: str,
         target: str,
         summary: str,
+        status: str = "running",
         details: Mapping[str, Any] | None = None,
     ) -> None:
         started_at = utcnow()
@@ -131,7 +132,7 @@ class DashboardEventStore:
                     sync_id=sync_id,
                     source=source,
                     target=target,
-                    status="running",
+                    status=safe_text(status, max_length=64) or "running",
                     summary=safe_text(summary, max_length=self.limits.max_field_length),
                     started_at=started_at,
                     details=safe_json(details or {}, max_length=self.limits.max_field_length),
@@ -160,6 +161,7 @@ class DashboardEventStore:
         warnings_count: int = 0,
         summary: str | None = None,
         details: Mapping[str, Any] | None = None,
+        terminal: bool = True,
     ) -> None:
         ended_at = utcnow()
         with self._session() as session:
@@ -167,11 +169,15 @@ class DashboardEventStore:
             if run is None:
                 return
             run.status = status
-            run.ended_at = ended_at
-            started_at = run.started_at
-            if started_at.tzinfo is None:
-                started_at = started_at.replace(tzinfo=UTC)
-            run.duration_ms = int((ended_at - started_at).total_seconds() * 1000)
+            if terminal:
+                run.ended_at = ended_at
+                started_at = run.started_at
+                if started_at.tzinfo is None:
+                    started_at = started_at.replace(tzinfo=UTC)
+                run.duration_ms = int((ended_at - started_at).total_seconds() * 1000)
+            else:
+                run.ended_at = None
+                run.duration_ms = None
             run.objects_checked = objects_checked
             run.objects_created = objects_created
             run.objects_updated = objects_updated
@@ -183,6 +189,43 @@ class DashboardEventStore:
                 run.summary = safe_text(summary, max_length=self.limits.max_field_length)
             if details is not None:
                 run.details = safe_json(details, max_length=self.limits.max_field_length)
+            session.commit()
+
+    def update_sync_run_status(
+        self,
+        *,
+        sync_id: str,
+        status: str,
+        terminal: bool,
+        summary: str | None = None,
+        details: Mapping[str, Any] | None = None,
+        errors_count: int | None = None,
+    ) -> None:
+        now = utcnow()
+        with self._session() as session:
+            run = session.get(DashboardSyncRun, sync_id)
+            if run is None:
+                return
+            run.status = safe_text(status, max_length=64) or status
+            if terminal:
+                run.ended_at = now
+                started_at = run.started_at
+                if started_at.tzinfo is None:
+                    started_at = started_at.replace(tzinfo=UTC)
+                run.duration_ms = int((now - started_at).total_seconds() * 1000)
+            else:
+                run.ended_at = None
+                run.duration_ms = None
+            if summary is not None:
+                run.summary = safe_text(summary, max_length=self.limits.max_field_length)
+            if details is not None:
+                merged_details = {**dict(run.details or {}), **dict(details)}
+                run.details = safe_json(
+                    merged_details,
+                    max_length=self.limits.max_field_length,
+                )
+            if errors_count is not None:
+                run.errors_count = errors_count
             session.commit()
 
     def record_change(
@@ -239,25 +282,61 @@ class DashboardEventStore:
         sync_id: str | None = None,
         details: Mapping[str, Any] | None = None,
     ) -> None:
+        self.record_logs(
+            [
+                {
+                    "level": level,
+                    "message": message,
+                    "component": component,
+                    "sync_id": sync_id,
+                    "details": details or {},
+                }
+            ]
+        )
+
+    def record_logs(
+        self,
+        entries: Sequence[Mapping[str, Any]],
+        *,
+        prune: bool = True,
+    ) -> None:
+        """Persist a bounded log batch in one transaction and prune once."""
+        if not entries:
+            return
         with self._session() as session:
-            session.add(
-                DashboardLogEntry(
-                    occurred_at=utcnow(),
-                    level=(safe_text(level, max_length=64) or "info").lower(),
-                    component=safe_text(component, max_length=255),
-                    message=safe_text(message, max_length=self.limits.max_field_length) or "",
-                    sync_id=safe_text(sync_id, max_length=255),
-                    details=safe_json(details or {}, max_length=self.limits.max_field_length),
-                )
+            occurred_at = utcnow()
+            session.add_all(
+                [
+                    DashboardLogEntry(
+                        occurred_at=occurred_at,
+                        level=(safe_text(entry.get("level"), max_length=64) or "info").lower(),
+                        component=safe_text(entry.get("component"), max_length=255),
+                        message=(
+                            safe_text(entry.get("message"), max_length=self.limits.max_field_length)
+                            or ""
+                        ),
+                        sync_id=safe_text(entry.get("sync_id"), max_length=255),
+                        details=safe_json(
+                            (
+                                entry.get("details")
+                                if isinstance(entry.get("details"), Mapping)
+                                else {}
+                            ),
+                            max_length=self.limits.max_field_length,
+                        ),
+                    )
+                    for entry in entries
+                ]
             )
             session.commit()
-            self._prune_table(
-                session,
-                DashboardLogEntry,
-                DashboardLogEntry.id,
-                DashboardLogEntry.occurred_at,
-                self.limits.max_log_entries,
-            )
+            if prune:
+                self._prune_table(
+                    session,
+                    DashboardLogEntry,
+                    DashboardLogEntry.id,
+                    DashboardLogEntry.occurred_at,
+                    self.limits.max_log_entries,
+                )
 
     def connector_status(self, *, started_at: datetime) -> dict[str, Any]:
         try:

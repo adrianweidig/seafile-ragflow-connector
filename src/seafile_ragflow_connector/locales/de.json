@@ -2,6 +2,7 @@
   "cli": {
     "app_help": "Offline-fähiger Seafile-zu-RAGFlow-Connector",
     "output_json": "Maschinenlesbares JSON ausgeben.",
+    "configuration_invalid": "Konfiguration ungültig: {details}",
     "init_db": {
       "help": "Connector-State-Tabellen anlegen oder aktualisieren.",
       "done": "Datenbank initialisiert"
@@ -41,15 +42,61 @@
     "check_config": {
       "help": "Konfiguration laden und validieren, ohne externe Dienste zu kontaktieren."
     },
+    "doctor": {
+      "help": "Lokale Konfigurationswahrheit und optionale State-Dienste diagnostizieren.",
+      "effective": "Effektive, redigierte Konfiguration ausgeben.",
+      "live": "Datenbank und Redis zusätzlich erreichbar prüfen.",
+      "notes": {
+        "acl_subfolders": "Unterordnerberechtigungen werden derzeit nicht separat ausgewertet.",
+        "acl_share_links": "Freigabelinks werden derzeit nicht in den ACL-Snapshot aufgenommen.",
+        "sync_user_email": "Dokumentativer Hinweis; für den Zugriff ist das Sync-Token maßgeblich.",
+        "validate_dataset": "Erstellte und gebundene Datasets werden im aktuellen Pfad immer gelesen.",
+        "preserve_filename": "Quellpfad und Originalname werden derzeit immer als Metadaten erhalten.",
+        "reparse": "Geänderte Dataset-Einstellungen lösen noch kein automatisches Reparse aus.",
+        "full_sync_fallback": "Delta-Sync fällt bei fehlender belastbarer Basis immer auf Vollsync zurück.",
+        "archive_dataset": "Gelöschte Bibliotheken können aktuell behalten oder gelöscht, nicht archiviert werden.",
+        "library_concurrency": "Parallelität entsteht durch Worker-Replikate; pro Worker läuft ein Job seriell.",
+        "upload_workers": "Uploads werden innerhalb eines Worker-Prozesses derzeit seriell ausgeführt.",
+        "parse_workers": "Parse-Aufträge werden innerhalb eines Worker-Prozesses derzeit seriell ausgeführt.",
+        "upload_batch": "Der aktuelle Uploadpfad verarbeitet Dateien einzeln.",
+        "parse_batch": "Parse-Aufträge verwenden derzeit keine konfigurierbare Batchgröße.",
+        "inflight": "Das Inflight-Limit wird noch nicht als Laufzeitdrossel verwendet.",
+        "runtime_path": "Wird vom Container-Entrypoint für beschreibbare Laufzeitpfade verwendet.",
+        "outbound_policy": "Dokumentierte Betriebsabsicht; der Prozess erzwingt keine Netzwerkpolicy.",
+        "telemetry": "Dokumentierte Betriebsabsicht; der Connector besitzt aktuell keine Telemetrie."
+      }
+    },
+    "library": {
+      "help": "Bibliotheken planen, synchronisieren und prüfen.",
+      "status_help": "Lokal bekannten Bibliotheks- und Cursorstatus anzeigen.",
+      "plan_help": "Reconcile-Plan ohne Remote-Mutationen erstellen.",
+      "sync_help": "Bibliothek als persistenten Delta- oder Vollsync-Job einplanen.",
+      "reconcile_help": "Reconcile planen oder als gefencten Reparaturjob ausführen.",
+      "missing": "Bibliothek {repo_id} ist im Connector-State nicht vorhanden."
+    },
     "dashboard": {
       "help": "Lesendes HTTP-Dashboard als Vordergrundprozess starten.",
       "disabled": "Dashboard deaktiviert; setze CONNECTOR_DASHBOARD_ENABLED=true, um es zu starten"
     },
     "jobs": {
+      "help": "Persistente Connector-Jobs anzeigen und steuern.",
+      "list_help": "Jobs nach Status und Bibliothek filtern.",
+      "show_help": "Einen Job einschließlich Retry- und Fehlerzustand anzeigen.",
+      "cancel_help": "Queued Job abbrechen oder kooperativen Abbruch anfordern.",
+      "retry_help": "Dead- oder abgebrochenen Job erneut einplanen.",
+      "not_found": "Job {job_id} wurde nicht gefunden.",
+      "disappeared": "Job {job_id} ist während des Wartens verschwunden.",
+      "unknown_status": "Unbekannter Jobstatus: {values}. Erlaubt: {allowed}.",
       "requires_repo_id": "{job_type} benötigt repo_id",
       "upload_requires_file": "UPLOAD_FILE benötigt file_path",
       "delete_requires_file": "DELETE_FILE benötigt file_path",
       "sync_mode_error": "SYNC_OPENWEBUI mode muss disabled, dry-run, sync oder repair sein"
+    },
+    "cleanup": {
+      "help": "Fehlgeschlagene Zielbereinigungen anzeigen und erneut ausführen.",
+      "list_help": "Cleanup-Outbox nach Status und Bibliothek filtern.",
+      "retry_help": "Eine fehlgeschlagene Zielbereinigung als persistenten Job erneut einplanen.",
+      "unknown_status": "Unbekannter Cleanup-Status: {values}. Erlaubt: {allowed}."
     }
   },
   "settings": {

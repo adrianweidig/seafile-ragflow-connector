@@ -5,10 +5,11 @@ import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Literal, Never, cast
 
 import structlog
 import typer
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from seafile_ragflow_connector.app.logging import configure_logging
@@ -21,6 +22,11 @@ from seafile_ragflow_connector.app.runtime import (
 )
 from seafile_ragflow_connector.clients import OpenWebUIClient
 from seafile_ragflow_connector.config import get_search_service_settings, get_settings
+from seafile_ragflow_connector.config.inventory import (
+    configured_limited_settings,
+    settings_inventory,
+    settings_inventory_summary,
+)
 from seafile_ragflow_connector.config.settings import SearchServiceSettings, Settings
 from seafile_ragflow_connector.dashboard.server import (
     DashboardBindError,
@@ -43,21 +49,36 @@ from seafile_ragflow_connector.domain.ragflow_search_settings import (
 from seafile_ragflow_connector.i18n import localizer_for, t
 from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
 from seafile_ragflow_connector.jobs.scheduler import PeriodicTask, SimpleScheduler
-from seafile_ragflow_connector.jobs.types import JobSpec, JobType
+from seafile_ragflow_connector.jobs.types import JobSpec, JobStatus, JobType
 from seafile_ragflow_connector.jobs.worker import WorkerRunner
-from seafile_ragflow_connector.persistence.db import database_revisions, init_database
+from seafile_ragflow_connector.persistence.db import (
+    database_revisions,
+    get_session_factory,
+    init_database,
+)
 from seafile_ragflow_connector.persistence.models.library import Library
+from seafile_ragflow_connector.persistence.models.sync_state import FileDocumentVersion
 from seafile_ragflow_connector.search.server import SearchServiceContext, serve_search_forever
 from seafile_ragflow_connector.security.access_control import ACLSnapshotService
 from seafile_ragflow_connector.sync.target_cleanup import LibrarySourceLike, TargetCleanupService
+from seafile_ragflow_connector.utils.redaction import redact_mapping
 
 app = typer.Typer(help=t("cli.app_help"))
+library_app = typer.Typer(help=t("cli.library.help"))
+jobs_app = typer.Typer(help=t("cli.jobs.help"))
+cleanup_app = typer.Typer(help=t("cli.cleanup.help"))
+app.add_typer(library_app, name="library")
+app.add_typer(jobs_app, name="jobs")
+app.add_typer(cleanup_app, name="cleanup")
 PROCESS_STARTED_AT = datetime.now(UTC)
 OpenWebUIMode = Literal["disabled", "dry-run", "sync", "repair"]
 
 
 def _bootstrap() -> Settings:
-    settings = get_settings()
+    try:
+        settings = get_settings()
+    except ValidationError as exc:
+        _exit_for_invalid_configuration(exc)
     configure_logging(
         settings.log_level,
         settings.log_format,
@@ -67,9 +88,25 @@ def _bootstrap() -> Settings:
 
 
 def _bootstrap_search() -> SearchServiceSettings:
-    settings = get_search_service_settings()
+    try:
+        settings = get_search_service_settings()
+    except ValidationError as exc:
+        _exit_for_invalid_configuration(exc)
     configure_logging(settings.log_level, settings.log_format)
     return settings
+
+
+def _exit_for_invalid_configuration(exc: ValidationError) -> Never:
+    details: list[str] = []
+    for error in exc.errors(include_input=False, include_url=False):
+        location = ".".join(str(part) for part in error.get("loc", ()))
+        message = str(error.get("msg", "invalid value"))
+        details.append(f"{location}: {message}" if location else message)
+    typer.echo(
+        t("cli.configuration_invalid", details="; ".join(details)),
+        err=True,
+    )
+    raise typer.Exit(2)
 
 
 @app.command()
@@ -354,6 +391,8 @@ def controller() -> None:
                     PROCESS_STARTED_AT,
                     orchestrator=runtime.orchestrator,
                     openwebui_sync_service=runtime.openwebui_sync_service,
+                    job_store=runtime.job_store,
+                    signal_queue=runtime.signal_queue,
                 )
             )
         except DashboardBindError as exc:
@@ -372,6 +411,9 @@ def controller() -> None:
         log.info("controller.discovery.enqueued", count=len(specs))
 
     def delta() -> None:
+        specs = runtime.orchestrator.discover_job_specs()
+        _enqueue_specs(runtime.job_store, runtime.signal_queue, specs)
+        log.info("controller.delta.enqueued", count=len(specs))
         stale = runtime.job_store.requeue_stale_running_jobs(
             older_than_seconds=settings.job_lease_seconds
         )
@@ -487,8 +529,12 @@ def reconciler() -> None:
     log = structlog.get_logger(__name__)
 
     def reconcile() -> None:
-        summary = runtime.orchestrator.sync_once()
-        log.info("reconciler.synced", **summary.__dict__)
+        specs = [
+            JobSpec(JobType.RECONCILE_LIBRARY, repo_id=library.repo_id)
+            for library in runtime.orchestrator.discover_libraries()
+        ]
+        _enqueue_specs(runtime.job_store, runtime.signal_queue, specs)
+        log.info("reconciler.enqueued", count=len(specs))
 
     scheduler = SimpleScheduler(
         [PeriodicTask("reconcile", settings.reconcile_interval_seconds, reconcile)]
@@ -534,6 +580,290 @@ def check_config(
         },
         json_output=json_output,
     )
+
+
+@app.command(help=t("cli.doctor.help"))
+def doctor(
+    effective: Annotated[
+        bool,
+        typer.Option("--effective", help=t("cli.doctor.effective")),
+    ] = False,
+    live: Annotated[
+        bool,
+        typer.Option("--live", help=t("cli.doctor.live")),
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Lokale Konfigurationswahrheit und optionale State-Dienste diagnostizieren."""
+    settings = _bootstrap()
+    inventory = settings_inventory(settings)
+    checks: dict[str, dict[str, Any]] = {
+        "configuration": {"status": "ok"},
+        "database": {"status": "not_checked"},
+        "redis": {"status": "not_checked"},
+    }
+    if live:
+        try:
+            check_database(settings.database_url)
+            current, expected = database_revisions(settings.database_url)
+            checks["database"] = {
+                "status": "ok" if current == expected else "migration_required",
+                "revision_current": current,
+                "revision_expected": expected,
+            }
+        except Exception as exc:
+            checks["database"] = {
+                "status": "failed",
+                "error_class": type(exc).__name__,
+            }
+        try:
+            check_redis(settings.redis_url)
+            checks["redis"] = {"status": "ok"}
+        except Exception as exc:
+            checks["redis"] = {
+                "status": "failed",
+                "error_class": type(exc).__name__,
+            }
+    payload: dict[str, Any] = {
+        "ready": all(
+            check["status"] in {"ok", "not_checked"} for check in checks.values()
+        ),
+        "checks": checks,
+        "runtime": {
+            "app_env": settings.app_env,
+            "language": localizer_for(settings).language,
+            "dashboard_enabled": settings.connector_dashboard_enabled,
+            "authz_enabled": settings.authz_api_enabled,
+            "openwebui_mode": settings.openwebui_effective_sync_mode,
+        },
+        "configuration_statuses": settings_inventory_summary(inventory),
+        "configured_limited_settings": configured_limited_settings(settings),
+    }
+    if effective:
+        payload["effective_configuration"] = inventory
+    _emit_payload(payload, json_output=json_output)
+    if live and not payload["ready"]:
+        raise typer.Exit(1)
+
+
+@library_app.command("status", help=t("cli.library.status_help"))
+def library_status(
+    repo_id: Annotated[str | None, typer.Option("--repo-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Lokal bekannten Bibliotheks- und Cursorstatus anzeigen."""
+    settings = _bootstrap()
+    session_factory = get_session_factory(settings.database_url)
+    with session_factory() as session:
+        stmt = select(Library).order_by(Library.name, Library.repo_id)
+        if repo_id:
+            stmt = stmt.where(Library.repo_id == repo_id)
+        rows = list(session.scalars(stmt).all())
+    _emit_payload(
+        {
+            "count": len(rows),
+            "libraries": [_library_status_payload(row) for row in rows],
+        },
+        json_output=json_output,
+    )
+
+
+@library_app.command("plan", help=t("cli.library.plan_help"))
+def library_plan(
+    repo_id: Annotated[str, typer.Option("--repo-id")],
+    scope: Annotated[str, typer.Option("--scope")] = "/",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Reconcile-Plan ohne Remote-Mutationen erstellen."""
+    settings = _bootstrap()
+    runtime = build_runtime(settings)
+    try:
+        plan = runtime.orchestrator.plan_library_reconcile(repo_id, scope=scope)
+        _emit_payload(_reconcile_plan_payload(plan), json_output=json_output)
+    finally:
+        runtime.close()
+
+
+@library_app.command("sync", help=t("cli.library.sync_help"))
+def library_sync(
+    repo_id: Annotated[str, typer.Option("--repo-id")],
+    mode: Annotated[Literal["auto", "delta", "full"], typer.Option("--mode")] = "auto",
+    scope: Annotated[str, typer.Option("--scope")] = "/",
+    wait: Annotated[bool, typer.Option("--wait")] = False,
+    timeout_seconds: Annotated[int, typer.Option("--timeout-seconds", min=1)] = 1800,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Bibliothek als persistentes Delta- oder Vollsync-Job einplanen."""
+    job_type = JobType.SYNC_LIBRARY_FULL if mode == "full" else JobType.SYNC_LIBRARY_DELTA
+    payload = _enqueue_cli_job(
+        JobSpec(job_type, repo_id=repo_id, payload={"scope": scope}),
+        wait=wait,
+        timeout_seconds=timeout_seconds,
+    )
+    _emit_job_result(payload, json_output=json_output)
+
+
+@library_app.command("reconcile", help=t("cli.library.reconcile_help"))
+def library_reconcile(
+    repo_id: Annotated[str, typer.Option("--repo-id")],
+    scope: Annotated[str, typer.Option("--scope")] = "/",
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+    wait: Annotated[bool, typer.Option("--wait")] = False,
+    timeout_seconds: Annotated[int, typer.Option("--timeout-seconds", min=1)] = 1800,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Reconcile planen oder als gefencten Reparaturjob ausführen."""
+    if not execute:
+        library_plan(repo_id=repo_id, scope=scope, json_output=json_output)
+        return
+    payload = _enqueue_cli_job(
+        JobSpec(JobType.RECONCILE_LIBRARY, repo_id=repo_id, payload={"scope": scope}),
+        wait=wait,
+        timeout_seconds=timeout_seconds,
+    )
+    _emit_job_result(payload, json_output=json_output)
+
+
+@jobs_app.command("list", help=t("cli.jobs.list_help"))
+def jobs_list(
+    status: Annotated[str | None, typer.Option("--status")] = None,
+    repo_id: Annotated[str | None, typer.Option("--repo-id")] = None,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=1000)] = 100,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Jobs nach Status und Bibliothek filtern."""
+    settings = _bootstrap()
+    store = JobStore(get_session_factory(settings.database_url))
+    statuses = _job_status_filter(status)
+    rows = store.list_jobs(statuses=statuses, repo_id=repo_id, limit=limit)
+    _emit_payload(
+        {"count": len(rows), "jobs": [_job_payload(row) for row in rows]},
+        json_output=json_output,
+    )
+
+
+@jobs_app.command("show", help=t("cli.jobs.show_help"))
+def jobs_show(
+    job_id: Annotated[int, typer.Argument(min=1)],
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Einen Job einschließlich Retry- und Fehlerzustand anzeigen."""
+    settings = _bootstrap()
+    row = JobStore(get_session_factory(settings.database_url)).get(job_id)
+    if row is None:
+        raise typer.BadParameter(t("cli.jobs.not_found", job_id=job_id))
+    _emit_payload(_job_payload(row), json_output=json_output)
+
+
+@jobs_app.command("cancel", help=t("cli.jobs.cancel_help"))
+def jobs_cancel(
+    job_id: Annotated[int, typer.Argument(min=1)],
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Queued Job abbrechen oder kooperativen Abbruch anfordern."""
+    settings = _bootstrap()
+    changed = JobStore(get_session_factory(settings.database_url)).request_cancel(job_id)
+    _emit_payload(
+        {"job_id": job_id, "cancel_requested": changed},
+        json_output=json_output,
+    )
+
+
+@jobs_app.command("retry", help=t("cli.jobs.retry_help"))
+def jobs_retry(
+    job_id: Annotated[int, typer.Argument(min=1)],
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Dead- oder abgebrochenen Job erneut einplanen."""
+    settings = _bootstrap()
+    store = JobStore(get_session_factory(settings.database_url))
+    changed = store.retry(job_id)
+    signal_error: str | None = None
+    if changed:
+        signal_queue = JobSignalQueue(settings.redis_url)
+        try:
+            signal_queue.signal(job_id)
+        except Exception as exc:
+            # Der Worker pollt zusätzlich die Datenbank. Der persistierte Retry
+            # bleibt deshalb gültig, auch wenn der Redis-Wake-up ausfällt.
+            signal_error = type(exc).__name__
+        finally:
+            signal_queue.close()
+    payload: dict[str, Any] = {"job_id": job_id, "retried": changed}
+    if signal_error is not None:
+        payload["signal_warning"] = signal_error
+    _emit_payload(payload, json_output=json_output)
+
+
+@cleanup_app.command("list", help=t("cli.cleanup.list_help"))
+def cleanup_list(
+    status: Annotated[str | None, typer.Option("--status")] = "dead",
+    repo_id: Annotated[str | None, typer.Option("--repo-id")] = None,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=1000)] = 100,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Cleanup-Outbox nach Zustand und Bibliothek anzeigen."""
+    settings = _bootstrap()
+    runtime = build_runtime(settings)
+    try:
+        statuses = _cleanup_status_filter(status)
+        rows = runtime.orchestrator.list_cleanup_outbox(
+            repo_id=repo_id,
+            statuses=statuses,
+            limit=limit,
+        )
+        _emit_payload(
+            {
+                "count": len(rows),
+                "items": [_cleanup_outbox_payload(row) for row in rows],
+            },
+            json_output=json_output,
+        )
+    finally:
+        runtime.close()
+
+
+@cleanup_app.command("retry", help=t("cli.cleanup.retry_help"))
+def cleanup_retry(
+    outbox_id: Annotated[int, typer.Argument(min=1)],
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Fehlgeschlagene Zielbereinigung als persistenten Job erneut einplanen."""
+    settings = _bootstrap()
+    runtime = build_runtime(settings)
+    try:
+        repo_id = runtime.orchestrator.requeue_cleanup_outbox(outbox_id)
+        changed = repo_id is not None
+        result = None
+        signal_error: str | None = None
+        if repo_id is not None:
+            result = runtime.job_store.enqueue_with_result(
+                JobSpec(
+                    JobType.PROCESS_CLEANUP_OUTBOX,
+                    repo_id=repo_id,
+                    payload={"outbox_id": outbox_id},
+                )
+            )
+            if not result.deduplicated:
+                try:
+                    runtime.signal_queue.signal(result.job_id)
+                except Exception as exc:
+                    signal_error = type(exc).__name__
+    finally:
+        runtime.close()
+    payload: dict[str, Any] = {"outbox_id": outbox_id, "retried": changed}
+    if result is not None:
+        payload.update(
+            {
+                "job_id": result.job_id,
+                "deduplicated": result.deduplicated,
+            }
+        )
+    if signal_error is not None:
+        payload["signal_warning"] = signal_error
+    _emit_payload(payload, json_output=json_output)
+    if not changed:
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -608,8 +938,219 @@ def _enqueue_specs(
             )
 
 
+def _library_status_payload(library: Library) -> dict[str, Any]:
+    return {
+        "repo_id": library.repo_id,
+        "name": library.name,
+        "status": library.status,
+        "deletion_state": library.deletion_state,
+        "ragflow_dataset_id": library.ragflow_dataset_id,
+        "head_commit_id": library.head_commit_id,
+        "last_synced_commit_id": library.last_synced_commit_id,
+        "last_seen_at": _iso_timestamp(library.last_seen_at),
+        "missing_since": _iso_timestamp(library.missing_since),
+        "missing_observations": library.missing_observations,
+        "last_error": library.last_error,
+        "updated_at": _iso_timestamp(library.updated_at),
+    }
+
+
+def _reconcile_plan_payload(plan: Any) -> dict[str, Any]:
+    return {
+        "repo_id": plan.repo_id,
+        "dataset_id": plan.dataset_id,
+        "scope": plan.scope,
+        "commit_id": plan.commit_id,
+        "snapshot_id": plan.snapshot_id,
+        "has_drift": bool(plan.has_drift),
+        "warnings": list(plan.warnings),
+        "categories": dict(plan.categories),
+        "jobs": [
+            {
+                "job_type": spec.job_type.value,
+                "repo_id": spec.repo_id,
+                "file_path": spec.file_path,
+                "priority": spec.resolved_priority(),
+                "payload": dict(redact_mapping(spec.payload)),
+            }
+            for spec in plan.jobs
+        ],
+    }
+
+
+def _job_status_filter(raw: str | None) -> tuple[JobStatus, ...] | None:
+    if raw is None or not raw.strip():
+        return None
+    values: list[JobStatus] = []
+    invalid: list[str] = []
+    for value in raw.split(","):
+        normalized = value.strip().lower()
+        if not normalized:
+            continue
+        try:
+            status = JobStatus(normalized)
+        except ValueError:
+            invalid.append(value.strip())
+            continue
+        if status not in values:
+            values.append(status)
+    if invalid:
+        allowed = ", ".join(status.value for status in JobStatus)
+        raise typer.BadParameter(
+            t(
+                "cli.jobs.unknown_status",
+                values=", ".join(invalid),
+                allowed=allowed,
+            )
+        )
+    return tuple(values) or None
+
+
+def _cleanup_status_filter(raw: str | None) -> tuple[str, ...] | None:
+    if raw is None or not raw.strip():
+        return None
+    allowed = {"pending", "retrying", "dead", "completed", "superseded"}
+    values = list(
+        dict.fromkeys(
+            value.strip().lower() for value in raw.split(",") if value.strip()
+        )
+    )
+    invalid = [value for value in values if value not in allowed]
+    if invalid:
+        raise typer.BadParameter(
+            t(
+                "cli.cleanup.unknown_status",
+                values=", ".join(invalid),
+                allowed=", ".join(sorted(allowed)),
+            )
+        )
+    return tuple(values) or None
+
+
+def _cleanup_outbox_payload(row: Any) -> dict[str, Any]:
+    return {
+        "id": int(row.id),
+        "repo_id": row.repo_id,
+        "run_id": row.run_id,
+        "target_type": row.target_type,
+        "target_id": row.target_id,
+        "dataset_id": row.dataset_id,
+        "action": row.action,
+        "status": row.status,
+        "attempts": int(row.attempts),
+        "run_after": _iso_timestamp(row.run_after),
+        "error_message": row.error_message,
+        "created_at": _iso_timestamp(row.created_at),
+        "updated_at": _iso_timestamp(row.updated_at),
+        "completed_at": _iso_timestamp(row.completed_at),
+    }
+
+
+def _job_payload(job: Any) -> dict[str, Any]:
+    return {
+        "id": int(job.id),
+        "job_type": str(job.job_type),
+        "repo_id": job.repo_id,
+        "file_path": job.file_path,
+        "status": str(job.status),
+        "priority": int(job.priority),
+        "attempts": int(job.attempts),
+        "max_attempts": int(job.max_attempts),
+        "run_id": job.run_id,
+        "fence_token": job.fence_token,
+        "cancel_requested_at": _iso_timestamp(job.cancel_requested_at),
+        "run_after": _iso_timestamp(job.run_after),
+        "locked_by": job.locked_by,
+        "locked_at": _iso_timestamp(job.locked_at),
+        "error_message": job.error_message,
+        "payload": dict(redact_mapping(job.payload or {})),
+        "created_at": _iso_timestamp(job.created_at),
+        "updated_at": _iso_timestamp(job.updated_at),
+    }
+
+
+def _enqueue_cli_job(
+    spec: JobSpec,
+    *,
+    wait: bool,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    settings = _bootstrap()
+    init_database(settings.database_url)
+    session_factory = get_session_factory(settings.database_url)
+    if spec.repo_id is not None:
+        with session_factory() as session:
+            if session.get(Library, spec.repo_id) is None:
+                raise typer.BadParameter(t("cli.library.missing", repo_id=spec.repo_id))
+    store = JobStore(
+        session_factory,
+        default_max_attempts=settings.job_max_attempts,
+        retry_base_seconds=settings.job_retry_base_seconds,
+        retry_max_seconds=settings.job_retry_max_seconds,
+    )
+    result = store.enqueue_with_result(spec)
+    signal_error: str | None = None
+    if not result.deduplicated:
+        signal_queue = JobSignalQueue(settings.redis_url)
+        try:
+            signal_queue.signal(result.job_id)
+        except Exception as exc:
+            # Der Worker pollt zusätzlich die Datenbank; ein verlorenes Wake-up
+            # darf den persistent angelegten Job daher nicht verwerfen.
+            signal_error = type(exc).__name__
+        finally:
+            signal_queue.close()
+    payload: dict[str, Any] = {
+        "job_id": result.job_id,
+        "deduplicated": result.deduplicated,
+        "waited": wait,
+    }
+    if signal_error is not None:
+        payload["signal_warning"] = signal_error
+    if not wait:
+        job = store.get(result.job_id)
+        if job is not None:
+            payload["job"] = _job_payload(job)
+        return payload
+
+    terminal = {
+        JobStatus.SUCCEEDED.value,
+        JobStatus.DEAD.value,
+        JobStatus.CANCELLED.value,
+    }
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        job = store.get(result.job_id)
+        if job is None:
+            raise RuntimeError(t("cli.jobs.disappeared", job_id=result.job_id))
+        if job.status in terminal:
+            payload["job"] = _job_payload(job)
+            return payload
+        time.sleep(1)
+    job = store.get(result.job_id)
+    payload["timed_out"] = True
+    if job is not None:
+        payload["job"] = _job_payload(job)
+    return payload
+
+
+def _iso_timestamp(value: Any) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
 def _emit_payload(payload: dict[str, Any], *, json_output: bool = False) -> None:
     typer.echo(_format_payload(payload, json_output=json_output))
+
+
+def _emit_job_result(payload: dict[str, Any], *, json_output: bool = False) -> None:
+    _emit_payload(payload, json_output=json_output)
+    job = payload.get("job")
+    status = job.get("status") if isinstance(job, dict) else None
+    if payload.get("timed_out") or status in {
+        JobStatus.DEAD.value,
+        JobStatus.CANCELLED.value,
+    }:
+        raise typer.Exit(1)
 
 
 def _format_payload(payload: dict[str, Any], *, json_output: bool = False) -> str:
@@ -635,6 +1176,13 @@ def _retry_until(action: Callable[[], Any], label: str, timeout_seconds: int = 1
 
 
 def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], None]]:
+    def maybe_sync_openwebui(spec: JobSpec) -> None:
+        if not bool(spec.payload.get("sync_openwebui")):
+            return
+        if runtime.openwebui_sync_service is None or spec.repo_id is None:
+            return
+        runtime.openwebui_sync_service.sync_once(repo_ids={spec.repo_id})
+
     def ensure_dataset(spec: JobSpec) -> None:
         repo_id = _require_repo_id(spec)
         runtime.orchestrator.ensure_dataset_for_repo(repo_id)
@@ -643,6 +1191,19 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
         repo_id = _require_repo_id(spec)
         scope = str(spec.payload.get("scope") or spec.file_path or "/")
         runtime.orchestrator.sync_library_full(repo_id, scope=scope)
+        maybe_sync_openwebui(spec)
+
+    def sync_delta(spec: JobSpec) -> None:
+        repo_id = _require_repo_id(spec)
+        scope = str(spec.payload.get("scope") or spec.file_path or "/")
+        runtime.orchestrator.sync_library_delta(repo_id, scope=scope)
+        maybe_sync_openwebui(spec)
+
+    def reconcile_library(spec: JobSpec) -> None:
+        repo_id = _require_repo_id(spec)
+        scope = str(spec.payload.get("scope") or spec.file_path or "/")
+        runtime.orchestrator.reconcile_library(repo_id, scope=scope, execute=True)
+        maybe_sync_openwebui(spec)
 
     def upload_file(spec: JobSpec) -> None:
         repo_id = _require_repo_id(spec)
@@ -677,7 +1238,11 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
             spec.payload.get("dataset_id")
             or runtime.orchestrator.ensure_dataset_for_repo(repo_id)
         )
-        runtime.orchestrator.check_parse_status(repo_id, dataset_id)
+        runtime.orchestrator.check_parse_status(repo_id, dataset_id, raise_if_pending=True)
+
+    def process_cleanup_outbox(spec: JobSpec) -> None:
+        repo_id = _require_repo_id(spec)
+        runtime.orchestrator.process_cleanup_outbox(repo_id=repo_id)
 
     def sync_openwebui(spec: JobSpec) -> None:
         if runtime.openwebui_sync_service is None:
@@ -686,7 +1251,16 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
         if mode is not None and str(mode) not in {"disabled", "dry-run", "sync", "repair"}:
             raise ValueError(t("cli.jobs.sync_mode_error"))
         mode_override = cast(OpenWebUIMode, str(mode)) if mode else None
-        runtime.openwebui_sync_service.sync_once(mode_override=mode_override)
+        raw_repo_ids = spec.payload.get("repo_ids")
+        repo_ids = (
+            {str(value) for value in raw_repo_ids if str(value).strip()}
+            if isinstance(raw_repo_ids, list)
+            else ({spec.repo_id} if spec.repo_id else None)
+        )
+        runtime.openwebui_sync_service.sync_once(
+            mode_override=mode_override,
+            repo_ids=repo_ids,
+        )
 
     return {
         JobType.DISCOVER_LIBRARIES: lambda spec: _enqueue_specs(
@@ -697,13 +1271,14 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
         JobType.ENSURE_RAGFLOW_DATASET: ensure_dataset,
         JobType.REFRESH_DATASET_SETTINGS: ensure_dataset,
         JobType.SYNC_LIBRARY_FULL: sync_full,
-        JobType.SYNC_LIBRARY_DELTA: sync_full,
+        JobType.SYNC_LIBRARY_DELTA: sync_delta,
         JobType.UPLOAD_FILE: upload_file,
         JobType.DELETE_FILE: delete_file,
         JobType.PARSE_DOCUMENTS: parse_documents,
         JobType.REPARSE_DOCUMENTS: parse_documents,
         JobType.CHECK_PARSE_STATUS: check_parse,
-        JobType.RECONCILE_LIBRARY: sync_full,
+        JobType.PROCESS_CLEANUP_OUTBOX: process_cleanup_outbox,
+        JobType.RECONCILE_LIBRARY: reconcile_library,
         JobType.RECONCILE_RAGFLOW_DATASET: check_parse,
         JobType.SYNC_OPENWEBUI: sync_openwebui,
     }
@@ -834,15 +1409,42 @@ def _wait_for_parse(runtime: Runtime, timeout_seconds: int) -> None:
     while time.monotonic() < deadline:
         active = False
         for repo_id, dataset_id in _active_dataset_bindings(runtime):
-            updated = runtime.orchestrator.check_parse_status(repo_id, dataset_id)
-            if updated and any(
-                document.get("run") in {"RUNNING", "UNSTART"}
-                for document in runtime.ragflow_client.iter_documents(dataset_id)
-            ):
-                active = True
+            runtime.orchestrator.check_parse_status(repo_id, dataset_id)
+            pending, dead = _parse_work_state(runtime, repo_id, dataset_id)
+            if dead:
+                raise RuntimeError(
+                    f"RAGFlow parsing failed for {dead} document(s) in {repo_id}"
+                )
+            active = active or pending > 0
         if not active:
             return
         time.sleep(5)
+    raise TimeoutError(
+        f"RAGFlow parsing did not finish within {timeout_seconds} seconds"
+    )
+
+
+def _parse_work_state(runtime: Runtime, repo_id: str, dataset_id: str) -> tuple[int, int]:
+    with runtime.orchestrator.session_factory() as session:
+        rows = session.execute(
+            select(
+                FileDocumentVersion.file_id,
+                FileDocumentVersion.id,
+                FileDocumentVersion.state,
+            )
+            .where(FileDocumentVersion.repo_id == repo_id)
+            .where(FileDocumentVersion.dataset_id == dataset_id)
+            .order_by(FileDocumentVersion.file_id, FileDocumentVersion.id.desc())
+        ).all()
+    latest_by_file: dict[int, str] = {}
+    for file_id, _version_id, state in rows:
+        latest_by_file.setdefault(int(file_id), str(state))
+    pending = sum(
+        state in {"uploaded", "parsing", "retryable_failed"}
+        for state in latest_by_file.values()
+    )
+    dead = sum(state == "dead" for state in latest_by_file.values())
+    return pending, dead
 
 
 def _active_dataset_bindings(runtime: Runtime) -> list[tuple[str, str]]:

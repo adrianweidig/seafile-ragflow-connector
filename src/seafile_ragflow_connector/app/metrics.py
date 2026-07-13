@@ -32,6 +32,10 @@ authz_denials_total = Counter(
     "Authorization denials",
     ["surface"],
 )
+dashboard_logs_dropped_total = Counter(
+    "dashboard_logs_dropped_total",
+    "Dashboard log entries dropped because the buffer was full or persistence failed",
+)
 openwebui_sync_runs_total = Counter("openwebui_sync_runs_total", "OpenWebUI sync runs")
 openwebui_artifacts_created_total = Counter(
     "openwebui_artifacts_created_total",

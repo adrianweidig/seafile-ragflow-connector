@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import gc
+import threading
+import time
 import unittest
 from http import HTTPStatus
 from pathlib import Path
@@ -21,7 +23,10 @@ from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.search.server import (
     SearchBindError,
+    SearchCancellation,
+    SearchCancelledError,
     SearchPermissionError,
+    SearchRequestCoordinator,
     SearchUser,
     _compose_answer_from_sources,
     _handle_chat,
@@ -33,6 +38,7 @@ from seafile_ragflow_connector.search.server import (
     _validate_trusted_header_boundary,
 )
 from seafile_ragflow_connector.search.ui import SEARCH_HTML
+from seafile_ragflow_connector.sources.evidence import SourceDTO
 
 
 class SearchServerTests(unittest.TestCase):
@@ -143,8 +149,21 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn(".sources-panel { display: none; }", SEARCH_HTML)
         self.assertNotIn("grid-template-rows: auto minmax(220px, 34vh) auto", SEARCH_HTML)
         self.assertNotIn("min-height: 62px", SEARCH_HTML)
-        self.assertIn("showToast", SEARCH_HTML)
-        self.assertIn('id="toast"', SEARCH_HTML)
+        self.assertIn('id="cancelSearch"', SEARCH_HTML)
+        self.assertIn('id="retrySearch"', SEARCH_HTML)
+        self.assertIn('id="loadMoreResults"', SEARCH_HTML)
+        self.assertIn('data-mobile-view="answer"', SEARCH_HTML)
+        self.assertIn('data-mobile-view="document"', SEARCH_HTML)
+        self.assertIn('data-mobile-view="sources"', SEARCH_HTML)
+        self.assertIn("AbortController", SEARCH_HTML)
+        self.assertIn("createRequestId", SEARCH_HTML)
+        self.assertIn("/api/search/cancel", SEARCH_HTML)
+        self.assertIn("request_id: requestId", SEARCH_HTML)
+        self.assertIn("keepalive: true", SEARCH_HTML)
+        self.assertIn("['cursor_expired', 'invalid_cursor']", SEARCH_HTML)
+        self.assertIn("lastAttempt = {request, append: false, cursor: null}", SEARCH_HTML)
+        self.assertIn("Das letzte erfolgreiche Ergebnis bleibt sichtbar", SEARCH_HTML)
+        self.assertNotIn('id="toast"', SEARCH_HTML)
         self.assertIn("frame-src 'self' blob:", search_server.SEARCH_CONTENT_SECURITY_POLICY)
 
     def test_query_calls_ragflow_only_for_allowed_profiles(self) -> None:
@@ -201,7 +220,7 @@ class SearchServerTests(unittest.TestCase):
 
         self.assertEqual(_FakeRAGFlowClient.calls, ["dataset-anleitungen"])
         self.assertEqual(_FakeRAGFlowClient.retrieval_options[0]["top_k"], 1024)
-        self.assertEqual(_FakeRAGFlowClient.retrieval_options[0]["page_size"], 10)
+        self.assertEqual(_FakeRAGFlowClient.retrieval_options[0]["page_size"], 11)
         self.assertTrue(_FakeRAGFlowClient.retrieval_options[0]["keyword"])
         self.assertTrue(_FakeRAGFlowClient.retrieval_options[0]["highlight"])
         self.assertEqual(seen_profile_ids, [["repo-anleitungen", "repo-geheim"]])
@@ -249,6 +268,406 @@ class SearchServerTests(unittest.TestCase):
         self.assertEqual(viewer_payload["source_path"], "/Anleitungen/FI/Handbuch FI Typ B.pdf")
         self.assertEqual(result["results"][0]["viewer_kind"], "pdf")
         self.assertIn("Bildvorschau", result["results"][0]["viewer_message"])
+        self.assertEqual(result["results"][0]["source_dto_version"], "v1")
+        self.assertEqual(result["results"][0]["status"], "available")
+        self.assertIsInstance(result["request_id"], str)
+        self.assertGreaterEqual(result["timing_ms"], 0)
+        self.assertEqual(result["partial_failures"], [])
+
+    def test_profiles_advertise_search_limits_and_cursor_capabilities(self) -> None:
+        original_profiles = search_server._authz_profiles
+        search_server._authz_profiles = lambda _settings, _user: [  # type: ignore[assignment]
+            {"id": "repo-1", "display_name": "Anleitungen"}
+        ]
+        try:
+            result = search_server._handle_profiles(
+                _settings(search_max_selected_profiles=50),
+                SearchUser(username="olaf", email="olaf@example.local", display_name=None),
+            )
+        finally:
+            search_server._authz_profiles = original_profiles  # type: ignore[assignment]
+
+        capabilities = result["capabilities"]
+        self.assertTrue(capabilities["cursor_pagination"])
+        self.assertTrue(capabilities["snapshot_pagination"])
+        self.assertTrue(capabilities["partial_results"])
+        self.assertEqual(capabilities["max_selected_profiles"], 25)
+        self.assertEqual(capabilities["default_page_size"], 20)
+        self.assertEqual(capabilities["max_page_size"], 100)
+        self.assertEqual(capabilities["max_parallel_profiles"], 4)
+        self.assertEqual(capabilities["snapshot_ttl_seconds"], 180)
+        self.assertEqual(capabilities["snapshot_max_results"], 200)
+        self.assertEqual(capabilities["source_dto_version"], "v1")
+
+    def test_query_cursor_paginates_stably_and_rejects_mismatched_search(self) -> None:
+        settings = _settings()
+        original_authz = search_server._authz_filter_profiles
+        original_retrieve = search_server._retrieve_allowed_profiles
+        search_server._authz_filter_profiles = lambda _settings, _user, profile_ids: {  # type: ignore[assignment]
+            "allowed": [
+                {
+                    "profile_id": profile_id,
+                    "repo_id": profile_id,
+                    "ragflow_dataset_id": f"dataset-{profile_id}",
+                    "display_name": profile_id,
+                }
+                for profile_id in profile_ids
+            ],
+            "denied": [],
+        }
+
+        retrieval_calls = 0
+
+        def fake_retrieve(
+            _settings: SearchServiceSettings,
+            _allowed: list[dict[str, object]],
+            *,
+            question: str,
+            requested_results: int,
+            cancellation: SearchCancellation | None = None,
+        ) -> tuple[
+            list[dict[str, object]],
+            dict[str, object],
+            list[dict[str, object]],
+            list[dict[str, object]],
+        ]:
+            nonlocal retrieval_calls
+            del question, cancellation
+            retrieval_calls += 1
+            count = min(requested_results, 45)
+            prefix = "S" if retrieval_calls == 1 else "DRIFT-"
+            return (
+                [
+                    {
+                        "source_id": f"{prefix}{index}",
+                        "document_name": f"Dokument {index}.pdf",
+                    }
+                    for index in range(1, count + 1)
+                ],
+                {"search_template_source": "builtin"},
+                [],
+                [],
+            )
+
+        search_server._retrieve_allowed_profiles = fake_retrieve  # type: ignore[assignment]
+        user = SearchUser(username="olaf", email="olaf@example.local", display_name=None)
+        payload = {
+            "profile_ids": ["repo-1"],
+            "question": "Wie lautet die Regel?",
+            "page_size": 20,
+        }
+        try:
+            first = _handle_query(settings, user, payload)
+            second = _handle_query(
+                settings,
+                user,
+                {**payload, "cursor": first["pagination"]["next_cursor"]},
+            )
+            third = _handle_query(
+                settings,
+                user,
+                {**payload, "cursor": second["pagination"]["next_cursor"]},
+            )
+            with self.assertRaisesRegex(ValueError, "ungültig"):
+                _handle_query(
+                    settings,
+                    user,
+                    {
+                        **payload,
+                        "question": "Eine andere Frage",
+                        "cursor": first["pagination"]["next_cursor"],
+                    },
+                )
+            with self.assertRaisesRegex(ValueError, "ungültig"):
+                _handle_query(
+                    settings,
+                    SearchUser(
+                        username="berta",
+                        email="berta@example.local",
+                        display_name=None,
+                    ),
+                    {**payload, "cursor": first["pagination"]["next_cursor"]},
+                )
+        finally:
+            search_server._authz_filter_profiles = original_authz
+            search_server._retrieve_allowed_profiles = original_retrieve
+
+        self.assertEqual(len(first["results"]), 20)
+        self.assertEqual(first["results"][0]["source_id"], "S1")
+        self.assertEqual(second["results"][0]["source_id"], "S21")
+        self.assertEqual(third["results"][0]["source_id"], "S41")
+        self.assertEqual(len(third["results"]), 5)
+        self.assertEqual(retrieval_calls, 1)
+        self.assertRegex(first["pagination"]["next_cursor"], r"^[0-9a-f]{64}$")
+        self.assertTrue(first["pagination"]["snapshot"])
+        self.assertEqual(first["pagination"]["snapshot_result_count"], 45)
+        self.assertTrue(first["pagination"]["has_more"])
+        self.assertTrue(second["pagination"]["has_more"])
+        self.assertFalse(third["pagination"]["has_more"])
+        self.assertIsNone(third["pagination"]["next_cursor"])
+        self.assertNotEqual(first["request_id"], second["request_id"])
+
+    def test_snapshot_cursor_expires_and_capacity_evicts_oldest_entry(self) -> None:
+        now = [10.0]
+        store = search_server.SearchResultSnapshotStore(
+            ttl_seconds=2.0,
+            max_entries=1,
+            max_snapshot_bytes=1024,
+            max_total_bytes=1024,
+            clock=lambda: now[0],
+        )
+
+        def create(owner: str, source_id: str):
+            created = store.create(
+                owner=owner,
+                fingerprint="fingerprint",
+                allowed_profile_keys=("repo-1",),
+                results=[{"source_id": source_id}, {"source_id": f"{source_id}-2"}],
+                template_diagnostics={},
+                retrieval_diagnostics=[],
+                partial_failures=[],
+                profiles_allowed=1,
+                profiles_denied=0,
+                retrieval_parallelism=1,
+                truncated=False,
+                byte_size=100,
+                first_offset=1,
+            )
+            self.assertIsNotNone(created)
+            assert created is not None
+            return created[1]
+
+        expired_cursor = create("olaf@example.local", "S1")
+        now[0] = 13.0
+        with self.assertRaisesRegex(search_server.SearchCursorExpiredError, "abgelaufen"):
+            store.page(
+                expired_cursor,
+                owner="olaf@example.local",
+                fingerprint="fingerprint",
+                allowed_profile_keys=("repo-1",),
+                page_size=1,
+            )
+
+        now[0] = 20.0
+        evicted_cursor = create("olaf@example.local", "S3")
+        active_cursor = create("olaf@example.local", "S5")
+        with self.assertRaisesRegex(search_server.SearchCursorError, "ungültig"):
+            store.page(
+                evicted_cursor,
+                owner="olaf@example.local",
+                fingerprint="fingerprint",
+                allowed_profile_keys=("repo-1",),
+                page_size=1,
+            )
+        page = store.page(
+            active_cursor,
+            owner="olaf@example.local",
+            fingerprint="fingerprint",
+            allowed_profile_keys=("repo-1",),
+            page_size=1,
+        )
+        self.assertEqual(page[2][0]["source_id"], "S5-2")
+
+    def test_query_returns_partial_failures_with_successful_results(self) -> None:
+        settings = _settings()
+        original_authz = search_server._authz_filter_profiles
+        original_retrieve = search_server._retrieve_allowed_profiles
+        search_server._authz_filter_profiles = lambda _settings, _user, _profile_ids: {  # type: ignore[assignment]
+            "allowed": [
+                {
+                    "profile_id": "repo-ok",
+                    "repo_id": "repo-ok",
+                    "ragflow_dataset_id": "dataset-ok",
+                    "display_name": "Verfügbar",
+                },
+                {
+                    "profile_id": "repo-down",
+                    "repo_id": "repo-down",
+                    "ragflow_dataset_id": "dataset-down",
+                    "display_name": "Vorübergehend nicht verfügbar",
+                },
+            ],
+            "denied": [],
+        }
+        search_server._retrieve_allowed_profiles = lambda *_args, **_kwargs: (  # type: ignore[assignment]
+            [{"source_id": "S1", "document_name": "Ergebnis.pdf"}],
+            {"search_template_source": "builtin"},
+            [],
+            [
+                {
+                    "profile_id": "repo-down",
+                    "code": "upstream_error",
+                    "message": "Diese Bibliothek konnte vorübergehend nicht durchsucht werden.",
+                    "retryable": True,
+                }
+            ],
+        )
+        try:
+            result = _handle_query(
+                settings,
+                SearchUser(username="olaf", email="olaf@example.local", display_name=None),
+                {
+                    "profile_ids": ["repo-ok", "repo-down"],
+                    "question": "Status",
+                    "page_size": 20,
+                },
+            )
+        finally:
+            search_server._authz_filter_profiles = original_authz
+            search_server._retrieve_allowed_profiles = original_retrieve
+
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(len(result["partial_failures"]), 1)
+        self.assertEqual(result["partial_failures"][0]["profile_id"], "repo-down")
+        self.assertEqual(result["diagnostics"]["profiles_failed"], 1)
+
+    def test_retrieval_fetches_enough_upstream_pages_for_page_size_one_hundred(
+        self,
+    ) -> None:
+        original_client = search_server.RAGFlowClient
+        search_server.RAGFlowClient = _PagingRAGFlowClient  # type: ignore[assignment]
+        _PagingRAGFlowClient.retrieval_options = []
+        try:
+            results, _template, diagnostics, failures = (
+                search_server._retrieve_allowed_profiles(
+                    _settings(),
+                    [
+                        {
+                            "profile_id": "repo-anleitungen",
+                            "repo_id": "repo-anleitungen",
+                            "ragflow_dataset_id": "dataset-anleitungen",
+                            "display_name": "Anleitungen",
+                        }
+                    ],
+                    question="Wartungsintervalle",
+                    requested_results=101,
+                )
+            )
+        finally:
+            search_server.RAGFlowClient = original_client  # type: ignore[assignment]
+
+        self.assertEqual(len(results), 101)
+        self.assertEqual(
+            [options["page"] for options in _PagingRAGFlowClient.retrieval_options],
+            [1, 2, 3],
+        )
+        self.assertTrue(
+            all(
+                options["page_size"] == 50
+                for options in _PagingRAGFlowClient.retrieval_options
+            )
+        )
+        self.assertEqual(diagnostics[0]["pages_fetched"], 3)
+        self.assertEqual(failures, [])
+
+    def test_allowed_profile_without_dataset_is_reported_as_partial_failure(self) -> None:
+        results, _template, _diagnostics, failures = (
+            search_server._retrieve_allowed_profiles(
+                _settings(ragflow_search_template_enabled=False),
+                [
+                    {
+                        "profile_id": "repo-pending",
+                        "repo_id": "repo-pending",
+                        "display_name": "Noch nicht synchronisiert",
+                    }
+                ],
+                question="Status",
+                requested_results=20,
+            )
+        )
+
+        self.assertEqual(results, [])
+        self.assertEqual(failures[0]["code"], "dataset_not_ready")
+        self.assertFalse(failures[0]["retryable"])
+
+    def test_server_cancellation_stops_scheduling_and_returns_quickly(self) -> None:
+        original_client = search_server.RAGFlowClient
+        search_server.RAGFlowClient = _BlockingRAGFlowClient  # type: ignore[assignment]
+        _BlockingRAGFlowClient.reset()
+        cancellation = SearchCancellation()
+        outcome: list[BaseException] = []
+
+        def retrieve() -> None:
+            try:
+                search_server._retrieve_allowed_profiles(
+                    _settings(ragflow_search_template_enabled=False),
+                    [
+                        {
+                            "profile_id": f"repo-{index}",
+                            "repo_id": f"repo-{index}",
+                            "ragflow_dataset_id": f"dataset-{index}",
+                            "display_name": f"Bibliothek {index}",
+                        }
+                        for index in range(10)
+                    ],
+                    question="Langsame Suche",
+                    requested_results=20,
+                    cancellation=cancellation,
+                )
+            except BaseException as exc:  # noqa: BLE001 - asserted below
+                outcome.append(exc)
+
+        worker = threading.Thread(target=retrieve)
+        worker.start()
+        self.assertTrue(_BlockingRAGFlowClient.started.wait(timeout=1.0))
+        started = time.perf_counter()
+        cancellation.cancel()
+        worker.join(timeout=1.0)
+        elapsed = time.perf_counter() - started
+        search_server.RAGFlowClient = original_client  # type: ignore[assignment]
+
+        self.assertFalse(worker.is_alive())
+        self.assertLess(elapsed, 0.5)
+        self.assertEqual(len(outcome), 1)
+        self.assertIsInstance(outcome[0], SearchCancelledError)
+        self.assertLessEqual(_BlockingRAGFlowClient.calls, 4)
+
+    def test_request_coordinator_bounds_and_cancels_only_matching_owner(self) -> None:
+        coordinator = SearchRequestCoordinator(max_concurrent_requests=1)
+        first_id = "9f7c9bbc-c64b-4f56-8633-1c1a4bdfe4cf"
+        second_id = "cf34ee31-5379-47aa-b5ba-b80a0058420d"
+        first = coordinator.begin(first_id, "olaf@example.local")
+        with self.assertRaisesRegex(RuntimeError, "Zu viele Suchanfragen"):
+            coordinator.begin(second_id, "olaf@example.local")
+        self.assertFalse(coordinator.cancel(first_id, "other@example.local"))
+        self.assertTrue(coordinator.cancel(first_id, "olaf@example.local"))
+        self.assertTrue(first.cancelled)
+        coordinator.finish(first_id, first)
+        second = coordinator.begin(second_id, "olaf@example.local")
+        coordinator.finish(second_id, second)
+
+    def test_partial_failure_distinguishes_permanent_and_retryable_api_errors(self) -> None:
+        profile = {
+            "profile_id": "repo-1",
+            "repo_id": "repo-1",
+            "ragflow_dataset_id": "dataset-1",
+            "display_name": "Anleitungen",
+        }
+
+        forbidden = search_server._partial_retrieval_failure(
+            profile,
+            search_server.ApiError("forbidden", status_code=403),
+        )
+        missing = search_server._partial_retrieval_failure(
+            profile,
+            search_server.ApiError("missing", status_code=404),
+        )
+        limited = search_server._partial_retrieval_failure(
+            profile,
+            search_server.ApiError("limited", status_code=429),
+        )
+        unavailable = search_server._partial_retrieval_failure(
+            profile,
+            search_server.ApiError("unavailable", status_code=503),
+        )
+
+        self.assertFalse(forbidden["retryable"])
+        self.assertFalse(missing["retryable"])
+        self.assertEqual(forbidden["code"], "upstream_rejected")
+        self.assertTrue(limited["retryable"])
+        self.assertEqual(limited["code"], "upstream_rate_limited")
+        self.assertTrue(unavailable["retryable"])
+        self.assertEqual(unavailable["code"], "upstream_unavailable")
 
     def test_subset_selection_queries_only_checked_libraries(self) -> None:
         settings = _settings()
@@ -510,6 +929,43 @@ class SearchServerTests(unittest.TestCase):
             results[0]["open_url"],
             "https://sea.top.secret/lib/repo-anleitungen/file/admin-handbuch-test.md#page=2",
         )
+
+    def test_recovery_upload_names_are_hidden_without_path_metadata(self) -> None:
+        operation_id = "0123456789abcdef0123456789abcdef"
+        results = _search_results_from_ragflow(
+            {
+                "chunks": [
+                    {
+                        "document_name": f"report.__connector_{operation_id}.pdf",
+                        "content": "PDF-Treffer",
+                        "similarity": 0.9,
+                    },
+                    {
+                        "document_name": f"notes.__connector_{operation_id}.txt",
+                        "content": "Text-Treffer",
+                        "similarity": 0.8,
+                    },
+                ]
+            },
+            {
+                "repo_id": "repo-anleitungen",
+                "ragflow_dataset_id": "dataset-anleitungen",
+                "display_name": "Anleitungen",
+            },
+        )
+
+        self.assertEqual(
+            [result["document_name"] for result in results],
+            ["report.pdf", "notes.txt"],
+        )
+        dto = SourceDTO(
+            source_id="S1",
+            citation_label="S1",
+            rank=1,
+            document_name=f"report.__connector_{operation_id}.pdf",
+            dataset_name="Anleitungen",
+        )
+        self.assertEqual(dto.document_name, "report.pdf")
 
     def test_chat_answer_is_not_raw_s_number_source_dump(self) -> None:
         answer = _compose_answer_from_sources(
@@ -1205,6 +1661,57 @@ class _FakeRAGFlowClient:
 
     def close(self) -> None:
         pass
+
+
+class _PagingRAGFlowClient(_FakeRAGFlowClient):
+    retrieval_options: list[dict[str, object]] = []
+
+    def retrieve_chunks(self, **kwargs: object) -> dict[str, object]:
+        options = dict(kwargs.get("retrieval_options") or {})
+        self.__class__.retrieval_options.append(options)
+        page = int(options.get("page") or 1)
+        page_size = int(options.get("page_size") or 50)
+        start = (page - 1) * page_size
+        return {
+            "chunks": [
+                {
+                    "document_id": f"doc-{index}",
+                    "document_name": f"Dokument {index}.pdf",
+                    "content": f"Eindeutiger Treffer {index}.",
+                    "similarity": 1.0 - (index / 1000),
+                }
+                for index in range(start, start + page_size)
+            ],
+            "_connector_retrieval_diagnostics": {
+                "retrieval_payload_page_size": page_size,
+            },
+        }
+
+
+class _BlockingRAGFlowClient(_FakeRAGFlowClient):
+    started = threading.Event()
+    calls = 0
+    lock = threading.Lock()
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.closed = threading.Event()
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.started.clear()
+        cls.calls = 0
+
+    def retrieve_chunks(self, **kwargs: object) -> dict[str, object]:
+        del kwargs
+        with self.__class__.lock:
+            self.__class__.calls += 1
+        self.__class__.started.set()
+        self.closed.wait(timeout=5.0)
+        raise RuntimeError("client closed after cancellation")
+
+    def close(self) -> None:
+        self.closed.set()
 
 
 class _FakeOpenAIResponse:

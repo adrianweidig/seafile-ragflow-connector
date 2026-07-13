@@ -9,6 +9,7 @@
 # Manuelle Nutzung:
 #   docker compose --env-file connector.env \
 #     -f deploy/compose/external-services.compose.yml \
+#     -f deploy/compose/bundled-state.compose.yml \
 #     -f deploy/compose/enterprise-ca.compose.yml config --quiet
 #
 # Erforderliche Host-Variable:

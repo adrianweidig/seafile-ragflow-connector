@@ -6,6 +6,10 @@ from enum import StrEnum
 from hashlib import sha256
 from typing import Any
 
+CORRELATION_PAYLOAD_KEYS = frozenset(
+    {"workflow_run_id", "parent_run_id", "correlation_id"}
+)
+
 
 class JobType(StrEnum):
     DISCOVER_LIBRARIES = "DISCOVER_LIBRARIES"
@@ -20,6 +24,7 @@ class JobType(StrEnum):
     PARSE_DOCUMENTS = "PARSE_DOCUMENTS"
     REPARSE_DOCUMENTS = "REPARSE_DOCUMENTS"
     CHECK_PARSE_STATUS = "CHECK_PARSE_STATUS"
+    PROCESS_CLEANUP_OUTBOX = "PROCESS_CLEANUP_OUTBOX"
     RECONCILE_LIBRARY = "RECONCILE_LIBRARY"
     RECONCILE_RAGFLOW_DATASET = "RECONCILE_RAGFLOW_DATASET"
     SYNC_OPENWEBUI = "SYNC_OPENWEBUI"
@@ -43,6 +48,7 @@ class JobPriority:
 HIGH_PRIORITY_TYPES = {
     JobType.DELETE_FILE,
     JobType.ENSURE_RAGFLOW_DATASET,
+    JobType.PROCESS_CLEANUP_OUTBOX,
 }
 
 LOW_PRIORITY_TYPES = {
@@ -73,11 +79,16 @@ class JobSpec:
         return JobPriority.NORMAL
 
     def dedup_key(self) -> str:
+        semantic_payload = {
+            key: value
+            for key, value in self.payload.items()
+            if key not in CORRELATION_PAYLOAD_KEYS
+        }
         identity = {
             "job_type": self.job_type.value,
             "repo_id": self.repo_id,
             "file_path": self.file_path.replace("\\", "/") if self.file_path else None,
-            "payload": self.payload,
+            "payload": semantic_payload,
         }
         canonical = json.dumps(
             identity,

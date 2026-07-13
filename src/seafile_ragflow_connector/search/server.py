@@ -9,15 +9,19 @@ import mimetypes
 import re
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import lru_cache
+from hashlib import sha256
 from html.parser import HTMLParser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
+from uuid import UUID, uuid4
 
 import httpx
 import structlog
@@ -46,12 +50,13 @@ from seafile_ragflow_connector.persistence import get_engine, get_session_factor
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.search.ui import SEARCH_HTML
 from seafile_ragflow_connector.sources.evidence import (
-    EvidenceHit,
+    SourceDTO,
     build_text_fragment_url,
     locator_quality,
     open_url_kind,
     render_preview_html,
     score_value,
+    user_facing_document_name,
 )
 from seafile_ragflow_connector.utils.http_logging import sanitize_http_access_message
 from seafile_ragflow_connector.utils.readiness import ReadinessCache
@@ -82,6 +87,18 @@ SOURCE_PATH_HASH_LABEL = "Source path hash:"
 SOURCE_BEGIN_MARKER = "----- BEGIN SOURCE CONTENT -----"
 SOURCE_END_MARKER = "----- END SOURCE CONTENT -----"
 
+SEARCH_DEFAULT_PAGE_SIZE = 20
+SEARCH_MAX_PAGE_SIZE = 100
+SEARCH_MAX_RETRIEVAL_WORKERS = 4
+SEARCH_MAX_SELECTED_PROFILES = 25
+SEARCH_MAX_CONCURRENT_REQUESTS = 8
+SEARCH_GLOBAL_RETRIEVAL_WORKERS = 16
+SEARCH_SNAPSHOT_TTL_SECONDS = 180.0
+SEARCH_SNAPSHOT_MAX_ENTRIES = 32
+SEARCH_SNAPSHOT_MAX_RESULTS = 200
+SEARCH_SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024
+SEARCH_SNAPSHOT_MAX_TOTAL_BYTES = 24 * 1024 * 1024
+
 
 class SearchBindError(RuntimeError):
     pass
@@ -91,8 +108,283 @@ class SearchPermissionError(PermissionError):
     pass
 
 
+class SearchCancelledError(RuntimeError):
+    pass
+
+
+class SearchBusyError(RuntimeError):
+    pass
+
+
+class SearchRequestConflictError(RuntimeError):
+    pass
+
+
+class SearchCursorError(ValueError):
+    pass
+
+
+class SearchCursorExpiredError(SearchCursorError):
+    pass
+
+
 class DocumentTooLargeError(ValueError):
     pass
+
+
+class SearchCancellation:
+    def __init__(self) -> None:
+        self._event = threading.Event()
+        self._lock = threading.Lock()
+        self._closers: set[Callable[[], None]] = set()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._event.is_set()
+
+    def wait(self, timeout: float) -> bool:
+        return self._event.wait(timeout)
+
+    def add_closer(self, closer: Callable[[], None]) -> None:
+        with self._lock:
+            if self._event.is_set():
+                close_now = True
+            else:
+                self._closers.add(closer)
+                close_now = False
+        if close_now:
+            _close_cancelled_client(closer)
+
+    def remove_closer(self, closer: Callable[[], None]) -> None:
+        with self._lock:
+            self._closers.discard(closer)
+
+    def cancel(self) -> None:
+        self._event.set()
+        with self._lock:
+            closers = tuple(self._closers)
+        for closer in closers:
+            _close_cancelled_client(closer)
+
+
+class SearchRequestCoordinator:
+    def __init__(self, max_concurrent_requests: int) -> None:
+        self._slots = threading.BoundedSemaphore(max_concurrent_requests)
+        self._lock = threading.Lock()
+        self._requests: dict[str, tuple[str, SearchCancellation]] = {}
+
+    def begin(self, request_id: str, owner: str) -> SearchCancellation:
+        if not self._slots.acquire(blocking=False):
+            raise SearchBusyError("Zu viele Suchanfragen laufen gleichzeitig.")
+        cancellation = SearchCancellation()
+        with self._lock:
+            if request_id in self._requests:
+                self._slots.release()
+                raise SearchRequestConflictError("request_id is already active")
+            self._requests[request_id] = (owner, cancellation)
+        return cancellation
+
+    def finish(self, request_id: str, cancellation: SearchCancellation) -> None:
+        released = False
+        with self._lock:
+            current = self._requests.get(request_id)
+            if current is not None and current[1] is cancellation:
+                del self._requests[request_id]
+                released = True
+        if released:
+            self._slots.release()
+
+    def cancel(self, request_id: str, owner: str) -> bool:
+        with self._lock:
+            current = self._requests.get(request_id)
+        if current is None or current[0] != owner:
+            return False
+        current[1].cancel()
+        return True
+
+
+@dataclass
+class SearchResultSnapshot:
+    snapshot_id: str
+    owner: str
+    fingerprint: str
+    allowed_profile_keys: tuple[str, ...]
+    results: tuple[dict[str, Any], ...]
+    template_diagnostics: dict[str, Any]
+    retrieval_diagnostics: list[dict[str, Any]]
+    partial_failures: list[dict[str, Any]]
+    profiles_allowed: int
+    profiles_denied: int
+    retrieval_parallelism: int
+    truncated: bool
+    expires_at: float
+    byte_size: int
+    cursors: dict[int, str]
+
+
+class SearchResultSnapshotStore:
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = SEARCH_SNAPSHOT_TTL_SECONDS,
+        max_entries: int = SEARCH_SNAPSHOT_MAX_ENTRIES,
+        max_snapshot_bytes: int = SEARCH_SNAPSHOT_MAX_BYTES,
+        max_total_bytes: int = SEARCH_SNAPSHOT_MAX_TOTAL_BYTES,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._ttl_seconds = max(1.0, ttl_seconds)
+        self._max_entries = max(1, max_entries)
+        self._max_snapshot_bytes = max(1, max_snapshot_bytes)
+        self._max_total_bytes = max(1, max_total_bytes)
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._snapshots: OrderedDict[str, SearchResultSnapshot] = OrderedDict()
+        self._cursor_index: dict[str, tuple[str, int]] = {}
+        self._total_bytes = 0
+
+    def create(
+        self,
+        *,
+        owner: str,
+        fingerprint: str,
+        allowed_profile_keys: tuple[str, ...],
+        results: list[dict[str, Any]],
+        template_diagnostics: dict[str, Any],
+        retrieval_diagnostics: list[dict[str, Any]],
+        partial_failures: list[dict[str, Any]],
+        profiles_allowed: int,
+        profiles_denied: int,
+        retrieval_parallelism: int,
+        truncated: bool,
+        byte_size: int,
+        first_offset: int,
+    ) -> tuple[SearchResultSnapshot, str] | None:
+        if (
+            not results
+            or byte_size > self._max_snapshot_bytes
+            or byte_size > self._max_total_bytes
+        ):
+            return None
+        now = self._clock()
+        snapshot = SearchResultSnapshot(
+            snapshot_id=uuid4().hex,
+            owner=owner,
+            fingerprint=fingerprint,
+            allowed_profile_keys=allowed_profile_keys,
+            results=tuple(results),
+            template_diagnostics=dict(template_diagnostics),
+            retrieval_diagnostics=[dict(item) for item in retrieval_diagnostics],
+            partial_failures=[dict(item) for item in partial_failures],
+            profiles_allowed=profiles_allowed,
+            profiles_denied=profiles_denied,
+            retrieval_parallelism=retrieval_parallelism,
+            truncated=truncated,
+            expires_at=now + self._ttl_seconds,
+            byte_size=byte_size,
+            cursors={},
+        )
+        with self._lock:
+            self._purge_expired_locked(now)
+            while self._snapshots and (
+                len(self._snapshots) >= self._max_entries
+                or self._total_bytes + byte_size > self._max_total_bytes
+            ):
+                oldest_id = next(iter(self._snapshots))
+                self._drop_locked(oldest_id)
+            if self._total_bytes + byte_size > self._max_total_bytes:
+                return None
+            self._snapshots[snapshot.snapshot_id] = snapshot
+            self._total_bytes += byte_size
+            cursor = self._cursor_for_locked(snapshot, first_offset)
+        return snapshot, cursor
+
+    def page(
+        self,
+        cursor: str,
+        *,
+        owner: str,
+        fingerprint: str,
+        allowed_profile_keys: tuple[str, ...],
+        page_size: int,
+    ) -> tuple[SearchResultSnapshot, int, list[dict[str, Any]], str | None, float]:
+        now = self._clock()
+        with self._lock:
+            pointer = self._cursor_index.get(cursor)
+            if pointer is None:
+                raise SearchCursorError(
+                    "Der Suchcursor ist ungültig oder gehört zu einer anderen Suche."
+                )
+            snapshot_id, offset = pointer
+            snapshot = self._snapshots.get(snapshot_id)
+            if snapshot is None:
+                raise SearchCursorError(
+                    "Der Suchcursor ist ungültig oder gehört zu einer anderen Suche."
+                )
+            if snapshot.expires_at <= now:
+                self._drop_locked(snapshot_id)
+                raise SearchCursorExpiredError(
+                    "Der Suchcursor ist abgelaufen. Starte eine neue Suche."
+                )
+            if (
+                snapshot.owner != owner
+                or snapshot.fingerprint != fingerprint
+                or snapshot.allowed_profile_keys != allowed_profile_keys
+            ):
+                raise SearchCursorError(
+                    "Der Suchcursor ist ungültig oder gehört zu einer anderen Suche."
+                )
+            self._purge_expired_locked(now, except_snapshot_id=snapshot_id)
+            self._snapshots.move_to_end(snapshot_id)
+            end = min(len(snapshot.results), offset + page_size)
+            results = list(snapshot.results[offset:end])
+            next_cursor = (
+                self._cursor_for_locked(snapshot, end)
+                if results and end < len(snapshot.results)
+                else None
+            )
+            expires_in = max(0.0, snapshot.expires_at - now)
+        return snapshot, offset, results, next_cursor, expires_in
+
+    def _cursor_for_locked(self, snapshot: SearchResultSnapshot, offset: int) -> str:
+        existing = snapshot.cursors.get(offset)
+        if existing:
+            return existing
+        cursor = uuid4().hex + uuid4().hex
+        while cursor in self._cursor_index:
+            cursor = uuid4().hex + uuid4().hex
+        snapshot.cursors[offset] = cursor
+        self._cursor_index[cursor] = (snapshot.snapshot_id, offset)
+        return cursor
+
+    def _purge_expired_locked(
+        self,
+        now: float,
+        *,
+        except_snapshot_id: str | None = None,
+    ) -> None:
+        expired = [
+            snapshot_id
+            for snapshot_id, snapshot in self._snapshots.items()
+            if snapshot_id != except_snapshot_id and snapshot.expires_at <= now
+        ]
+        for snapshot_id in expired:
+            self._drop_locked(snapshot_id)
+
+    def _drop_locked(self, snapshot_id: str) -> None:
+        snapshot = self._snapshots.pop(snapshot_id, None)
+        if snapshot is None:
+            return
+        self._total_bytes = max(0, self._total_bytes - snapshot.byte_size)
+        for cursor in snapshot.cursors.values():
+            self._cursor_index.pop(cursor, None)
+
+
+_SEARCH_REQUEST_COORDINATOR = SearchRequestCoordinator(SEARCH_MAX_CONCURRENT_REQUESTS)
+_SEARCH_RESULT_SNAPSHOTS = SearchResultSnapshotStore()
+_SEARCH_RETRIEVAL_EXECUTOR = ThreadPoolExecutor(
+    max_workers=SEARCH_GLOBAL_RETRIEVAL_WORKERS,
+    thread_name_prefix="connector-search-retrieval",
+)
 
 
 @dataclass
@@ -288,23 +580,83 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
 
         def do_POST(self) -> None:  # noqa: N802
             try:
-                if self.path == "/api/search/query":
+                if self.path == "/api/search/cancel":
                     user = _user_from_headers(
                         context.settings,
                         self.headers,
                         self.client_address[0],
                     )
-                    self._send_json(_handle_query(context.settings, user, self._json_body()))
+                    payload = self._json_body()
+                    request_id = _search_request_id(payload, required=True)
+                    cancelled = _SEARCH_REQUEST_COORDINATOR.cancel(
+                        request_id,
+                        _search_request_owner(user),
+                    )
+                    self._send_json(
+                        {
+                            "request_id": request_id,
+                            "cancelled": cancelled,
+                        }
+                    )
                     return
-                if self.path == "/api/search/chat":
+                if self.path in {"/api/search/query", "/api/search/chat"}:
                     user = _user_from_headers(
                         context.settings,
                         self.headers,
                         self.client_address[0],
                     )
-                    self._send_json(_handle_chat(context.settings, user, self._json_body()))
+                    payload = self._json_body()
+                    request_id = _search_request_id(payload)
+                    payload["request_id"] = request_id
+                    cancellation = _SEARCH_REQUEST_COORDINATOR.begin(
+                        request_id,
+                        _search_request_owner(user),
+                    )
+                    try:
+                        if self.path == "/api/search/query":
+                            result = _handle_query(
+                                context.settings,
+                                user,
+                                payload,
+                                cancellation=cancellation,
+                            )
+                        else:
+                            result = _handle_chat(
+                                context.settings,
+                                user,
+                                payload,
+                                cancellation=cancellation,
+                            )
+                    finally:
+                        _SEARCH_REQUEST_COORDINATOR.finish(request_id, cancellation)
+                    self._send_json(result)
                     return
                 self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+            except SearchCancelledError:
+                self._send_json(
+                    {"error": "cancelled", "message": "Suche abgebrochen."},
+                    status=HTTPStatus.CONFLICT,
+                )
+            except SearchBusyError as exc:
+                self._send_json(
+                    {"error": "busy", "message": str(exc)},
+                    status=HTTPStatus.TOO_MANY_REQUESTS,
+                )
+            except SearchRequestConflictError as exc:
+                self._send_json(
+                    {"error": "conflict", "message": str(exc)},
+                    status=HTTPStatus.CONFLICT,
+                )
+            except SearchCursorExpiredError as exc:
+                self._send_json(
+                    {"error": "cursor_expired", "message": str(exc)},
+                    status=HTTPStatus.GONE,
+                )
+            except SearchCursorError as exc:
+                self._send_json(
+                    {"error": "invalid_cursor", "message": str(exc)},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
             except SearchPermissionError as exc:
                 self._send_json(
                     {"error": "forbidden", "message": str(exc) or "Kein Zugriff."},
@@ -354,7 +706,10 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
             self._send_security_headers()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                return
 
         def _send_html(self, html_text: str) -> None:
             body = html_text.encode("utf-8")
@@ -463,39 +818,175 @@ def _search_ragflow_ready(settings: SearchServiceSettings) -> None:
 
 def _handle_profiles(settings: SearchServiceSettings, user: SearchUser) -> dict[str, Any]:
     profiles = _authz_profiles(settings, user)
-    return {"profiles": profiles, "user_display": user.display}
+    return {
+        "profiles": profiles,
+        "user_display": user.display,
+        "capabilities": {
+            "chat_mode": settings.search_enable_chat_mode,
+            "retrieval_mode": settings.search_enable_retrieval_mode,
+            "cursor_pagination": True,
+            "snapshot_pagination": True,
+            "partial_results": True,
+            "max_selected_profiles": min(
+                SEARCH_MAX_SELECTED_PROFILES,
+                settings.search_max_selected_profiles,
+            ),
+            "default_page_size": SEARCH_DEFAULT_PAGE_SIZE,
+            "max_page_size": SEARCH_MAX_PAGE_SIZE,
+            "max_parallel_profiles": SEARCH_MAX_RETRIEVAL_WORKERS,
+            "max_concurrent_requests": SEARCH_MAX_CONCURRENT_REQUESTS,
+            "snapshot_ttl_seconds": int(SEARCH_SNAPSHOT_TTL_SECONDS),
+            "snapshot_max_results": SEARCH_SNAPSHOT_MAX_RESULTS,
+            "source_dto_version": "v1",
+        },
+    }
 
 
 def _handle_query(
     settings: SearchServiceSettings,
     user: SearchUser,
     payload: dict[str, Any],
+    *,
+    cancellation: SearchCancellation | None = None,
 ) -> dict[str, Any]:
+    started = time.perf_counter()
+    request_id = _search_request_id(payload)
+    _raise_if_search_cancelled(cancellation)
     if not settings.search_enable_retrieval_mode:
         raise ValueError("Retrieval-Modus ist deaktiviert.")
     question = _required_text(payload, "question")
     profile_ids = _profile_ids(payload, settings)
     if not profile_ids:
         raise SearchPermissionError("Wähle mindestens eine Bibliothek aus.")
-    top_k = _bounded_top_k(payload.get("top_k"), settings)
+    page_size = _bounded_page_size(payload, settings)
+    cursor = _optional_text(payload.get("cursor"))
     filtered = _authz_filter_profiles(settings, user, profile_ids)
+    _raise_if_search_cancelled(cancellation)
     allowed = filtered["allowed"]
     denied = filtered["denied"]
     if not allowed:
         raise SearchPermissionError("Kein Zugriff auf diese Bibliothek.")
-    results, template_diagnostics, retrieval_diagnostics = _retrieve_allowed_profiles(
-        settings,
-        allowed,
-        question=question,
-        top_k=top_k,
+    owner = _search_request_owner(user)
+    fingerprint = _search_cursor_fingerprint(
+        question,
+        profile_ids,
+        scope=f"{settings.search_authz_base_url}|{settings.search_ragflow_base_url}",
     )
+    allowed_profile_keys = _search_snapshot_profile_keys(allowed)
+    snapshot: SearchResultSnapshot | None = None
+    snapshot_expires_in: float | None = None
+
+    if cursor:
+        (
+            snapshot,
+            cursor_offset,
+            page_results,
+            next_cursor,
+            snapshot_expires_in,
+        ) = _SEARCH_RESULT_SNAPSHOTS.page(
+            cursor,
+            owner=owner,
+            fingerprint=fingerprint,
+            allowed_profile_keys=allowed_profile_keys,
+            page_size=page_size,
+        )
+        template_diagnostics = dict(snapshot.template_diagnostics)
+        retrieval_diagnostics = [dict(item) for item in snapshot.retrieval_diagnostics]
+        partial_failures = [dict(item) for item in snapshot.partial_failures]
+        profiles_allowed = snapshot.profiles_allowed
+        profiles_denied = snapshot.profiles_denied
+        retrieval_parallelism = snapshot.retrieval_parallelism
+        snapshot_truncated = snapshot.truncated
+        snapshot_result_count = len(snapshot.results)
+    else:
+        requested_results = _search_snapshot_requested_results(payload, page_size)
+        (
+            retrieved_results,
+            template_diagnostics,
+            retrieval_diagnostics,
+            partial_failures,
+        ) = _retrieve_allowed_profiles(
+            settings,
+            allowed,
+            question=question,
+            requested_results=requested_results,
+            cancellation=cancellation,
+        )
+        _raise_if_search_cancelled(cancellation)
+        snapshot_results, snapshot_truncated, snapshot_bytes = (
+            _bounded_search_snapshot_results(
+                retrieved_results,
+                template_diagnostics=template_diagnostics,
+                retrieval_diagnostics=retrieval_diagnostics,
+                partial_failures=partial_failures,
+                retrieval_limit_reached=len(retrieved_results) >= requested_results,
+            )
+        )
+        minimum_first_page = min(page_size, len(retrieved_results))
+        if len(snapshot_results) < minimum_first_page:
+            snapshot_results = retrieved_results[:minimum_first_page]
+            snapshot_bytes = _estimated_json_bytes(snapshot_results)
+            snapshot_truncated = len(retrieved_results) > len(snapshot_results)
+        cursor_offset = 0
+        page_results = snapshot_results[:page_size]
+        profiles_allowed = len(allowed)
+        profiles_denied = len(denied)
+        retrieval_parallelism = min(SEARCH_MAX_RETRIEVAL_WORKERS, len(allowed))
+        next_cursor = None
+        if len(snapshot_results) > len(page_results) and page_results:
+            created = _SEARCH_RESULT_SNAPSHOTS.create(
+                owner=owner,
+                fingerprint=fingerprint,
+                allowed_profile_keys=allowed_profile_keys,
+                results=snapshot_results,
+                template_diagnostics=template_diagnostics,
+                retrieval_diagnostics=retrieval_diagnostics,
+                partial_failures=partial_failures,
+                profiles_allowed=profiles_allowed,
+                profiles_denied=profiles_denied,
+                retrieval_parallelism=retrieval_parallelism,
+                truncated=snapshot_truncated,
+                byte_size=snapshot_bytes,
+                first_offset=len(page_results),
+            )
+            if created is not None:
+                snapshot, next_cursor = created
+                snapshot_expires_in = SEARCH_SNAPSHOT_TTL_SECONDS
+            else:
+                snapshot_results = page_results
+                snapshot_truncated = True
+        snapshot_result_count = len(snapshot_results)
+
+    has_more = next_cursor is not None
+    timing_ms = int((time.perf_counter() - started) * 1000)
     return {
+        "request_id": request_id,
+        "timing_ms": timing_ms,
         "query": question,
-        "results": results,
+        "results": page_results,
+        "partial_failures": partial_failures,
+        "pagination": {
+            "cursor": cursor,
+            "next_cursor": next_cursor,
+            "page_size": page_size,
+            "offset": cursor_offset,
+            "returned": len(page_results),
+            "has_more": has_more,
+            "snapshot": snapshot is not None,
+            "snapshot_expires_in_seconds": (
+                int(snapshot_expires_in) if snapshot_expires_in is not None else None
+            ),
+            "snapshot_result_count": snapshot_result_count,
+            "snapshot_truncated": snapshot_truncated,
+        },
         "diagnostics": {
-            "profiles_allowed": len(allowed),
-            "profiles_denied": len(denied),
-            "retrieval_mode": "multi_dataset" if len(allowed) > 1 else "single_dataset",
+            "profiles_allowed": profiles_allowed,
+            "profiles_denied": profiles_denied,
+            "profiles_failed": len(partial_failures),
+            "retrieval_mode": (
+                "multi_dataset" if profiles_allowed > 1 else "single_dataset"
+            ),
+            "retrieval_parallelism": retrieval_parallelism,
             **template_diagnostics,
             "ragflow_retrieval": retrieval_diagnostics,
         },
@@ -506,20 +997,28 @@ def _handle_chat(
     settings: SearchServiceSettings,
     user: SearchUser,
     payload: dict[str, Any],
+    *,
+    cancellation: SearchCancellation | None = None,
 ) -> dict[str, Any]:
     if not settings.search_enable_chat_mode:
         raise ValueError("Antwortmodus ist deaktiviert.")
-    response = _handle_query(settings, user, payload)
+    response = _handle_query(settings, user, payload, cancellation=cancellation)
     sources = response["results"]
-    answer = _generate_answer(settings, str(response["query"]), sources)
-    response["answer"] = {
-        "text": answer.text,
-        "mode": answer.mode,
-        "citations": _answer_citations(sources, settings),
-    }
+    pagination = response.get("pagination") or {}
+    if int(pagination.get("offset") or 0) > 0:
+        response["answer"] = None
+        response["answer_unchanged"] = True
+    else:
+        _raise_if_search_cancelled(cancellation)
+        answer = _generate_answer(settings, str(response["query"]), sources)
+        response["answer"] = {
+            "text": answer.text,
+            "mode": answer.mode,
+            "citations": _answer_citations(sources, settings),
+        }
+        response["diagnostics"]["answer_generation"] = answer.diagnostics
     response["sources"] = sources
     response["diagnostics"]["retrieval_mode"] = "answer_with_sources"
-    response["diagnostics"]["answer_generation"] = answer.diagnostics
     return response
 
 
@@ -773,49 +1272,259 @@ def _retrieve_allowed_profiles(
     allowed: list[dict[str, Any]],
     *,
     question: str,
-    top_k: int,
-) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
+    requested_results: int,
+    cancellation: SearchCancellation | None = None,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    template_client = RAGFlowClient(
+        settings.search_ragflow_base_url,
+        settings.search_ragflow_api_key,
+        verify=settings.search_ragflow_httpx_verify,
+    )
+    if cancellation is not None:
+        cancellation.add_closer(template_client.close)
+    try:
+        _raise_if_search_cancelled(cancellation)
+        template = resolve_search_template(template_client, config_from_settings(settings))
+        _raise_if_search_cancelled(cancellation)
+    finally:
+        if cancellation is not None:
+            cancellation.remove_closer(template_client.close)
+        template_client.close()
+
+    retrieval_options = template.settings.to_retrieval_options(
+        requested_results=requested_results
+    )
+    indexed_profiles: list[tuple[int, dict[str, Any]]] = []
+    failures_by_index: dict[int, dict[str, Any]] = {}
+    for index, profile in enumerate(allowed):
+        if str(profile.get("ragflow_dataset_id") or ""):
+            indexed_profiles.append((index, profile))
+            continue
+        failures_by_index[index] = {
+            "profile_id": _optional_text(profile.get("profile_id")),
+            "repo_id": _optional_text(profile.get("repo_id")),
+            "dataset_id": None,
+            "display_name": _optional_text(profile.get("display_name")),
+            "code": "dataset_not_ready",
+            "message": "Diese Bibliothek ist noch nicht für die Suche bereit.",
+            "retryable": False,
+        }
+    results_by_index: dict[int, list[dict[str, Any]]] = {}
+    diagnostics_by_index: dict[int, dict[str, Any]] = {}
+    worker_count = min(SEARCH_MAX_RETRIEVAL_WORKERS, len(indexed_profiles))
+    if worker_count:
+        profile_iterator = iter(indexed_profiles)
+        futures: dict[
+            Future[tuple[list[dict[str, Any]], dict[str, Any] | None]],
+            tuple[int, dict[str, Any]],
+        ] = {}
+
+        def submit_next_profile() -> bool:
+            _raise_if_search_cancelled(cancellation)
+            try:
+                index, profile = next(profile_iterator)
+            except StopIteration:
+                return False
+            future = _SEARCH_RETRIEVAL_EXECUTOR.submit(
+                _retrieve_profile,
+                settings,
+                profile,
+                question=question,
+                retrieval_options=retrieval_options,
+                requested_results=requested_results,
+                cancellation=cancellation,
+            )
+            futures[future] = (index, profile)
+            return True
+
+        try:
+            for _worker in range(worker_count):
+                if not submit_next_profile():
+                    break
+            while futures:
+                _raise_if_search_cancelled(cancellation)
+                done, _pending = wait(
+                    tuple(futures),
+                    timeout=0.05,
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done:
+                    continue
+                for future in done:
+                    index, profile = futures.pop(future)
+                    _raise_if_search_cancelled(cancellation)
+                    try:
+                        profile_results, profile_diagnostics = future.result()
+                    except (
+                        ApiError,
+                        httpx.RequestError,
+                        RuntimeError,
+                        TypeError,
+                        ValueError,
+                    ) as exc:
+                        if cancellation is not None and cancellation.cancelled:
+                            raise SearchCancelledError("search request was cancelled") from exc
+                        failures_by_index[index] = _partial_retrieval_failure(profile, exc)
+                        structlog.get_logger(__name__).warning(
+                            "search.profile_retrieval_failed",
+                            profile_id=profile.get("profile_id"),
+                            repo_id=profile.get("repo_id"),
+                            dataset_id=profile.get("ragflow_dataset_id"),
+                            error_class=exc.__class__.__name__,
+                        )
+                    else:
+                        results_by_index[index] = profile_results
+                        if profile_diagnostics:
+                            diagnostics_by_index[index] = profile_diagnostics
+                    submit_next_profile()
+        except SearchCancelledError:
+            for future in futures:
+                future.cancel()
+            raise
+
+    results = [
+        item
+        for index, _profile in indexed_profiles
+        for item in results_by_index.get(index, [])
+    ]
+    retrieval_diagnostics = [
+        diagnostics_by_index[index]
+        for index, _profile in indexed_profiles
+        if index in diagnostics_by_index
+    ]
+    partial_failures = [
+        failures_by_index[index]
+        for index in range(len(allowed))
+        if index in failures_by_index
+    ]
+    deduplicated = _deduplicate_results(results)[:requested_results]
+    return (
+        _finalize_search_results(deduplicated, settings=settings),
+        template.diagnostics(),
+        retrieval_diagnostics,
+        partial_failures,
+    )
+
+
+def _retrieve_profile(
+    settings: SearchServiceSettings,
+    profile: dict[str, Any],
+    *,
+    question: str,
+    retrieval_options: dict[str, Any],
+    requested_results: int,
+    cancellation: SearchCancellation | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    dataset_id = str(profile.get("ragflow_dataset_id") or "")
     client = RAGFlowClient(
         settings.search_ragflow_base_url,
         settings.search_ragflow_api_key,
         verify=settings.search_ragflow_httpx_verify,
     )
+    if cancellation is not None:
+        cancellation.add_closer(client.close)
+    page_size = max(1, int(retrieval_options.get("page_size") or requested_results))
+    max_pages = max(1, (requested_results + page_size - 1) // page_size)
+    collected: list[dict[str, Any]] = []
+    diagnostics: dict[str, Any] | None = None
+    pages_fetched = 0
     try:
-        template = resolve_search_template(client, config_from_settings(settings))
-        retrieval_options = template.settings.to_retrieval_options(requested_results=top_k)
-        results: list[dict[str, Any]] = []
-        retrieval_diagnostics: list[dict[str, Any]] = []
-        for profile in allowed:
-            dataset_id = str(profile.get("ragflow_dataset_id") or "")
-            if not dataset_id:
-                continue
+        for page in range(1, max_pages + 1):
+            _raise_if_search_cancelled(cancellation)
+            page_options = {**retrieval_options, "page": page}
             with upstream_latency_seconds.labels("ragflow", "retrieve_chunks").time():
                 raw = client.retrieve_chunks(
                     dataset_id=dataset_id,
                     question=question,
-                    retrieval_options=retrieval_options,
+                    retrieval_options=page_options,
                 )
+            pages_fetched += 1
+            _raise_if_search_cancelled(cancellation)
+            raw_page_size = _raw_retrieval_page_size(raw)
+            page_results = _search_results_from_ragflow(raw, profile, settings=settings)
+            collected = _deduplicate_results([*collected, *page_results])
             if isinstance(raw, dict) and isinstance(
                 raw.get("_connector_retrieval_diagnostics"),
                 dict,
             ):
-                retrieval_diagnostics.append(
-                    {
-                        "dataset_id": dataset_id,
-                        **dict(raw["_connector_retrieval_diagnostics"]),
-                    }
-                )
-            results.extend(_search_results_from_ragflow(raw, profile, settings=settings))
+                diagnostics = {
+                    "dataset_id": dataset_id,
+                    **dict(raw["_connector_retrieval_diagnostics"]),
+                }
+            if (raw_page_size if raw_page_size is not None else len(page_results)) < page_size:
+                break
     finally:
+        if cancellation is not None:
+            cancellation.remove_closer(client.close)
         client.close()
-    return (
-        _finalize_search_results(
-            _deduplicate_results(results)[:top_k],
-            settings=settings,
-        ),
-        template.diagnostics(),
-        retrieval_diagnostics,
+    if diagnostics is not None:
+        diagnostics["pages_fetched"] = pages_fetched
+    return collected[:requested_results], diagnostics
+
+
+def _raw_retrieval_page_size(payload: Any) -> int | None:
+    if not isinstance(payload, dict):
+        return None
+    chunks = payload.get("chunks")
+    if isinstance(chunks, (list, dict)):
+        return len(chunks)
+    data = payload.get("data")
+    if isinstance(data, dict):
+        chunks = data.get("chunks")
+        if isinstance(chunks, (list, dict)):
+            return len(chunks)
+    return None
+
+
+def _partial_retrieval_failure(
+    profile: dict[str, Any],
+    exc: Exception,
+) -> dict[str, Any]:
+    status_code = _retrieval_error_status(exc)
+    retryable = isinstance(exc, httpx.RequestError) or status_code in {408, 425, 429} or bool(
+        status_code and status_code >= 500
     )
+    if status_code == 429:
+        code = "upstream_rate_limited"
+    elif retryable:
+        code = "upstream_unavailable"
+    else:
+        code = "upstream_rejected"
+    return {
+        "profile_id": _optional_text(profile.get("profile_id")),
+        "repo_id": _optional_text(profile.get("repo_id")),
+        "dataset_id": _optional_text(profile.get("ragflow_dataset_id")),
+        "display_name": _optional_text(profile.get("display_name")),
+        "code": code,
+        "message": (
+            "Diese Bibliothek konnte vorübergehend nicht durchsucht werden."
+            if retryable
+            else "Diese Bibliothek ist derzeit nicht für die Suche verfügbar."
+        ),
+        "retryable": retryable,
+    }
+
+
+def _retrieval_error_status(exc: Exception) -> int | None:
+    if isinstance(exc, ApiError):
+        status_code = exc.status_code
+        if status_code == 200 and isinstance(exc.payload, dict):
+            payload_code = exc.payload.get("code")
+            if payload_code is None:
+                return None
+            try:
+                status_code = int(payload_code)
+            except (TypeError, ValueError):
+                return None
+        return status_code
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code
+    return None
 
 
 def _search_results_from_ragflow(
@@ -1152,7 +1861,7 @@ def _finalize_search_results(
             text_fragment_url=text_fragment_url,
         )
         best_open_url = text_fragment_url or open_url
-        hit = EvidenceHit(
+        hit = SourceDTO(
             source_id=source_id,
             citation_label=source_id,
             rank=rank,
@@ -1180,9 +1889,9 @@ def _finalize_search_results(
             text_fragment_url=text_fragment_url,
         )
         preview_url = _search_preview_url(hit, settings)
-        hit = replace(hit, preview_url=preview_url)
+        viewer_url = _search_document_viewer_url(hit, settings)
+        hit = replace(hit, preview_url=preview_url, viewer_url=viewer_url)
         item = hit.to_search_result()
-        item["viewer_url"] = _search_document_viewer_url(hit, settings)
         item["viewer_kind"] = _viewer_kind(
             source_path=hit.source_path,
             document_name=hit.document_name,
@@ -1214,7 +1923,7 @@ def _finalize_search_results(
     return finalized
 
 
-def _search_preview_url(hit: EvidenceHit, settings: SearchServiceSettings) -> str | None:
+def _search_preview_url(hit: SourceDTO, settings: SearchServiceSettings) -> str | None:
     if not settings.search_source_preview_enabled:
         return None
     token = sign_preview_payload(
@@ -1226,7 +1935,7 @@ def _search_preview_url(hit: EvidenceHit, settings: SearchServiceSettings) -> st
     return f"/api/search/source/preview?token={quote(token)}"
 
 
-def _search_document_viewer_url(hit: EvidenceHit, settings: SearchServiceSettings) -> str | None:
+def _search_document_viewer_url(hit: SourceDTO, settings: SearchServiceSettings) -> str | None:
     if not settings.search_document_viewer_enabled or not hit.repo_id or not hit.source_path:
         return None
     payload = hit.preview_payload()
@@ -1255,7 +1964,7 @@ def _viewer_kind(*, source_path: str | None, document_name: str | None) -> str:
     return "unknown"
 
 
-def _viewer_message(kind: str, hit: EvidenceHit) -> str:
+def _viewer_message(kind: str, hit: SourceDTO) -> str:
     if kind == "pdf" and hit.page not in (None, ""):
         return (
             "PDF-Seite wird als sichere Bildvorschau angezeigt; "
@@ -1857,9 +2566,142 @@ def _profile_ids(payload: dict[str, Any], settings: SearchServiceSettings) -> li
     if not isinstance(raw, list):
         raise ValueError("profile_ids must be a list")
     profile_ids = [str(item).strip() for item in raw if str(item).strip()]
-    if len(profile_ids) > settings.search_max_selected_profiles:
+    max_selected_profiles = min(
+        SEARCH_MAX_SELECTED_PROFILES,
+        settings.search_max_selected_profiles,
+    )
+    if len(profile_ids) > max_selected_profiles:
         raise ValueError("too many selected profiles")
     return profile_ids
+
+
+def _bounded_page_size(
+    payload: dict[str, Any],
+    settings: SearchServiceSettings,
+) -> int:
+    if "page_size" not in payload:
+        if "top_k" in payload:
+            return _bounded_top_k(payload.get("top_k"), settings)
+        return SEARCH_DEFAULT_PAGE_SIZE
+    try:
+        page_size = int(payload.get("page_size") or SEARCH_DEFAULT_PAGE_SIZE)
+    except (TypeError, ValueError):
+        page_size = SEARCH_DEFAULT_PAGE_SIZE
+    return max(1, min(SEARCH_MAX_PAGE_SIZE, page_size))
+
+
+def _search_request_id(payload: dict[str, Any], *, required: bool = False) -> str:
+    raw = _optional_text(payload.get("request_id"))
+    if raw is None:
+        if required:
+            raise ValueError("request_id is required")
+        return str(uuid4())
+    try:
+        request_id = UUID(raw)
+    except (ValueError, AttributeError) as exc:
+        raise ValueError("request_id must be a UUID") from exc
+    return str(request_id)
+
+
+def _search_request_owner(user: SearchUser) -> str:
+    return (user.email or user.username or "").strip().casefold()
+
+
+def _raise_if_search_cancelled(cancellation: SearchCancellation | None) -> None:
+    if cancellation is not None and cancellation.cancelled:
+        raise SearchCancelledError("search request was cancelled")
+
+
+def _close_cancelled_client(closer: Callable[[], None]) -> None:
+    try:
+        closer()
+    except Exception:
+        structlog.get_logger(__name__).debug(
+            "search.cancel_close_failed",
+            exc_info=True,
+        )
+
+
+def _search_snapshot_requested_results(
+    payload: dict[str, Any],
+    page_size: int,
+) -> int:
+    if "page_size" not in payload and "top_k" in payload:
+        return min(SEARCH_SNAPSHOT_MAX_RESULTS + 1, page_size + 1)
+    return SEARCH_SNAPSHOT_MAX_RESULTS + 1
+
+
+def _search_snapshot_profile_keys(
+    allowed: list[dict[str, Any]],
+) -> tuple[str, ...]:
+    keys = {
+        json.dumps(
+            {
+                "profile_id": _optional_text(profile.get("profile_id")),
+                "repo_id": _optional_text(profile.get("repo_id")),
+                "dataset_id": _optional_text(profile.get("ragflow_dataset_id")),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        for profile in allowed
+    }
+    return tuple(sorted(keys))
+
+
+def _bounded_search_snapshot_results(
+    results: list[dict[str, Any]],
+    *,
+    template_diagnostics: dict[str, Any],
+    retrieval_diagnostics: list[dict[str, Any]],
+    partial_failures: list[dict[str, Any]],
+    retrieval_limit_reached: bool,
+) -> tuple[list[dict[str, Any]], bool, int]:
+    base_payload = {
+        "template_diagnostics": template_diagnostics,
+        "retrieval_diagnostics": retrieval_diagnostics,
+        "partial_failures": partial_failures,
+    }
+    byte_size = _estimated_json_bytes(base_payload)
+    bounded: list[dict[str, Any]] = []
+    for result in results[:SEARCH_SNAPSHOT_MAX_RESULTS]:
+        result_bytes = _estimated_json_bytes(result)
+        if byte_size + result_bytes > SEARCH_SNAPSHOT_MAX_BYTES:
+            break
+        bounded.append(result)
+        byte_size += result_bytes
+    truncated = retrieval_limit_reached or len(bounded) < len(results)
+    return bounded, truncated, byte_size
+
+
+def _estimated_json_bytes(value: Any) -> int:
+    return len(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    )
+
+
+def _search_cursor_fingerprint(
+    question: str,
+    profile_ids: list[str],
+    *,
+    scope: str = "",
+) -> str:
+    canonical = json.dumps(
+        {
+            "question": question.strip(),
+            "profile_ids": sorted(set(profile_ids)),
+            "scope": scope,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return sha256(canonical.encode("utf-8")).hexdigest()[:20]
 
 
 def _bounded_top_k(value: Any, settings: SearchServiceSettings) -> int:
@@ -1973,11 +2815,7 @@ def _normalize_source_path(value: str | None) -> str | None:
 
 
 def _friendly_document_name(document_name: str | None, source_path: str | None) -> str:
-    if source_path:
-        path_name = source_path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].strip()
-        if path_name:
-            return path_name
-    clean = str(document_name or "").strip()
+    clean = user_facing_document_name(document_name, source_path)
     if "__" in clean:
         clean = clean.split("__", 1)[1].strip()
     for suffix in (".md.txt", ".pdf.txt", ".docx.txt", ".xlsx.txt", ".pptx.txt", ".html.txt"):

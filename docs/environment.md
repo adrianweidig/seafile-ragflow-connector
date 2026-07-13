@@ -4,10 +4,18 @@ Die zentrale Schnittstelle ist `connector.env.example`. Für den Minimalbetrieb
 gilt: nur Pflichtwerte setzen, optionale Blöcke leer lassen. Leere optionale
 Werte bedeuten, dass der Code die internen Defaults nutzt.
 
-## Minimalpflicht
+## Betriebsprofile und Minimalpflicht
 
-Für Seafile -> RAGFlow mit Postgres und Redis aus dem Docker-Stack sind nur
-diese Werte fachlich Pflicht:
+Der unterstützte manuelle Compose-Aufruf kombiniert immer eine Basisdatei mit
+genau einem State-Profil. Das Standardprofil ergänzt außerdem
+`search.compose.yml`; Core-only lässt dieses Overlay vollständig weg.
+
+| Profil | Compose-Baustein | Pflichtwerte für State |
+| --- | --- | --- |
+| Gebündelter State | `bundled-state.compose.yml` | `POSTGRES_PASSWORD`; PostgreSQL und Redis laufen im Stack. |
+| Externer State | `external-state.compose.yml` | `DATABASE_URL` und `REDIS_URL`; lokale State-Container werden nicht gestartet. |
+
+Für Seafile -> RAGFlow gelten zusätzlich diese fachlichen Pflichtwerte:
 
 | Variable | Pflicht | Wann | Hinweis |
 | --- | --- | --- | --- |
@@ -16,11 +24,16 @@ diese Werte fachlich Pflicht:
 | `SEAFILE_SYNC_USER_TOKEN` | ja | immer | API-Token für Dateilisten und Downloads. |
 | `RAGFLOW_BASE_URL` | ja | immer | Aus dem Connector-Container erreichbare RAGFlow-API. |
 | `RAGFLOW_API_KEY` | ja | immer | API-Key des RAGFlow-Zielusers. |
-| `POSTGRES_PASSWORD` | ja | wenn keine `DATABASE_URL` gesetzt ist | Passwort der Stack-Datenbank. |
-| `DATABASE_URL` | alternativ | wenn externe DB genutzt wird | Ersetzt `POSTGRES_*` für die Anwendung. |
+| `AUTHZ_API_SHARED_SECRET` | ja | Standard und Core-only | Technisches Secret der internen Authz-API; der Wizard erzeugt es. |
+| `POSTGRES_PASSWORD` | ja | `bundled-state` | Passwort der Stack-Datenbank. |
+| `DATABASE_URL` | ja | `external-state` | Vollständige URL zur vorhandenen PostgreSQL-Datenbank. |
+| `REDIS_URL` | ja | `external-state` | Vollständige URL zum vorhandenen Redis-/Valkey-Dienst. |
 
-`REDIS_URL` ist nur Pflicht, wenn kein Stack-Redis genutzt werden soll. In den
-Compose-Dateien wird Redis standardmäßig als `connector-redis` bereitgestellt.
+Das Standardprofil mit Search benötigt außerdem `SEARCH_AUTHZ_SHARED_SECRET`
+mit demselben Wert wie `AUTHZ_API_SHARED_SECRET` sowie
+`SEARCH_RAGFLOW_BASE_URL` und `SEARCH_RAGFLOW_API_KEY`. Der Enterprise-Wizard
+leitet diese Werte aus der Core-Konfiguration ab. Core-only definiert keinen
+Search-Container und verlangt diese Search-Werte nicht.
 
 ## Allgemeine optionale Werte
 
@@ -59,9 +72,9 @@ Er benötigt keinen Seafile-Admin- oder Sync-Token.
 
 | Variable | Pflicht | Zweck |
 | --- | --- | --- |
-| `SEARCH_SERVICE_ENABLED` | optional | Aktiviert den Search-Server; Default `true`. |
+| `SEARCH_SERVICE_ENABLED` | optional | Laufzeitwert des Search-Prozesses. Deployment erfolgt über das Search-Overlay; einen definierten Container nicht mit `false` deaktivieren. |
 | `SEARCH_SERVICE_HOST`, `SEARCH_SERVICE_PORT` | optional | Bind-Adresse und Container-Port. |
-| `SEARCH_SERVICE_PUBLISHED_PORT` | optional | Host-Portbindung in Compose/Portainer, z. B. `127.0.0.1:18090`. |
+| `SEARCH_SERVICE_PUBLISHED_PORT` | optional | Host-Portbindung in Compose/Portainer, z. B. `127.0.0.1:18090`; in Swarm eine reine Portnummer wie `18090`. |
 | `SEARCH_AUTH_MODE` | optional | Aktuell `trusted_header`. |
 | `SEARCH_TRUSTED_USERNAME_HEADER` | optional | Header für den Login-/Usernamen. |
 | `SEARCH_TRUSTED_EMAIL_HEADER` | optional | Header für die Nutzer-E-Mail; primärer ACL-Match-Key. |
@@ -230,6 +243,22 @@ Die Controller-Automationen `DISCOVERY_INTERVAL_SECONDS` und
 Reconciler geloggt. Manuelle Läufe sind unabhängig davon über
 `connector sync-once`, `connector check-live`, `connector authz-sync-once` und
 `connector openwebui-sync-once` möglich.
+
+Delta-Läufe vergleichen bestätigte, commit-gepinnte Snapshots und schieben den
+Cursor erst nach erfolgreicher Verarbeitung vor. Bei fehlender oder
+unvollständiger Basis erfolgt ein kontrollierter Vollsync. Reconcile erstellt
+einen getrennten Drift-Plan und führt die Reparaturen als deduplizierte Jobs
+aus.
+
+Einige ältere Tuning- und Policy-Variablen bleiben zur Kompatibilität ladbar,
+steuern aber noch keinen eigenständigen Laufzeitpfad. Dazu gehören insbesondere
+`UPLOAD_WORKERS`, `PARSE_WORKERS`, die drei `RAGFLOW_*BATCH/INFLIGHT`-Werte,
+`REPARSE_ON_DATASET_SETTINGS_CHANGE` und
+`ARCHIVE_DATASET_WHEN_LIBRARY_DELETED`. `MAX_CONCURRENT_LIBRARIES` beschreibt
+die gewünschte Deployment-Parallelität; effektiv wird diese durch die Zahl der
+Worker-Replikate bestimmt. `connector doctor --effective --json` zeigt für jede
+Option den Status `active`, `deployment`, `informational`, `compatibility` oder
+`reserved`, ohne Secrets offenzulegen.
 
 Für produktive Starts ist die kleinste robuste Konfiguration meistens besser:
 erst Minimalpflicht setzen, `connector check-config` ausführen, dann gezielt

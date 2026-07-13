@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections import Counter
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, sessionmaker
 from structlog.contextvars import bind_contextvars, unbind_contextvars
 
@@ -20,23 +23,53 @@ from seafile_ragflow_connector.domain.ingestion_artifacts import (
     prepare_ingestion_artifact,
 )
 from seafile_ragflow_connector.domain.naming import slugify
+from seafile_ragflow_connector.jobs.context import (
+    JobDeferredError,
+    current_job_id,
+    current_job_run_id,
+    job_cancellation_requested,
+)
+from seafile_ragflow_connector.jobs.job_store import JobStore
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.library import Library
+from seafile_ragflow_connector.persistence.models.sync_state import (
+    CleanupOutbox,
+    FileDocumentVersion,
+    SourceSnapshot,
+    SourceSnapshotEntry,
+    SyncCursor,
+    SyncRun,
+)
 from seafile_ragflow_connector.persistence.models.template import DatasetSettingsSnapshot
+from seafile_ragflow_connector.persistence.sync_state import (
+    RepoLeaseHandle,
+    RepoMutationLeaseStore,
+    SyncStateStore,
+    activate_repo_lease,
+    current_repo_lease,
+)
 from seafile_ragflow_connector.sync.dataset_provisioning import (
     DatasetProvisioner,
     DatasetProvisioningResult,
     LibrarySource,
 )
 from seafile_ragflow_connector.sync.dataset_settings import DatasetSettingsService
+from seafile_ragflow_connector.sync.delta_sync import (
+    SnapshotEntry,
+    capture_commit_snapshot,
+    diff_snapshots,
+    snapshot_entries_from_records,
+)
 from seafile_ragflow_connector.sync.discovery import (
     DiscoveredLibrary,
     normalize_library,
     should_skip_library,
 )
-from seafile_ragflow_connector.utils.hashing import sha256_bytes
+from seafile_ragflow_connector.sync.reconcile import ReconcilePlan, Reconciler
 from seafile_ragflow_connector.utils.paths import normalize_seafile_path
+
+MISSING_OBSERVATION_MIN_INTERVAL = timedelta(hours=1)
 
 
 @dataclass(frozen=True)
@@ -55,6 +88,22 @@ class FileSyncResult:
     skipped: bool
     document_id: str | None
     change_type: str | None = None
+
+
+class ParsePendingError(JobDeferredError):
+    """Healthy RAGFlow parsing is still in progress and needs another poll."""
+
+
+class ParseDeadError(ValueError):
+    """At least one managed RAGFlow document exhausted real parse retries."""
+
+
+class SyncCancelledError(RuntimeError):
+    pass
+
+
+class ReconcilePlanStaleError(RuntimeError):
+    pass
 
 
 class SyncOrchestrator:
@@ -94,6 +143,10 @@ class SyncOrchestrator:
             template_required=template_required,
         )
         self.dataset_settings_service = DatasetSettingsService(ragflow_client)
+        self.job_store = JobStore(session_factory)
+        self.repo_lease_store = RepoMutationLeaseStore(session_factory)
+        self.sync_state_store = SyncStateStore(session_factory)
+        self.reconciler = Reconciler(session_factory, ragflow_client)
         self.log = structlog.get_logger(__name__)
 
     def discover_libraries(self) -> list[DiscoveredLibrary]:
@@ -112,17 +165,20 @@ class SyncOrchestrator:
                 db_library = self._upsert_library(session, library)
                 if skipped:
                     db_library.status = f"skipped:{reason}"
+                dataset_id = db_library.ragflow_dataset_id
                 session.commit()
+            self.job_store.refresh_workflow_parents_for_repo_cleanup(library.repo_id)
             if skipped:
                 self.log.info("library.skipped", repo_id=library.repo_id, reason=reason)
                 continue
+            self._ensure_parse_status_job(library.repo_id, dataset_id)
             discovered.append(library)
         self._cleanup_missing_libraries(current_repo_ids)
         return discovered
 
     def discover_job_specs(self) -> list[JobSpec]:
         return [
-            JobSpec(JobType.SYNC_LIBRARY_FULL, repo_id=library.repo_id)
+            JobSpec(JobType.SYNC_LIBRARY_DELTA, repo_id=library.repo_id)
             for library in self.discover_libraries()
         ]
 
@@ -131,7 +187,7 @@ class SyncOrchestrator:
         summary = SyncSummary(libraries_seen=len(libraries))
         for library in libraries:
             try:
-                library_summary = self.sync_library_full(library.repo_id)
+                library_summary = self.sync_library_delta(library.repo_id)
             except Exception as exc:
                 self._mark_library_error(library.repo_id, exc)
                 self.log.warning(
@@ -161,6 +217,14 @@ class SyncOrchestrator:
         return summary
 
     def ensure_dataset_for_repo(self, repo_id: str) -> str:
+        active_lease = current_repo_lease(repo_id)
+        if active_lease is None:
+            with self._mutation_scope(
+                repo_id,
+                owner_id=f"dataset:{new_sync_id(repo_id)}",
+            ):
+                return self.ensure_dataset_for_repo(repo_id)
+        self.repo_lease_store.assert_owned(active_lease)
         with self.session_factory() as session:
             db_library = self._get_library(session, repo_id)
             previous_dataset_id = db_library.ragflow_dataset_id
@@ -222,6 +286,8 @@ class SyncOrchestrator:
         try:
             dataset = self.ragflow_client.get_dataset(dataset_id)
         except ApiError as exc:
+            if exc.status_code != 404:
+                raise
             self.log.info(
                 "ragflow.dataset_bound_reuse_skipped",
                 repo_id=source.repo_id,
@@ -246,7 +312,93 @@ class SyncOrchestrator:
         return self.dataset_provisioner.result_from_existing_dataset(source, resolved)
 
     def sync_library_full(self, repo_id: str, *, scope: str = "/") -> SyncSummary:
+        normalized_scope = normalize_seafile_path(scope)
         sync_id = new_sync_id(repo_id)
+        with self._mutation_scope(repo_id, owner_id=f"sync:{sync_id}") as lease:
+            self.process_cleanup_outbox(repo_id=repo_id, lease=lease)
+            with self.session_factory() as session:
+                library = self._get_library(session, repo_id)
+                target_commit_id = library.head_commit_id
+            cursor = self.sync_state_store.get_cursor(repo_id, normalized_scope)
+            baseline_commit_id = cursor.commit_id if cursor else None
+            run_id = self.sync_state_store.create_run(
+                run_id=sync_id,
+                repo_id=repo_id,
+                mode="full",
+                scope=normalized_scope,
+                parent_run_id=self._current_parent_run_id(),
+                job_id=current_job_id(),
+                baseline_commit_id=baseline_commit_id,
+                target_commit_id=target_commit_id,
+                fence_token=lease.fence_token,
+            )
+            snapshot_id: int | None = None
+            snapshot_entries: list[SnapshotEntry] | None = None
+            if target_commit_id:
+                captured = self._try_capture_snapshot(
+                    repo_id,
+                    target_commit_id,
+                    normalized_scope,
+                )
+                if captured is not None:
+                    snapshot_id, snapshot_entries = captured
+            try:
+                summary = self._sync_library_full_owned(
+                    repo_id,
+                    scope=normalized_scope,
+                    sync_id=sync_id,
+                    lease=lease,
+                    source_commit_id=(target_commit_id if snapshot_entries is not None else None),
+                    snapshot_entries=snapshot_entries,
+                )
+                if target_commit_id and snapshot_id is not None:
+                    advanced = self.sync_state_store.advance_cursor(
+                        repo_id=repo_id,
+                        scope=normalized_scope,
+                        expected_commit_id=baseline_commit_id,
+                        target_commit_id=target_commit_id,
+                        snapshot_id=snapshot_id,
+                    )
+                    if not advanced:
+                        raise RuntimeError("sync cursor changed while full sync was running")
+                    if normalized_scope == "/":
+                        with self.session_factory() as session:
+                            library = self._get_library(session, repo_id)
+                            library.last_synced_commit_id = target_commit_id
+                            session.commit()
+                self._complete_or_wait_for_async_work(
+                    run_id,
+                    repo_id,
+                    {
+                        "files_seen": summary.files_seen,
+                        "files_uploaded": summary.files_uploaded,
+                        "files_deleted": summary.files_deleted,
+                        "files_skipped": summary.files_skipped,
+                        "snapshot_pinned": snapshot_entries is not None,
+                    },
+                )
+                return summary
+            except Exception as exc:
+                cancelled = isinstance(exc, SyncCancelledError)
+                self.sync_state_store.update_run(
+                    run_id,
+                    status="cancelled" if cancelled else "failed",
+                    error_message=None if cancelled else str(exc)[:4000],
+                    finished=True,
+                )
+                raise
+
+    def _sync_library_full_owned(
+        self,
+        repo_id: str,
+        *,
+        scope: str,
+        sync_id: str,
+        lease: RepoLeaseHandle,
+        source_commit_id: str | None,
+        snapshot_entries: list[SnapshotEntry] | None,
+    ) -> SyncSummary:
+        self.repo_lease_store.assert_owned(lease)
         try:
             dataset_id = self.ensure_dataset_for_repo(repo_id)
         except Exception as exc:
@@ -273,7 +425,55 @@ class SyncOrchestrator:
         warnings_count = 0
 
         try:
-            for path, item in self.iter_files(repo_id, scope):
+            source_files_iter: Iterable[tuple[str, dict[str, Any]]]
+            if snapshot_entries is None:
+                source_files_iter = self.iter_files(repo_id, scope)
+            else:
+                source_files_iter = (
+                    (entry.path, self._snapshot_item(entry))
+                    for entry in snapshot_entries
+                    if not entry.is_directory
+                )
+            source_files = list(source_files_iter)
+            source_paths = {
+                normalize_seafile_path(path) for path, _item in source_files
+            }
+            source_object_counts = Counter(
+                object_id
+                for _path, item in source_files
+                if (object_id := _seafile_object_id(item))
+            )
+            with self.session_factory() as session:
+                existing_files = list(
+                    session.scalars(select(File).where(File.repo_id == repo_id)).all()
+                )
+                existing_object_counts = Counter(
+                    row.seafile_obj_id for row in existing_files if row.seafile_obj_id
+                )
+                unique_existing_paths = {
+                    str(row.seafile_obj_id): row.normalized_path
+                    for row in existing_files
+                    if row.seafile_obj_id
+                    and existing_object_counts[str(row.seafile_obj_id)] == 1
+                }
+            rename_candidates: dict[str, str] = {}
+            for path, item in source_files:
+                normalized_path = normalize_seafile_path(path)
+                object_id = _seafile_object_id(item)
+                previous_path = unique_existing_paths.get(object_id or "")
+                if (
+                    object_id
+                    and source_object_counts[object_id] == 1
+                    and previous_path
+                    and previous_path != normalized_path
+                    and previous_path not in source_paths
+                ):
+                    rename_candidates[normalized_path] = previous_path
+            for path, item in source_files:
+                if not self.repo_lease_store.heartbeat(lease, lease_seconds=900):
+                    self.repo_lease_store.assert_owned(lease)
+                if self._cancellation_requested(sync_id):
+                    raise SyncCancelledError("sync run cancellation requested")
                 normalized_path = normalize_seafile_path(path)
                 seen_paths.add(normalized_path)
                 files_seen += 1
@@ -284,6 +484,8 @@ class SyncOrchestrator:
                         normalized_path,
                         item=item,
                         sync_id=sync_id,
+                        source_commit_id=source_commit_id,
+                        lease=lease,
                     )
                 except Exception as exc:
                     errors_count += 1
@@ -309,6 +511,21 @@ class SyncOrchestrator:
                     files_skipped += 1
                 if result.skipped or result.change_type == "unchanged":
                     dashboard_skipped += 1
+                previous_path = rename_candidates.get(normalized_path)
+                if previous_path and result.document_id:
+                    cleanup_queued = self._queue_file_cleanup(
+                        repo_id,
+                        dataset_id,
+                        previous_path,
+                        wait_for_document_id=result.document_id,
+                        fence_token=lease.fence_token,
+                        delete_file_row=True,
+                        run_id=self._correlation_run_id(sync_id),
+                    )
+                    if cleanup_queued:
+                        # Keep delete_missing_files from deleting the old document before
+                        # the replacement reached the current parse state.
+                        seen_paths.add(previous_path)
 
             files_deleted = self.delete_missing_files(
                 repo_id,
@@ -316,10 +533,10 @@ class SyncOrchestrator:
                 seen_paths,
                 scope=scope,
                 sync_id=sync_id,
+                lease=lease,
             )
             with self.session_factory() as session:
                 db_library = self._get_library(session, repo_id)
-                db_library.last_synced_commit_id = db_library.head_commit_id
                 db_library.status = "active"
                 db_library.last_error = None
                 session.commit()
@@ -332,7 +549,7 @@ class SyncOrchestrator:
             )
             self._finish_dashboard_sync_run(
                 sync_id=sync_id,
-                status="succeeded",
+                status="running",
                 objects_checked=files_seen,
                 objects_created=files_created,
                 objects_updated=files_updated,
@@ -345,6 +562,7 @@ class SyncOrchestrator:
                     f"{files_deleted} gelöscht, {files_skipped} übersprungen"
                 ),
                 details={"repo_id": repo_id, "dataset_id": dataset_id, "scope": scope},
+                terminal=False,
             )
             self.log.info(
                 "library.sync_completed",
@@ -359,18 +577,24 @@ class SyncOrchestrator:
             )
             return summary
         except Exception as exc:
-            self._mark_library_error(repo_id, exc)
+            cancelled = isinstance(exc, SyncCancelledError)
+            if not cancelled:
+                self._mark_library_error(repo_id, exc)
             self._finish_dashboard_sync_run(
                 sync_id=sync_id,
-                status="failed",
+                status="cancelled" if cancelled else "failed",
                 objects_checked=files_seen,
                 objects_created=files_created,
                 objects_updated=files_updated,
                 objects_deleted=files_deleted,
                 objects_skipped=dashboard_skipped,
-                errors_count=max(errors_count, 1),
+                errors_count=errors_count if cancelled else max(errors_count, 1),
                 warnings_count=warnings_count,
-                summary=f"Synchronisation fehlgeschlagen: {exc}",
+                summary=(
+                    "Synchronisation abgebrochen"
+                    if cancelled
+                    else f"Synchronisation fehlgeschlagen: {exc}"
+                ),
                 details={
                     "repo_id": repo_id,
                     "dataset_id": dataset_id,
@@ -382,6 +606,313 @@ class SyncOrchestrator:
         finally:
             unbind_contextvars("sync_id")
 
+    def sync_library_delta(self, repo_id: str, *, scope: str = "/") -> SyncSummary:
+        normalized_scope = normalize_seafile_path(scope)
+        with self._mutation_scope(
+            repo_id,
+            owner_id=f"delta:{new_sync_id(repo_id)}",
+        ) as lease:
+            self.process_cleanup_outbox(repo_id=repo_id, lease=lease)
+            with self.session_factory() as session:
+                library = self._get_library(session, repo_id)
+                target_commit_id = library.head_commit_id
+            cursor = self.sync_state_store.get_cursor(repo_id, normalized_scope)
+            if not target_commit_id or cursor is None:
+                self.log.info(
+                    "library.delta_full_fallback",
+                    repo_id=repo_id,
+                    reason="missing_target_or_baseline",
+                )
+                return self.sync_library_full(repo_id, scope=normalized_scope)
+            if cursor.commit_id == target_commit_id:
+                run_id = self.sync_state_store.create_run(
+                    repo_id=repo_id,
+                    mode="delta",
+                    scope=normalized_scope,
+                    parent_run_id=self._current_parent_run_id(),
+                    job_id=current_job_id(),
+                    baseline_commit_id=cursor.commit_id,
+                    target_commit_id=target_commit_id,
+                    fence_token=lease.fence_token,
+                )
+                summary = SyncSummary(libraries_synced=1)
+                self._ensure_parse_status_job(
+                    repo_id,
+                    self._library_dataset_id(repo_id),
+                    run_id=self._correlation_run_id(run_id),
+                )
+                self._complete_or_wait_for_async_work(
+                    run_id,
+                    repo_id,
+                    {"changes": 0, "reason": "head_unchanged"},
+                )
+                return summary
+
+            captured = self._try_capture_snapshot(
+                repo_id,
+                target_commit_id,
+                normalized_scope,
+            )
+            if captured is None:
+                self.log.info(
+                    "library.delta_full_fallback",
+                    repo_id=repo_id,
+                    reason="commit_snapshot_unavailable",
+                )
+                return self.sync_library_full(repo_id, scope=normalized_scope)
+            target_snapshot_id, target_entries = captured
+            baseline_snapshot = self.sync_state_store.get_snapshot(cursor.snapshot_id)
+            baseline_records = self.sync_state_store.snapshot_entries(cursor.snapshot_id)
+            if baseline_snapshot is None or not baseline_snapshot.complete:
+                self.log.info(
+                    "library.delta_full_fallback",
+                    repo_id=repo_id,
+                    reason="baseline_snapshot_missing",
+                )
+                return self.sync_library_full(repo_id, scope=normalized_scope)
+            baseline_entries = snapshot_entries_from_records(baseline_records)
+            changes = diff_snapshots(baseline_entries, target_entries)
+            run_id = self.sync_state_store.create_run(
+                repo_id=repo_id,
+                mode="delta",
+                scope=normalized_scope,
+                parent_run_id=self._current_parent_run_id(),
+                job_id=current_job_id(),
+                baseline_commit_id=cursor.commit_id,
+                target_commit_id=target_commit_id,
+                fence_token=lease.fence_token,
+                progress={"changes": len(changes), "processed": 0},
+            )
+            files_uploaded = 0
+            files_deleted = 0
+            files_skipped = 0
+            try:
+                dataset_id = self.ensure_dataset_for_repo(repo_id)
+                for index, change in enumerate(changes, start=1):
+                    if not self.repo_lease_store.heartbeat(lease, lease_seconds=900):
+                        self.repo_lease_store.assert_owned(lease)
+                    if self._cancellation_requested(run_id):
+                        raise SyncCancelledError("sync run cancellation requested")
+                    if change.operation == "removed":
+                        if self.delete_file(
+                            repo_id,
+                            dataset_id,
+                            change.path,
+                            sync_id=run_id,
+                            lease=lease,
+                        ):
+                            files_deleted += 1
+                    elif change.entry is not None:
+                        result = self.sync_file(
+                            repo_id,
+                            dataset_id,
+                            change.path,
+                            item=self._snapshot_item(change.entry),
+                            sync_id=run_id,
+                            source_commit_id=target_commit_id,
+                            lease=lease,
+                        )
+                        files_uploaded += int(result.uploaded)
+                        files_skipped += int(result.skipped)
+                        if change.operation == "renamed" and change.old_path:
+                            self._queue_file_cleanup(
+                                repo_id,
+                                dataset_id,
+                                change.old_path,
+                                fence_token=lease.fence_token,
+                                wait_for_document_id=result.document_id,
+                                delete_file_row=True,
+                                run_id=self._correlation_run_id(run_id),
+                            )
+                    self.sync_state_store.update_run(
+                        run_id,
+                        progress={"changes": len(changes), "processed": index},
+                    )
+                self.repo_lease_store.assert_owned(lease)
+                if not self.sync_state_store.advance_cursor(
+                    repo_id=repo_id,
+                    scope=normalized_scope,
+                    expected_commit_id=cursor.commit_id,
+                    target_commit_id=target_commit_id,
+                    snapshot_id=target_snapshot_id,
+                ):
+                    raise RuntimeError("sync cursor changed while delta sync was running")
+                if normalized_scope == "/":
+                    with self.session_factory() as session:
+                        library = self._get_library(session, repo_id)
+                        library.last_synced_commit_id = target_commit_id
+                        library.status = "active"
+                        library.last_error = None
+                        session.commit()
+                summary = SyncSummary(
+                    libraries_synced=1,
+                    files_seen=len([entry for entry in target_entries if not entry.is_directory]),
+                    files_uploaded=files_uploaded,
+                    files_deleted=files_deleted,
+                    files_skipped=files_skipped,
+                )
+                self._complete_or_wait_for_async_work(
+                    run_id,
+                    repo_id,
+                    {
+                        "changes": len(changes),
+                        "processed": len(changes),
+                        "files_uploaded": files_uploaded,
+                        "files_deleted": files_deleted,
+                        "files_skipped": files_skipped,
+                    },
+                )
+                return summary
+            except Exception as exc:
+                cancelled = isinstance(exc, SyncCancelledError)
+                if not cancelled:
+                    self._mark_library_error(repo_id, exc)
+                self.sync_state_store.update_run(
+                    run_id,
+                    status="cancelled" if cancelled else "failed",
+                    error_message=None if cancelled else str(exc)[:4000],
+                    finished=True,
+                )
+                raise
+
+    def plan_library_reconcile(self, repo_id: str, *, scope: str = "/") -> ReconcilePlan:
+        active = current_repo_lease(repo_id)
+        if active is None:
+            with self._mutation_scope(
+                repo_id,
+                owner_id=f"reconcile-plan:{new_sync_id(repo_id)}",
+            ):
+                return self.plan_library_reconcile(repo_id, scope=scope)
+        self.repo_lease_store.assert_owned(active)
+        normalized_scope = normalize_seafile_path(scope)
+        with self.session_factory() as session:
+            library = self._get_library(session, repo_id)
+            dataset_id = library.ragflow_dataset_id
+            target_commit_id = library.head_commit_id
+        if not dataset_id:
+            return ReconcilePlan(
+                repo_id=repo_id,
+                scope=normalized_scope,
+                commit_id=target_commit_id,
+                warnings=["library has no RAGFlow dataset binding"],
+            )
+        source_entries: list[SnapshotEntry] | None = None
+        snapshot_id: int | None = None
+        plan_commit_id = target_commit_id
+        if target_commit_id:
+            captured = self._try_capture_snapshot(
+                repo_id,
+                target_commit_id,
+                normalized_scope,
+            )
+            if captured is not None:
+                snapshot_id, source_entries = captured
+        if source_entries is None:
+            cursor = self.sync_state_store.get_cursor(repo_id, normalized_scope)
+            if cursor is not None:
+                snapshot_id = cursor.snapshot_id
+                plan_commit_id = cursor.commit_id
+                source_entries = snapshot_entries_from_records(
+                    self.sync_state_store.snapshot_entries(cursor.snapshot_id)
+                )
+        plan = self.reconciler.plan_library_reconcile(
+            repo_id,
+            dataset_id,
+            source_entries=source_entries,
+            scope=normalized_scope,
+            commit_id=plan_commit_id,
+            snapshot_id=snapshot_id,
+        )
+        if source_entries is None:
+            return ReconcilePlan(
+                repo_id=plan.repo_id,
+                dataset_id=plan.dataset_id,
+                scope=plan.scope,
+                commit_id=plan.commit_id,
+                snapshot_id=plan.snapshot_id,
+                jobs=plan.jobs,
+                categories=plan.categories,
+                warnings=[*plan.warnings, "no complete Seafile snapshot is available"],
+            )
+        return plan
+
+    def reconcile_library(
+        self,
+        repo_id: str,
+        *,
+        scope: str = "/",
+        execute: bool = False,
+    ) -> ReconcilePlan:
+        with self._mutation_scope(
+            repo_id,
+            owner_id=f"reconcile:{new_sync_id(repo_id)}",
+        ) as lease:
+            plan = self.plan_library_reconcile(repo_id, scope=scope)
+            if not execute or not plan.jobs:
+                return plan
+            self._assert_reconcile_plan_current(plan)
+            with self.session_factory() as session:
+                library = self._get_library(session, repo_id)
+                dataset_id = library.ragflow_dataset_id
+            if not dataset_id:
+                return ReconcilePlan(
+                    repo_id=plan.repo_id,
+                    dataset_id=plan.dataset_id,
+                    scope=plan.scope,
+                    commit_id=plan.commit_id,
+                    snapshot_id=plan.snapshot_id,
+                    jobs=plan.jobs,
+                    categories=plan.categories,
+                    warnings=[*plan.warnings, "reconcile execution skipped without dataset"],
+                )
+            for job in plan.jobs:
+                self.repo_lease_store.assert_owned(lease)
+                self._assert_reconcile_plan_current(plan)
+                if job_cancellation_requested():
+                    raise SyncCancelledError("reconcile cancellation requested")
+                if job.job_type == JobType.DELETE_FILE and job.file_path:
+                    self.delete_file(
+                        repo_id,
+                        dataset_id,
+                        job.file_path,
+                        lease=lease,
+                    )
+                elif job.job_type == JobType.UPLOAD_FILE and job.file_path:
+                    self.sync_file(
+                        repo_id,
+                        dataset_id,
+                        job.file_path,
+                        force=bool(job.payload.get("force")),
+                        source_commit_id=plan.commit_id,
+                        lease=lease,
+                    )
+                elif job.job_type == JobType.CHECK_PARSE_STATUS:
+                    self.check_parse_status(repo_id, dataset_id)
+            self.process_cleanup_outbox(repo_id=repo_id, lease=lease)
+        return plan
+
+    def _assert_reconcile_plan_current(self, plan: ReconcilePlan) -> None:
+        if not plan.repo_id or not plan.commit_id or plan.snapshot_id is None:
+            raise ReconcilePlanStaleError(
+                "reconcile execution requires a pinned complete source snapshot"
+            )
+        snapshot = self.sync_state_store.get_snapshot(plan.snapshot_id)
+        if (
+            snapshot is None
+            or not snapshot.complete
+            or snapshot.commit_id != plan.commit_id
+            or snapshot.repo_id != plan.repo_id
+            or snapshot.scope != plan.scope
+        ):
+            raise ReconcilePlanStaleError("reconcile source snapshot is no longer valid")
+        with self.session_factory() as session:
+            library = self._get_library(session, plan.repo_id)
+            current_head = library.head_commit_id
+        if current_head != plan.commit_id:
+            raise ReconcilePlanStaleError(
+                "Seafile head changed after reconcile planning; create a fresh plan"
+            )
+
     def sync_file(
         self,
         repo_id: str,
@@ -391,14 +922,38 @@ class SyncOrchestrator:
         item: dict[str, Any] | None = None,
         force: bool = False,
         sync_id: str | None = None,
+        source_commit_id: str | None = None,
+        lease: RepoLeaseHandle | None = None,
     ) -> FileSyncResult:
-        data = self.sync_client.download_file(repo_id, path)
+        if lease is None:
+            with self._mutation_scope(
+                repo_id,
+                owner_id=f"file:{new_sync_id(repo_id)}",
+            ) as acquired:
+                return self.sync_file(
+                    repo_id,
+                    dataset_id,
+                    path,
+                    item=item,
+                    force=force,
+                    sync_id=sync_id,
+                    source_commit_id=source_commit_id,
+                    lease=acquired,
+                )
+        self.repo_lease_store.assert_owned(lease)
+        if source_commit_id and hasattr(self.sync_client, "download_file_revision"):
+            data = self.sync_client.download_file_revision(repo_id, path, source_commit_id)
+        else:
+            data = self.sync_client.download_file(repo_id, path)
         classification = classify_file(path, data, self.file_policy)
-        source_hash = sha256_bytes(data)
         artifact = None
         if classification.should_ingest:
             artifact = prepare_ingestion_artifact(classification, data)
 
+        pending_version_id: int | None = None
+        resume_document_id: str | None = None
+        upload_operation_id: str | None = None
+        old_version_id: int | None = None
         with self.session_factory() as session:
             db_file = self._upsert_file_row(
                 session,
@@ -406,12 +961,23 @@ class SyncOrchestrator:
                 path=path,
                 item=item,
                 classification=classification,
-                source_hash=source_hash,
             )
+            if source_commit_id:
+                db_file.last_seen_commit_id = source_commit_id
             if not classification.should_ingest or artifact is None:
+                retired_document_id = db_file.ragflow_document_id
                 db_file.sync_status = "skipped"
                 db_file.error_message = classification.reason
                 session.commit()
+                if retired_document_id:
+                    self._queue_file_cleanup(
+                        repo_id,
+                        dataset_id,
+                        path,
+                        fence_token=lease.fence_token if lease else None,
+                        run_id=self._correlation_run_id(sync_id),
+                    )
+                    self.process_cleanup_outbox(repo_id=repo_id, lease=lease)
                 self.log.info(
                     "file.skipped",
                     sync_id=sync_id,
@@ -450,6 +1016,57 @@ class SyncOrchestrator:
                 and bool(db_file.ragflow_document_id)
             )
             old_document_id = db_file.ragflow_document_id
+            old_version_id = self._ensure_current_document_version(
+                session,
+                db_file,
+                dataset_id,
+            )
+            if unchanged and old_version_id is not None:
+                old_version = session.get(FileDocumentVersion, old_version_id)
+                unchanged = bool(
+                    old_version is not None
+                    and old_version.state == "current"
+                    and old_version.parse_status != "FAIL"
+                )
+            pending_version = session.scalar(
+                select(FileDocumentVersion)
+                .where(FileDocumentVersion.file_id == db_file.id)
+                .where(FileDocumentVersion.dataset_id == dataset_id)
+                .where(
+                    FileDocumentVersion.state.in_(
+                        ["pending_upload", "uploaded", "parsing", "retryable_failed"]
+                    )
+                )
+                .where(
+                    FileDocumentVersion.source_content_sha256
+                    == artifact.source_content_sha256
+                )
+                .where(
+                    FileDocumentVersion.ingested_content_sha256
+                    == artifact.ingested_content_sha256
+                )
+                .order_by(FileDocumentVersion.id.desc())
+            )
+            if pending_version is not None:
+                pending_version_id = int(pending_version.id)
+                resume_document_id = pending_version.document_id
+                if not pending_version.upload_operation_id:
+                    pending_version.upload_operation_id = uuid4().hex
+                upload_operation_id = pending_version.upload_operation_id
+                if pending_version.state == "parsing" and resume_document_id:
+                    db_file.sync_status = "parsing"
+                    session.commit()
+                    self._ensure_parse_status_job(
+                        repo_id,
+                        dataset_id,
+                        run_id=self._correlation_run_id(sync_id),
+                    )
+                    return FileSyncResult(
+                        uploaded=False,
+                        skipped=False,
+                        document_id=resume_document_id,
+                        change_type="pending",
+                    )
             db_file.sync_status = "pending"
             db_file.error_message = None
             session.commit()
@@ -507,8 +1124,6 @@ class SyncOrchestrator:
                     change_type="unchanged",
                 )
 
-        stale_document_ids = [old_document_id] if old_document_id else []
-
         settings_hash = None
         if self.refresh_dataset_settings:
             settings = self.dataset_settings_service.refresh(dataset_id)
@@ -523,107 +1138,135 @@ class SyncOrchestrator:
                 )
                 session.commit()
 
-        document = self.ragflow_client.upload_document(
-            dataset_id,
-            document_name=artifact.document_name,
-            content=artifact.content,
-            mime_type=artifact.mime_type,
+        if pending_version_id is None:
+            with self.session_factory() as session:
+                db_file = self._get_file(session, repo_id, normalize_seafile_path(path))
+                version = FileDocumentVersion(
+                    file_id=db_file.id,
+                    repo_id=repo_id,
+                    normalized_path=db_file.normalized_path,
+                    dataset_id=dataset_id,
+                    document_name=artifact.document_name,
+                    source_content_sha256=artifact.source_content_sha256,
+                    ingested_content_sha256=artifact.ingested_content_sha256,
+                    ingested_mime=artifact.mime_type,
+                    state="pending_upload",
+                    previous_version_id=old_version_id,
+                    upload_operation_id=uuid4().hex,
+                )
+                session.add(version)
+                session.commit()
+                pending_version_id = int(version.id)
+                upload_operation_id = version.upload_operation_id
+
+        if not upload_operation_id:
+            with self.session_factory() as session:
+                stored_version = session.get(FileDocumentVersion, pending_version_id)
+                if stored_version is None:
+                    raise RuntimeError("pending document version disappeared before upload")
+                stored_version.upload_operation_id = (
+                    stored_version.upload_operation_id or uuid4().hex
+                )
+                upload_operation_id = stored_version.upload_operation_id
+                session.commit()
+
+        assert upload_operation_id is not None
+        managed_document_name = _managed_upload_document_name(
+            artifact.document_name,
+            upload_operation_id,
         )
-        document_id = str(document.get("id") or document.get("document_id") or "")
-        if not document_id:
-            msg = f"RAGFlow upload response did not contain a document id for {path}"
-            raise RuntimeError(msg)
         metadata = build_ragflow_document_metadata(
             artifact,
             repo_id=repo_id,
             path=path,
             item=item,
         )
-        try:
-            self.ragflow_client.update_document_metadata(dataset_id, document_id, metadata)
-        except ApiError as exc:
-            if exc.status_code not in {404, 405}:
-                raise
-            self.log.warning(
-                "ragflow.document_metadata_update_unsupported",
+        metadata.update(
+            {
+                "connector_managed": "true",
+                "connector_upload_operation_id": upload_operation_id,
+            }
+        )
+
+        uploaded_now = False
+        if resume_document_id is None:
+            if lease is not None:
+                self.repo_lease_store.assert_owned(lease)
+            recovered = self._recover_managed_upload(
+                dataset_id,
+                managed_document_name=managed_document_name,
+                upload_operation_id=upload_operation_id,
+            )
+            if recovered is None:
+                document = self.ragflow_client.upload_document(
+                    dataset_id,
+                    document_name=managed_document_name,
+                    content=artifact.content,
+                    mime_type=artifact.mime_type,
+                )
+                uploaded_now = True
+            else:
+                document = recovered
+            document_id = str(document.get("id") or document.get("document_id") or "")
+            if not document_id:
+                msg = f"RAGFlow upload response did not contain a document id for {path}"
+                raise RuntimeError(msg)
+            self._update_managed_document_metadata(
+                dataset_id,
+                document_id,
+                metadata,
                 sync_id=sync_id,
                 repo_id=repo_id,
-                dataset_id=dataset_id,
                 path=path,
-                document_id=document_id,
-                status_code=exc.status_code,
             )
+            with self.session_factory() as session:
+                stored_version = session.get(FileDocumentVersion, pending_version_id)
+                if stored_version is None:
+                    raise RuntimeError("pending document version disappeared after upload")
+                stored_version.document_id = document_id
+                stored_version.state = "uploaded"
+                stored_version.error_message = None
+                session.commit()
+        else:
+            document_id = resume_document_id
+            self._update_managed_document_metadata(
+                dataset_id,
+                document_id,
+                metadata,
+                sync_id=sync_id,
+                repo_id=repo_id,
+                path=path,
+            )
+        self._restore_friendly_document_name(
+            dataset_id,
+            document_id,
+            artifact.document_name,
+            sync_id=sync_id,
+            repo_id=repo_id,
+            path=path,
+        )
+        if lease is not None:
+            self.repo_lease_store.assert_owned(lease)
         self.ragflow_client.parse_documents(dataset_id, [document_id])
 
         with self.session_factory() as session:
             db_file = self._get_file(session, repo_id, normalize_seafile_path(path))
-            db_file.source_content_sha256 = artifact.source_content_sha256
-            db_file.ingested_content_sha256 = artifact.ingested_content_sha256
-            db_file.ragflow_document_id = document_id
-            db_file.ragflow_document_name = artifact.document_name
-            db_file.ingested_document_name = artifact.document_name
-            db_file.ingested_mime = artifact.mime_type
             db_file.last_uploaded_dataset_settings_hash = settings_hash
-            db_file.sync_status = "uploaded"
+            db_file.sync_status = "parsing"
             db_file.parse_status = "UNSTART"
             db_file.error_message = None
+            stored_version = session.get(FileDocumentVersion, pending_version_id)
+            if stored_version is None:
+                raise RuntimeError("pending document version disappeared before parse tracking")
+            stored_version.state = "parsing"
+            stored_version.parse_status = "UNSTART"
+            stored_version.error_message = None
             session.commit()
-
-        stale_document_ids = [
-            stale_id for stale_id in stale_document_ids if stale_id != document_id
-        ]
-        if stale_document_ids:
-            try:
-                self.ragflow_client.delete_documents(dataset_id, stale_document_ids)
-            except Exception as exc:
-                self.log.warning(
-                    "ragflow.stale_documents_delete_failed",
-                    sync_id=sync_id,
-                    repo_id=repo_id,
-                    dataset_id=dataset_id,
-                    path=path,
-                    document_ids=stale_document_ids,
-                    error_class=type(exc).__name__,
-                )
-                self._record_dashboard_change(
-                    sync_id=sync_id,
-                    action="delete_stale_ragflow_documents",
-                    change_type="deleted",
-                    status="failed",
-                    object_name=artifact.document_name,
-                    source_path=path,
-                    target_path=dataset_id,
-                    error_message=str(exc)[:4000],
-                    details={
-                        "repo_id": repo_id,
-                        "dataset_id": dataset_id,
-                        "document_ids": stale_document_ids,
-                    },
-                )
-            else:
-                self.log.info(
-                    "ragflow.stale_documents_deleted",
-                    sync_id=sync_id,
-                    repo_id=repo_id,
-                    dataset_id=dataset_id,
-                    path=path,
-                    document_name=artifact.document_name,
-                    document_count=len(stale_document_ids),
-                )
-                self._record_dashboard_change(
-                    sync_id=sync_id,
-                    action="delete_stale_ragflow_documents",
-                    change_type="deleted",
-                    status="succeeded",
-                    object_name=artifact.document_name,
-                    source_path=path,
-                    target_path=dataset_id,
-                    details={
-                        "repo_id": repo_id,
-                        "dataset_id": dataset_id,
-                        "document_ids": stale_document_ids,
-                    },
-                )
+        self._ensure_parse_status_job(
+            repo_id,
+            dataset_id,
+            run_id=self._correlation_run_id(sync_id),
+        )
 
         self.log.info(
             "file.uploaded",
@@ -636,7 +1279,7 @@ class SyncOrchestrator:
             ingestion_strategy=classification.ingestion_strategy,
             source_size_bytes=len(data),
         )
-        change_type = "updated" if old_document_id or stale_document_ids else "created"
+        change_type = "updated" if old_document_id else "created"
         self._record_dashboard_change(
             sync_id=sync_id,
             action="upload_file",
@@ -654,11 +1297,12 @@ class SyncOrchestrator:
                 "ingestion_strategy": classification.ingestion_strategy,
                 "source_size_bytes": len(data),
                 "mime_type": artifact.mime_type,
-                "stale_document_ids": stale_document_ids,
+                "previous_document_id": old_document_id,
+                "document_state": "parsing",
             },
         )
         return FileSyncResult(
-            uploaded=True,
+            uploaded=uploaded_now,
             skipped=False,
             document_id=document_id,
             change_type=change_type,
@@ -671,7 +1315,21 @@ class SyncOrchestrator:
         path: str,
         *,
         sync_id: str | None = None,
+        lease: RepoLeaseHandle | None = None,
     ) -> bool:
+        if lease is None:
+            with self._mutation_scope(
+                repo_id,
+                owner_id=f"delete:{new_sync_id(repo_id)}",
+            ) as acquired:
+                return self.delete_file(
+                    repo_id,
+                    dataset_id,
+                    path,
+                    sync_id=sync_id,
+                    lease=acquired,
+                )
+        self.repo_lease_store.assert_owned(lease)
         normalized_path = normalize_seafile_path(path)
         with self.session_factory() as session:
             db_file = session.scalar(
@@ -706,19 +1364,22 @@ class SyncOrchestrator:
             document_id = db_file.ragflow_document_id
             document_name = db_file.ragflow_document_name or db_file.ingested_document_name
         if document_id and self.delete_ragflow_docs_on_seafile_delete:
-            self.ragflow_client.delete_documents(dataset_id, [document_id])
-            self.log.info(
-                "file.ragflow_document_deleted",
-                sync_id=sync_id,
-                repo_id=repo_id,
-                dataset_id=dataset_id,
-                path=normalized_path,
-                document_id=document_id,
+            self._queue_file_cleanup(
+                repo_id,
+                dataset_id,
+                normalized_path,
+                fence_token=lease.fence_token if lease else None,
+                delete_file_row=True,
+                run_id=self._correlation_run_id(sync_id),
             )
-        with self.session_factory() as session:
-            db_file = self._get_file(session, repo_id, normalized_path)
-            session.delete(db_file)
-            session.commit()
+            completed = self.process_cleanup_outbox(repo_id=repo_id, lease=lease)
+            if completed <= 0:
+                return False
+        else:
+            with self.session_factory() as session:
+                db_file = self._get_file(session, repo_id, normalized_path)
+                session.delete(db_file)
+                session.commit()
         self._record_dashboard_change(
             sync_id=sync_id,
             action="delete_file",
@@ -739,6 +1400,7 @@ class SyncOrchestrator:
         *,
         scope: str = "/",
         sync_id: str | None = None,
+        lease: RepoLeaseHandle | None = None,
     ) -> int:
         normalized_scope = normalize_seafile_path(scope)
         deleted = 0
@@ -756,24 +1418,13 @@ class SyncOrchestrator:
             ]
 
         for row in missing:
-            if row.ragflow_document_id and self.delete_ragflow_docs_on_seafile_delete:
-                try:
-                    self.ragflow_client.delete_documents(dataset_id, [row.ragflow_document_id])
-                except ApiError:
-                    raise
-                self.log.info(
-                    "file.missing_ragflow_document_deleted",
-                    sync_id=sync_id,
-                    repo_id=repo_id,
-                    dataset_id=dataset_id,
-                    path=row.normalized_path,
-                    document_id=row.ragflow_document_id,
-                )
-            with self.session_factory() as session:
-                db_file = session.get(File, row.id)
-                if db_file:
-                    session.delete(db_file)
-                    session.commit()
+            removed = self.delete_file(
+                repo_id,
+                dataset_id,
+                row.normalized_path,
+                sync_id=sync_id,
+                lease=lease,
+            )
             self._record_dashboard_change(
                 sync_id=sync_id,
                 action="delete_missing_file",
@@ -796,47 +1447,789 @@ class SyncOrchestrator:
                     "document_id": row.ragflow_document_id,
                 },
             )
-            deleted += 1
+            deleted += int(removed or not row.ragflow_document_id)
         return deleted
 
-    def check_parse_status(self, repo_id: str, dataset_id: str) -> int:
-        documents = self.ragflow_client.iter_documents(dataset_id)
-        by_id = {
-            document_id: document
-            for document in documents
-            if (document_id := _document_id(document))
-        }
-        updated = 0
-        with self.session_factory() as session:
-            rows = session.scalars(select(File).where(File.repo_id == repo_id)).all()
-            for row in rows:
-                if not row.ragflow_document_id:
-                    continue
-                document = by_id.get(row.ragflow_document_id)
-                if not document:
-                    continue
-                parse_status = str(document.get("run") or "").strip()
-                if not parse_status:
-                    continue
-                row.parse_status = parse_status
-                if parse_status == "FAIL":
-                    row.error_message = str(document.get("progress_msg") or "")[:4000]
-                    self._record_dashboard_change(
-                        sync_id=None,
-                        action="check_parse_status",
-                        change_type="failed",
-                        status="failed",
-                        object_name=row.ragflow_document_name or row.ingested_document_name,
-                        source_path=row.normalized_path,
-                        target_path=f"{dataset_id}/{row.ragflow_document_id}",
-                        error_message=row.error_message,
-                        details={"repo_id": repo_id, "dataset_id": dataset_id},
+    def check_parse_status(
+        self,
+        repo_id: str,
+        dataset_id: str,
+        *,
+        raise_if_pending: bool = False,
+    ) -> int:
+        with self._mutation_scope(
+            repo_id,
+            owner_id=f"parse:{new_sync_id(repo_id)}",
+        ) as lease:
+            documents = self.ragflow_client.iter_documents(dataset_id)
+            by_id = {
+                document_id: document
+                for document in documents
+                if (document_id := _document_id(document))
+            }
+            updated = 0
+            retry_ids: list[str] = []
+            cleanup: list[tuple[int, str, str]] = []
+            with self.session_factory() as session:
+                for db_file in session.scalars(
+                    select(File)
+                    .where(File.repo_id == repo_id)
+                    .where(File.ragflow_document_id.is_not(None))
+                ):
+                    self._ensure_current_document_version(session, db_file, dataset_id)
+                session.flush()
+                versions = session.scalars(
+                    select(FileDocumentVersion)
+                    .where(FileDocumentVersion.repo_id == repo_id)
+                    .where(FileDocumentVersion.dataset_id == dataset_id)
+                    .where(FileDocumentVersion.document_id.is_not(None))
+                    .where(
+                        FileDocumentVersion.state.in_(
+                            ["current", "uploaded", "parsing", "retryable_failed"]
+                        )
                     )
-                elif parse_status == "DONE":
-                    row.error_message = None
-                updated += 1
+                ).all()
+                for version in versions:
+                    assert version.document_id is not None
+                    document = by_id.get(version.document_id)
+                    if document is None:
+                        continue
+                    parse_status = str(document.get("run") or "").strip().upper()
+                    if not parse_status:
+                        continue
+                    version.poll_count += 1
+                    version.parse_status = parse_status
+                    tracked_file = session.get(File, version.file_id)
+                    if tracked_file is None:
+                        continue
+                    if parse_status == "FAIL":
+                        version.retry_count += 1
+                        version.error_message = str(document.get("progress_msg") or "")[:4000]
+                        if version.retry_count < 5:
+                            version.state = "retryable_failed"
+                            retry_ids.append(version.document_id)
+                        else:
+                            version.state = "dead"
+                        tracked_file.sync_status = "parse_failed"
+                        tracked_file.parse_status = "FAIL"
+                        tracked_file.retry_count = version.retry_count
+                        tracked_file.error_message = version.error_message
+                    elif parse_status == "DONE":
+                        previous_versions = session.scalars(
+                            select(FileDocumentVersion)
+                            .where(FileDocumentVersion.file_id == version.file_id)
+                            .where(FileDocumentVersion.id != version.id)
+                            .where(
+                                FileDocumentVersion.state.in_(
+                                    [
+                                        "current",
+                                        "dead",
+                                        "retryable_failed",
+                                        "parsing",
+                                    ]
+                                )
+                            )
+                        ).all()
+                        for previous in previous_versions:
+                            previous.state = "superseded"
+                            if previous.document_id:
+                                cleanup.append(
+                                    (int(previous.id), previous.document_id, previous.dataset_id)
+                                )
+                        version.state = "current"
+                        version.retry_count = 0
+                        version.error_message = None
+                        version.promoted_at = datetime.now(UTC)
+                        tracked_file.source_content_sha256 = version.source_content_sha256
+                        tracked_file.ingested_content_sha256 = version.ingested_content_sha256
+                        tracked_file.ragflow_document_id = version.document_id
+                        tracked_file.ragflow_document_name = version.document_name
+                        tracked_file.ingested_document_name = version.document_name
+                        tracked_file.ingested_mime = version.ingested_mime
+                        tracked_file.sync_status = "synced"
+                        tracked_file.parse_status = "DONE"
+                        tracked_file.retry_count = 0
+                        tracked_file.error_message = None
+                    else:
+                        version.state = "parsing"
+                        version.error_message = None
+                        tracked_file.sync_status = "parsing"
+                        tracked_file.parse_status = parse_status
+                        tracked_file.error_message = None
+                    updated += 1
+                session.commit()
+
+            for document_id in retry_ids:
+                self.repo_lease_store.assert_owned(lease)
+                try:
+                    self.ragflow_client.parse_documents(dataset_id, [document_id])
+                except Exception as exc:
+                    self.log.warning(
+                        "ragflow.document_parse_retry_failed",
+                        repo_id=repo_id,
+                        dataset_id=dataset_id,
+                        document_id=document_id,
+                        error_class=type(exc).__name__,
+                    )
+                else:
+                    with self.session_factory() as session:
+                        retry_version = session.scalar(
+                            select(FileDocumentVersion).where(
+                                FileDocumentVersion.document_id == document_id
+                            )
+                        )
+                        if retry_version is not None:
+                            retry_version.state = "parsing"
+                            session.commit()
+            for version_id, document_id, previous_dataset_id in cleanup:
+                self._enqueue_cleanup(
+                    repo_id=repo_id,
+                    target_type="ragflow_document",
+                    target_id=document_id,
+                    dataset_id=previous_dataset_id,
+                    document_version_id=version_id,
+                    fence_token=lease.fence_token,
+                    run_id=self._correlation_run_id(),
+                )
+            self.process_cleanup_outbox(repo_id=repo_id, lease=lease)
+            self._ensure_parse_status_job(
+                repo_id,
+                dataset_id,
+                run_id=self._correlation_run_id(),
+            )
+            self._refresh_waiting_sync_runs(repo_id)
+            if raise_if_pending:
+                counts = self._async_work_counts(repo_id)
+                pending = counts["pending_parse"]
+                dead = counts["dead_parse"]
+                if dead:
+                    raise ParseDeadError(
+                        f"{dead} RAGFlow document(s) exhausted parse retries"
+                    )
+                if pending:
+                    raise ParsePendingError(
+                        f"{pending} RAGFlow document(s) are still parsing",
+                        delay_seconds=30,
+                    )
+            return updated
+
+    @contextmanager
+    def _mutation_scope(
+        self,
+        repo_id: str,
+        *,
+        owner_id: str,
+    ) -> Iterator[RepoLeaseHandle]:
+        active = current_repo_lease(repo_id)
+        if active is not None:
+            self.repo_lease_store.assert_owned(active)
+            yield active
+            return
+        handle = self.repo_lease_store.acquire(
+            repo_id,
+            owner_id,
+            lease_seconds=900,
+        )
+        try:
+            with activate_repo_lease(handle):
+                yield handle
+        finally:
+            self.repo_lease_store.release(handle)
+
+    def _cancellation_requested(self, run_id: str) -> bool:
+        return job_cancellation_requested() or self.sync_state_store.cancel_requested(run_id)
+
+    def _current_parent_run_id(self) -> str | None:
+        run_id = current_job_run_id()
+        return run_id if run_id and self.sync_state_store.get_run(run_id) is not None else None
+
+    def _correlation_run_id(self, fallback: str | None = None) -> str | None:
+        run_id = current_job_run_id() or fallback
+        return run_id if run_id and self.sync_state_store.get_run(run_id) is not None else None
+
+    def _library_dataset_id(self, repo_id: str) -> str | None:
+        with self.session_factory() as session:
+            library = session.get(Library, repo_id)
+            return library.ragflow_dataset_id if library is not None else None
+
+    def _async_work_counts(self, repo_id: str) -> dict[str, int]:
+        with self.session_factory() as session:
+            version_states = session.execute(
+                select(
+                    FileDocumentVersion.file_id,
+                    FileDocumentVersion.id,
+                    FileDocumentVersion.state,
+                )
+                .where(FileDocumentVersion.repo_id == repo_id)
+                .order_by(FileDocumentVersion.file_id, FileDocumentVersion.id.desc())
+            ).all()
+            latest_state_by_file: dict[int, str] = {}
+            for file_id, _version_id, state in version_states:
+                latest_state_by_file.setdefault(int(file_id), str(state))
+            pending_parse = sum(
+                state in {"uploaded", "parsing", "retryable_failed"}
+                for state in latest_state_by_file.values()
+            )
+            dead_parse = sum(
+                state == "dead" for state in latest_state_by_file.values()
+            )
+            pending_cleanup = int(
+                session.scalar(
+                    select(func.count(CleanupOutbox.id))
+                    .where(CleanupOutbox.repo_id == repo_id)
+                    .where(CleanupOutbox.status.in_(["pending", "retrying"]))
+                )
+                or 0
+            )
+            dead_cleanup = int(
+                session.scalar(
+                    select(func.count(CleanupOutbox.id))
+                    .where(CleanupOutbox.repo_id == repo_id)
+                    .where(CleanupOutbox.status == "dead")
+                )
+                or 0
+            )
+        return {
+            "pending_parse": pending_parse,
+            "dead_parse": dead_parse,
+            "pending_cleanup": pending_cleanup,
+            "dead_cleanup": dead_cleanup,
+        }
+
+    def _complete_or_wait_for_async_work(
+        self,
+        run_id: str,
+        repo_id: str,
+        progress: Mapping[str, Any],
+    ) -> str:
+        counts = self._async_work_counts(repo_id)
+        merged_progress = {
+            **dict(progress),
+            **counts,
+            "sync_phase_complete": True,
+        }
+        if counts["dead_parse"] or counts["dead_cleanup"]:
+            error = (
+                "asynchronous sync work failed: "
+                f"parse={counts['dead_parse']}, cleanup={counts['dead_cleanup']}"
+            )
+            self.sync_state_store.update_run(
+                run_id,
+                status="failed",
+                progress=merged_progress,
+                error_message=error,
+                finished=True,
+            )
+            self._update_dashboard_async_status(
+                run_id,
+                status="failed",
+                progress=merged_progress,
+                terminal=True,
+                error_message=error,
+            )
+            return "failed"
+        if counts["pending_parse"] or counts["pending_cleanup"]:
+            self.sync_state_store.update_run(
+                run_id,
+                status="running",
+                progress=merged_progress,
+            )
+            self._update_dashboard_async_status(
+                run_id,
+                status="running",
+                progress=merged_progress,
+                terminal=False,
+            )
+            return "running"
+        self.sync_state_store.update_run(
+            run_id,
+            status="succeeded",
+            progress=merged_progress,
+            finished=True,
+        )
+        self._update_dashboard_async_status(
+            run_id,
+            status="succeeded",
+            progress=merged_progress,
+            terminal=True,
+        )
+        return "succeeded"
+
+    def _refresh_waiting_sync_runs(self, repo_id: str) -> None:
+        with self.session_factory() as session:
+            runs = list(
+                session.scalars(
+                    select(SyncRun)
+                    .where(SyncRun.repo_id == repo_id)
+                    .where(SyncRun.status.in_(["running", "retrying"]))
+                    .where(SyncRun.mode != "workflow")
+                ).all()
+            )
+            snapshots = [
+                (run.id, dict(run.progress or {}))
+                for run in runs
+                if (run.progress or {}).get("sync_phase_complete")
+                or any(
+                    key in (run.progress or {})
+                    for key in (
+                        "pending_parse",
+                        "dead_parse",
+                        "pending_cleanup",
+                        "dead_cleanup",
+                    )
+                )
+            ]
+        for run_id, progress in snapshots:
+            self._complete_or_wait_for_async_work(run_id, repo_id, progress)
+
+    def _ensure_parse_status_job(
+        self,
+        repo_id: str,
+        dataset_id: str | None,
+        *,
+        run_id: str | None = None,
+    ) -> int | None:
+        if not dataset_id:
+            return None
+        with self.session_factory() as session:
+            pending = session.scalar(
+                select(func.count(FileDocumentVersion.id))
+                .where(FileDocumentVersion.repo_id == repo_id)
+                .where(FileDocumentVersion.dataset_id == dataset_id)
+                .where(
+                    FileDocumentVersion.state.in_(
+                        ["uploaded", "parsing", "retryable_failed"]
+                    )
+                )
+            )
+        if not pending:
+            return None
+        result = self.job_store.enqueue_with_result(
+            JobSpec(
+                JobType.CHECK_PARSE_STATUS,
+                repo_id=repo_id,
+                payload={"dataset_id": dataset_id},
+                max_attempts=5,
+            )
+        )
+        correlation_run_id = run_id or self._correlation_run_id()
+        if correlation_run_id:
+            self.job_store.bind_run_if_unbound(result.job_id, correlation_run_id)
+        parent_job_id = current_job_id()
+        if parent_job_id is not None:
+            self.job_store.inherit_workflow_subscriptions(
+                parent_job_id,
+                result.job_id,
+                child_created=not result.deduplicated,
+            )
+        return result.job_id
+
+    def _try_capture_snapshot(
+        self,
+        repo_id: str,
+        commit_id: str,
+        scope: str,
+    ) -> tuple[int, list[SnapshotEntry]] | None:
+        if not hasattr(self.sync_client, "list_dir_at_commit"):
+            return None
+        try:
+            entries = capture_commit_snapshot(
+                self.sync_client,
+                repo_id,
+                commit_id,
+                scope=scope,
+            )
+        except ApiError as exc:
+            if exc.status_code not in {400, 404, 405, 501}:
+                raise
+            self.log.info(
+                "seafile.commit_snapshot_unavailable",
+                repo_id=repo_id,
+                commit_id=commit_id,
+                status_code=exc.status_code,
+                fallback="live_full_sync",
+            )
+            return None
+        except TypeError as exc:
+            if not _is_incompatible_snapshot_client_error(exc):
+                raise
+            self.log.info(
+                "seafile.commit_snapshot_incompatible",
+                repo_id=repo_id,
+                commit_id=commit_id,
+                error_class=type(exc).__name__,
+                fallback="live_full_sync",
+            )
+            return None
+        snapshot = self.sync_state_store.replace_snapshot(
+            repo_id=repo_id,
+            commit_id=commit_id,
+            scope=scope,
+            entries=[entry.as_record() for entry in entries],
+            complete=True,
+        )
+        return snapshot.snapshot_id, entries
+
+    @staticmethod
+    def _snapshot_item(entry: SnapshotEntry) -> dict[str, Any]:
+        item = dict(entry.raw)
+        if entry.object_id:
+            item.setdefault("id", entry.object_id)
+        if entry.size is not None:
+            item.setdefault("size", entry.size)
+        if entry.mtime is not None:
+            item.setdefault("mtime", entry.mtime)
+        return item
+
+    def _ensure_current_document_version(
+        self,
+        session: Session,
+        db_file: File,
+        dataset_id: str,
+    ) -> int | None:
+        if not db_file.ragflow_document_id:
+            return None
+        existing = session.scalar(
+            select(FileDocumentVersion)
+            .where(FileDocumentVersion.file_id == db_file.id)
+            .where(FileDocumentVersion.document_id == db_file.ragflow_document_id)
+            .order_by(FileDocumentVersion.id.desc())
+        )
+        if existing is not None:
+            return int(existing.id)
+        version = FileDocumentVersion(
+            file_id=db_file.id,
+            repo_id=db_file.repo_id,
+            normalized_path=db_file.normalized_path,
+            dataset_id=dataset_id,
+            document_id=db_file.ragflow_document_id,
+            document_name=(
+                db_file.ragflow_document_name
+                or db_file.ingested_document_name
+                or _basename(db_file.normalized_path)
+            ),
+            source_content_sha256=db_file.source_content_sha256,
+            ingested_content_sha256=db_file.ingested_content_sha256,
+            ingested_mime=db_file.ingested_mime,
+            state="current",
+            parse_status=db_file.parse_status,
+            poll_count=0,
+            retry_count=db_file.retry_count,
+            error_message=db_file.error_message,
+            promoted_at=db_file.updated_at,
+        )
+        session.add(version)
+        session.flush()
+        return int(version.id)
+
+    def _queue_file_cleanup(
+        self,
+        repo_id: str,
+        dataset_id: str,
+        path: str,
+        *,
+        fence_token: int | None,
+        wait_for_document_id: str | None = None,
+        delete_file_row: bool = False,
+        run_id: str | None = None,
+    ) -> bool:
+        normalized_path = normalize_seafile_path(path)
+        with self.session_factory() as session:
+            db_file = session.scalar(
+                select(File).where(
+                    File.repo_id == repo_id,
+                    File.normalized_path == normalized_path,
+                )
+            )
+            if db_file is None or not db_file.ragflow_document_id:
+                if db_file is not None and delete_file_row:
+                    session.delete(db_file)
+                    session.commit()
+                return False
+            version_id = self._ensure_current_document_version(session, db_file, dataset_id)
+            file_id = int(db_file.id)
+            document_id = db_file.ragflow_document_id
             session.commit()
-        return updated
+        self._enqueue_cleanup(
+            repo_id=repo_id,
+            target_type="ragflow_document",
+            target_id=document_id,
+            dataset_id=dataset_id,
+            file_id=file_id,
+            document_version_id=version_id,
+            fence_token=fence_token,
+            run_id=run_id,
+            payload={
+                "wait_for_document_id": wait_for_document_id,
+                "delete_file_row": delete_file_row,
+                "clear_binding": not delete_file_row,
+            },
+        )
+        return True
+
+    def _enqueue_cleanup(
+        self,
+        *,
+        repo_id: str,
+        target_type: str,
+        target_id: str,
+        dataset_id: str | None,
+        file_id: int | None = None,
+        document_version_id: int | None = None,
+        fence_token: int | None = None,
+        run_id: str | None = None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> int:
+        with self.session_factory() as session:
+            existing = session.scalar(
+                select(CleanupOutbox).where(
+                    CleanupOutbox.target_type == target_type,
+                    CleanupOutbox.target_id == target_id,
+                    CleanupOutbox.action == "delete",
+                )
+            )
+            if existing is not None:
+                if existing.status in {"completed", "superseded", "cancelled"}:
+                    existing.repo_id = repo_id
+                    existing.run_id = run_id
+                    existing.file_id = file_id
+                    existing.document_version_id = document_version_id
+                    existing.dataset_id = dataset_id
+                    existing.payload = dict(payload or {})
+                    existing.status = "pending"
+                    existing.attempts = 0
+                    existing.run_after = datetime.now(UTC)
+                    existing.fence_token = fence_token
+                    existing.error_message = None
+                    existing.completed_at = None
+                    session.commit()
+                elif run_id and not existing.run_id:
+                    existing.run_id = run_id
+                    session.commit()
+                outbox_id = int(existing.id)
+                parent_job_id = current_job_id()
+                if parent_job_id is not None:
+                    self.job_store.subscribe_cleanup_from_job(parent_job_id, outbox_id)
+                return outbox_id
+            row = CleanupOutbox(
+                repo_id=repo_id,
+                run_id=run_id,
+                file_id=file_id,
+                document_version_id=document_version_id,
+                target_type=target_type,
+                target_id=target_id,
+                dataset_id=dataset_id,
+                action="delete",
+                payload=dict(payload or {}),
+                fence_token=fence_token,
+            )
+            session.add(row)
+            session.commit()
+            outbox_id = int(row.id)
+        parent_job_id = current_job_id()
+        if parent_job_id is not None:
+            self.job_store.subscribe_cleanup_from_job(parent_job_id, outbox_id)
+        return outbox_id
+
+    def process_cleanup_outbox(
+        self,
+        *,
+        repo_id: str,
+        lease: RepoLeaseHandle | None = None,
+        limit: int = 100,
+    ) -> int:
+        if lease is None:
+            active = current_repo_lease(repo_id)
+            if active is None:
+                with self._mutation_scope(
+                    repo_id,
+                    owner_id=f"cleanup:{new_sync_id(repo_id)}",
+                ) as acquired:
+                    return self.process_cleanup_outbox(
+                        repo_id=repo_id,
+                        lease=acquired,
+                        limit=limit,
+                    )
+            lease = active
+        now = datetime.now(UTC)
+        with self.session_factory() as session:
+            row_ids = list(
+                session.scalars(
+                    select(CleanupOutbox.id)
+                    .where(CleanupOutbox.repo_id == repo_id)
+                    .where(CleanupOutbox.status.in_(["pending", "retrying"]))
+                    .where(CleanupOutbox.run_after <= now)
+                    .order_by(CleanupOutbox.id)
+                    .limit(limit)
+                ).all()
+            )
+        completed = 0
+        for row_id in row_ids:
+            with self.session_factory() as session:
+                row = session.get(CleanupOutbox, row_id)
+                if row is None or row.status not in {"pending", "retrying"}:
+                    continue
+                wait_for_document_id = str(
+                    (row.payload or {}).get("wait_for_document_id") or ""
+                )
+                if wait_for_document_id:
+                    waiting_version = session.scalar(
+                        select(FileDocumentVersion)
+                        .where(FileDocumentVersion.document_id == wait_for_document_id)
+                    )
+                    ready = bool(waiting_version and waiting_version.state == "current")
+                    if waiting_version is not None and not ready:
+                        ready = bool(
+                            session.scalar(
+                                select(FileDocumentVersion.id)
+                                .where(
+                                    FileDocumentVersion.file_id == waiting_version.file_id
+                                )
+                                .where(FileDocumentVersion.state == "current")
+                            )
+                        )
+                    if not ready:
+                        continue
+                target_type = row.target_type
+                target_id = row.target_id
+                dataset_id = row.dataset_id
+                payload = dict(row.payload or {})
+                file_id = row.file_id
+                document_version_id = row.document_version_id
+            try:
+                self.repo_lease_store.assert_owned(lease)
+                if target_type == "ragflow_document":
+                    if not dataset_id:
+                        raise ValueError("document cleanup requires dataset_id")
+                    self.ragflow_client.delete_documents(dataset_id, [target_id])
+                elif target_type == "ragflow_dataset":
+                    self.ragflow_client.delete_datasets([target_id])
+                else:
+                    raise ValueError(f"unsupported cleanup target type: {target_type}")
+            except Exception as exc:
+                with self.session_factory() as session:
+                    row = session.scalar(
+                        select(CleanupOutbox)
+                        .where(CleanupOutbox.id == row_id)
+                        .where(CleanupOutbox.status.in_(["pending", "retrying"]))
+                        .with_for_update()
+                    )
+                    if row is not None:
+                        row.attempts += 1
+                        row.status = "dead" if row.attempts >= 5 else "retrying"
+                        delay = min(600, 30 * (2 ** max(0, row.attempts - 1)))
+                        row.run_after = datetime.now(UTC) + timedelta(seconds=delay)
+                        row.error_message = str(exc)[:4000]
+                        if row.target_type == "ragflow_dataset":
+                            library = session.get(Library, row.repo_id)
+                            if library is not None:
+                                library.status = "delete_failed"
+                                library.deletion_state = "delete_failed"
+                                library.last_error = row.error_message
+                        session.commit()
+                self.job_store.refresh_workflow_parents_for_cleanup(int(row_id))
+                self.log.warning(
+                    "cleanup.outbox_failed",
+                    repo_id=repo_id,
+                    target_type=target_type,
+                    target_id=target_id,
+                    error_class=type(exc).__name__,
+                )
+                continue
+            with self.session_factory() as session:
+                row = session.scalar(
+                    select(CleanupOutbox)
+                    .where(CleanupOutbox.id == row_id)
+                    .where(CleanupOutbox.status.in_(["pending", "retrying"]))
+                    .with_for_update()
+                )
+                if row is None:
+                    continue
+                row.status = "completed"
+                row.completed_at = datetime.now(UTC)
+                row.error_message = None
+                if document_version_id is not None:
+                    version = session.get(FileDocumentVersion, document_version_id)
+                    if version is not None and version.state != "superseded":
+                        version.state = "superseded"
+                if file_id is not None:
+                    db_file = session.get(File, file_id)
+                    if db_file is not None and payload.get("delete_file_row"):
+                        session.delete(db_file)
+                    elif (
+                        db_file is not None
+                        and payload.get("clear_binding")
+                        and db_file.ragflow_document_id == target_id
+                    ):
+                        db_file.ragflow_document_id = None
+                        db_file.ragflow_document_name = None
+                        db_file.ingested_document_name = None
+                        db_file.ingested_mime = None
+                        db_file.parse_status = None
+                if target_type == "ragflow_dataset":
+                    library = session.get(Library, repo_id)
+                    if library is not None:
+                        self._purge_deleted_library_state(session, library)
+                session.commit()
+                completed += 1
+            self.job_store.refresh_workflow_parents_for_cleanup(int(row_id))
+        self._refresh_waiting_sync_runs(repo_id)
+        return completed
+
+    def list_cleanup_outbox(
+        self,
+        *,
+        repo_id: str | None = None,
+        statuses: tuple[str, ...] | None = None,
+        limit: int = 100,
+    ) -> list[CleanupOutbox]:
+        if limit <= 0 or limit > 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        with self.session_factory() as session:
+            stmt = select(CleanupOutbox).order_by(CleanupOutbox.created_at.desc()).limit(limit)
+            if repo_id is not None:
+                stmt = stmt.where(CleanupOutbox.repo_id == repo_id)
+            if statuses:
+                stmt = stmt.where(CleanupOutbox.status.in_(statuses))
+            rows = list(session.scalars(stmt).all())
+            for row in rows:
+                session.expunge(row)
+            return rows
+
+    def requeue_cleanup_outbox(self, outbox_id: int) -> str | None:
+        with self.session_factory() as session:
+            row = session.get(CleanupOutbox, outbox_id)
+            if row is None or row.status != "dead":
+                return None
+            repo_id = row.repo_id
+            library = session.get(Library, repo_id)
+            if (
+                row.target_type == "ragflow_dataset"
+                and library is not None
+                and library.deletion_state == "active"
+            ):
+                return None
+            row.status = "pending"
+            row.attempts = 0
+            row.run_after = datetime.now(UTC)
+            row.error_message = None
+            row.completed_at = None
+            library = session.get(Library, row.repo_id)
+            if library is not None and row.target_type == "ragflow_dataset":
+                library.status = "confirmed_for_deletion"
+                library.deletion_state = "confirmed"
+                library.last_error = None
+            session.commit()
+        self.job_store.refresh_workflow_parents_for_cleanup(outbox_id)
+        return repo_id
+
+    def retry_cleanup_outbox(self, outbox_id: int) -> bool:
+        repo_id = self.requeue_cleanup_outbox(outbox_id)
+        if repo_id is None:
+            return False
+        self.process_cleanup_outbox(repo_id=repo_id)
+        self._refresh_waiting_sync_runs(repo_id)
+        return True
 
     def iter_files(self, repo_id: str, path: str = "/") -> Iterable[tuple[str, dict[str, Any]]]:
         for item in self.sync_client.list_dir(repo_id, path):
@@ -865,23 +2258,96 @@ class SyncOrchestrator:
         db_library.virtual = library.virtual
         db_library.seafile_mtime = library.seafile_mtime
         db_library.head_commit_id = library.head_commit_id
+        if db_library.deletion_state == "deleted":
+            db_library.ragflow_dataset_id = None
+            db_library.ragflow_dataset_name = None
+        db_library.last_seen_at = datetime.now(UTC)
+        for cleanup in session.scalars(
+            select(CleanupOutbox)
+            .where(CleanupOutbox.repo_id == library.repo_id)
+            .where(CleanupOutbox.target_type == "ragflow_dataset")
+            .where(CleanupOutbox.status.in_(["pending", "retrying", "dead"]))
+        ):
+            cleanup.status = "superseded"
+            cleanup.completed_at = datetime.now(UTC)
+            cleanup.error_message = "source library reappeared before dataset cleanup"
+        db_library.missing_since = None
+        db_library.last_missing_observation_at = None
+        db_library.missing_observations = 0
+        db_library.deletion_state = "active"
+        db_library.status = "active"
+        db_library.last_error = None
         return db_library
 
     def _cleanup_missing_libraries(self, current_repo_ids: set[str]) -> None:
+        now = datetime.now(UTC)
         with self.session_factory() as session:
             missing = session.scalars(
                 select(Library)
                 .where(Library.repo_id.not_in(current_repo_ids))
                 .where(Library.status != "deleted")
             ).all()
+            total_known = session.scalar(
+                select(func.count(Library.repo_id)).where(Library.status != "deleted")
+            )
+            cleanup_statuses: dict[str, str] = {}
+            for cleanup_repo_id, cleanup_status in session.execute(
+                select(CleanupOutbox.repo_id, CleanupOutbox.status)
+                .where(CleanupOutbox.target_type == "ragflow_dataset")
+                .where(CleanupOutbox.status.in_(["pending", "retrying", "dead"]))
+            ):
+                repo_key = str(cleanup_repo_id)
+                if cleanup_status == "dead" or repo_key not in cleanup_statuses:
+                    cleanup_statuses[repo_key] = str(cleanup_status)
+            for row in missing:
+                row.missing_since = row.missing_since or now
+                last_observed = row.last_missing_observation_at
+                if last_observed is None or _as_utc(last_observed) <= (
+                    now - MISSING_OBSERVATION_MIN_INTERVAL
+                ):
+                    row.missing_observations += 1
+                    row.last_missing_observation_at = now
+                cleanup_status = cleanup_statuses.get(row.repo_id)
+                if cleanup_status:
+                    if cleanup_status == "dead":
+                        row.deletion_state = "delete_failed"
+                        row.status = "delete_failed"
+                    else:
+                        row.deletion_state = "confirmed"
+                        row.status = "confirmed_for_deletion"
+                    continue
+                if row.deletion_state in {"confirmed", "delete_failed"}:
+                    continue
+                if row.deletion_state != "awaiting_confirmation":
+                    row.deletion_state = "missing"
+                    row.status = "missing"
+            mass_guard = (
+                len(missing) >= 3
+                and bool(total_known)
+                and len(missing) / int(total_known or 1) > 0.20
+            )
+            eligible = [
+                row
+                for row in missing
+                if row.missing_observations >= 3
+                and row.missing_since is not None
+                and _as_utc(row.missing_since) <= now - timedelta(hours=24)
+                and row.deletion_state == "missing"
+            ]
+            if mass_guard:
+                for row in eligible:
+                    row.deletion_state = "awaiting_confirmation"
+                    row.status = "awaiting_confirmation"
             items = [
                 {
                     "repo_id": row.repo_id,
                     "name": row.name,
                     "dataset_id": row.ragflow_dataset_id,
                 }
-                for row in missing
+                for row in eligible
+                if not mass_guard
             ]
+            session.commit()
 
         for item in items:
             repo_id = str(item["repo_id"])
@@ -894,30 +2360,24 @@ class SyncOrchestrator:
                     dataset_id=dataset_id or None,
                 )
                 if dataset_id and self.delete_dataset_when_library_deleted:
-                    self.ragflow_client.delete_datasets([dataset_id])
-                    self.log.info(
-                        "ragflow.dataset_deleted_for_missing_library",
-                        repo_id=repo_id,
-                        dataset_id=dataset_id,
-                    )
-                    self._record_dashboard_change(
-                        sync_id=None,
-                        action="delete_ragflow_dataset_for_missing_library",
-                        change_type="deleted",
-                        status="succeeded",
-                        object_name=str(item["name"]),
-                        source_path=f"seafile:{repo_id}",
-                        target_path=f"ragflow:{dataset_id}",
-                        details={"repo_id": repo_id, "dataset_id": dataset_id},
-                    )
-                with self.session_factory() as session:
-                    db_library = session.get(Library, repo_id)
-                    if db_library:
-                        db_library.status = "deleted"
-                        db_library.last_error = None
-                        for row in session.scalars(select(File).where(File.repo_id == repo_id)):
-                            session.delete(row)
-                        session.commit()
+                    with self._mutation_scope(
+                        repo_id,
+                        owner_id=f"library-cleanup:{new_sync_id(repo_id)}",
+                    ) as lease:
+                        self._enqueue_cleanup(
+                            repo_id=repo_id,
+                            target_type="ragflow_dataset",
+                            target_id=dataset_id,
+                            dataset_id=dataset_id,
+                            fence_token=lease.fence_token,
+                        )
+                        self.process_cleanup_outbox(repo_id=repo_id, lease=lease)
+                else:
+                    with self.session_factory() as session:
+                        db_library = session.get(Library, repo_id)
+                        if db_library:
+                            self._purge_deleted_library_state(session, db_library)
+                            session.commit()
             except Exception as exc:
                 with self.session_factory() as session:
                     db_library = session.get(Library, repo_id)
@@ -932,6 +2392,62 @@ class SyncOrchestrator:
                     error=str(exc),
                 )
 
+    def confirm_missing_library_deletion(self, repo_id: str) -> bool:
+        with self.session_factory() as session:
+            library = session.get(Library, repo_id)
+            if library is None or library.deletion_state != "awaiting_confirmation":
+                return False
+            dataset_id = library.ragflow_dataset_id
+            library.deletion_state = "confirmed"
+            library.status = "confirmed_for_deletion"
+            session.commit()
+        if dataset_id and self.delete_dataset_when_library_deleted:
+            with self._mutation_scope(
+                repo_id,
+                owner_id=f"library-confirm:{new_sync_id(repo_id)}",
+            ) as lease:
+                self._enqueue_cleanup(
+                    repo_id=repo_id,
+                    target_type="ragflow_dataset",
+                    target_id=dataset_id,
+                    dataset_id=dataset_id,
+                    fence_token=lease.fence_token,
+                )
+                self.process_cleanup_outbox(repo_id=repo_id, lease=lease)
+        else:
+            with self.session_factory() as session:
+                library = session.get(Library, repo_id)
+                if library is not None:
+                    self._purge_deleted_library_state(session, library)
+                    session.commit()
+        return True
+
+    def _purge_deleted_library_state(
+        self,
+        session: Session,
+        library: Library,
+    ) -> None:
+        repo_id = library.repo_id
+        library.status = "deleted"
+        library.deletion_state = "deleted"
+        library.last_error = None
+        library.last_synced_commit_id = None
+        for db_file in session.scalars(select(File).where(File.repo_id == repo_id)):
+            session.delete(db_file)
+        snapshot_ids = list(
+            session.scalars(
+                select(SourceSnapshot.id).where(SourceSnapshot.repo_id == repo_id)
+            ).all()
+        )
+        session.execute(delete(SyncCursor).where(SyncCursor.repo_id == repo_id))
+        if snapshot_ids:
+            session.execute(
+                delete(SourceSnapshotEntry).where(
+                    SourceSnapshotEntry.snapshot_id.in_(snapshot_ids)
+                )
+            )
+            session.execute(delete(SourceSnapshot).where(SourceSnapshot.id.in_(snapshot_ids)))
+
     def _upsert_file_row(
         self,
         session: Session,
@@ -940,7 +2456,6 @@ class SyncOrchestrator:
         path: str,
         item: dict[str, Any] | None,
         classification: Any,
-        source_hash: str,
     ) -> File:
         normalized_path = normalize_seafile_path(path)
         db_file = session.scalar(
@@ -958,7 +2473,6 @@ class SyncOrchestrator:
         db_file.detected_encoding = classification.detected_encoding
         db_file.is_text = classification.is_text
         db_file.ingestion_strategy = classification.ingestion_strategy
-        db_file.source_content_sha256 = source_hash
         if item:
             db_file.seafile_obj_id = str(item.get("id") or item.get("obj_id") or "") or None
             db_file.size = _int_or_none(item.get("size"))
@@ -999,6 +2513,11 @@ class SyncOrchestrator:
             row.parse_status = None
             row.sync_status = "pending"
             row.error_message = None
+        for version in session.scalars(
+            select(FileDocumentVersion).where(FileDocumentVersion.repo_id == repo_id)
+        ):
+            if version.dataset_id == previous_dataset_id and version.state == "current":
+                version.state = "superseded"
         self._record_dashboard_change(
             sync_id=None,
             action="reset_file_bindings_after_dataset_recreate",
@@ -1057,6 +2576,7 @@ class SyncOrchestrator:
         warnings_count: int,
         summary: str,
         details: Mapping[str, Any],
+        terminal: bool = True,
     ) -> None:
         if self.dashboard_store is None:
             return
@@ -1073,9 +2593,44 @@ class SyncOrchestrator:
                 warnings_count=warnings_count,
                 summary=summary,
                 details=details,
+                terminal=terminal,
             )
         except Exception as exc:
             self.log.warning("dashboard.sync_run_finish_failed", error=str(exc), sync_id=sync_id)
+
+    def _update_dashboard_async_status(
+        self,
+        sync_id: str,
+        *,
+        status: str,
+        progress: Mapping[str, Any],
+        terminal: bool,
+        error_message: str | None = None,
+    ) -> None:
+        if self.dashboard_store is None:
+            return
+        if status == "running":
+            summary = "Synchronisation wartet auf Verarbeitung in RAGFlow"
+        elif status == "failed":
+            reason = error_message or "asynchrone Verarbeitung"
+            summary = f"Synchronisation fehlgeschlagen: {reason}"
+        else:
+            summary = "Synchronisation vollständig abgeschlossen"
+        try:
+            self.dashboard_store.update_sync_run_status(
+                sync_id=sync_id,
+                status=status,
+                terminal=terminal,
+                summary=summary,
+                details={"async_work": dict(progress)},
+                errors_count=(1 if status == "failed" else None),
+            )
+        except Exception as exc:
+            self.log.warning(
+                "dashboard.sync_run_status_update_failed",
+                error=str(exc),
+                sync_id=sync_id,
+            )
 
     def _record_dashboard_change(self, **kwargs: Any) -> None:
         if self.dashboard_store is None:
@@ -1121,6 +2676,95 @@ class SyncOrchestrator:
         )
         return any(_document_id(document) == document_id for document in documents)
 
+    def _recover_managed_upload(
+        self,
+        dataset_id: str,
+        *,
+        managed_document_name: str,
+        upload_operation_id: str,
+    ) -> dict[str, Any] | None:
+        matches: list[dict[str, Any]] = []
+        for document in self.ragflow_client.iter_documents(
+            dataset_id,
+            keywords=upload_operation_id,
+        ):
+            if _remote_document_name(document) != managed_document_name:
+                continue
+            metadata = document.get("metadata") or document.get("meta_fields") or {}
+            if isinstance(metadata, Mapping):
+                remote_operation_id = str(
+                    metadata.get("connector_upload_operation_id") or ""
+                ).strip()
+                if remote_operation_id and remote_operation_id != upload_operation_id:
+                    continue
+            matches.append(dict(document))
+        if len(matches) > 1:
+            raise RuntimeError(
+                "multiple RAGFlow documents match one connector upload operation"
+            )
+        if matches:
+            self.log.info(
+                "ragflow.document_upload_recovered",
+                dataset_id=dataset_id,
+                document_id=_document_id(matches[0]),
+                upload_operation_id=upload_operation_id,
+            )
+            return matches[0]
+        return None
+
+    def _update_managed_document_metadata(
+        self,
+        dataset_id: str,
+        document_id: str,
+        metadata: dict[str, str],
+        *,
+        sync_id: str | None,
+        repo_id: str,
+        path: str,
+    ) -> None:
+        try:
+            self.ragflow_client.update_document_metadata(dataset_id, document_id, metadata)
+        except ApiError as exc:
+            if exc.status_code not in {404, 405}:
+                raise
+            self.log.warning(
+                "ragflow.document_metadata_update_unsupported",
+                sync_id=sync_id,
+                repo_id=repo_id,
+                dataset_id=dataset_id,
+                path=path,
+                document_id=document_id,
+                status_code=exc.status_code,
+            )
+
+    def _restore_friendly_document_name(
+        self,
+        dataset_id: str,
+        document_id: str,
+        document_name: str,
+        *,
+        sync_id: str | None,
+        repo_id: str,
+        path: str,
+    ) -> None:
+        rename_document = getattr(self.ragflow_client, "rename_document", None)
+        if not callable(rename_document):
+            return
+        try:
+            rename_document(dataset_id, document_id, document_name)
+        except ApiError as exc:
+            if exc.status_code not in {400, 404, 405, 501}:
+                raise
+            self.log.warning(
+                "ragflow.document_rename_unsupported",
+                sync_id=sync_id,
+                repo_id=repo_id,
+                dataset_id=dataset_id,
+                path=path,
+                document_id=document_id,
+                status_code=exc.status_code,
+            )
+
 
 def _join_seafile_path(parent: str, name: str) -> str:
     if parent == "/":
@@ -1140,9 +2784,42 @@ def _is_directory(item: dict[str, Any]) -> bool:
     return value in {"dir", "directory"} or bool(item.get("is_dir"))
 
 
+def _seafile_object_id(item: Mapping[str, Any]) -> str | None:
+    value = str(item.get("id") or item.get("obj_id") or "").strip()
+    return value or None
+
+
+def _is_incompatible_snapshot_client_error(exc: TypeError) -> bool:
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "positional argument",
+            "unexpected keyword argument",
+            "required positional argument",
+        )
+    )
+
+
 def _document_id(document: dict[str, Any]) -> str | None:
     value = document.get("id") or document.get("document_id")
     return str(value) if value else None
+
+
+def _remote_document_name(document: Mapping[str, Any]) -> str:
+    return str(
+        document.get("name")
+        or document.get("document_name")
+        or document.get("doc_name")
+        or ""
+    )
+
+
+def _managed_upload_document_name(document_name: str, operation_id: str) -> str:
+    stem, suffix = _split_document_name(document_name)
+    # Keep the marker and extension intact even for unusually long source names.
+    bounded_stem = stem[:160] or "document"
+    return f"{bounded_stem}.__connector_{operation_id}{suffix}"
 
 
 def _document_search_keyword(document_name: str) -> str:
@@ -1169,3 +2846,7 @@ def _datetime_from_timestamp(value: Any) -> datetime | None:
         return datetime.fromtimestamp(int(value), UTC)
     except (TypeError, ValueError, OSError):
         return None
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)

@@ -81,7 +81,7 @@ browserfreundliche Ableitung derselben Aufnahme.
 | --- | --- |
 | Source of truth | Seafile bleibt maßgeblich. Zielsystem-Drift wird repariert, nicht nach Seafile zurückgeschrieben. |
 | Dataset-Lifecycle | Libraries werden entdeckt, Datasets aus `connector_template` erzeugt, Dokumente importiert und Parse-Läufe angestoßen. |
-| Delta und Delete | Änderungen, entfernte Dateien und gelöschte Libraries werden nachvollziehbar in RAGFlow und optional OpenWebUI propagiert. |
+| Sync und Delete | Commit-gepinnte Snapshots und Cursor liefern echte Delta-Läufe; fehlt eine belastbare Basis, fällt der Connector kontrolliert auf Vollsync zurück. Löschungen werden nachvollziehbar in RAGFlow und optional OpenWebUI propagiert. |
 | Repair statt Fragilität | Extern gelöschte RAGFlow-Datasets, Dokumente, Chats, Tools oder Pipes werden aus State und Seafile wieder aufgebaut. |
 | OpenWebUI | Datasets können als Custom Models erscheinen; Tool und Pipe nutzen einen Connector-Proxy statt eingebetteter RAGFlow-Secrets. |
 | ACL-aware Search | Separater Search-Service mit Trusted-Header-Auth, SearchProfiles und zentraler Authz-Prüfung vor jeder RAGFlow-Abfrage. |
@@ -122,8 +122,8 @@ Mehr Details stehen in [docs/architecture.md](docs/architecture.md).
 | --- | --- |
 | Seafile Discovery | Library-Discovery über Admin-API, rekursive Datei-Iteration, Download-Rewrite für unterschiedliche Netzwerkpfade. |
 | RAGFlow Provisioning | Dataset-Erzeugung aus `connector_template`, Erhalt live geänderter Dataset-Einstellungen, Upload und Parse-Steuerung. |
-| Sync und Cleanup | Delta-Sync, Full-Sync, Delete-Propagation, orphan cleanup, Schutz vor unklaren Fremdartefakten. |
-| Drift Repair | Wiederaufbau fehlender Datasets und Dokumente aus Seafile, Reparatur eigener OpenWebUI-Artefakte. |
+| Sync und Cleanup | Commit-gepinnter Delta-Sync, Vollsync-Fallback, Delete-Propagation, versionierte Dokument-Promotion und eine gefencte Cleanup-Outbox. |
+| Drift Repair | Reconcile-Plan zwischen Seafile-Snapshot, Connector-State und RAGFlow; Reparaturen laufen als persistente, deduplizierte Jobs. |
 | OpenWebUI Integration | deterministische Chats, Tools, Pipes, Custom-Model-Namen, Quellen/Citations und optionaler Preview-Viewer. |
 | Dashboard und Audit | Health, Sync-Historie, Änderungen, Logs, Diagnose, TLS-Status, kontrollierte Bibliotheksauswahl und Excel-Audit-Export ohne Dateiinhaltsexfiltration. |
 | Deployment | GHCR-Image, Portainer-Stack, direkte Compose-Varianten, Shared-Network-Modus, Swarm-Stack und Offline-Image-Workflow. |
@@ -215,7 +215,8 @@ docker compose \
   config --quiet
 ```
 
-Minimalpflicht für Seafile -> RAGFlow mit Stack-Postgres:
+Minimalpflicht für das statische Portainer-Standardprofil mit Search und
+gebündeltem State:
 
 | Variable | Zweck |
 | --- | --- |
@@ -224,7 +225,10 @@ Minimalpflicht für Seafile -> RAGFlow mit Stack-Postgres:
 | `SEAFILE_SYNC_USER_TOKEN` | Seafile API-Token für Datei-Downloads |
 | `RAGFLOW_BASE_URL` | aus dem Connector-Container erreichbare RAGFlow-API-URL |
 | `RAGFLOW_API_KEY` | API-Key des RAGFlow-Zielusers |
-| `POSTGRES_PASSWORD` | Passwort für die Stack-Datenbank, sofern `DATABASE_URL` nicht gesetzt ist |
+| `AUTHZ_API_SHARED_SECRET` | technisches Secret für Core und Search |
+| `SEARCH_AUTHZ_SHARED_SECRET` | derselbe Wert wie `AUTHZ_API_SHARED_SECRET` |
+| `SEARCH_RAGFLOW_BASE_URL`, `SEARCH_RAGFLOW_API_KEY` | RAGFlow-Ziel aus Sicht des Search-Containers |
+| `POSTGRES_PASSWORD` | Passwort für die gebündelte Stack-Datenbank |
 
 Start:
 
@@ -251,9 +255,12 @@ erreichbar, wenn `CONNECTOR_DASHBOARD_ENABLED=true` gesetzt ist.
 
 ## Automatisierungen
 
-`connector-controller` plant Discovery, Delta-Sync, RAGFlow-Template-Refresh
-und optionalen OpenWebUI-Sync. `connector-reconciler` führt den
-Reconciliation-Lauf aus. Alle periodischen Laufzeit-Automationen nutzen als
+`connector-controller` plant Discovery, commit-gepinnte Delta-Läufe,
+RAGFlow-Template-Refresh und optionalen OpenWebUI-Sync. Ohne vollständigen
+Snapshot oder Cursor wird automatisch ein sicherer Vollsync eingeplant.
+`connector-reconciler` vergleicht Seafile-Snapshot, Connector-State und
+RAGFlow-Dokumente und stellt erkannte Drift über deduplizierte Jobs wieder her.
+Alle periodischen Laufzeit-Automationen nutzen als
 Standard `1800` Sekunden, also 30 Minuten, und lehnen Werte unter 60 Sekunden
 ab. Der aktive Intervall wird beim Start der Prozesse geloggt.
 
@@ -261,7 +268,10 @@ Manuelle Prüfungen und Syncs sind unabhängig vom Zeitplan möglich:
 
 ```bash
 connector check-live
-connector sync-once
+connector doctor --effective
+connector library status --json
+connector library sync --repo-id <repo-id> --mode auto
+connector library reconcile --repo-id <repo-id>
 connector openwebui-sync-once
 ```
 
@@ -278,6 +288,11 @@ In Compose und Portainer sind die Werte über
 4. Nur die Pflichtwerte ersetzen; OpenWebUI-Werte nur setzen, wenn die Anbindung aktiviert wird.
 5. `CONNECTOR_IMAGE` produktiv auf einen veröffentlichten Release- oder Digest-Pin setzen. Falls Images offline bereitgestellt werden, außerdem `POSTGRES_IMAGE`, `REDIS_IMAGE` und die `*_PULL_POLICY`-Werte auf die lokal vorhandenen Images abstimmen.
 6. Stack deployen und die Logs von `connector-controller`, `connector-worker` und `connector-reconciler` prüfen.
+
+Für ein Core-only- oder External-State-Portainer-Bundle den Enterprise-Wizard
+verwenden: `ENTERPRISE_WITH_SEARCH=false` lässt Search vollständig weg;
+`ENTERPRISE_STATE_MODE=external` verlangt `DATABASE_URL` und `REDIS_URL` und
+nimmt die lokalen State-Container aus dem gestarteten Modell.
 
 Wichtig für Portainer-Image-Uploads: Der Stack startet genau das Image, dessen
 Name in `CONNECTOR_IMAGE` steht. Wenn das hochgeladene Image z. B. als
@@ -372,6 +387,11 @@ veröffentlicht den Port nicht.
 
 Die Oberfläche nutzt keine CDN- oder Internet-Assets, bietet einen Dark-/Light-
 Modus und enthält Auto-Refresh für 5 Sekunden, 10 Sekunden oder 1 Minute. Der
+aktive Bereich und die Pagination bleiben in der URL erhalten. Auf schmalen
+Displays wechselt die Navigation in einen zugänglichen Drawer. Prüfläufe werden
+als persistente Jobs gestartet, zeigen Fortschritt und lassen sich abbrechen
+oder erneut einplanen; technische Rohdaten bleiben standardmäßig eingeklappt.
+Der
 Excel-Audit-Export enthält mehrere Tabellenblätter und exportiert nur Status-,
 Sync-, Änderungs-, Log- und Diagnosemetadaten. Datei-Inhalte aus Seafile oder
 RAGFlow werden nicht heruntergeladen. Im OpenWebUI-Tab können connector-eigene
@@ -473,8 +493,12 @@ Das Paket stellt den Befehl `connector` bereit. Wichtige Kommandos:
 | Kommando | Zweck |
 | --- | --- |
 | `connector init-db` | Connector-State-Tabellen anlegen oder migrieren |
+| `connector doctor --effective` | redigierte Konfigurationswahrheit und optionale DB-/Redis-Diagnose anzeigen |
 | `connector check-live` | Datenbank, Redis, Seafile und RAGFlow ohne Mutation prüfen |
 | `connector sync-once` | einen vollständigen Discovery- und Sync-Lauf ausführen |
+| `connector library status`, `plan`, `sync`, `reconcile` | Bibliothekszustand prüfen sowie Delta-/Vollsync und Reconcile gezielt steuern |
+| `connector jobs list`, `show`, `cancel`, `retry` | persistente Jobs inspizieren, abbrechen und erneut einplanen |
+| `connector cleanup list`, `retry` | fehlgeschlagene Zielbereinigungen sichtbar machen und persistent erneut einplanen |
 | `connector cleanup-orphans` | verwaiste connector-eigene Zielartefakte planen oder löschen |
 | `connector openwebui-sync-once` | einen OpenWebUI-Sync-Lauf ausführen |
 | `connector demo-fixtures` | lokale Demo-Dateien erzeugen |

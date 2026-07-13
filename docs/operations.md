@@ -38,7 +38,8 @@ einzelnen Deployment-Pfaden fehlen.
 5. `connector.env.example` in Portainer importieren.
 6. Die Minimalpflichtwerte ersetzen: `SEAFILE_BASE_URL`,
    `SEAFILE_ADMIN_TOKEN`, `SEAFILE_SYNC_USER_TOKEN`, `RAGFLOW_BASE_URL`,
-   `RAGFLOW_API_KEY` und `POSTGRES_PASSWORD` oder alternativ `DATABASE_URL`.
+   `RAGFLOW_API_KEY`, `AUTHZ_API_SHARED_SECRET` und für das gewählte State-Profil
+   entweder `POSTGRES_PASSWORD` oder gemeinsam `DATABASE_URL` und `REDIS_URL`.
 7. `CONNECTOR_IMAGE`, `POSTGRES_IMAGE` und `REDIS_IMAGE` müssen exakt den
    Image-Namen entsprechen, die Portainer unter `Images` anzeigt. Wenn nur
    lokale Images genutzt werden sollen, `CONNECTOR_IMAGE_PULL_POLICY=never`,
@@ -132,6 +133,8 @@ Beispiel:
 docker compose \
   --env-file connector.env \
   -f deploy/compose/external-services.compose.yml \
+  -f deploy/compose/bundled-state.compose.yml \
+  -f deploy/compose/search.compose.yml \
   up -d
 ```
 
@@ -189,12 +192,14 @@ werden. Außerdem veröffentlicht Swarm Dashboard-Ports über das Routing-Mesh;
 zentrale Vorlage noch `127.0.0.1:18080` enthält, muss der Wert für Swarm auf
 `18080` geändert werden.
 
-## Datenbank-Upgrade auf Revision 0005
+## Datenbank-Upgrade auf Revision 0006
 
-Revision `0005_sync_job_deduplication` ergänzt die atomische Deduplizierung
-aktiver Sync-Jobs. Vor einem produktiven Upgrade zuerst ein PostgreSQL-Backup
-erstellen. Danach Controller und Reconciler als Job-Produzenten stoppen und
-die Worker vorhandene Jobs abarbeiten lassen:
+Revision `0006_sync_consistency_state` ergänzt aufbauend auf der atomischen
+Job-Deduplizierung aus `0005` commit-gepinnte Snapshots und Cursor, Sync-Runs,
+Repo-Leases mit Fence-Token, Dokumentversionen und die Cleanup-Outbox. Vor einem
+produktiven Upgrade zuerst ein PostgreSQL-Backup erstellen. Danach Controller
+und Reconciler als Job-Produzenten stoppen und die Worker vorhandene Jobs
+abarbeiten lassen:
 
 ```bash
 docker compose --env-file connector.env \
@@ -217,7 +222,10 @@ bereitstellen und `connector init-db` beziehungsweise den normalen Stackstart
 ausführen. Bestehende Jobs erhalten beim Upgrade eindeutige
 `legacy:<id>`-Schlüssel und werden nicht nachträglich zusammengeführt. Neue
 Jobs werden anschließend atomar über ihren semantischen Schlüssel
-dedupliziert. Ein Rollback erfolgt bevorzugt durch Wiederherstellung des zuvor
+dedupliziert. Snapshot- und Versionszustand wird durch neue Läufe schrittweise
+gefüllt; bestehende Datei-/Dokumentbindungen bleiben erhalten. Controller,
+Worker und Reconciler müssen gemeinsam auf denselben Image-Stand aktualisiert
+werden. Ein Rollback erfolgt bevorzugt durch Wiederherstellung des zuvor
 erstellten Backups.
 
 ### Dashboard im Betrieb
@@ -462,10 +470,15 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
 
 - Keine Libraries: `SEAFILE_BASE_URL`, `SEAFILE_ADMIN_TOKEN` und Admin-Rechte für
   `/api/v2.1/admin/libraries/` prüfen.
-- Automationen und Skripte: `connector check-config`, `connector check-live`,
-  `connector sync-once`, `connector cleanup-orphans` und
+- Automationen und Skripte: `connector check-config`, `connector doctor`,
+  `connector check-live`, `connector sync-once`, `connector library status`,
+  `connector jobs list`, `connector cleanup list`, `connector cleanup-orphans` und
   `connector openwebui-sync-once` unterstützen `--json`. Ohne dieses Flag bleibt
   die bisherige menschenlesbare Ausgabe erhalten.
+- `connector library sync --wait` und `connector library reconcile --execute
+  --wait` liefern bei Timeout, Abbruch oder endgültig fehlgeschlagenem Job
+  Exitcode `1`; Konfigurationsfehler liefern Exitcode `2`. Dadurch können
+  Automationen nicht mit einem falsch-grünen Ergebnis weiterlaufen.
 - Template nicht gefunden: `RAGFLOW_TEMPLATE_AUTO_CREATE=true` nutzen oder
   `RAGFLOW_TEMPLATE_DATASET_NAME`, `RAGFLOW_API_KEY` und RAGFlow-User prüfen.
 - `unable to get local issuer certificate`: Root- und Intermediate-CA als PEM

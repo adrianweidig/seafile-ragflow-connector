@@ -1,0 +1,9 @@
+# State-Profil: PostgreSQL und Redis aus der gewählten Basis-Compose-Datei.
+#
+# Dieses Overlay macht das Passwort bereits bei `docker compose config`
+# verpflichtend. Es wird zusammen mit genau einer Basisdatei verwendet.
+
+services:
+  connector-postgres:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD for bundled state}

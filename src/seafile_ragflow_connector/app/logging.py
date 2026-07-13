@@ -33,9 +33,14 @@ def configure_logging(
     )
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+    old_dashboard_handlers = [
+        handler for handler in root_logger.handlers if isinstance(handler, DashboardLogHandler)
+    ]
     root_logger.handlers = [
         handler for handler in root_logger.handlers if not isinstance(handler, DashboardLogHandler)
     ]
+    for handler in old_dashboard_handlers:
+        handler.close()
     if dashboard_store is not None:
         root_logger.addHandler(DashboardLogHandler(dashboard_store))
 

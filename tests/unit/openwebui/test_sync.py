@@ -70,6 +70,7 @@ class _FakeOpenWebUIClient:
         self.function_valve_updates: list[str] = []
         self.tool_valves: dict[str, dict[str, object]] = {}
         self.function_valves: dict[str, dict[str, object]] = {}
+        self.operations: list[tuple[str, str]] = []
 
     def probe_capabilities(self):
         return OpenWebUICapabilities(
@@ -86,19 +87,25 @@ class _FakeOpenWebUIClient:
         return self.tools.get(tool_id)
 
     def create_tool(self, payload: dict[str, object]):
+        self.operations.append(("create_tool", str(payload["id"])))
         self.tools[str(payload["id"])] = dict(payload)
         return payload
 
     def update_tool(self, tool_id: str, payload: dict[str, object]):
+        self.operations.append(("update_tool", tool_id))
         self.tools[tool_id] = dict(payload)
         return payload
 
     def update_tool_valves(self, tool_id: str, valves: dict[str, object]):
+        self.operations.append(("tool_valves", tool_id))
         self.tool_valve_updates.append(tool_id)
         self.tool_valves[tool_id] = dict(valves)
+        if tool_id in self.tools:
+            self.tools[tool_id]["valves"] = dict(valves)
         return valves
 
     def delete_tool(self, tool_id: str):
+        self.operations.append(("delete_tool", tool_id))
         self.deleted_tools.append(tool_id)
         self.tools.pop(tool_id, None)
         return True
@@ -107,22 +114,29 @@ class _FakeOpenWebUIClient:
         return self.functions.get(function_id)
 
     def create_function(self, payload: dict[str, object]):
+        self.operations.append(("create_function", str(payload["id"])))
         self.functions[str(payload["id"])] = {**payload, "is_active": True}
         return payload
 
     def update_function(self, function_id: str, payload: dict[str, object]):
+        self.operations.append(("update_function", function_id))
         self.functions[function_id] = {**payload, "is_active": True}
         return payload
 
     def update_function_valves(self, function_id: str, valves: dict[str, object]):
+        self.operations.append(("function_valves", function_id))
         self.function_valve_updates.append(function_id)
         self.function_valves[function_id] = dict(valves)
+        if function_id in self.functions:
+            self.functions[function_id]["valves"] = dict(valves)
         return valves
 
     def ensure_function_active(self, function_id: str):
+        self.operations.append(("activate_function", function_id))
         return {"id": function_id, "is_active": True}
 
     def delete_function(self, function_id: str):
+        self.operations.append(("delete_function", function_id))
         self.deleted_functions.append(function_id)
         self.functions.pop(function_id, None)
         return True
@@ -133,7 +147,33 @@ class _UnreachableOpenWebUIClient(_FakeOpenWebUIClient):
         return OpenWebUICapabilities(reachable=False, error="unauthorized")
 
 
-def _settings(*, mode: str = "sync", answer_synthesis: bool = False) -> Settings:
+class _FailingToolCreateOpenWebUIClient(_FakeOpenWebUIClient):
+    def create_tool(self, payload: dict[str, object]):
+        self.operations.append(("create_tool_failed", str(payload["id"])))
+        raise RuntimeError("simulated tool create failure")
+
+
+class _FailingDeleteOnceOpenWebUIClient(_FakeOpenWebUIClient):
+    def __init__(self, failing_tool_id: str) -> None:
+        super().__init__()
+        self.failing_tool_id = failing_tool_id
+        self.delete_failures = 0
+
+    def delete_tool(self, tool_id: str):
+        if tool_id == self.failing_tool_id and self.delete_failures == 0:
+            self.operations.append(("delete_tool_failed", tool_id))
+            self.delete_failures += 1
+            raise RuntimeError("simulated transient delete failure")
+        return super().delete_tool(tool_id)
+
+
+def _settings(
+    *,
+    mode: str = "sync",
+    answer_synthesis: bool = False,
+    proxy_base_url: str = "http://connector:8080",
+    proxy_secret: str = "proxy-secret",
+) -> Settings:
     return Settings(
         seafile_base_url="http://seafile.local",
         seafile_admin_token="admin-token",
@@ -145,8 +185,8 @@ def _settings(*, mode: str = "sync", answer_synthesis: bool = False) -> Settings
         openwebui_integration_enabled=True,
         openwebui_sync_mode=mode,
         openwebui_admin_api_key="admin-key" if mode != "dry-run" else None,
-        openwebui_proxy_shared_secret="proxy-secret",
-        openwebui_proxy_internal_base_url="http://connector:8080",
+        openwebui_proxy_shared_secret=proxy_secret,
+        openwebui_proxy_internal_base_url=proxy_base_url,
         openwebui_pipe_answer_synthesis_enabled=answer_synthesis,
         openwebui_pipe_answer_llm_base_url=(
             "http://litellm:4000/v1" if answer_synthesis else None
@@ -262,7 +302,7 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         self.assertEqual(ragflow.updated_chats, [])
         with session_factory() as session:
             mapping = session.query(OpenWebUIDatasetMapping).one()
-            self.assertEqual(mapping.artifact_version, "27")
+            self.assertEqual(mapping.artifact_version, "28")
 
     def test_sync_merges_search_template_chat_settings_into_dataset_chat(self) -> None:
         session_factory = _session_factory(self)
@@ -385,6 +425,65 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         self.assertEqual(valves["ANSWER_LLM_MODEL"], "groq-rag-quality")
         self.assertEqual(valves["ANSWER_LLM_API_KEY"], "litellm-key")
         self.assertEqual(valves["CONNECTOR_PROXY_SHARED_SECRET"], "proxy-secret")
+
+    def test_sync_rotates_managed_valves_without_resetting_operator_valves(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Demo Dataset",
+                    status="active",
+                )
+            )
+            session.commit()
+        ragflow = _FakeRAGFlowClient()
+        openwebui = _FakeOpenWebUIClient()
+        first_service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=ragflow,  # type: ignore[arg-type]
+            openwebui_client=openwebui,  # type: ignore[arg-type]
+        )
+        first_service.sync_once()
+
+        tool_id = "ragflow_tool_demo_dataset_dataset1"
+        pipe_id = "ragflow_pipe_demo_dataset_dataset1"
+        openwebui.tools[tool_id]["valves"]["TOP_K"] = 17
+        openwebui.tools[tool_id]["valves"]["SHOW_SOURCE_SCORES"] = False
+        openwebui.tools[tool_id]["valves"]["OPERATOR_PLUGIN_MODE"] = "curated"
+        openwebui.functions[pipe_id]["valves"]["STATUS_MODE"] = "detailed"
+        openwebui.functions[pipe_id]["valves"]["MAX_SOURCE_EVENTS"] = 7
+        openwebui.functions[pipe_id]["valves"]["OPERATOR_PLUGIN_MODE"] = "curated"
+
+        rotated_service = OpenWebUISyncService(
+            settings=_settings(
+                proxy_base_url="http://connector-v2:8080",
+                proxy_secret="rotated-secret",
+            ),
+            session_factory=session_factory,
+            ragflow_client=ragflow,  # type: ignore[arg-type]
+            openwebui_client=openwebui,  # type: ignore[arg-type]
+        )
+        summary = rotated_service.sync_once()
+
+        self.assertEqual(summary.tools_updated, 1)
+        self.assertEqual(summary.pipes_updated, 1)
+        tool_valves = openwebui.tool_valves[tool_id]
+        pipe_valves = openwebui.function_valves[pipe_id]
+        self.assertEqual(tool_valves["CONNECTOR_PROXY_BASE_URL"], "http://connector-v2:8080")
+        self.assertEqual(tool_valves["CONNECTOR_PROXY_SHARED_SECRET"], "rotated-secret")
+        self.assertEqual(tool_valves["TOP_K"], 17)
+        self.assertFalse(tool_valves["SHOW_SOURCE_SCORES"])
+        self.assertEqual(tool_valves["OPERATOR_PLUGIN_MODE"], "curated")
+        self.assertEqual(pipe_valves["CONNECTOR_PROXY_BASE_URL"], "http://connector-v2:8080")
+        self.assertEqual(pipe_valves["CONNECTOR_PROXY_SHARED_SECRET"], "rotated-secret")
+        self.assertEqual(pipe_valves["STATUS_MODE"], "detailed")
+        self.assertEqual(pipe_valves["MAX_SOURCE_EVENTS"], 7)
+        self.assertEqual(pipe_valves["OPERATOR_PLUGIN_MODE"], "curated")
 
     def test_foreign_openwebui_artifact_keeps_manual_required_status(self) -> None:
         session_factory = _session_factory(self)
@@ -556,6 +655,134 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
             mapping = session.query(OpenWebUIDatasetMapping).one()
             self.assertEqual(mapping.ragflow_dataset_id, "dataset-new")
             self.assertEqual(mapping.sync_status, "synced")
+            new_tool_id = str(mapping.openwebui_tool_id)
+            new_pipe_id = str(mapping.openwebui_pipe_id)
+        self.assertLess(
+            openwebui.operations.index(("tool_valves", new_tool_id)),
+            openwebui.operations.index(("delete_tool", "tool-old")),
+        )
+        self.assertLess(
+            openwebui.operations.index(("activate_function", new_pipe_id)),
+            openwebui.operations.index(("delete_function", "pipe-old")),
+        )
+
+    def test_artifact_id_change_keeps_previous_binding_when_create_fails(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset-new",
+                    ragflow_dataset_name="Demo Dataset",
+                    status="active",
+                )
+            )
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-old",
+                    ragflow_dataset_name="Demo Dataset",
+                    ragflow_chat_id="chat-old",
+                    openwebui_tool_id="tool-old",
+                    openwebui_pipe_id="pipe-old",
+                    openwebui_model_name="ragflow/old",
+                    sync_status="synced",
+                )
+            )
+            session.commit()
+        ragflow = _FakeRAGFlowClient()
+        openwebui = _FailingToolCreateOpenWebUIClient()
+        owned_payload = {
+            "content": "owner: seafile-ragflow-connector",
+            "meta": {"manifest": {"owner": "seafile-ragflow-connector"}},
+        }
+        openwebui.tools["tool-old"] = dict(owned_payload)
+        openwebui.functions["pipe-old"] = dict(owned_payload)
+        service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=ragflow,  # type: ignore[arg-type]
+            openwebui_client=openwebui,  # type: ignore[arg-type]
+        )
+
+        summary = service.sync_once()
+
+        self.assertEqual(summary.failed, 1)
+        self.assertEqual(openwebui.deleted_tools, [])
+        self.assertEqual(openwebui.deleted_functions, [])
+        self.assertEqual(ragflow.deleted_chats, [])
+        self.assertIn("tool-old", openwebui.tools)
+        self.assertIn("pipe-old", openwebui.functions)
+        with session_factory() as session:
+            mapping = session.query(OpenWebUIDatasetMapping).one()
+            self.assertEqual(mapping.ragflow_chat_id, "chat-old")
+            self.assertEqual(mapping.openwebui_tool_id, "tool-old")
+            self.assertEqual(mapping.openwebui_pipe_id, "pipe-old")
+            self.assertEqual(mapping.sync_status, "failed")
+
+    def test_deferred_replacement_cleanup_is_persisted_and_retried(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset-new",
+                    ragflow_dataset_name="Demo Dataset",
+                    status="active",
+                )
+            )
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-old",
+                    ragflow_dataset_name="Demo Dataset",
+                    ragflow_chat_id="chat-old",
+                    openwebui_tool_id="tool-old",
+                    openwebui_pipe_id="pipe-old",
+                    openwebui_model_name="ragflow/old",
+                    sync_status="synced",
+                )
+            )
+            session.commit()
+        ragflow = _FakeRAGFlowClient()
+        openwebui = _FailingDeleteOnceOpenWebUIClient("tool-old")
+        owned_payload = {
+            "content": "owner: seafile-ragflow-connector",
+            "meta": {"manifest": {"owner": "seafile-ragflow-connector"}},
+        }
+        openwebui.tools["tool-old"] = dict(owned_payload)
+        openwebui.functions["pipe-old"] = dict(owned_payload)
+        service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=ragflow,  # type: ignore[arg-type]
+            openwebui_client=openwebui,  # type: ignore[arg-type]
+        )
+
+        first_summary = service.sync_once()
+
+        self.assertEqual(first_summary.failed, 0)
+        self.assertIn("tool-old", openwebui.tools)
+        with session_factory() as session:
+            mapping = session.query(OpenWebUIDatasetMapping).one()
+            pending = mapping.capabilities_snapshot["pending_replacement_cleanup"]
+            self.assertEqual(pending, {"tools": ["tool-old"], "pipes": [], "chats": []})
+
+        second_summary = service.sync_once()
+
+        self.assertEqual(second_summary.failed, 0)
+        self.assertEqual(openwebui.deleted_tools, ["tool-old"])
+        self.assertNotIn("tool-old", openwebui.tools)
+        with session_factory() as session:
+            mapping = session.query(OpenWebUIDatasetMapping).one()
+            self.assertNotIn(
+                "pending_replacement_cleanup",
+                mapping.capabilities_snapshot,
+            )
 
 
 if __name__ == "__main__":

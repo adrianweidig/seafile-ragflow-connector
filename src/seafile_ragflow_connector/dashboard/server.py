@@ -36,7 +36,7 @@ from seafile_ragflow_connector.dashboard.health import (
     collect_dashboard_readiness,
     collect_tls_health,
 )
-from seafile_ragflow_connector.dashboard.store import DashboardEventStore
+from seafile_ragflow_connector.dashboard.store import DashboardEventStore, new_sync_id
 from seafile_ragflow_connector.dashboard.ui import DASHBOARD_HTML
 from seafile_ragflow_connector.domain.ragflow_search_settings import (
     ResolvedSearchTemplate,
@@ -44,6 +44,7 @@ from seafile_ragflow_connector.domain.ragflow_search_settings import (
     resolve_search_template,
 )
 from seafile_ragflow_connector.i18n import localizer_for
+from seafile_ragflow_connector.jobs.types import JobSpec, JobStatus, JobType
 from seafile_ragflow_connector.openwebui.sources import (
     OPENWEBUI_PREVIEW_AUDIENCE,
     SOURCE_PREVIEW_PURPOSE,
@@ -59,6 +60,7 @@ from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.persistence.models.openwebui import OpenWebUIDatasetMapping
 from seafile_ragflow_connector.persistence.models.search import SearchProfile
+from seafile_ragflow_connector.persistence.sync_state import SyncStateStore
 from seafile_ragflow_connector.security.access_control import (
     AccessControlService,
     AuthzResource,
@@ -108,6 +110,8 @@ class DashboardContext:
     started_at: datetime
     orchestrator: Any | None = None
     openwebui_sync_service: Any | None = None
+    job_store: Any | None = None
+    signal_queue: Any | None = None
 
 
 def start_dashboard_server(context: DashboardContext, *, background: bool = True) -> DashboardServerHandle:
@@ -234,6 +238,11 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/api/workflow/libraries":
                     self._send_json(_handle_workflow_libraries(context))
                     return
+                if parsed.path.startswith("/api/workflow/runs/"):
+                    workflow_run_id = parsed.path.rsplit("/", 1)[-1]
+                    payload, status = _handle_workflow_run_status(context, workflow_run_id)
+                    self._send_json(payload, status=status)
+                    return
                 if parsed.path == "/api/sync-runs":
                     params = parse_qs(parsed.query)
                     self._send_json(
@@ -251,6 +260,36 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                         self._send_json({"error": "sync run not found"}, status=HTTPStatus.NOT_FOUND)
                     else:
                         self._send_json(item)
+                    return
+                if parsed.path == "/api/cleanup-outbox":
+                    if context.orchestrator is None:
+                        self._send_json(
+                            {"error": "orchestrator unavailable"},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE,
+                        )
+                        return
+                    params = parse_qs(parsed.query)
+                    raw_status = _one(params, "status")
+                    statuses = (
+                        tuple(
+                            value.strip()
+                            for value in raw_status.split(",")
+                            if value.strip()
+                        )
+                        if raw_status
+                        else None
+                    )
+                    rows = context.orchestrator.list_cleanup_outbox(
+                        repo_id=_one(params, "repo_id"),
+                        statuses=statuses,
+                        limit=_int(params, "limit") or 100,
+                    )
+                    self._send_json(
+                        {
+                            "items": [_cleanup_outbox_payload(row) for row in rows],
+                            "count": len(rows),
+                        }
+                    )
                     return
                 if parsed.path == "/api/changes":
                     params = parse_qs(parsed.query)
@@ -345,7 +384,7 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/api/openwebui/proxy/chat":
                     self._send_json(_handle_openwebui_chat(context, self._json_body(), self.headers.get("Authorization")))
                     return
-                if parsed.path == "/api/workflow/run":
+                if parsed.path in {"/api/workflow/run", "/api/workflow/runs"}:
                     if not context.settings.connector_dashboard_enabled:
                         self._send_json({"error": "dashboard disabled"}, status=HTTPStatus.NOT_FOUND)
                         return
@@ -353,6 +392,21 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                         self._send_auth_required()
                         return
                     payload, status = _handle_workflow_run(context, self._json_body())
+                    self._send_json(payload, status=status)
+                    return
+                if parsed.path.startswith("/api/workflow/runs/"):
+                    if not context.settings.connector_dashboard_enabled:
+                        self._send_json({"error": "dashboard disabled"}, status=HTTPStatus.NOT_FOUND)
+                        return
+                    if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
+                        self._send_auth_required()
+                        return
+                    parts = [part for part in parsed.path.split("/") if part]
+                    if len(parts) != 5 or parts[:3] != ["api", "workflow", "runs"]:
+                        self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+                        return
+                    workflow_run_id, action = parts[3], parts[4]
+                    payload, status = _handle_workflow_run_action(context, workflow_run_id, action)
                     self._send_json(payload, status=status)
                     return
                 if parsed.path == "/api/jobs/dead/cleanup":
@@ -363,6 +417,66 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                         self._send_auth_required()
                         return
                     self._send_json(_handle_dead_jobs_cleanup(context))
+                    return
+                if parsed.path.startswith("/api/cleanup-outbox/") and parsed.path.endswith(
+                    "/retry"
+                ):
+                    if not context.settings.connector_dashboard_enabled:
+                        self._send_json({"error": "dashboard disabled"}, status=HTTPStatus.NOT_FOUND)
+                        return
+                    if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
+                        self._send_auth_required()
+                        return
+                    if (
+                        context.orchestrator is None
+                        or context.job_store is None
+                        or context.signal_queue is None
+                    ):
+                        self._send_json(
+                            {"error": "orchestrator unavailable"},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE,
+                        )
+                        return
+                    parts = [part for part in parsed.path.split("/") if part]
+                    if len(parts) != 4 or parts[:2] != ["api", "cleanup-outbox"]:
+                        self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+                        return
+                    outbox_id = int(parts[2])
+                    repo_id = context.orchestrator.requeue_cleanup_outbox(outbox_id)
+                    if repo_id is None:
+                        self._send_json(
+                            {"outbox_id": outbox_id, "retried": False},
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
+                    enqueue_result = context.job_store.enqueue_with_result(
+                        JobSpec(
+                            JobType.PROCESS_CLEANUP_OUTBOX,
+                            repo_id=repo_id,
+                            payload={"outbox_id": outbox_id},
+                        )
+                    )
+                    retry_payload: dict[str, Any] = {
+                        "outbox_id": outbox_id,
+                        "retried": True,
+                        "job_id": enqueue_result.job_id,
+                        "deduplicated": enqueue_result.deduplicated,
+                    }
+                    if not enqueue_result.deduplicated:
+                        try:
+                            context.signal_queue.signal(enqueue_result.job_id)
+                        except Exception as exc:
+                            signal_warning = type(exc).__name__
+                            retry_payload["signal_warning"] = signal_warning
+                            structlog.get_logger(__name__).warning(
+                                "dashboard.cleanup_retry_signal_failed",
+                                job_id=enqueue_result.job_id,
+                                error_type=signal_warning,
+                            )
+                    self._send_json(
+                        retry_payload,
+                        status=HTTPStatus.ACCEPTED,
+                    )
                     return
                 if parsed.path == "/api/openwebui/artifacts/delete":
                     if not context.settings.connector_dashboard_enabled:
@@ -1051,10 +1165,10 @@ def _delete_ragflow_dataset_artifact(context: DashboardContext, mapping_id: int)
 
 
 def _handle_workflow_libraries(context: DashboardContext) -> dict[str, Any]:
-    if context.orchestrator is None:
+    if context.orchestrator is None or context.job_store is None or context.signal_queue is None:
         return {
             "enabled": False,
-            "message": "Dashboard-Steuerung ist nur im laufenden Connector-Controller verfügbar.",
+            "message": "Dashboard-Steuerung ist nur mit laufendem Controller und Job-Queue verfügbar.",
             "libraries": [],
             "summary": {"visible": 0, "selectable": 0, "with_dataset": 0},
             "options": _workflow_options(context),
@@ -1076,11 +1190,15 @@ def _handle_workflow_run(
     context: DashboardContext,
     payload: dict[str, Any],
 ) -> tuple[dict[str, Any], HTTPStatus]:
-    if context.orchestrator is None:
+    if (
+        context.orchestrator is None
+        or context.job_store is None
+        or context.signal_queue is None
+    ):
         return (
             {
                 "status": "unavailable",
-                "message": "Dashboard-Steuerung ist nur im laufenden Connector-Controller verfügbar.",
+                "message": "Dashboard-Steuerung ist nur mit laufendem Controller und Job-Queue verfügbar.",
             },
             HTTPStatus.SERVICE_UNAVAILABLE,
         )
@@ -1090,6 +1208,7 @@ def _handle_workflow_run(
     if not create_dataset and not sync_openwebui:
         raise ValueError("Mindestens RAGFlow-Dataset oder OpenWebUI-Sync muss ausgewählt sein.")
     scope = _workflow_scope(payload)
+    mode = _workflow_mode(payload)
     visible = _visible_workflow_libraries(context)
     visible_by_repo = {str(item["repo_id"]): item for item in visible}
     missing = [repo_id for repo_id in repo_ids if repo_id not in visible_by_repo]
@@ -1105,80 +1224,306 @@ def _handle_workflow_run(
     if skipped:
         raise ValueError("Nicht auswählbare Bibliotheken: " + ", ".join(skipped))
 
-    context.orchestrator.discover_libraries()
-    results: list[dict[str, Any]] = []
-    ready_for_openwebui: list[str] = []
-    dataset_ready = _repo_ids_with_dataset(context, repo_ids)
+    workflow_run_id = new_sync_id("workflow")
+    sync_state_store = SyncStateStore(context.job_store.session_factory)
+    sync_state_store.create_run(
+        run_id=workflow_run_id,
+        repo_id=None,
+        mode="workflow",
+        scope=scope,
+        status="queued",
+        progress={"selected_repositories": len(repo_ids)},
+    )
+    jobs: list[dict[str, Any]] = []
+    signal_job_ids: list[int] = []
     for repo_id in repo_ids:
-        item: dict[str, Any] = {
-            "repo_id": repo_id,
-            "name": visible_by_repo[repo_id].get("name"),
-            "status": "skipped",
-            "dataset": None,
-            "openwebui": None,
-        }
         if create_dataset:
-            try:
-                summary = context.orchestrator.sync_library_full(repo_id, scope=scope)
-            except Exception as exc:
-                item["status"] = "failed"
-                item["error"] = str(exc)
-                results.append(item)
-                continue
-            item["status"] = "dataset_synced"
-            item["dataset"] = _summary_payload(summary)
-            dataset_ready = _repo_ids_with_dataset(context, repo_ids)
-        if sync_openwebui:
-            if repo_id in dataset_ready:
-                ready_for_openwebui.append(repo_id)
-            else:
-                item["status"] = "failed"
-                item["error"] = "Für diese Bibliothek ist noch kein RAGFlow-Dataset bekannt."
-        elif item["status"] == "skipped":
-            item["status"] = "selected"
-        results.append(item)
-
-    openwebui_result: dict[str, Any] | None = None
-    if sync_openwebui:
-        if context.openwebui_sync_service is None:
-            openwebui_result = {
-                "status": "failed",
-                "message": "OpenWebUI-Sync-Service ist nicht verfügbar.",
-            }
-        elif ready_for_openwebui:
-            openwebui_summary = context.openwebui_sync_service.sync_once(
-                repo_ids=set(ready_for_openwebui)
+            job_type = {
+                "delta": JobType.SYNC_LIBRARY_DELTA,
+                "full": JobType.SYNC_LIBRARY_FULL,
+                "reconcile": JobType.RECONCILE_LIBRARY,
+            }[mode]
+            spec = JobSpec(
+                job_type,
+                repo_id=repo_id,
+                payload={
+                    "scope": scope,
+                    "workflow_run_id": workflow_run_id,
+                    "sync_openwebui": sync_openwebui,
+                },
             )
-            openwebui_result = {
-                "status": "failed" if openwebui_summary.failed else "succeeded",
-                "repo_ids": ready_for_openwebui,
-                "summary": _summary_payload(openwebui_summary),
-            }
-            for item in results:
-                if item["repo_id"] in ready_for_openwebui:
-                    item["openwebui"] = openwebui_result["summary"]
-                    if item["status"] == "dataset_synced":
-                        item["status"] = "completed"
         else:
-            openwebui_result = {
-                "status": "skipped",
-                "message": "Keine ausgewählte Bibliothek hat ein nutzbares RAGFlow-Dataset.",
+            spec = JobSpec(
+                JobType.SYNC_OPENWEBUI,
+                repo_id=repo_id,
+                payload={
+                    "repo_ids": [repo_id],
+                    "workflow_run_id": workflow_run_id,
+                },
+            )
+        enqueue_result = context.job_store.enqueue_with_result(spec)
+        context.job_store.subscribe_workflow(
+            workflow_run_id,
+            enqueue_result.job_id,
+            is_root=True,
+            owns_job=not enqueue_result.deduplicated,
+        )
+        if not enqueue_result.deduplicated:
+            context.job_store.bind_run(enqueue_result.job_id, workflow_run_id)
+            signal_job_ids.append(enqueue_result.job_id)
+        jobs.append(
+            {
+                "job_id": enqueue_result.job_id,
+                "repo_id": repo_id,
+                "job_type": spec.job_type.value,
+                "deduplicated": enqueue_result.deduplicated,
             }
+        )
 
-    status = _workflow_result_status(results, openwebui_result)
+    details = {
+        "kind": "workflow_parent",
+        "mode": mode,
+        "scope": scope,
+        "repo_ids": repo_ids,
+        "job_ids": [item["job_id"] for item in jobs],
+        "create_dataset": create_dataset,
+        "sync_openwebui": sync_openwebui,
+    }
+    context.store.create_sync_run(
+        sync_id=workflow_run_id,
+        source="dashboard",
+        target="job-queue",
+        status="queued",
+        summary=f"{len(jobs)} Workflow-Jobs eingeplant",
+        details=details,
+    )
+    for job_id in signal_job_ids:
+        try:
+            context.signal_queue.signal(job_id)
+        except Exception as exc:
+            structlog.get_logger(__name__).warning(
+                "dashboard.workflow_signal_failed",
+                job_id=job_id,
+                error=str(exc),
+            )
     return (
         {
-            "status": status,
+            "status": "queued",
+            "run_id": workflow_run_id,
+            "status_url": f"/api/workflow/runs/{workflow_run_id}",
             "scope": scope,
+            "mode": mode,
             "selected_repo_ids": repo_ids,
             "create_dataset": create_dataset,
             "sync_openwebui": sync_openwebui,
-            "results": results,
-            "openwebui": openwebui_result,
-            "libraries": _visible_workflow_libraries(context),
+            "jobs": jobs,
         },
-        HTTPStatus.OK,
+        HTTPStatus.ACCEPTED,
     )
+
+
+def _handle_workflow_run_status(
+    context: DashboardContext,
+    workflow_run_id: str,
+) -> tuple[dict[str, Any], HTTPStatus]:
+    parent = context.store.get_sync_run(workflow_run_id)
+    if parent is None or (parent.get("details") or {}).get("kind") != "workflow_parent":
+        return {"error": "workflow run not found"}, HTTPStatus.NOT_FOUND
+    if context.job_store is None:
+        return {"error": "job store unavailable"}, HTTPStatus.SERVICE_UNAVAILABLE
+    details = dict(parent.get("details") or {})
+    root_jobs = [
+        job
+        for job_id in details.get("job_ids") or []
+        if (job := context.job_store.get(int(job_id))) is not None
+    ]
+    correlation_run_ids = {workflow_run_id}
+    correlation_run_ids.update(
+        str(job.run_id) for job in root_jobs if str(job.run_id or "").strip()
+    )
+    subscribed_jobs = context.job_store.workflow_jobs(workflow_run_id)
+    jobs = subscribed_jobs or root_jobs
+
+    sync_state_store = SyncStateStore(context.job_store.session_factory)
+    child_runs_by_id: dict[str, Any] = {}
+    for run_id in correlation_run_ids:
+        for child_run in sync_state_store.list_runs(parent_run_id=run_id, limit=1000):
+            child_runs_by_id[str(child_run.id)] = child_run
+    child_runs = list(child_runs_by_id.values())
+    cleanup_rows = context.job_store.workflow_cleanup_rows(workflow_run_id)
+
+    statuses = [str(job.status) for job in jobs]
+    statuses.extend(_workflow_cleanup_status(row.status) for row in cleanup_rows)
+    status = context.job_store.refresh_workflow_parent(workflow_run_id)
+    completed = sum(
+        value in {JobStatus.SUCCEEDED.value, JobStatus.CANCELLED.value, JobStatus.DEAD.value}
+        for value in statuses
+    )
+    payload = {
+        "run_id": workflow_run_id,
+        "status": status,
+        "progress": {"completed": completed, "total": len(statuses)},
+        "mode": details.get("mode"),
+        "scope": details.get("scope"),
+        "selected_repo_ids": details.get("repo_ids") or [],
+        "jobs": [_workflow_job_payload(job) for job in jobs],
+        "sync_runs": [
+            {
+                "run_id": run.id,
+                "repo_id": run.repo_id,
+                "mode": run.mode,
+                "status": run.status,
+                "progress": dict(run.progress or {}),
+                "error_message": run.error_message,
+            }
+            for run in child_runs
+        ],
+        "cleanup_outbox": [
+            {
+                "id": int(row.id),
+                "repo_id": row.repo_id,
+                "target_type": row.target_type,
+                "status": row.status,
+                "attempts": int(row.attempts),
+                "error_message": row.error_message,
+            }
+            for row in cleanup_rows
+        ],
+        "started_at": parent.get("started_at"),
+        "finished_at": parent.get("ended_at"),
+    }
+    if status in {"succeeded", "failed", "cancelled"} and parent.get("status") != status:
+        context.store.finish_sync_run(
+            sync_id=workflow_run_id,
+            status=status,
+            objects_checked=len(jobs),
+            objects_created=0,
+            objects_updated=0,
+            objects_deleted=0,
+            objects_skipped=0,
+            errors_count=sum(str(job.status) == JobStatus.DEAD.value for job in jobs),
+            summary=f"Workflow {status}: {completed}/{len(jobs)} Jobs abgeschlossen",
+            details=details,
+        )
+        refreshed = context.store.get_sync_run(workflow_run_id)
+        payload["finished_at"] = refreshed.get("ended_at") if refreshed is not None else None
+    sync_state_store.update_run(
+        workflow_run_id,
+        status=status,
+        progress={"completed": completed, "total": len(statuses)},
+        error_message=("workflow child failed" if status == "failed" else None),
+        finished=status in {"succeeded", "failed", "cancelled"},
+    )
+    return payload, HTTPStatus.OK
+
+
+def _handle_workflow_run_action(
+    context: DashboardContext,
+    workflow_run_id: str,
+    action: str,
+) -> tuple[dict[str, Any], HTTPStatus]:
+    if action not in {"cancel", "retry"}:
+        return {"error": "not found"}, HTTPStatus.NOT_FOUND
+    parent = context.store.get_sync_run(workflow_run_id)
+    if parent is None or (parent.get("details") or {}).get("kind") != "workflow_parent":
+        return {"error": "workflow run not found"}, HTTPStatus.NOT_FOUND
+    if context.job_store is None or context.signal_queue is None:
+        return {"error": "job queue unavailable"}, HTTPStatus.SERVICE_UNAVAILABLE
+    changed: list[int] = []
+    if action == "cancel":
+        changed = context.job_store.cancel_workflow_subscription(workflow_run_id)
+        return {
+            "run_id": workflow_run_id,
+            "action": action,
+            "changed_job_ids": changed,
+            "detached": True,
+        }, HTTPStatus.ACCEPTED
+    for job_id in context.job_store.resume_workflow_subscription(workflow_run_id):
+        if context.job_store.retry(job_id):
+            changed.append(job_id)
+            try:
+                context.signal_queue.signal(job_id)
+            except Exception as exc:
+                structlog.get_logger(__name__).warning(
+                    "dashboard.workflow_signal_failed",
+                    job_id=job_id,
+                    error=str(exc),
+                )
+    return {
+        "run_id": workflow_run_id,
+        "action": action,
+        "changed_job_ids": changed,
+    }, HTTPStatus.ACCEPTED
+
+
+def _aggregate_workflow_status(statuses: list[str]) -> str:
+    if not statuses:
+        return "queued"
+    if any(status == JobStatus.DEAD.value for status in statuses):
+        return "failed"
+    if any(status == JobStatus.RUNNING.value for status in statuses):
+        return "running"
+    if any(status == JobStatus.RETRYING.value for status in statuses):
+        return "retrying"
+    if any(status == JobStatus.QUEUED.value for status in statuses):
+        return "queued"
+    if all(status == JobStatus.CANCELLED.value for status in statuses):
+        return "cancelled"
+    if all(status in {JobStatus.SUCCEEDED.value, JobStatus.CANCELLED.value} for status in statuses):
+        return "succeeded"
+    return "queued"
+
+
+def _workflow_sync_run_status(status: str) -> str:
+    if status == "failed":
+        return JobStatus.DEAD.value
+    if status == "cancelled":
+        return JobStatus.CANCELLED.value
+    if status == "succeeded":
+        return JobStatus.SUCCEEDED.value
+    if status == "retrying":
+        return JobStatus.RETRYING.value
+    return JobStatus.RUNNING.value
+
+
+def _workflow_cleanup_status(status: str) -> str:
+    if status == "dead":
+        return JobStatus.DEAD.value
+    if status == "completed":
+        return JobStatus.SUCCEEDED.value
+    return JobStatus.RETRYING.value
+
+
+def _cleanup_outbox_payload(row: Any) -> dict[str, Any]:
+    return {
+        "id": int(row.id),
+        "repo_id": row.repo_id,
+        "run_id": row.run_id,
+        "target_type": row.target_type,
+        "target_id": row.target_id,
+        "dataset_id": row.dataset_id,
+        "action": row.action,
+        "status": row.status,
+        "attempts": int(row.attempts),
+        "run_after": row.run_after.isoformat() if row.run_after is not None else None,
+        "error_message": row.error_message,
+        "created_at": row.created_at.isoformat() if row.created_at is not None else None,
+        "completed_at": row.completed_at.isoformat() if row.completed_at is not None else None,
+    }
+
+
+def _workflow_job_payload(job: Any) -> dict[str, Any]:
+    return {
+        "job_id": int(job.id),
+        "job_type": str(job.job_type),
+        "repo_id": job.repo_id,
+        "status": str(job.status),
+        "attempts": int(job.attempts),
+        "max_attempts": int(job.max_attempts),
+        "error": job.error_message,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+    }
 
 
 def _workflow_options(context: DashboardContext) -> dict[str, Any]:
@@ -1294,6 +1639,13 @@ def _workflow_scope(payload: dict[str, Any]) -> str:
     if not scope.startswith("/"):
         raise ValueError("scope muss mit / beginnen.")
     return scope
+
+
+def _workflow_mode(payload: dict[str, Any]) -> str:
+    mode = str(payload.get("mode") or "delta").strip().lower()
+    if mode not in {"delta", "full", "reconcile"}:
+        raise ValueError("mode muss delta, full oder reconcile sein.")
+    return mode
 
 
 def _repo_ids_with_dataset(context: DashboardContext, repo_ids: list[str]) -> set[str]:

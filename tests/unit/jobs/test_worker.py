@@ -16,6 +16,7 @@ from seafile_ragflow_connector.jobs.types import JobSpec, JobStatus, JobType
 from seafile_ragflow_connector.jobs.worker import WorkerRunner, is_retryable_job_error
 from seafile_ragflow_connector.persistence import Base
 from seafile_ragflow_connector.persistence.models.job import SyncJob
+from seafile_ragflow_connector.persistence.sync_state import RepoMutationLeaseStore
 
 
 def _store() -> JobStore:
@@ -162,6 +163,53 @@ def test_worker_cannot_finalize_after_owner_changes() -> None:
         assert job is not None
         assert job.status == JobStatus.RUNNING.value
         assert job.locked_by == "worker-b"
+
+
+def test_running_job_cancel_request_wins_over_late_handler_failure() -> None:
+    store = _store()
+    job_id = store.enqueue(JobSpec(JobType.SYNC_LIBRARY_FULL, repo_id="repo"))
+
+    def cancel_then_fail(_spec: JobSpec) -> None:
+        assert store.request_cancel(job_id)
+        raise RuntimeError("late failure after cancellation")
+
+    runner = WorkerRunner(
+        store,
+        handlers={JobType.SYNC_LIBRARY_FULL: cancel_then_fail},
+        worker_id="worker-a",
+    )
+
+    assert runner.run_once()
+    with store.session_factory() as session:
+        job = session.get(SyncJob, job_id)
+        assert job is not None
+        assert job.status == JobStatus.CANCELLED.value
+
+
+def test_busy_repository_lease_defers_job_without_consuming_attempt() -> None:
+    store = _store()
+    leases = RepoMutationLeaseStore(store.session_factory)
+    held = leases.acquire("repo", "other-worker", lease_seconds=60)
+    job_id = store.enqueue(
+        JobSpec(JobType.SYNC_LIBRARY_FULL, repo_id="repo", max_attempts=1)
+    )
+    handled: list[bool] = []
+    runner = WorkerRunner(
+        store,
+        handlers={JobType.SYNC_LIBRARY_FULL: lambda _spec: handled.append(True)},
+        worker_id="worker-a",
+        repo_lease_store=leases,
+        heartbeat_seconds=1,
+    )
+
+    assert runner.run_once()
+    assert handled == []
+    with store.session_factory() as session:
+        job = session.get(SyncJob, job_id)
+        assert job is not None
+        assert job.status == JobStatus.RETRYING.value
+        assert job.attempts == 0
+    leases.release(held)
 
 
 class _HeartbeatStore:

@@ -28,6 +28,7 @@ try:
         DashboardLimits,
         utcnow,
     )
+    from seafile_ragflow_connector.jobs.job_store import JobStore
     from seafile_ragflow_connector.jobs.types import JobStatus, JobType
     from seafile_ragflow_connector.openwebui.sources import sign_preview_payload
     from seafile_ragflow_connector.persistence.db import Base
@@ -466,6 +467,7 @@ class DashboardServerTests(unittest.TestCase):
             )
             session.commit()
         orchestrator = _FakeWorkflowOrchestrator(store.session_factory)
+        job_store = JobStore(store.session_factory)
         handle = start_dashboard_server(
             DashboardContext(
                 store=store,
@@ -473,6 +475,8 @@ class DashboardServerTests(unittest.TestCase):
                 started_at=utcnow(),
                 orchestrator=orchestrator,
                 openwebui_sync_service=_FakeWorkflowOpenWebUI(),
+                job_store=job_store,
+                signal_queue=_FakeWorkflowSignalQueue(),
             )
         )
         port = handle.server.server_address[1]
@@ -490,10 +494,12 @@ class DashboardServerTests(unittest.TestCase):
         self.assertFalse(libraries["repo-2"]["selectable"])
         self.assertEqual(libraries["repo-2"]["skip_reason"], "encrypted")
 
-    def test_workflow_run_syncs_selected_library_and_scopes_openwebui(self) -> None:
+    def test_workflow_run_enqueues_selected_library_and_returns_parent_status(self) -> None:
         store = _store(self)
         orchestrator = _FakeWorkflowOrchestrator(store.session_factory)
         openwebui = _FakeWorkflowOpenWebUI()
+        job_store = JobStore(store.session_factory)
+        signal_queue = _FakeWorkflowSignalQueue()
         handle = start_dashboard_server(
             DashboardContext(
                 store=store,
@@ -501,31 +507,77 @@ class DashboardServerTests(unittest.TestCase):
                 started_at=utcnow(),
                 orchestrator=orchestrator,
                 openwebui_sync_service=openwebui,
+                job_store=job_store,
+                signal_queue=signal_queue,
             )
         )
         port = handle.server.server_address[1]
         try:
             data = _post_json(
                 port,
-                "/api/workflow/run",
+                "/api/workflow/runs",
                 {
                     "repo_ids": ["repo-1"],
                     "create_dataset": True,
                     "sync_openwebui": True,
+                    "mode": "delta",
                     "scope": "/Admin",
                 },
             )
+            status = _get_json(port, data["status_url"])
+            cancelled = _post_json(port, f"{data['status_url']}/cancel", {})
+            cancelled_status = _get_json(port, data["status_url"])
+            retried = _post_json(port, f"{data['status_url']}/retry", {})
+            retried_status = _get_json(port, data["status_url"])
         finally:
             handle.stop()
 
-        self.assertEqual(data["status"], "succeeded")
-        self.assertEqual(orchestrator.synced, [("repo-1", "/Admin")])
-        self.assertEqual(openwebui.repo_ids, [{"repo-1"}])
-        self.assertEqual(data["results"][0]["status"], "completed")
-        with store.session_factory() as session:
-            library = session.get(Library, "repo-1")
-            self.assertIsNotNone(library)
-            self.assertEqual(library.ragflow_dataset_id, "dataset-repo-1")
+        self.assertEqual(data["status"], "queued")
+        self.assertEqual(status["status"], "queued")
+        self.assertEqual(status["progress"], {"completed": 0, "total": 1})
+        self.assertEqual(cancelled["action"], "cancel")
+        self.assertEqual(cancelled_status["status"], "cancelled")
+        self.assertEqual(retried["action"], "retry")
+        self.assertEqual(retried_status["status"], "queued")
+        self.assertEqual(orchestrator.synced, [])
+        self.assertEqual(openwebui.repo_ids, [])
+        self.assertEqual(
+            signal_queue.job_ids,
+            [data["jobs"][0]["job_id"], data["jobs"][0]["job_id"]],
+        )
+        job = job_store.get(data["jobs"][0]["job_id"])
+        self.assertIsNotNone(job)
+        self.assertEqual(job.job_type, JobType.SYNC_LIBRARY_DELTA.value)
+        self.assertEqual(job.payload["scope"], "/Admin")
+        self.assertTrue(job.payload["sync_openwebui"])
+
+    def test_cleanup_retry_stays_accepted_when_queue_signal_fails(self) -> None:
+        store = _store(self)
+        orchestrator = _FakeWorkflowOrchestrator(store.session_factory)
+        job_store = JobStore(store.session_factory)
+        handle = start_dashboard_server(
+            DashboardContext(
+                store=store,
+                settings=_settings(0),
+                started_at=utcnow(),
+                orchestrator=orchestrator,
+                openwebui_sync_service=_FakeWorkflowOpenWebUI(),
+                job_store=job_store,
+                signal_queue=_FailingWorkflowSignalQueue(),
+            )
+        )
+        port = handle.server.server_address[1]
+        try:
+            response = _post_json(port, "/api/cleanup-outbox/42/retry", {})
+        finally:
+            handle.stop()
+
+        self.assertTrue(response["retried"])
+        self.assertEqual(response["signal_warning"], "ConnectionError")
+        job = job_store.get(int(response["job_id"]))
+        self.assertIsNotNone(job)
+        assert job is not None
+        self.assertEqual(job.status, JobStatus.QUEUED.value)
 
     def test_dead_job_cleanup_endpoint_requires_dashboard_auth_and_clears_dead_jobs(self) -> None:
         store = _store(self)
@@ -1580,6 +1632,10 @@ class _FakeWorkflowOrchestrator:
             session.commit()
         return _FakeWorkflowSyncSummary()
 
+    def requeue_cleanup_outbox(self, outbox_id: int) -> str | None:
+        _ = outbox_id
+        return "repo-1"
+
 
 class _FakeWorkflowOpenWebUI:
     def __init__(self) -> None:
@@ -1588,6 +1644,20 @@ class _FakeWorkflowOpenWebUI:
     def sync_once(self, *, repo_ids: set[str] | None = None) -> _FakeWorkflowOpenWebUISummary:
         self.repo_ids.append(set(repo_ids or set()))
         return _FakeWorkflowOpenWebUISummary()
+
+
+class _FakeWorkflowSignalQueue:
+    def __init__(self) -> None:
+        self.job_ids: list[int] = []
+
+    def signal(self, job_id: int) -> None:
+        self.job_ids.append(job_id)
+
+
+class _FailingWorkflowSignalQueue(_FakeWorkflowSignalQueue):
+    def signal(self, job_id: int) -> None:
+        super().signal(job_id)
+        raise ConnectionError("redis unavailable")
 
 
 class _FakeOpenWebUIAdminClient:

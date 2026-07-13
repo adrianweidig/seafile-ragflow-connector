@@ -3,14 +3,24 @@ from __future__ import annotations
 # ruff: noqa: E501
 import html
 import json
+import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import quote, urlsplit, urlunsplit
 
+SOURCE_DTO_VERSION = "v1"
+SOURCE_DTO_STATUSES = frozenset({"available", "moved", "removed"})
+_MANAGED_UPLOAD_DOCUMENT_RE = re.compile(
+    r"^(?P<stem>.+)\.__connector_"
+    r"(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})"
+    r"(?P<suffix>(?:\.[^/\\]+)?)$",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
-class EvidenceHit:
+class SourceDTO:
     source_id: str
     citation_label: str
     rank: int
@@ -34,10 +44,20 @@ class EvidenceHit:
     source_role: str = "related"
     locator_quality: str = "unknown"
     preview_url: str | None = None
+    viewer_url: str | None = None
     open_url: str | None = None
     open_url_kind: str = "none"
     text_fragment_url: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    source_dto_version: str = SOURCE_DTO_VERSION
+    status: str = "available"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "document_name",
+            user_facing_document_name(self.document_name, self.source_path),
+        )
 
     @property
     def score_percent(self) -> int | None:
@@ -57,6 +77,8 @@ class EvidenceHit:
 
     def preview_payload(self) -> dict[str, Any]:
         return {
+            "source_dto_version": self.source_dto_version,
+            "status": normalized_source_status(self.status),
             "source_id": self.source_id,
             "citation_label": self.citation_label,
             "dataset_id": self.ragflow_dataset_id,
@@ -82,6 +104,8 @@ class EvidenceHit:
 
     def to_search_result(self) -> dict[str, Any]:
         return {
+            "source_dto_version": self.source_dto_version,
+            "status": normalized_source_status(self.status),
             "source_id": self.source_id,
             "citation_label": self.citation_label,
             "rank": self.rank,
@@ -112,10 +136,35 @@ class EvidenceHit:
             "source_role": self.source_role,
             "locator_quality": self.locator_quality,
             "preview_url": self.preview_url,
+            "viewer_url": self.viewer_url,
             "open_url": self.open_url,
+            "original_url": self.open_url,
             "open_url_kind": self.open_url_kind,
             "text_fragment_url": self.text_fragment_url,
         }
+
+
+# Backwards-compatible public name used by existing Search and preview callers.
+EvidenceHit = SourceDTO
+
+
+def user_facing_document_name(
+    document_name: str | None,
+    source_path: str | None = None,
+) -> str:
+    clean_path = str(source_path or "").replace("\\", "/").rstrip("/")
+    clean = clean_path.rsplit("/", 1)[-1].strip() if clean_path else ""
+    if not clean:
+        clean = str(document_name or "").strip()
+    match = _MANAGED_UPLOAD_DOCUMENT_RE.fullmatch(clean)
+    if match:
+        clean = f"{match.group('stem')}{match.group('suffix')}"
+    return clean or "Dokument"
+
+
+def normalized_source_status(value: Any) -> str:
+    status = str(value or "available").strip().lower()
+    return status if status in SOURCE_DTO_STATUSES else "available"
 
 
 def locator_quality(

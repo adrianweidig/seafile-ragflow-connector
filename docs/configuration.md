@@ -7,7 +7,7 @@ setzen und dieselbe Datei mit Docker Compose oder Portainer verwenden. Die
 vollständige Pflicht-/Optional-Liste steht in
 [`environment.md`](environment.md).
 
-Minimalpflicht für Seafile -> RAGFlow mit Stack-Postgres:
+Minimalpflicht für Seafile -> RAGFlow mit gebündeltem State:
 
 ```env
 SEAFILE_BASE_URL=
@@ -15,11 +15,16 @@ SEAFILE_ADMIN_TOKEN=
 SEAFILE_SYNC_USER_TOKEN=
 RAGFLOW_BASE_URL=
 RAGFLOW_API_KEY=
+AUTHZ_API_SHARED_SECRET=
 POSTGRES_PASSWORD=
 ```
 
-Alternativ ersetzt `DATABASE_URL` die `POSTGRES_*`-Anwendungswerte. OpenWebUI,
-Dashboard, TLS-CA-Bundles, URL-Rewrites und Tuning sind optionale Erweiterungen.
+Das unterstützte External-State-Profil ersetzt den gebündelten State durch
+`DATABASE_URL` **und** `REDIS_URL`; die lokalen PostgreSQL-/Redis-Dienste werden
+dann nicht gestartet. Das Standardprofil ergänzt Search und benötigt die in
+[`environment.md`](environment.md) aufgeführten Search-Werte; Core-only lässt
+das Search-Overlay weg. OpenWebUI, Dashboard, TLS-CA-Bundles, URL-Rewrites und
+Tuning sind optionale Erweiterungen.
 Secrets müssen über Portainer-Environment-Management, Docker Secrets oder eine
 lokale nicht committete Env-Datei bereitgestellt werden.
 
@@ -121,6 +126,11 @@ existiert; der Connector schreibt den Wert als Valve in Tool und Pipe.
 - `REPARSE_ON_DATASET_SETTINGS_CHANGE=false`: bestehende Dokumente nach einer
   Admin-Änderung nicht stillschweigend vollständig neu verarbeiten.
 
+Die Variablen `REPARSE_ON_DATASET_SETTINGS_CHANGE` und
+`RAGFLOW_VALIDATE_CREATED_DATASET` bleiben als Kompatibilitätsvertrag ladbar;
+ein automatisches Reparse ist noch nicht aktiv und neu erstellte oder gebundene
+Datasets werden im aktuellen Provisioning-Pfad immer erneut gelesen.
+
 ## Delete-Policy
 
 Seafile ist immer die Quelle der Wahrheit. Der Connector löscht oder verändert
@@ -142,6 +152,25 @@ ARCHIVE_DATASET_WHEN_LIBRARY_DELETED=false
   aus Seafile erneut hochgeladen.
 - Externe Löschungen in OpenWebUI werden durch den OpenWebUI-Sync repariert:
   fehlende eigene Tools und Pipes werden neu erzeugt, statt Seafile zu ändern.
+- `ARCHIVE_DATASET_WHEN_LIBRARY_DELETED` ist derzeit reserviert. Unterstützt
+  sind Behalten oder Löschen; `connector doctor --effective` weist auf den
+  nicht aktiven Archivpfad hin.
+
+## Konfigurationsdiagnose
+
+`connector check-config` bleibt der kurze Parser-/Validierungscheck. Für die
+vollständige, redigierte Konfigurationswahrheit steht zusätzlich bereit:
+
+```bash
+connector doctor --effective --json
+connector doctor --live --json
+```
+
+`--effective` listet kanonische Env-Namen, effektive Werte und den
+Implementierungsstatus jeder Option; Secret- und Connection-Werte werden
+redigiert. `--live` prüft zusätzlich Datenbank, Migrationsstand und Redis, ohne
+Seafile oder RAGFlow zu verändern. Die externen APIs bleiben Aufgabe von
+`connector check-live`.
 
 ## Dashboard
 

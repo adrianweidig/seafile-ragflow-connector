@@ -4,6 +4,7 @@ import asyncio
 import json
 import unittest
 from importlib import resources
+from unittest.mock import patch
 
 import httpx
 
@@ -64,18 +65,18 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertTrue(tool.valves["CONNECTOR_PROXY_VERIFY_SSL"])
         self.assertEqual(tool.valves["CONNECTOR_PROXY_CA_BUNDLE"], "")
         self.assertIn("owner: seafile-ragflow-connector", tool.content)
-        self.assertIn("artifact_version: 27", tool.content)
-        self.assertIn("artifact_version: 27", pipe.content)
+        self.assertIn("artifact_version: 28", tool.content)
+        self.assertIn("artifact_version: 28", pipe.content)
         self.assertFalse(tool.valves["TLS_DEBUG"])
         self.assertEqual(tool.valves["SHOW_SOURCE_SCORES"], True)
         self.assertEqual(tool.valves["LANGUAGE"], "de")
         self.assertEqual(pipe.name, "Seafile · Demo Library")
         self.assertEqual(pipe.valves["MODEL_NAME"], "Seafile · Demo Library")
         self.assertEqual(pipe.valves["RAGFLOW_MODEL_ID"], "model")
-        self.assertEqual(pipe.valves["SOURCE_DISPLAY_MODE"], "compact")
+        self.assertEqual(pipe.valves["SOURCE_DISPLAY_MODE"], "native")
         self.assertEqual(pipe.valves["SOURCE_MARKDOWN_MODE"], "compact")
         self.assertEqual(pipe.valves["RETRIEVAL_ONLY_FALLBACK"], "brief")
-        self.assertEqual(pipe.valves["EMIT_CITATION_EVENTS"], False)
+        self.assertEqual(pipe.valves["EMIT_CITATION_EVENTS"], True)
         self.assertEqual(pipe.valves["APPEND_SOURCE_OVERVIEW"], True)
         self.assertEqual(pipe.valves["SHOW_SOURCE_SCORES"], True)
         self.assertEqual(pipe.valves["SHOW_LOCATOR_QUALITY"], True)
@@ -220,8 +221,8 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertEqual(payload["model"], "ragflow-chat-model")
         self.assertEqual(payload["ragflow"]["mode"], "chat")
         self.assertTrue(payload["openwebui"]["expects_generated_answer"])
-        self.assertEqual(payload["openwebui"]["source_markdown_mode"], "compact")
-        self.assertEqual(payload["openwebui"]["source_display_mode"], "markdown_audit")
+        self.assertEqual(payload["openwebui"]["source_markdown_mode"], "none")
+        self.assertEqual(payload["openwebui"]["source_display_mode"], "native")
         self.assertFalse(payload["openwebui"]["audit_evidence"])
         self.assertEqual(
             payload["extra_body"]["reference_metadata"]["fields"][:3],
@@ -303,7 +304,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
             namespace["_is_source_inventory_question"]("Welche Quellen wurden gefunden?")
         )
 
-    def test_pipe_final_answer_uses_compact_sources_by_default(self) -> None:
+    def test_pipe_final_answer_uses_native_sources_by_default(self) -> None:
         inputs = DatasetArtifactInputs(
             namespace="ragflow",
             repo_id="repo-1",
@@ -335,12 +336,105 @@ class OpenWebUIArtifactTests(unittest.TestCase):
 
         self.assertTrue(final_answer.startswith("Mobiles Arbeiten ist"))
         self.assertNotIn("[S1]", final_answer)
+        self.assertNotIn("## Quellen", final_answer)
+        self.assertNotIn("### S1", final_answer)
+        self.assertNotIn("report.pdf", final_answer)
+
+    def test_pipe_uses_compact_markdown_when_native_citations_are_unavailable(self) -> None:
+        namespace = _pipe_namespace()
+        pipe_instance = namespace["Pipe"]()
+        sources = [
+            {
+                "name": "report.pdf",
+                "text": "Der relevante Auszug steht hier.",
+                "score": 0.91,
+                "source_metadata": {"page": 2},
+            }
+        ]
+
+        final_answer = namespace["_compose_final_answer"](
+            "Mobiles Arbeiten ist geregelt.",
+            sources,
+            pipe_instance.valves,
+            force_markdown_fallback=True,
+        )
+
+        self.assertIn("Mobiles Arbeiten ist geregelt.", final_answer)
         self.assertIn("## Quellen", final_answer)
-        self.assertIn("### S1", final_answer)
         self.assertIn("report.pdf", final_answer)
         self.assertIn("Seite 2", final_answer)
         self.assertNotIn("chunk_id", final_answer)
         self.assertNotIn("document_id", final_answer)
+
+    def test_tool_prefers_native_citations_and_falls_back_without_emitter(self) -> None:
+        inputs = DatasetArtifactInputs(
+            namespace="ragflow",
+            repo_id="repo-1",
+            dataset_id="dataset-1234567890",
+            dataset_name="Demo Library",
+            ragflow_chat_id="chat-1",
+            proxy_base_url="http://connector:8080",
+        )
+        namespace: dict[str, object] = {}
+        tool = build_tool_spec(inputs)
+        exec(
+            compile(tool.content, "<openwebui-tool>", "exec", dont_inherit=True),
+            namespace,
+        )
+        tool_instance = namespace["Tools"]()
+        for key, value in tool.valves.items():
+            setattr(tool_instance.valves, key, value)
+        tool_instance.valves.CONNECTOR_PROXY_SHARED_SECRET = "test-secret"
+
+        class FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, object]:
+                return {
+                    "answer": "Mobiles Arbeiten ist geregelt.",
+                    "sources": [
+                        {
+                            "source_id": "S1",
+                            "document_name": "report.pdf",
+                            "snippet": "Der relevante Auszug steht hier.",
+                            "page": 2,
+                        }
+                    ],
+                }
+
+        class FakeAsyncClient:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args: object) -> None:
+                return None
+
+            async def post(self, *_args: object, **_kwargs: object) -> FakeResponse:
+                return FakeResponse()
+
+        events: list[dict[str, object]] = []
+
+        async def emit(event: dict[str, object]) -> None:
+            events.append(event)
+
+        with patch.object(httpx, "AsyncClient", FakeAsyncClient):
+            native_answer = asyncio.run(
+                tool_instance.query_dataset(
+                    "Was gilt?",
+                    __event_emitter__=emit,
+                )
+            )
+            fallback_answer = asyncio.run(tool_instance.query_dataset("Was gilt?"))
+
+        self.assertEqual(native_answer, "Mobiles Arbeiten ist geregelt.")
+        self.assertTrue(any(event.get("type") == "citation" for event in events))
+        self.assertNotIn("## Quellen", native_answer)
+        self.assertIn("## Gefundene Quellen", fallback_answer)
+        self.assertIn("report.pdf", fallback_answer)
 
     def test_pipe_curates_uncited_documents_for_normal_answers(self) -> None:
         namespace = _pipe_namespace()
@@ -692,6 +786,26 @@ class OpenWebUIArtifactTests(unittest.TestCase):
 
         self.assertEqual([item["name"] for item in normalized], ["high.md", "unknown.md"])
 
+    def test_pipe_hides_recovery_upload_name_without_path_metadata(self) -> None:
+        namespace = _pipe_namespace()
+        operation_id = "0123456789abcdef0123456789abcdef"
+
+        normalized = namespace["_normalize_sources"](
+            [
+                {
+                    "document_name": f"report.__connector_{operation_id}.pdf",
+                    "text": "PDF-Treffer",
+                },
+                {
+                    "document_name": f"notes.__connector_{operation_id}.txt",
+                    "text": "Text-Treffer",
+                },
+            ],
+            limit=20,
+        )
+
+        self.assertEqual([item["name"] for item in normalized], ["report.pdf", "notes.txt"])
+
     def test_pipe_audit_mode_warns_without_adding_fake_source_marker(self) -> None:
         namespace = _pipe_namespace()
         pipe_instance = namespace["Pipe"]()
@@ -870,7 +984,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertIn("RAGFlow search", tool.name)
         self.assertIn("Dataset-specific RAGFlow search", str(tool.payload))
         self.assertIn("RAGFlow model", str(pipe.payload))
-        self.assertNotIn("LANGUAGE", pipe.valves)
+        self.assertEqual(pipe.valves["LANGUAGE"], "en")
 
     def test_artifact_metadata_and_embedded_messages_support_product_languages(self) -> None:
         examples = {
@@ -897,7 +1011,7 @@ class OpenWebUIArtifactTests(unittest.TestCase):
 
                 self.assertIn(expected_name, tool.name)
                 self.assertEqual(tool.valves["LANGUAGE"], language)
-                self.assertNotIn("LANGUAGE", pipe.valves)
+                self.assertEqual(pipe.valves["LANGUAGE"], language)
                 self.assertEqual(tool.payload["meta"]["manifest"]["language"], language)
                 self.assertIn(language, tool.content)
 

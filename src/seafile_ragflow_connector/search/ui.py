@@ -587,22 +587,16 @@ SEARCH_HTML = r"""<!doctype html>
     .hover-card strong { color: var(--strong); overflow-wrap: anywhere; }
     .hover-card span { color: var(--muted); font-size: .84rem; }
     .hover-card p { margin: 0; overflow-wrap: anywhere; }
-    .toast {
-      position: fixed;
-      right: 22px;
-      bottom: 22px;
-      z-index: 40;
-      max-width: min(420px, calc(100vw - 32px));
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 11px 13px;
-      background: var(--surface);
-      color: var(--text);
-      box-shadow: 0 18px 50px rgba(15, 23, 42, .22);
-      font-weight: 760;
+    .mobile-view-tabs { display: none; }
+    .request-actions, .pagination-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px;
+      padding: 0 16px 12px;
     }
-    .toast.success { border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); background: var(--accent-soft); color: var(--accent-text); }
-    .toast.error { border-color: color-mix(in srgb, var(--danger) 42%, var(--border)); background: var(--danger-soft); color: var(--danger); }
+    .request-actions:empty, .pagination-actions:empty { display: none; }
+    .request-actions .secondary, .pagination-actions .secondary { min-width: 140px; }
     @media (max-width: 1280px) {
       main { grid-template-columns: minmax(250px, 300px) minmax(0, 1fr); }
       .sources-panel { display: none; }
@@ -618,7 +612,7 @@ SEARCH_HTML = r"""<!doctype html>
       .viewer { grid-template-rows: auto clamp(140px, 24vh, 220px) auto; }
     }
     @media (max-width: 600px) {
-      header { display: grid; }
+      header { display: grid; position: static; }
       .header-actions, .theme-toggle { width: 100%; }
       .toolbar { display: grid; }
       .segments { width: 100%; }
@@ -637,6 +631,38 @@ SEARCH_HTML = r"""<!doctype html>
       .result-top { display: grid; }
       .actions .secondary { width: 100%; }
       .source-rail { grid-template-columns: 1fr; }
+      .inline-source-rail { display: grid; grid-template-columns: 1fr; overflow: visible; }
+      .inline-source-card { width: 100%; min-width: 0; }
+      .mobile-view-tabs {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px;
+        padding: 10px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+        position: sticky;
+        top: 0;
+        z-index: 12;
+      }
+      .mobile-view-tab {
+        min-height: 38px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface-2);
+        color: var(--muted);
+        font-weight: 800;
+      }
+      .mobile-view-tab[aria-selected="true"] { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent); }
+      body[data-mobile-view="answer"] #documentViewer,
+      body[data-mobile-view="answer"] #inlineSources { display: none !important; }
+      body[data-mobile-view="document"] #answer,
+      body[data-mobile-view="document"] #results,
+      body[data-mobile-view="document"] #inlineSources,
+      body[data-mobile-view="document"] #paginationActions { display: none !important; }
+      body[data-mobile-view="sources"] #documentViewer,
+      body[data-mobile-view="sources"] #answer,
+      body[data-mobile-view="sources"] #results,
+      body[data-mobile-view="sources"] #paginationActions { display: none !important; }
     }
   </style>
 </head>
@@ -685,6 +711,11 @@ SEARCH_HTML = r"""<!doctype html>
         <div class="profile-list" id="profileList"></div>
       </aside>
       <section class="panel search-panel" aria-label="Suche">
+        <div class="mobile-view-tabs" role="tablist" aria-label="Suchergebnis">
+          <button class="mobile-view-tab" type="button" role="tab" data-mobile-view="answer" data-i18n="mobileAnswer" aria-selected="true">Antwort</button>
+          <button class="mobile-view-tab" type="button" role="tab" data-mobile-view="document" data-i18n="mobileDocument" aria-selected="false">Dokument</button>
+          <button class="mobile-view-tab" type="button" role="tab" data-mobile-view="sources" data-i18n="mobileSources" aria-selected="false">Quellen</button>
+        </div>
         <section class="viewer" id="documentViewer" aria-label="Dokumentviewer">
           <div class="viewer-head">
             <div class="viewer-title">
@@ -704,6 +735,10 @@ SEARCH_HTML = r"""<!doctype html>
           </div>
         </section>
         <div id="state" class="state" aria-live="polite">Wähle Bibliotheken aus und starte eine Suche.</div>
+        <div class="request-actions" id="requestActions">
+          <button class="secondary" id="cancelSearch" type="button" data-i18n="cancelSearch" hidden>Suche abbrechen</button>
+          <button class="secondary" id="retrySearch" type="button" data-i18n="retrySearch" hidden>Erneut versuchen</button>
+        </div>
         <div id="answer" class="answer" hidden></div>
         <section class="inline-sources" id="inlineSources" aria-label="Quellen im Arbeitsbereich" hidden>
           <div class="inline-sources-head">
@@ -713,6 +748,9 @@ SEARCH_HTML = r"""<!doctype html>
           <div class="inline-source-rail" id="inlineSourceRail"></div>
         </section>
         <div id="results" class="results"></div>
+        <div class="pagination-actions" id="paginationActions">
+          <button class="secondary" id="loadMoreResults" type="button" data-i18n="loadMore" hidden>Weitere Treffer laden</button>
+        </div>
         <div class="query-area composer" id="composer">
           <form class="query-form" id="queryForm">
             <textarea class="query-input" id="question" name="question" rows="2" placeholder="Was möchtest du in deinen Bibliotheken wissen?" aria-label="Suchfrage"></textarea>
@@ -723,7 +761,7 @@ SEARCH_HTML = r"""<!doctype html>
               <button class="segment" type="button" data-mode="retrieval" aria-pressed="false">Dokumente finden</button>
               <button class="segment" type="button" data-mode="chat" aria-pressed="true">Antwort mit Quellen</button>
             </div>
-            <label class="topk">Treffer <input id="topK" type="number" min="1" max="20" value="8"></label>
+            <label class="topk"><span data-i18n="resultsPerPage">Treffer pro Seite</span> <input id="topK" type="number" min="1" max="100" value="20"></label>
           </div>
         </div>
       </section>
@@ -744,7 +782,6 @@ SEARCH_HTML = r"""<!doctype html>
     </main>
   </div>
   <div class="hover-card" id="sourceHover" role="tooltip" aria-hidden="true"></div>
-  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
   <script>
     const stateEl = document.getElementById('state');
     const resultsEl = document.getElementById('results');
@@ -774,15 +811,136 @@ SEARCH_HTML = r"""<!doctype html>
     const viewerTextPreviewEl = document.getElementById('viewerTextPreview');
     const viewerEmptyEl = document.getElementById('viewerEmpty');
     const viewerExcerptEl = document.getElementById('viewerExcerpt');
-    const toastEl = document.getElementById('toast');
+    const cancelSearchEl = document.getElementById('cancelSearch');
+    const retrySearchEl = document.getElementById('retrySearch');
+    const loadMoreResultsEl = document.getElementById('loadMoreResults');
+    const SEARCH_LOCALES = {
+      de: {
+        mobileAnswer: 'Antwort',
+        mobileDocument: 'Dokument',
+        mobileSources: 'Quellen',
+        cancelSearch: 'Suche abbrechen',
+        retrySearch: 'Erneut versuchen',
+        loadMore: 'Weitere Treffer laden',
+        resultsPerPage: 'Treffer pro Seite',
+        profilesLoading: 'Bibliotheken werden geladen …',
+        profilesReady: 'Wähle Bibliotheken aus und starte eine Suche.',
+        noProfiles: 'Keine freigegebenen Bibliotheken verfügbar.',
+        noSelection: 'Keine Bibliothek ausgewählt. Wähle mindestens eine Bibliothek für die Suche.',
+        maxProfiles: 'Es können höchstens {count} Bibliotheken gleichzeitig durchsucht werden.',
+        profileLoadFailed: 'Profile konnten nicht geladen werden.',
+        signedIn: 'Angemeldet',
+        selectionRequired: 'Wähle mindestens eine Bibliothek aus.',
+        questionRequired: 'Gib eine Suchfrage ein.',
+        searchRunningOne: 'Suche läuft in 1 Bibliothek …',
+        searchRunningMany: 'Suche läuft in {count} Bibliotheken …',
+        chatRunningOne: 'Suche in 1 Bibliothek … Antwort wird aus Fundstellen generiert …',
+        chatRunningMany: 'Suche in {count} Bibliotheken … Antwort wird aus Fundstellen generiert …',
+        searchCancelled: 'Suche abgebrochen. Das letzte erfolgreiche Ergebnis bleibt sichtbar.',
+        moreLoadedOne: '1 weiterer Treffer geladen.',
+        moreLoadedMany: '{count} weitere Treffer geladen.',
+        partialFailureOne: '1 Bibliothek konnte vorübergehend nicht durchsucht werden.',
+        partialFailureMany: '{count} Bibliotheken konnten vorübergehend nicht durchsucht werden.',
+        partialPermanentOne: '1 Bibliothek ist derzeit nicht für die Suche verfügbar.',
+        partialPermanentMany: '{count} Bibliotheken sind derzeit nicht für die Suche verfügbar.',
+        resultOne: '1 Treffer',
+        resultMany: '{count} Treffer',
+        libraryOne: '1 Bibliothek',
+        libraryMany: '{count} Bibliotheken',
+        sourceOne: '1 Quelle',
+        sourceMany: '{count} Quellen',
+        resultsFrom: '{results} aus {libraries}.',
+        sourcesFromAllowed: '{sources} aus den erlaubten Bibliotheken.',
+        profileSelection: '{libraries} · {selected}/{limit} ausgewählt',
+        deniedOne: '1 Bibliothek wurde wegen fehlender Berechtigung ausgelassen.',
+        deniedMany: '{count} Bibliotheken wurden wegen fehlender Berechtigung ausgelassen.',
+        searchFailed: 'Suche fehlgeschlagen.',
+        failureKeepsResults: '{message} Das letzte erfolgreiche Ergebnis bleibt sichtbar.',
+      },
+      en: {
+        mobileAnswer: 'Answer',
+        mobileDocument: 'Document',
+        mobileSources: 'Sources',
+        cancelSearch: 'Cancel search',
+        retrySearch: 'Retry',
+        loadMore: 'Load more results',
+        resultsPerPage: 'Results per page',
+        profilesLoading: 'Loading libraries …',
+        profilesReady: 'Select libraries and start a search.',
+        noProfiles: 'No authorized libraries are available.',
+        noSelection: 'No library selected. Select at least one library to search.',
+        maxProfiles: 'At most {count} libraries can be searched at once.',
+        profileLoadFailed: 'Profiles could not be loaded.',
+        signedIn: 'Signed in',
+        selectionRequired: 'Select at least one library.',
+        questionRequired: 'Enter a search question.',
+        searchRunningOne: 'Searching 1 library …',
+        searchRunningMany: 'Searching {count} libraries …',
+        chatRunningOne: 'Searching 1 library … Generating an answer from the results …',
+        chatRunningMany: 'Searching {count} libraries … Generating an answer from the results …',
+        searchCancelled: 'Search cancelled. The last successful result remains visible.',
+        moreLoadedOne: 'Loaded 1 additional result.',
+        moreLoadedMany: 'Loaded {count} additional results.',
+        partialFailureOne: '1 library could not be searched temporarily.',
+        partialFailureMany: '{count} libraries could not be searched temporarily.',
+        partialPermanentOne: '1 library is currently unavailable for search.',
+        partialPermanentMany: '{count} libraries are currently unavailable for search.',
+        resultOne: '1 result',
+        resultMany: '{count} results',
+        libraryOne: '1 library',
+        libraryMany: '{count} libraries',
+        sourceOne: '1 source',
+        sourceMany: '{count} sources',
+        resultsFrom: '{results} from {libraries}.',
+        sourcesFromAllowed: '{sources} from the authorized libraries.',
+        profileSelection: '{libraries} · {selected}/{limit} selected',
+        deniedOne: '1 library was omitted because access is not permitted.',
+        deniedMany: '{count} libraries were omitted because access is not permitted.',
+        searchFailed: 'Search failed.',
+        failureKeepsResults: '{message} The last successful result remains visible.',
+      },
+    };
+    const searchLocale = (document.documentElement.lang || navigator.language || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
     let profiles = [];
     let mode = 'chat';
     let latestSources = [];
-    let toastTimer = null;
     let viewerRequestId = 0;
     let isLoading = false;
     let activeTextMarkEl = null;
     let activeViewerObjectUrl = null;
+    let activeRequestController = null;
+    let activeRequestId = null;
+    let successfulRequest = null;
+    let lastAttempt = null;
+    let nextCursor = null;
+    let maxSelectedProfiles = 25;
+
+    function t(key, values = {}) {
+      const catalog = SEARCH_LOCALES[searchLocale] || SEARCH_LOCALES.de;
+      return String(catalog[key] || SEARCH_LOCALES.de[key] || key).replace(/\{(\w+)\}/g, (_match, name) => String(values[name] ?? ''));
+    }
+
+    function countText(count, oneKey, manyKey) {
+      return t(count === 1 ? oneKey : manyKey, {count});
+    }
+
+    function createRequestId() {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return window.crypto.randomUUID();
+      }
+      const bytes = new Uint8Array(16);
+      window.crypto.getRandomValues(bytes);
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+      const hex = [...bytes].map(value => value.toString(16).padStart(2, '0'));
+      return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10).join('')}`;
+    }
+
+    function applySearchLocale() {
+      document.querySelectorAll('[data-i18n]').forEach(element => {
+        element.textContent = t(element.dataset.i18n);
+      });
+    }
 
     function setState(text, kind = '') {
       stateEl.textContent = text;
@@ -791,17 +949,28 @@ SEARCH_HTML = r"""<!doctype html>
     }
 
     function showToast(text, kind = 'success') {
-      if (toastTimer) window.clearTimeout(toastTimer);
-      toastEl.textContent = text;
-      toastEl.className = 'toast' + (kind ? ` ${kind}` : '');
-      toastEl.hidden = false;
-      toastTimer = window.setTimeout(() => {
-        toastEl.hidden = true;
-      }, 3600);
+      setState(text, kind);
     }
 
     function selectedProfileIds() {
       return [...document.querySelectorAll('[data-profile-id]:checked')].map(item => item.value);
+    }
+
+    function storedProfileIds() {
+      try {
+        const value = JSON.parse(localStorage.getItem('connector-search-profiles') || 'null');
+        return Array.isArray(value) ? value.map(String) : null;
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    function persistProfileSelection() {
+      try {
+        localStorage.setItem('connector-search-profiles', JSON.stringify(selectedProfileIds()));
+      } catch (_error) {
+        return;
+      }
     }
 
     function updateSubmitState() {
@@ -810,27 +979,44 @@ SEARCH_HTML = r"""<!doctype html>
 
     function setLoading(loading) {
       isLoading = loading;
+      cancelSearchEl.hidden = !loading;
+      loadMoreResultsEl.disabled = loading;
       updateSubmitState();
     }
 
     function updateProfileSelectionState() {
       const selected = selectedProfileIds().length;
       const total = profiles.length;
+      const selectionLimit = Math.min(total, maxSelectedProfiles);
       selectionCountEl.textContent = `${selected}/${total}`;
       profileSummaryEl.textContent = total
-        ? `${total} verfügbare Bibliothek${total === 1 ? '' : 'en'} · ${selected} ausgewählt`
+        ? t('profileSelection', {
+            libraries: countText(total, 'libraryOne', 'libraryMany'),
+            selected,
+            limit: selectionLimit,
+          })
         : '0 Bibliotheken';
-      document.getElementById('selectAllProfiles').disabled = !total || selected === total;
+      document.getElementById('selectAllProfiles').disabled = !total || selected >= Math.min(total, maxSelectedProfiles);
       document.getElementById('clearProfiles').disabled = !selected;
+      persistProfileSelection();
       updateSubmitState();
     }
 
     function setAllProfiles(checked) {
+      let selected = checked ? selectedProfileIds().length : 0;
       document.querySelectorAll('[data-profile-id]').forEach(item => {
-        if (!item.closest('.profile-row').hidden) item.checked = checked;
+        if (item.closest('.profile-row').hidden) return;
+        if (!checked) {
+          item.checked = false;
+          return;
+        }
+        if (!item.checked && selected < maxSelectedProfiles) {
+          item.checked = true;
+          selected += 1;
+        }
       });
       updateProfileSelectionState();
-      if (!checked) setState('Keine Bibliothek ausgewählt. Wähle mindestens eine Bibliothek für die Suche.');
+      if (!checked) setState(t('noSelection'));
     }
 
     function renderProfiles() {
@@ -840,17 +1026,29 @@ SEARCH_HTML = r"""<!doctype html>
         updateProfileSelectionState();
         return;
       }
+      const stored = storedProfileIds();
+      const selectedByDefault = new Set(
+        stored === null
+          ? profiles.slice(0, maxSelectedProfiles).map(profile => String(profile.id))
+          : stored.slice(0, maxSelectedProfiles)
+      );
       for (const profile of profiles) {
         const label = document.createElement('label');
         label.className = 'profile-row';
         label.dataset.profileName = `${profile.display_name || ''} ${profile.repo_id || ''}`.toLowerCase();
         label.innerHTML = `
-          <input data-profile-id type="checkbox" value="${escapeAttr(profile.id)}" checked>
+          <input data-profile-id type="checkbox" value="${escapeAttr(profile.id)}" ${selectedByDefault.has(String(profile.id)) ? 'checked' : ''}>
           <span>
             <span class="profile-name">${escapeHtml(profile.display_name || profile.repo_id)}</span>
             <span class="profile-kind">${escapeHtml(profile.kind || 'Bibliothek')}</span>
           </span>`;
-        label.querySelector('input').addEventListener('change', updateProfileSelectionState);
+        label.querySelector('input').addEventListener('change', event => {
+          if (event.currentTarget.checked && selectedProfileIds().length > maxSelectedProfiles) {
+            event.currentTarget.checked = false;
+            setState(t('maxProfiles', {count: maxSelectedProfiles}), 'error');
+          }
+          updateProfileSelectionState();
+        });
         profileListEl.appendChild(label);
       }
       updateProfileSelectionState();
@@ -865,75 +1063,177 @@ SEARCH_HTML = r"""<!doctype html>
     }
 
     async function loadProfiles() {
-      setState('Bibliotheken werden geladen …', 'loading');
+      setState(t('profilesLoading'), 'loading');
       try {
         const response = await fetch('/api/search/profiles', {headers: {'Accept': 'application/json'}});
         const data = await response.json();
-        if (!response.ok) throw new Error(data.message || data.error || 'Profile konnten nicht geladen werden.');
+        if (!response.ok) throw new Error(data.message || data.error || t('profileLoadFailed'));
+        const capabilities = data.capabilities || {};
+        const advertisedProfileLimit = Number(capabilities.max_selected_profiles || 25);
+        maxSelectedProfiles = Number.isFinite(advertisedProfileLimit)
+          ? Math.max(1, Math.min(25, advertisedProfileLimit))
+          : 25;
+        topKEl.max = String(capabilities.max_page_size || 100);
+        if (!topKEl.value) topKEl.value = String(capabilities.default_page_size || 20);
         profiles = data.profiles || [];
-        userLineEl.textContent = data.user_display || 'Angemeldet';
+        userLineEl.textContent = data.user_display || t('signedIn');
         renderProfiles();
-        setState(profiles.length ? 'Wähle Bibliotheken aus und starte eine Suche.' : 'Keine freigegebenen Bibliotheken verfügbar.');
+        setState(profiles.length ? t('profilesReady') : t('noProfiles'));
       } catch (error) {
-        setState(error.message || 'Profile konnten nicht geladen werden.', 'error');
+        setState(error.message || t('profileLoadFailed'), 'error');
       }
     }
 
     async function runSearch(event) {
       event.preventDefault();
       if (isLoading) return;
-      answerEl.hidden = true;
-      answerEl.innerHTML = '';
-      resultsEl.innerHTML = '';
-      renderSourceRail([]);
-      selectSource(null);
       const question = questionEl.value.trim();
       if (!question) {
-        setState('Gib eine Suchfrage ein.', 'error');
+        setState(t('questionRequired'), 'error');
         return;
       }
       const profile_ids = selectedProfileIds();
       if (!profile_ids.length) {
-        setState('Wähle mindestens eine Bibliothek aus. Ohne Auswahl wird RAGFlow nicht abgefragt.', 'error');
+        setState(t('selectionRequired'), 'error');
         return;
       }
-      const endpoint = mode === 'chat' ? '/api/search/chat' : '/api/search/query';
+      const request = {
+        endpoint: mode === 'chat' ? '/api/search/chat' : '/api/search/query',
+        profile_ids,
+        question,
+        page_size: Number(topKEl.value || 20),
+      };
+      await executeSearch(request, false, null);
+    }
+
+    async function executeSearch(request, append, cursor = append ? nextCursor : null) {
+      if (isLoading) return;
+      lastAttempt = {request, append, cursor};
+      const requestId = createRequestId();
+      activeRequestId = requestId;
+      activeRequestController = new AbortController();
+      retrySearchEl.hidden = true;
       setLoading(true);
       setState(
-        mode === 'chat'
-          ? `Suche in ${profile_ids.length} Bibliothek${profile_ids.length === 1 ? '' : 'en'} … Antwort wird aus Fundstellen generiert …`
-          : `Suche läuft in ${profile_ids.length} Bibliothek${profile_ids.length === 1 ? '' : 'en'} …`,
+        request.endpoint === '/api/search/chat' && !append
+          ? countText(request.profile_ids.length, 'chatRunningOne', 'chatRunningMany')
+          : countText(request.profile_ids.length, 'searchRunningOne', 'searchRunningMany'),
         'loading'
       );
       try {
-        const response = await fetch(endpoint, {
+        const response = await fetch(append ? '/api/search/query' : request.endpoint, {
           method: 'POST',
           headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-          body: JSON.stringify({profile_ids, question, top_k: Number(topKEl.value || 8)})
+          signal: activeRequestController.signal,
+          body: JSON.stringify({
+            profile_ids: request.profile_ids,
+            question: request.question,
+            page_size: request.page_size,
+            cursor,
+            request_id: requestId,
+          })
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.message || data.error || 'Suche fehlgeschlagen.');
+        if (!response.ok) {
+          const requestError = new Error(data.message || data.error || t('searchFailed'));
+          requestError.code = data.error || '';
+          throw requestError;
+        }
         const results = data.results || data.sources || [];
-        latestSources = results;
-        if (data.answer) renderAnswer(data.answer, results);
-        renderResults(results, question);
-        renderSourceRail(results);
-        if (results.length) selectSource(results[0]);
+        latestSources = append ? dedupeSources([...latestSources, ...results]) : results;
+        if (!append) {
+          successfulRequest = request;
+          if (data.answer) {
+            renderAnswer(data.answer, latestSources);
+          } else {
+            answerEl.hidden = true;
+            answerEl.innerHTML = '';
+          }
+        }
+        renderResults(latestSources, request.question);
+        renderSourceRail(latestSources);
+        if (!append) selectSource(results[0] || null, {activateMobile: false});
+        if (!append && window.matchMedia('(max-width: 600px)').matches) setMobileView('answer');
+        nextCursor = data.pagination && data.pagination.next_cursor ? data.pagination.next_cursor : null;
+        loadMoreResultsEl.hidden = !nextCursor;
         const denied = data.diagnostics && data.diagnostics.profiles_denied ? data.diagnostics.profiles_denied : 0;
-        const allowed = data.diagnostics && data.diagnostics.profiles_allowed ? data.diagnostics.profiles_allowed : profile_ids.length;
-        const resultText = `${results.length} Treffer aus ${allowed} Bibliothek${allowed === 1 ? '' : 'en'}.`;
-        const successText = denied ? `${resultText} ${denied} Bibliothek(en) wurden wegen fehlender Berechtigung ausgelassen.` : resultText;
-        if (mode === 'chat' && data.answer) {
-          stateEl.hidden = true;
-          showToast(successText, 'success');
+        const allowed = data.diagnostics && data.diagnostics.profiles_allowed ? data.diagnostics.profiles_allowed : request.profile_ids.length;
+        const resultText = append
+          ? countText(results.length, 'moreLoadedOne', 'moreLoadedMany')
+          : t('resultsFrom', {
+              results: countText(latestSources.length, 'resultOne', 'resultMany'),
+              libraries: countText(allowed, 'libraryOne', 'libraryMany'),
+            });
+        const deniedText = countText(denied, 'deniedOne', 'deniedMany');
+        const successText = denied ? `${resultText} ${deniedText}` : resultText;
+        const partialFailures = data.partial_failures || [];
+        if (partialFailures.length) {
+          const retryableCount = partialFailures.filter(failure => failure.retryable).length;
+          const permanentCount = partialFailures.length - retryableCount;
+          const failureMessages = [];
+          if (retryableCount) {
+            failureMessages.push(
+              countText(retryableCount, 'partialFailureOne', 'partialFailureMany')
+            );
+          }
+          if (permanentCount) {
+            failureMessages.push(
+              countText(permanentCount, 'partialPermanentOne', 'partialPermanentMany')
+            );
+          }
+          setState(`${successText} ${failureMessages.join(' ')}`, 'error');
         } else {
           setState(successText, 'success');
         }
       } catch (error) {
-        setState(error.message || 'Suche fehlgeschlagen.', 'error');
+        if (error && error.name === 'AbortError') {
+          setState(t('searchCancelled'), 'error');
+        } else {
+          if (append && ['cursor_expired', 'invalid_cursor'].includes(error.code)) {
+            nextCursor = null;
+            loadMoreResultsEl.hidden = true;
+            lastAttempt = {request, append: false, cursor: null};
+          }
+          setState(
+            t('failureKeepsResults', {message: error.message || t('searchFailed')}),
+            'error'
+          );
+          retrySearchEl.hidden = false;
+        }
       } finally {
+        activeRequestId = null;
+        activeRequestController = null;
         setLoading(false);
       }
+    }
+
+    function cancelActiveSearch() {
+      const requestId = activeRequestId;
+      const controller = activeRequestController;
+      if (requestId) {
+        fetch('/api/search/cancel', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+          body: JSON.stringify({request_id: requestId}),
+          keepalive: true,
+        }).catch(() => undefined);
+      }
+      controller?.abort();
+    }
+
+    function dedupeSources(sources) {
+      const seen = new Set();
+      return sources.filter(source => {
+        const key = `${source.ragflow_dataset_id || source.libraryId || ''}:${source.document_id || source.documentId || source.source_path || ''}:${source.chunk_id || source.chunkId || source.source_id || ''}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    async function loadMoreResults() {
+      if (!successfulRequest || !nextCursor || isLoading) return;
+      await executeSearch(successfulRequest, true, nextCursor);
     }
 
     function renderAnswer(answer, sources = []) {
@@ -1084,7 +1384,11 @@ SEARCH_HTML = r"""<!doctype html>
       sourceRailEl.innerHTML = '';
       inlineSourceRailEl.innerHTML = '';
       sourceCountEl.textContent = String(sources.length);
-      sourceSummaryEl.textContent = sources.length ? `${sources.length} Quellen aus den erlaubten Bibliotheken.` : 'Noch keine Treffer.';
+      sourceSummaryEl.textContent = sources.length
+        ? t('sourcesFromAllowed', {
+            sources: countText(sources.length, 'sourceOne', 'sourceMany'),
+          })
+        : 'Noch keine Treffer.';
       inlineSourceSummaryEl.textContent = sources.length ? `${sources.length} Quellen` : 'Noch keine Treffer.';
       inlineSourcesEl.hidden = !sources.length;
       if (!sources.length) {
@@ -1169,7 +1473,7 @@ SEARCH_HTML = r"""<!doctype html>
       }
     }
 
-    function selectSource(source) {
+    function selectSource(source, {activateMobile = true} = {}) {
       hideHover();
       viewerRequestId += 1;
       if (!source) {
@@ -1193,6 +1497,9 @@ SEARCH_HTML = r"""<!doctype html>
       }
       renderViewer(source);
       focusSource(source);
+      if (activateMobile && window.matchMedia('(max-width: 600px)').matches) {
+        setMobileView('document');
+      }
     }
 
     function renderViewer(source) {
@@ -1662,6 +1969,14 @@ SEARCH_HTML = r"""<!doctype html>
       libraryToggleEl.textContent = collapsed ? 'Ausklappen' : 'Einklappen';
     }
 
+    function setMobileView(view) {
+      const next = ['answer', 'document', 'sources'].includes(view) ? view : 'answer';
+      document.body.dataset.mobileView = next;
+      document.querySelectorAll('.mobile-view-tab[data-mobile-view]').forEach(button => {
+        button.setAttribute('aria-selected', String(button.dataset.mobileView === next));
+      });
+    }
+
     function syncLibraryCollapse() {
       const isMobile = window.matchMedia('(max-width: 600px)').matches;
       if (isMobile && !libraryPanelEl.dataset.userCollapse) {
@@ -1708,12 +2023,24 @@ SEARCH_HTML = r"""<!doctype html>
       }
     });
     document.getElementById('queryForm').addEventListener('submit', runSearch);
+    cancelSearchEl.addEventListener('click', cancelActiveSearch);
+    retrySearchEl.addEventListener('click', () => {
+      if (lastAttempt && !isLoading) {
+        executeSearch(lastAttempt.request, lastAttempt.append, lastAttempt.cursor);
+      }
+    });
+    loadMoreResultsEl.addEventListener('click', loadMoreResults);
+    document.querySelectorAll('.mobile-view-tab[data-mobile-view]').forEach(button => {
+      button.addEventListener('click', () => setMobileView(button.dataset.mobileView));
+    });
     libraryToggleEl.addEventListener('click', () => {
       libraryPanelEl.dataset.userCollapse = 'true';
       setLibraryCollapsed(!libraryPanelEl.classList.contains('is-collapsed'));
     });
     window.addEventListener('resize', syncLibraryCollapse);
+    applySearchLocale();
     applyTheme(initialTheme());
+    setMobileView('answer');
     syncLibraryCollapse();
     updateSubmitState();
     loadProfiles();

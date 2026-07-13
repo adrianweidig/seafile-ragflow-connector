@@ -20,6 +20,8 @@ Nicht interaktiv, z. B. für Automatisierung:
   ENTERPRISE_NONINTERACTIVE=true \
   ENTERPRISE_ASSUME_YES=true \
   ENTERPRISE_MODE=external \
+  ENTERPRISE_STATE_MODE=bundled \
+  ENTERPRISE_WITH_SEARCH=true \
   ENTERPRISE_WITH_OPENWEBUI=true \
   ENTERPRISE_CA_HOST_FILE=/etc/pki/company-root-ca.pem \
   ENTERPRISE_SEAFILE_BASE_URL=https://seafile.intern \
@@ -33,6 +35,9 @@ Secrets werden dabei aus bereits exportierten Prozessvariablen gelesen:
   SEAFILE_ADMIN_TOKEN
   SEAFILE_SYNC_USER_TOKEN
   RAGFLOW_API_KEY
+  AUTHZ_API_SHARED_SECRET
+  POSTGRES_PASSWORD                 # nur bei ENTERPRISE_STATE_MODE=bundled
+  DATABASE_URL und REDIS_URL        # nur bei ENTERPRISE_STATE_MODE=external
   OPENWEBUI_ADMIN_API_KEY
 
 ENTERPRISE_CA_HOST_FILE ist optional. Wenn der Pfad unbekannt ist, startet der
@@ -333,8 +338,11 @@ assert_portainer_compose_has_no_secrets() {
     SEAFILE_ADMIN_TOKEN \
     SEAFILE_SYNC_USER_TOKEN \
     RAGFLOW_API_KEY \
+    AUTHZ_API_SHARED_SECRET \
     OPENWEBUI_ADMIN_API_KEY_VALUE \
     POSTGRES_PASSWORD \
+    DATABASE_URL \
+    REDIS_URL \
     DASHBOARD_PASSWORD \
     OPENWEBUI_PROXY_SHARED_SECRET_VALUE
   do
@@ -445,6 +453,23 @@ esac
 ENTERPRISE_WITH_OPENWEBUI="${ENTERPRISE_WITH_OPENWEBUI:-}"
 prompt_yes_no ENTERPRISE_WITH_OPENWEBUI "OpenWebUI-Pipes und auditierbare Quellen direkt synchronisieren?" true
 
+ENTERPRISE_WITH_SEARCH="${ENTERPRISE_WITH_SEARCH:-}"
+prompt_yes_no ENTERPRISE_WITH_SEARCH "Nutzernahe Search-Webseite als Standardmodul starten?" true
+
+enterprise_state_mode="${ENTERPRISE_STATE_MODE:-}"
+if [ -z "$enterprise_state_mode" ] && ! is_true "$NON_INTERACTIVE"; then
+  note "Connector-State:"
+  note "  1) bundled  - PostgreSQL und Redis laufen im Connector-Stack"
+  note "  2) external - vorhandene PostgreSQL-/Redis-Dienste über URLs nutzen"
+  read -r -p "Wo soll der Connector-State laufen? [bundled]: " enterprise_state_mode
+fi
+enterprise_state_mode="${enterprise_state_mode:-bundled}"
+case "$enterprise_state_mode" in
+  1|bundled) enterprise_state_mode="bundled" ;;
+  2|external) enterprise_state_mode="external" ;;
+  *) die "ENTERPRISE_STATE_MODE muss bundled oder external sein" ;;
+esac
+
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-}"
 prompt_value COMPOSE_PROJECT_NAME "Compose-Projektname" "seafile-ragflow-connector-enterprise" true
 
@@ -527,8 +552,26 @@ prompt_value SEAFILE_SYNC_USER_EMAIL "Seafile Sync-User-E-Mail, optional" "" fal
 RAGFLOW_API_KEY="${RAGFLOW_API_KEY:-}"
 prompt_secret RAGFLOW_API_KEY "RAGFlow API-Key" true false
 
+AUTHZ_API_SHARED_SECRET="${AUTHZ_API_SHARED_SECRET:-}"
+prompt_secret AUTHZ_API_SHARED_SECRET "Shared Secret für Authz-API und Search" true true
+
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
-prompt_secret POSTGRES_PASSWORD "Postgres-Passwort für den Connector-State" true true
+DATABASE_URL="${DATABASE_URL:-}"
+REDIS_URL="${REDIS_URL:-}"
+if [ "$enterprise_state_mode" = "bundled" ]; then
+  prompt_secret POSTGRES_PASSWORD "Postgres-Passwort für den Connector-State" true true
+  DATABASE_URL=""
+  REDIS_URL=""
+else
+  POSTGRES_PASSWORD=""
+  prompt_secret DATABASE_URL "Externe PostgreSQL-DATABASE_URL" true false
+  prompt_secret REDIS_URL "Externe REDIS_URL" true false
+fi
+
+SEARCH_SERVICE_PUBLISHED_PORT="${SEARCH_SERVICE_PUBLISHED_PORT:-}"
+if is_true "$ENTERPRISE_WITH_SEARCH"; then
+  prompt_value SEARCH_SERVICE_PUBLISHED_PORT "Search-Port-Bindung" "127.0.0.1:18090" true
+fi
 
 DASHBOARD_USER="${CONNECTOR_DASHBOARD_AUTH_USERNAME:-admin}"
 prompt_value DASHBOARD_USER "Dashboard-Benutzername" "$DASHBOARD_USER" true
@@ -639,6 +682,14 @@ elif is_true "$ENTERPRISE_WITH_OPENWEBUI"; then
 else
   compose_files+=("deploy/compose/shared-network.compose.yml")
 fi
+if [ "$enterprise_state_mode" = "external" ]; then
+  compose_files+=("deploy/compose/external-state.compose.yml")
+else
+  compose_files+=("deploy/compose/bundled-state.compose.yml")
+fi
+if is_true "$ENTERPRISE_WITH_SEARCH"; then
+  compose_files+=("deploy/compose/search.compose.yml")
+fi
 if [ -n "$CA_BUNDLE_VALUE" ]; then
   compose_files+=("deploy/compose/enterprise-ca.compose.yml")
 fi
@@ -693,6 +744,9 @@ write_env_line CONNECTOR_DASHBOARD_PUBLISHED_PORT "$CONNECTOR_DASHBOARD_PUBLISHE
 write_env_line CONNECTOR_DASHBOARD_AUTH_USERNAME "$DASHBOARD_USER"
 write_env_line CONNECTOR_DASHBOARD_AUTH_PASSWORD "$DASHBOARD_PASSWORD"
 
+write_env_line AUTHZ_API_ENABLED true
+write_env_line AUTHZ_API_SHARED_SECRET "$AUTHZ_API_SHARED_SECRET"
+
 write_env_line SEAFILE_BASE_URL "$ENTERPRISE_SEAFILE_BASE_URL"
 write_env_line SEAFILE_PUBLIC_BASE_URL "$ENTERPRISE_SEAFILE_PUBLIC_BASE_URL"
 write_env_line SEAFILE_ADMIN_TOKEN "$SEAFILE_ADMIN_TOKEN"
@@ -712,6 +766,19 @@ write_env_line RAGFLOW_TEMPLATE_REQUIRED "${RAGFLOW_TEMPLATE_REQUIRED:-true}"
 write_env_line RAGFLOW_VERIFY_SSL true
 write_env_line RAGFLOW_CA_BUNDLE "$CA_BUNDLE_VALUE"
 write_env_line RAGFLOW_PUBLIC_BASE_URL "$ENTERPRISE_RAGFLOW_PUBLIC_BASE_URL"
+
+if is_true "$ENTERPRISE_WITH_SEARCH"; then
+  write_env_line SEARCH_SERVICE_ENABLED true
+  write_env_line SEARCH_SERVICE_PUBLISHED_PORT "$SEARCH_SERVICE_PUBLISHED_PORT"
+  write_env_line SEARCH_AUTHZ_BASE_URL "http://connector-controller:8080"
+  write_env_line SEARCH_AUTHZ_SHARED_SECRET "$AUTHZ_API_SHARED_SECRET"
+  write_env_line SEARCH_RAGFLOW_BASE_URL "$ENTERPRISE_RAGFLOW_BASE_URL"
+  write_env_line SEARCH_RAGFLOW_API_KEY "$RAGFLOW_API_KEY"
+  write_env_line SEARCH_RAGFLOW_VERIFY_SSL true
+  write_env_line SEARCH_RAGFLOW_CA_BUNDLE "$CA_BUNDLE_VALUE"
+else
+  write_env_line SEARCH_SERVICE_ENABLED false
+fi
 
 if is_true "$ENTERPRISE_WITH_OPENWEBUI"; then
   write_env_line OPENWEBUI_INTEGRATION_ENABLED true
@@ -740,7 +807,9 @@ fi
 write_env_line POSTGRES_DB "${POSTGRES_DB:-seafile_ragflow_sync}"
 write_env_line POSTGRES_USER "${POSTGRES_USER:-sync}"
 write_env_line POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+write_env_line DATABASE_URL "$DATABASE_URL"
 write_env_line REDIS_DB "${REDIS_DB:-0}"
+write_env_line REDIS_URL "$REDIS_URL"
 write_env_line CONNECTOR_AUTO_INIT_DB true
 write_env_line CONNECTOR_STARTUP_CHECK "$CONNECTOR_STARTUP_CHECK_VALUE"
 write_env_line CONNECTOR_BOOTSTRAP_CHECK_LIVE "$CONNECTOR_BOOTSTRAP_CHECK_LIVE_VALUE"

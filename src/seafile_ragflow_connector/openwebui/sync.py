@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+import httpx
 import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -15,6 +16,7 @@ from seafile_ragflow_connector.app.metrics import (
     openwebui_sync_failures_total,
     openwebui_sync_runs_total,
 )
+from seafile_ragflow_connector.clients.http import ApiError
 from seafile_ragflow_connector.clients.openwebui import OpenWebUICapabilities, OpenWebUIClient
 from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
 from seafile_ragflow_connector.config.settings import Settings
@@ -42,6 +44,8 @@ from seafile_ragflow_connector.persistence.models.openwebui import (
 )
 from seafile_ragflow_connector.utils.hashing import sha256_text
 from seafile_ragflow_connector.utils.redaction import redact_mapping
+
+_PENDING_REPLACEMENT_CLEANUP_KEY = "pending_replacement_cleanup"
 
 
 @dataclass
@@ -262,45 +266,7 @@ class OpenWebUISyncService:
         )
         tool_spec = build_tool_spec(inputs)
         pipe_spec = build_pipe_spec(inputs)
-        self._cleanup_replaced_artifacts(
-            mode=mode,
-            capabilities=capabilities,
-            summary=summary,
-            sync_id=sync_id,
-            dataset_id=dataset_id,
-            previous_tool_id=previous_tool_id,
-            next_tool_id=tool_spec.artifact_id if self.settings.openwebui_create_tools else None,
-            previous_pipe_id=previous_pipe_id,
-            next_pipe_id=pipe_spec.artifact_id if self.settings.openwebui_create_pipes else None,
-            previous_chat_id=previous_chat_id,
-            next_chat_id=chat_id,
-        )
         mapping_id = mapping.id
-        with self.session_factory() as session:
-            stored_mapping = session.get(OpenWebUIDatasetMapping, mapping_id)
-            if stored_mapping is None:
-                raise RuntimeError("OpenWebUI mapping vanished during sync")
-            stored_mapping.ragflow_chat_id = chat_id
-            stored_mapping.openwebui_tool_id = (
-                tool_spec.artifact_id if self.settings.openwebui_create_tools else None
-            )
-            stored_mapping.openwebui_pipe_id = (
-                pipe_spec.artifact_id if self.settings.openwebui_create_pipes else None
-            )
-            stored_mapping.openwebui_model_name = build_model_name(
-                self.settings.openwebui_function_namespace,
-                dataset_name,
-                dataset_id,
-            )
-            stored_mapping.artifact_version = ARTIFACT_VERSION
-            stored_mapping.tool_definition_hash = tool_spec.definition_hash
-            stored_mapping.pipe_definition_hash = pipe_spec.definition_hash
-            stored_mapping.openwebui_tool_payload = dict(redact_mapping(tool_spec.payload))
-            stored_mapping.openwebui_pipe_payload = dict(redact_mapping(pipe_spec.payload))
-            stored_mapping.capabilities_snapshot = capabilities.as_dict()
-            stored_mapping.last_sync_attempt_at = _utcnow()
-            session.commit()
-
         artifact_actions: list[str] = []
         if self.settings.openwebui_create_tools:
             action = self._sync_tool(
@@ -308,7 +274,9 @@ class OpenWebUISyncService:
                 tool_spec,
                 mode,
                 capabilities,
-                previous_tool_hash,
+                previous_tool_hash
+                if previous_tool_id == tool_spec.artifact_id
+                else None,
             )
             artifact_actions.append(action)
             _count_action(summary, "tool", action)
@@ -325,7 +293,9 @@ class OpenWebUISyncService:
                 pipe_spec,
                 mode,
                 capabilities,
-                previous_pipe_hash,
+                previous_pipe_hash
+                if previous_pipe_id == pipe_spec.artifact_id
+                else None,
             )
             artifact_actions.append(action)
             _count_action(summary, "pipe", action)
@@ -337,25 +307,78 @@ class OpenWebUISyncService:
                 dataset_id,
             )
 
+        if "manual_required" in artifact_actions:
+            return
+
+        if mode == "dry-run":
+            next_status = "planned"
+        elif not self.settings.openwebui_create_tools or not self.settings.openwebui_create_pipes:
+            next_status = "partial"
+        else:
+            next_status = "synced"
+
+        next_tool_id = tool_spec.artifact_id if self.settings.openwebui_create_tools else None
+        next_pipe_id = pipe_spec.artifact_id if self.settings.openwebui_create_pipes else None
+        pending_cleanup = _pending_replacement_cleanup(mapping.capabilities_snapshot)
+        if mode != "dry-run":
+            pending_cleanup = _replacement_cleanup_candidates(
+                pending_cleanup,
+                previous_tool_id=previous_tool_id,
+                next_tool_id=next_tool_id,
+                previous_pipe_id=previous_pipe_id,
+                next_pipe_id=next_pipe_id,
+                previous_chat_id=previous_chat_id,
+                next_chat_id=chat_id,
+            )
         with self.session_factory() as session:
             stored_mapping = session.get(OpenWebUIDatasetMapping, mapping_id)
-            if stored_mapping:
-                if "manual_required" in artifact_actions:
-                    stored_mapping.sync_status = "manual_required"
-                elif mode == "dry-run":
-                    stored_mapping.sync_status = "planned"
-                    stored_mapping.last_error = None
-                elif (
-                    not self.settings.openwebui_create_tools
-                    or not self.settings.openwebui_create_pipes
-                ):
-                    stored_mapping.sync_status = "partial"
-                    stored_mapping.last_error = None
-                else:
-                    stored_mapping.sync_status = "synced"
-                    stored_mapping.last_error = None
-                if mode != "dry-run" and stored_mapping.sync_status in {"partial", "synced"}:
-                    stored_mapping.last_successful_sync_at = _utcnow()
+            if stored_mapping is None:
+                raise RuntimeError("OpenWebUI mapping vanished during sync")
+            stored_mapping.ragflow_chat_id = chat_id
+            stored_mapping.openwebui_tool_id = next_tool_id
+            stored_mapping.openwebui_pipe_id = next_pipe_id
+            stored_mapping.openwebui_model_name = build_model_name(
+                self.settings.openwebui_function_namespace,
+                dataset_name,
+                dataset_id,
+            )
+            stored_mapping.artifact_version = ARTIFACT_VERSION
+            stored_mapping.tool_definition_hash = tool_spec.definition_hash
+            stored_mapping.pipe_definition_hash = pipe_spec.definition_hash
+            stored_mapping.openwebui_tool_payload = dict(redact_mapping(tool_spec.payload))
+            stored_mapping.openwebui_pipe_payload = dict(redact_mapping(pipe_spec.payload))
+            stored_mapping.capabilities_snapshot = _capabilities_with_pending_cleanup(
+                capabilities.as_dict(),
+                pending_cleanup,
+            )
+            stored_mapping.last_sync_attempt_at = _utcnow()
+            stored_mapping.sync_status = next_status
+            stored_mapping.last_error = None
+            if mode != "dry-run" and next_status in {"partial", "synced"}:
+                stored_mapping.last_successful_sync_at = _utcnow()
+            session.commit()
+
+        remaining_cleanup = self._cleanup_replaced_artifacts(
+            mode=mode,
+            capabilities=capabilities,
+            summary=summary,
+            sync_id=sync_id,
+            dataset_id=dataset_id,
+            previous_tool_id=previous_tool_id,
+            next_tool_id=next_tool_id,
+            previous_pipe_id=previous_pipe_id,
+            next_pipe_id=next_pipe_id,
+            previous_chat_id=previous_chat_id,
+            next_chat_id=chat_id,
+            pending_cleanup=pending_cleanup,
+        )
+        with self.session_factory() as session:
+            stored_mapping = session.get(OpenWebUIDatasetMapping, mapping_id)
+            if stored_mapping is not None:
+                stored_mapping.capabilities_snapshot = _capabilities_with_pending_cleanup(
+                    capabilities.as_dict(),
+                    remaining_cleanup,
+                )
                 session.commit()
 
     def _discover_libraries(self, *, repo_ids: set[str] | None = None) -> list[Library]:
@@ -399,20 +422,25 @@ class OpenWebUISyncService:
                 )
             )
             if mapping is None:
+                capabilities_snapshot = capabilities.as_dict()
                 mapping = OpenWebUIDatasetMapping(
                     repo_id=library.repo_id,
                     ragflow_dataset_id=str(library.ragflow_dataset_id),
                     ragflow_dataset_name=str(library.ragflow_dataset_name or library.name),
                     sync_status="pending",
                     last_sync_attempt_at=now,
-                    capabilities_snapshot=capabilities.as_dict(),
+                    capabilities_snapshot=capabilities_snapshot,
                 )
                 session.add(mapping)
             else:
+                capabilities_snapshot = _capabilities_with_pending_cleanup(
+                    capabilities.as_dict(),
+                    _pending_replacement_cleanup(mapping.capabilities_snapshot),
+                )
                 mapping.ragflow_dataset_id = str(library.ragflow_dataset_id)
                 mapping.ragflow_dataset_name = str(library.ragflow_dataset_name or library.name)
                 mapping.last_sync_attempt_at = now
-                mapping.capabilities_snapshot = capabilities.as_dict()
+                mapping.capabilities_snapshot = capabilities_snapshot
             session.commit()
             session.refresh(mapping)
             session.expunge(mapping)
@@ -544,11 +572,21 @@ class OpenWebUISyncService:
                 "OpenWebUI tool ID exists but is not connector-owned",
             )
             return "manual_required"
-        if previous_hash == spec.definition_hash and _remote_content_matches(existing, spec):
+        reconciled_valves = _merge_managed_valves(existing, valves, spec.managed_valve_keys)
+        remote_valves = _remote_valves(existing)
+        content_matches = previous_hash == spec.definition_hash and _remote_content_matches(
+            existing,
+            spec,
+        )
+        if content_matches:
+            if remote_valves != reconciled_valves:
+                self.openwebui_client.update_tool_valves(spec.artifact_id, reconciled_valves)
             self.log.info("openwebui.sync.tool.reused", openwebui_tool_id=spec.artifact_id)
             return "reused"
         self.openwebui_client.update_tool(spec.artifact_id, spec.payload)
-        self.openwebui_client.update_tool_valves(spec.artifact_id, valves)
+        # OpenWebUI may reset valves while replacing artifact content. Reapply the
+        # reconciled values afterwards so operator-owned settings survive upgrades.
+        self.openwebui_client.update_tool_valves(spec.artifact_id, reconciled_valves)
         self.log.info("openwebui.sync.tool.updated", openwebui_tool_id=spec.artifact_id)
         return "updated"
 
@@ -588,12 +626,24 @@ class OpenWebUISyncService:
                 "OpenWebUI function ID exists but is not connector-owned",
             )
             return "manual_required"
-        if previous_hash == spec.definition_hash and _remote_content_matches(existing, spec):
+        reconciled_valves = _merge_managed_valves(existing, valves, spec.managed_valve_keys)
+        remote_valves = _remote_valves(existing)
+        content_matches = previous_hash == spec.definition_hash and _remote_content_matches(
+            existing,
+            spec,
+        )
+        if content_matches:
+            if remote_valves != reconciled_valves:
+                self.openwebui_client.update_function_valves(
+                    spec.artifact_id,
+                    reconciled_valves,
+                )
             self.openwebui_client.ensure_function_active(spec.artifact_id)
             self.log.info("openwebui.sync.pipe.reused", openwebui_pipe_id=spec.artifact_id)
             return "reused"
         self.openwebui_client.update_function(spec.artifact_id, spec.payload)
-        self.openwebui_client.update_function_valves(spec.artifact_id, valves)
+        # See _sync_tool: content replacement must not discard operator valves.
+        self.openwebui_client.update_function_valves(spec.artifact_id, reconciled_valves)
         self.openwebui_client.ensure_function_active(spec.artifact_id)
         self.log.info("openwebui.sync.pipe.updated", openwebui_pipe_id=spec.artifact_id)
         return "updated"
@@ -626,8 +676,12 @@ class OpenWebUISyncService:
             return capabilities.error or "OpenWebUI API is not reachable"
         if self.settings.openwebui_create_tools and not capabilities.tools_write:
             return "OpenWebUI tool API is not writable"
+        if self.settings.openwebui_create_tools and not capabilities.tools_valves:
+            return "OpenWebUI tool valves API is not writable"
         if self.settings.openwebui_create_pipes and not capabilities.functions_write:
             return "OpenWebUI function API is not writable"
+        if self.settings.openwebui_create_pipes and not capabilities.functions_valves:
+            return "OpenWebUI function valves API is not writable"
         return None
 
     def _set_mapping_status(self, mapping_id: int, status: str, error: str | None = None) -> None:
@@ -862,41 +916,92 @@ class OpenWebUISyncService:
         next_pipe_id: str | None,
         previous_chat_id: str | None,
         next_chat_id: str | None,
-    ) -> None:
+        pending_cleanup: dict[str, list[str]] | None = None,
+    ) -> dict[str, list[str]]:
+        candidates = _replacement_cleanup_candidates(
+            pending_cleanup or {},
+            previous_tool_id=previous_tool_id,
+            next_tool_id=next_tool_id,
+            previous_pipe_id=previous_pipe_id,
+            next_pipe_id=next_pipe_id,
+            previous_chat_id=previous_chat_id,
+            next_chat_id=next_chat_id,
+        )
         if mode == "dry-run":
-            return
-        if previous_tool_id and next_tool_id and previous_tool_id != next_tool_id:
-            deleted = self._delete_owned_tool_by_id(previous_tool_id, capabilities)
+            return candidates
+        remaining: dict[str, list[str]] = {"tools": [], "pipes": [], "chats": []}
+        for tool_id in candidates["tools"]:
+            if not capabilities.tools_write or self.openwebui_client is None:
+                remaining["tools"].append(tool_id)
+                continue
+            try:
+                deleted = self._delete_owned_tool_by_id(tool_id, capabilities)
+            except (ApiError, httpx.RequestError, RuntimeError, TypeError, ValueError) as exc:
+                deleted = False
+                remaining["tools"].append(tool_id)
+                self.log.warning(
+                    "openwebui.sync.replaced_tool_cleanup_deferred",
+                    openwebui_tool_id=tool_id,
+                    error_class=exc.__class__.__name__,
+                )
             if deleted:
                 summary.tools_deleted += 1
                 self._record_change(
                     sync_id,
                     "openwebui_tool",
                     "deleted",
-                    previous_tool_id,
+                    tool_id,
                     dataset_id,
                 )
-        if previous_pipe_id and next_pipe_id and previous_pipe_id != next_pipe_id:
-            deleted = self._delete_owned_pipe_by_id(previous_pipe_id, capabilities)
+        for pipe_id in candidates["pipes"]:
+            if not capabilities.functions_write or self.openwebui_client is None:
+                remaining["pipes"].append(pipe_id)
+                continue
+            try:
+                deleted = self._delete_owned_pipe_by_id(pipe_id, capabilities)
+            except (ApiError, httpx.RequestError, RuntimeError, TypeError, ValueError) as exc:
+                deleted = False
+                remaining["pipes"].append(pipe_id)
+                self.log.warning(
+                    "openwebui.sync.replaced_pipe_cleanup_deferred",
+                    openwebui_pipe_id=pipe_id,
+                    error_class=exc.__class__.__name__,
+                )
             if deleted:
                 summary.pipes_deleted += 1
                 self._record_change(
                     sync_id,
                     "openwebui_pipe",
                     "deleted",
-                    previous_pipe_id,
+                    pipe_id,
                     dataset_id,
                 )
-        if previous_chat_id and next_chat_id and previous_chat_id != next_chat_id:
-            self.ragflow_client.delete_chats([previous_chat_id])
-            summary.chats_deleted += 1
-            self.log.info(
-                "openwebui.sync.ragflow_chat.deleted",
-                sync_id=sync_id,
-                dataset_id=dataset_id,
-                ragflow_chat_id=previous_chat_id,
-            )
-            self._record_change(sync_id, "ragflow_chat", "deleted", previous_chat_id, dataset_id)
+        for chat_id in candidates["chats"]:
+            try:
+                self.ragflow_client.delete_chats([chat_id])
+            except (ApiError, httpx.RequestError, RuntimeError, TypeError, ValueError) as exc:
+                remaining["chats"].append(chat_id)
+                self.log.warning(
+                    "openwebui.sync.replaced_chat_cleanup_deferred",
+                    ragflow_chat_id=chat_id,
+                    error_class=exc.__class__.__name__,
+                )
+            else:
+                summary.chats_deleted += 1
+                self.log.info(
+                    "openwebui.sync.ragflow_chat.deleted",
+                    sync_id=sync_id,
+                    dataset_id=dataset_id,
+                    ragflow_chat_id=chat_id,
+                )
+                self._record_change(
+                    sync_id,
+                    "ragflow_chat",
+                    "deleted",
+                    chat_id,
+                    dataset_id,
+                )
+        return remaining
 
     def _delete_openwebui_tool(
         self,
@@ -1003,6 +1108,62 @@ def _chat_name(_namespace: str, dataset_name: str, dataset_id: str) -> str:
     return f"RAG_{slug}_{sha256_text(dataset_id)[:8]}"
 
 
+def _pending_replacement_cleanup(snapshot: Any) -> dict[str, list[str]]:
+    pending: dict[str, list[str]] = {"tools": [], "pipes": [], "chats": []}
+    if not isinstance(snapshot, dict):
+        return pending
+    raw = snapshot.get(_PENDING_REPLACEMENT_CLEANUP_KEY)
+    if not isinstance(raw, dict):
+        return pending
+    for kind in pending:
+        values = raw.get(kind)
+        if not isinstance(values, list):
+            continue
+        pending[kind] = list(
+            dict.fromkeys(value for value in values if isinstance(value, str) and value)
+        )
+    return pending
+
+
+def _replacement_cleanup_candidates(
+    pending: dict[str, list[str]],
+    *,
+    previous_tool_id: str | None,
+    next_tool_id: str | None,
+    previous_pipe_id: str | None,
+    next_pipe_id: str | None,
+    previous_chat_id: str | None,
+    next_chat_id: str | None,
+) -> dict[str, list[str]]:
+    candidates = _pending_replacement_cleanup(
+        {_PENDING_REPLACEMENT_CLEANUP_KEY: pending}
+    )
+    replacements = (
+        ("tools", previous_tool_id, next_tool_id),
+        ("pipes", previous_pipe_id, next_pipe_id),
+        ("chats", previous_chat_id, next_chat_id),
+    )
+    for kind, previous_id, next_id in replacements:
+        if previous_id and next_id and previous_id != next_id:
+            candidates[kind] = list(dict.fromkeys([*candidates[kind], previous_id]))
+    return candidates
+
+
+def _capabilities_with_pending_cleanup(
+    capabilities: dict[str, Any],
+    pending: dict[str, list[str]],
+) -> dict[str, Any]:
+    snapshot = dict(capabilities)
+    normalized = _pending_replacement_cleanup(
+        {_PENDING_REPLACEMENT_CLEANUP_KEY: pending}
+    )
+    if any(normalized.values()):
+        snapshot[_PENDING_REPLACEMENT_CLEANUP_KEY] = normalized
+    else:
+        snapshot.pop(_PENDING_REPLACEMENT_CLEANUP_KEY, None)
+    return snapshot
+
+
 def _chat_has_dataset(chat: dict[str, Any], dataset_id: str) -> bool:
     dataset_ids = chat.get("dataset_ids") or chat.get("kb_ids") or chat.get("datasets") or []
     if isinstance(dataset_ids, list):
@@ -1057,6 +1218,30 @@ def _valves_with_secret(
     if "ANSWER_LLM_API_KEY" in data:
         data["ANSWER_LLM_API_KEY"] = answer_llm_api_key or ""
     return data
+
+
+def _remote_valves(artifact: dict[str, Any]) -> dict[str, object]:
+    for key in ("user_valves", "function_valves", "tool_valves", "valves"):
+        value = artifact.get(key)
+        if isinstance(value, dict):
+            return {str(name): item for name, item in value.items()}
+    data = artifact.get("data")
+    if isinstance(data, dict):
+        return _remote_valves(data)
+    return {}
+
+
+def _merge_managed_valves(
+    artifact: dict[str, Any],
+    desired: dict[str, object],
+    managed_keys: frozenset[str],
+) -> dict[str, object]:
+    remote = _remote_valves(artifact)
+    merged = dict(remote)
+    for key, value in desired.items():
+        if key in managed_keys or key not in remote:
+            merged[key] = value
+    return merged
 
 
 def _is_connector_owned(artifact: dict[str, Any]) -> bool:

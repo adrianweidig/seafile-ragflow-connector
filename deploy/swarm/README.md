@@ -2,12 +2,18 @@
 
 Dieser Ordner enthält eine Alternative für Docker Swarm.
 
+- `docker-stack.yml` enthält Core, Worker, Reconciler und die State-Dienste.
+- `bundled-state.yml` oder `external-state.yml` wählt genau ein State-Profil.
+- `search.yml` ergänzt das Standardmodul Search; Weglassen ergibt Core-only.
+
 ## Wann diese Variante nutzen?
 
 Nutze `docker-stack.yml`, wenn der Connector als Swarm-Stack laufen soll und
-PostgreSQL/Redis ebenfalls durch Swarm verwaltet werden sollen. Seafile,
-RAGFlow und optional OpenWebUI bleiben externe Systeme. Sie müssen aus den
-Swarm-Nodes beziehungsweise aus den Connector-Tasks erreichbar sein.
+PostgreSQL/Redis ebenfalls durch Swarm verwaltet werden sollen. Das alternative
+Overlay `external-state.yml` skaliert beide lokalen State-Dienste auf null und
+verlangt `DATABASE_URL` sowie `REDIS_URL`. Seafile, RAGFlow und optional
+OpenWebUI bleiben externe Systeme. Sie müssen aus den Swarm-Nodes
+beziehungsweise aus den Connector-Tasks erreichbar sein.
 Die allgemeine erste Abnahme steht in der
 [Admin-Erststart-Checkliste](../../docs/admin-first-start-checklist.md);
 Swarm-spezifisch ist zusätzlich die reine Portnummer für
@@ -22,8 +28,11 @@ beachten.
   Connector-Entrypoint wartet selbst auf PostgreSQL und Redis.
 - Dashboard-Ports werden über Swarm Routing-Mesh veröffentlicht. Verwende im
   Swarm-Env nur eine Portnummer, keine Bind-Adresse wie `127.0.0.1:18080`.
-- `connector-search` läuft als eigener Service ohne Seafile-Admin- oder
+- `connector-search` läuft über das Standardmodul `search.yml` als eigener
+  Service ohne Seafile-Admin- oder
   Sync-Token und fragt vor RAGFlow-Abfragen die Authz-API im Controller.
+- Core-only lässt `search.yml` vollständig weg. Der Search-Prozess wird nicht
+  über `SEARCH_SERVICE_ENABLED=false` beendet.
 - Für produktive Secrets sollte Docker Secrets oder ein externes Secret
   Management genutzt werden. Die Beispiel-Env enthält nur Platzhalter.
 
@@ -43,8 +52,16 @@ wenn die Anbindung aktiviert wird. Danach:
 set -a
 . ./stack.env
 set +a
-docker stack deploy -c docker-stack.yml seafile-ragflow-connector
+docker stack deploy \
+  -c docker-stack.yml \
+  -c bundled-state.yml \
+  -c search.yml \
+  seafile-ragflow-connector
 ```
+
+Für externen State wird stattdessen `-c external-state.yml` verwendet. Für
+Core-only wird `-c search.yml` weggelassen. Der Search-Service wird über
+`SEARCH_SERVICE_PUBLISHED_PORT` tatsächlich im Routing-Mesh veröffentlicht.
 
 Status prüfen:
 

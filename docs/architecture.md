@@ -17,9 +17,9 @@ Seafile API -> controller -> PostgreSQL state -> Redis jobs -> workers -> RAGFlo
 
 | Komponente | Verantwortung |
 | --- | --- |
-| controller | Discovery-Loop, Dataset-Provisioning, Delta-Scheduling |
+| controller | Discovery-Loop, Dataset-Provisioning, commit-gepinnte Delta-Planung und Dashboard-Workflowsteuerung |
 | worker | Download, Klassifikation, Artefakt-Erzeugung, Upload, Delete, Parse |
-| reconciler | Reparatur abweichender Zustände zwischen Seafile, DB und RAGFlow |
+| reconciler | Eigenständiger Zustandsvergleich zwischen Seafile-Snapshot, DB und RAGFlow; Reparaturen werden als deduplizierte Jobs ausgeführt |
 | PostgreSQL | dauerhafter Sync-Zustand und Job-Historie |
 | Redis | Queue, Retry-Verzögerung, Worker-Fan-out |
 | OpenWebUI sync | optionale idempotente Erzeugung von RAGFlow-Chats, OpenWebUI-Tools und Pipes |
@@ -34,6 +34,22 @@ ein Dataset oder Dokument in RAGFlow ohne Seafile-Löschung verschwindet, erzeug
 der Connector Dataset und Dokumente beim nächsten Sync aus Seafile neu. Wenn
 OpenWebUI-Tools oder -Pipes fehlen, werden eigene Artefakte idempotent erneut
 angelegt.
+
+## Konsistenzmodell
+
+Ein Vollsync erfasst nach Möglichkeit einen vollständigen Snapshot für einen
+festen Seafile-Commit. Erst nach erfolgreicher Verarbeitung wird der Cursor per
+Compare-and-swap auf diesen Snapshot vorgeschoben. Ein Delta-Lauf vergleicht
+den letzten bestätigten Snapshot mit dem neuen Commit-Snapshot und verarbeitet
+Create, Update, Rename und Delete. Fehlt eine vollständige Basis, bleibt der
+Cursor unverändert und der Lauf fällt auf Vollsync zurück.
+
+Mutierende Jobs benötigen pro Bibliothek eine zeitlich begrenzte Lease mit
+monotonem Fence-Token. Dadurch kann ein alter Worker nach Lease-Verlust keinen
+neueren Lauf als erfolgreich abschließen. Neue Dokumentversionen werden erst
+nach erfolgreichem Parse zum aktuellen Dokument befördert; die vorherige
+Version bleibt bis dahin referenzierbar. Verzögerte Löschungen laufen über eine
+persistente Cleanup-Outbox.
 
 ## Dataset-Einstellungen
 

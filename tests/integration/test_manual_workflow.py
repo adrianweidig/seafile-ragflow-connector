@@ -84,6 +84,7 @@ class _FakeRAGFlowClient:
         self.created_datasets: list[dict[str, Any]] = []
         self.uploads: list[dict[str, Any]] = []
         self.metadata_updates: list[tuple[str, str, dict[str, object]]] = []
+        self.renamed_documents: list[tuple[str, str, str]] = []
         self.parsed_documents: list[tuple[str, list[str]]] = []
         self.chats: dict[str, dict[str, Any]] = {}
         self.created_chats: list[dict[str, Any]] = []
@@ -193,6 +194,18 @@ class _FakeRAGFlowClient:
             if document.get("id") == document_id:
                 document["metadata"] = dict(metadata)
         return {"id": document_id, "metadata": metadata}
+
+    def rename_document(
+        self,
+        dataset_id: str,
+        document_id: str,
+        document_name: str,
+    ) -> dict[str, str]:
+        self.renamed_documents.append((dataset_id, document_id, document_name))
+        for document in self.documents_by_dataset.get(dataset_id, []):
+            if document.get("id") == document_id:
+                document["name"] = document_name
+        return {"id": document_id, "name": document_name}
 
     def parse_documents(self, dataset_id: str, document_ids: list[str]) -> None:
         self.parsed_documents.append((dataset_id, document_ids))
@@ -359,7 +372,16 @@ class ManualWorkflowIntegrationTests(unittest.TestCase):
             self.assertTrue(str(library.ragflow_dataset_name).startswith("RAG_"))
             stored_file = session.query(File).one()
             self.assertEqual(stored_file.normalized_path, WORKFLOW_FILE)
-            self.assertEqual(stored_file.sync_status, "uploaded")
+            self.assertEqual(stored_file.sync_status, "parsing")
+            self.assertIsNone(stored_file.ragflow_document_id)
+
+        self.assertEqual(
+            orchestrator.check_parse_status(WORKFLOW_REPO_ID, "dataset-workflow"),
+            1,
+        )
+        with session_factory() as session:
+            stored_file = session.query(File).one()
+            self.assertEqual(stored_file.sync_status, "synced")
             self.assertEqual(stored_file.ragflow_document_id, "doc-workflow-1")
 
         self.assertEqual(
@@ -367,7 +389,14 @@ class ManualWorkflowIntegrationTests(unittest.TestCase):
             "connector_template",
         )
         self.assertEqual(ragflow.uploads[0]["dataset_id"], "dataset-workflow")
-        self.assertTrue(str(ragflow.uploads[0]["document_name"]).endswith(".md.txt"))
+        self.assertIn(".__connector_", str(ragflow.uploads[0]["document_name"]))
+        final_document = ragflow.documents_by_dataset["dataset-workflow"][0]
+        self.assertTrue(str(final_document["name"]).endswith(".md.txt"))
+        self.assertNotIn(".__connector_", str(final_document["name"]))
+        self.assertEqual(
+            ragflow.renamed_documents,
+            [("dataset-workflow", "doc-workflow-1", str(final_document["name"]))],
+        )
         self.assertEqual(ragflow.metadata_updates[0][2]["repo_id"], WORKFLOW_REPO_ID)
         self.assertEqual(ragflow.metadata_updates[0][2]["source_path"], WORKFLOW_FILE)
         self.assertEqual(ragflow.parsed_documents, [("dataset-workflow", ["doc-workflow-1"])])

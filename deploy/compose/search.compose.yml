@@ -8,6 +8,7 @@
 # Startbeispiel:
 #   docker compose --env-file connector.env \
 #     -f deploy/compose/shared-network.compose.yml \
+#     -f deploy/compose/bundled-state.compose.yml \
 #     -f deploy/compose/search.compose.yml up -d
 
 services:
@@ -33,9 +34,12 @@ services:
       POSTGRES_PORT: ${POSTGRES_PORT:-5432}
       POSTGRES_DB: ${POSTGRES_DB:-seafile_ragflow_sync}
       POSTGRES_USER: ${POSTGRES_USER:-sync}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       DATABASE_URL: ${DATABASE_URL:-}
-      SEARCH_SERVICE_ENABLED: ${SEARCH_SERVICE_ENABLED:-true}
+      # Wenn dieser Service im Compose-Modell vorhanden ist, muss er laufen.
+      # Core-only wird durch Weglassen dieses Overlays gewählt, nicht durch
+      # einen erfolgreich beendeten Container mit Restart-Policy.
+      SEARCH_SERVICE_ENABLED: "true"
       SEARCH_SERVICE_HOST: ${SEARCH_SERVICE_HOST:-0.0.0.0}
       SEARCH_SERVICE_PORT: ${SEARCH_SERVICE_PORT:-8090}
       SEARCH_AUTH_MODE: ${SEARCH_AUTH_MODE:-trusted_header}
