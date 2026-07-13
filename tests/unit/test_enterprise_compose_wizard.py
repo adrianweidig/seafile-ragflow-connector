@@ -516,8 +516,9 @@ def test_enterprise_compose_wizard_renders_external_state_core_only_bundle(
 
     rendered_compose = (output_dir / "portainer-compose.yml").read_text(encoding="utf-8")
     assert "connector-controller:" in rendered_compose
-    assert "connector-postgres:" not in rendered_compose
-    assert "connector-redis:" not in rendered_compose
+    assert rendered_compose.count("\n  connector-postgres:\n") == 1
+    assert rendered_compose.count("\n  connector-redis:\n") == 1
+    assert rendered_compose.count("    profiles:\n      - bundled-state") >= 2
     assert "connector-search:" not in rendered_compose
     assert "db-secret" not in rendered_compose
     assert "redis-secret" not in rendered_compose
