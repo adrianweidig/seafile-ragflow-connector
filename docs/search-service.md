@@ -17,10 +17,13 @@ auf. Nur erlaubte SearchProfiles werden an RAGFlow weitergegeben.
 | Route | Zweck |
 | --- | --- |
 | `GET /livez` | billige Prozess-/Eventloop-Liveness ohne Upstream-Zugriff |
-| `GET /readyz` | kurz gecachte Readiness für Datenbank, Core-Authz und RAGFlow |
+| `GET /readyz` | kurz gecachte Readiness für Datenbank, Core-Authz, RAGFlow und den konfigurierten Identitätsdienst |
 | `GET /metrics` | Prometheus-Textformat ohne Nutzer-, Repository- oder Pfadlabels |
 | `GET /health` | rückwärtskompatibler Alias für `/livez` |
 | `GET /search` | Weboberfläche "Wissenssuche" |
+| `GET /auth/login` | Anmeldeseite im Modus `openwebui_ldap` |
+| `POST /auth/login` | serverseitige LDAP-Anmeldung über OpenWebUI |
+| `POST /auth/logout` | beendet die lokale Search-Sitzung |
 | `GET /api/search/profiles` | erlaubte Bibliotheken/Datasets für den Nutzer |
 | `POST /api/search/query` | paginierte Retrieval-Suche über erlaubte Datasets |
 | `POST /api/search/chat` | paginierter Antwortmodus mit Quellen aus erlaubten Datasets |
@@ -29,9 +32,8 @@ auf. Nur erlaubte SearchProfiles werden an RAGFlow weitergegeben.
 
 ## Authentifizierung
 
-Der erste Auth-Modus ist `trusted_header`. Der Search-Service erwartet, dass
-ein vorgeschalteter Reverse Proxy oder Identity-Aware Proxy die Nutzeridentität
-setzt:
+Im Modus `trusted_header` erwartet der Search-Service, dass ein vorgeschalteter
+Reverse Proxy oder Identity-Aware Proxy die Nutzeridentität setzt:
 
 ```env
 SEARCH_AUTH_MODE=trusted_header
@@ -58,10 +60,37 @@ proxy_set_header X-Forwarded-Email $authenticated_email;
 proxy_set_header X-Forwarded-Name  $authenticated_display_name;
 ```
 
+Wenn OpenWebUI bereits erfolgreich an LDAP/AD angebunden ist, kann Search
+dieselbe Pipeline nutzen:
+
+```env
+SEARCH_AUTH_MODE=openwebui_ldap
+SEARCH_OPENWEBUI_LDAP_BASE_URL=http://openwebui:8080
+SEARCH_OPENWEBUI_LDAP_VERIFY_SSL=true
+SEARCH_OPENWEBUI_LDAP_CA_BUNDLE=
+SEARCH_OPENWEBUI_LDAP_TIMEOUT_SECONDS=20
+SEARCH_SESSION_SECRET=change-me-search-session-secret
+SEARCH_SESSION_TTL_SECONDS=28800
+SEARCH_SESSION_COOKIE_NAME=connector_search_session
+SEARCH_SESSION_COOKIE_SECURE=true
+```
+
+Search sendet Benutzername und Passwort nur serverseitig an
+`POST /api/v1/auths/ldap`. OpenWebUI führt den LDAP-Service-Bind, die
+Nutzersuche, den Nutzer-Bind und seine konfigurierte Gruppensynchronisierung
+aus. Das von OpenWebUI zurückgegebene Token wird weder gespeichert noch an den
+Browser weitergereicht. Search erstellt stattdessen eine eigene HMAC-signierte,
+zeitlich begrenzte Sitzung mit `HttpOnly`, `SameSite=Lax` und standardmäßig
+`Secure`. Das Session-Secret muss im Produktionsmodus explizit gesetzt werden.
+Die Abmeldung löscht nur die Search-Sitzung; LDAP- oder OpenWebUI-Sitzungen
+bleiben unverändert.
+
 Im Swarm-Standardprofil wird Search über
 `SEARCH_SERVICE_PUBLISHED_PORT` im Routing-Mesh veröffentlicht. Produktiv
-sollte davor ein authentifizierender Proxy stehen; nur dessen konkretes Netz
-gehört in die CIDR-Allowlist. Core-only lässt das Search-Modul vollständig weg.
+sollte im Modus `trusted_header` davor ein authentifizierender Proxy stehen;
+nur dessen konkretes Netz gehört in die CIDR-Allowlist. Im Modus
+`openwebui_ldap` reicht ein normaler TLS-Reverse-Proxy ohne eigene
+Nutzeranmeldung. Core-only lässt das Search-Modul vollständig weg.
 
 ## Autorisierung
 

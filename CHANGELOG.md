@@ -10,6 +10,9 @@ werden keine historischen Releases nachträglich erfunden.
 
 ### Added
 
+- Wissenssuche kann die bestehende OpenWebUI-LDAP-/AD-Pipeline für Anmeldung
+  und Gruppensynchronisierung nutzen und verwaltet danach eine eigene
+  kurzlebige, signierte Browsersitzung mit expliziter Abmeldung.
 - Commit-gepinnter Delta-Sync mit bestätigten Snapshots/Cursorn,
   Repo-Leases/Fence-Tokens, Dokumentversionen, Cleanup-Outbox und eigenständigem
   Reconcile-Plan.

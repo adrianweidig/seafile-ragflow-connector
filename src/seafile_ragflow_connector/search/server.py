@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hmac
 import html
 import importlib
 import io
@@ -18,6 +20,7 @@ from functools import lru_cache
 from hashlib import sha256
 from html.parser import HTMLParser
 from http import HTTPStatus
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
@@ -48,6 +51,7 @@ from seafile_ragflow_connector.openwebui.sources import (
 )
 from seafile_ragflow_connector.persistence import get_engine, get_session_factory
 from seafile_ragflow_connector.persistence.models.file import File
+from seafile_ragflow_connector.search.auth_ui import render_login_html
 from seafile_ragflow_connector.search.ui import SEARCH_HTML
 from seafile_ragflow_connector.sources.evidence import (
     SourceDTO,
@@ -105,6 +109,10 @@ class SearchBindError(RuntimeError):
 
 
 class SearchPermissionError(PermissionError):
+    pass
+
+
+class SearchAuthenticationError(SearchPermissionError):
     pass
 
 
@@ -475,16 +483,32 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
 
         def do_GET(self) -> None:  # noqa: N802
             try:
-                if self.path in {"/", "/search"}:
+                parsed = urlparse(self.path)
+                if parsed.path == "/auth/login":
+                    if context.settings.search_auth_mode != "openwebui_ldap":
+                        self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+                        return
+                    if _session_user_or_none(context.settings, self.headers) is not None:
+                        self._redirect("/search")
+                        return
+                    self._send_html(render_login_html())
+                    return
+                if parsed.path in {"/", "/search"}:
+                    if (
+                        context.settings.search_auth_mode == "openwebui_ldap"
+                        and _session_user_or_none(context.settings, self.headers) is None
+                    ):
+                        self._redirect("/auth/login")
+                        return
                     self._send_html(SEARCH_HTML)
                     return
-                if self.path == "/favicon.ico":
+                if parsed.path == "/favicon.ico":
                     self.send_response(HTTPStatus.NO_CONTENT.value)
                     self._send_security_headers()
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
-                if self.path in {"/health", "/livez"}:
+                if parsed.path in {"/health", "/livez"}:
                     self._send_json(
                         {
                             "status": "alive",
@@ -493,7 +517,6 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                         }
                     )
                     return
-                parsed = urlparse(self.path)
                 if parsed.path == "/readyz":
                     readiness = readiness_cache.get(
                         lambda: _collect_search_readiness(context.settings)
@@ -512,6 +535,11 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                     )
                     return
                 if parsed.path == "/api/search/source/preview":
+                    _user_from_request(
+                        context.settings,
+                        self.headers,
+                        self.client_address[0],
+                    )
                     params = parse_qs(parsed.query)
                     self._send_html(
                         render_preview_html(
@@ -524,7 +552,7 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                     )
                     return
                 if parsed.path == "/api/search/source/document":
-                    user = _user_from_headers(
+                    user = _user_from_request(
                         context.settings,
                         self.headers,
                         self.client_address[0],
@@ -538,7 +566,7 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                     self._send_binary(body, status=status, headers=headers)
                     return
                 if parsed.path == "/api/search/source/document/page-image":
-                    user = _user_from_headers(
+                    user = _user_from_request(
                         context.settings,
                         self.headers,
                         self.client_address[0],
@@ -552,8 +580,8 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                     )
                     self._send_binary(body, status=status, headers=headers)
                     return
-                if self.path == "/api/search/profiles":
-                    user = _user_from_headers(
+                if parsed.path == "/api/search/profiles":
+                    user = _user_from_request(
                         context.settings,
                         self.headers,
                         self.client_address[0],
@@ -561,6 +589,11 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                     self._send_json(_handle_profiles(context.settings, user))
                     return
                 self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+            except SearchAuthenticationError as exc:
+                self._send_json(
+                    {"error": "unauthorized", "message": str(exc) or "Anmeldung erforderlich."},
+                    status=HTTPStatus.UNAUTHORIZED,
+                )
             except SearchPermissionError as exc:
                 self._send_json(
                     {"error": "forbidden", "message": str(exc) or "Kein Zugriff."},
@@ -580,8 +613,47 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
 
         def do_POST(self) -> None:  # noqa: N802
             try:
-                if self.path == "/api/search/cancel":
-                    user = _user_from_headers(
+                parsed = urlparse(self.path)
+                if parsed.path == "/auth/login":
+                    if context.settings.search_auth_mode != "openwebui_ldap":
+                        self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+                        return
+                    try:
+                        form = self._form_body()
+                        user = _authenticate_openwebui_ldap(
+                            context.settings,
+                            form["username"],
+                            form["password"],
+                        )
+                    except (SearchAuthenticationError, ValueError):
+                        self._send_html(
+                            render_login_html(
+                                "Anmeldung fehlgeschlagen. Prüfen Sie Benutzername und Passwort."
+                            ),
+                            status=HTTPStatus.UNAUTHORIZED,
+                        )
+                        return
+                    self._redirect(
+                        "/search",
+                        headers={
+                            "Set-Cookie": _search_session_cookie(
+                                context.settings,
+                                _sign_search_session(context.settings, user),
+                            )
+                        },
+                    )
+                    return
+                if parsed.path == "/auth/logout":
+                    if context.settings.search_auth_mode != "openwebui_ldap":
+                        self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+                        return
+                    self._redirect(
+                        "/auth/login",
+                        headers={"Set-Cookie": _clear_search_session_cookie(context.settings)},
+                    )
+                    return
+                if parsed.path == "/api/search/cancel":
+                    user = _user_from_request(
                         context.settings,
                         self.headers,
                         self.client_address[0],
@@ -599,8 +671,8 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                         }
                     )
                     return
-                if self.path in {"/api/search/query", "/api/search/chat"}:
-                    user = _user_from_headers(
+                if parsed.path in {"/api/search/query", "/api/search/chat"}:
+                    user = _user_from_request(
                         context.settings,
                         self.headers,
                         self.client_address[0],
@@ -613,7 +685,7 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                         _search_request_owner(user),
                     )
                     try:
-                        if self.path == "/api/search/query":
+                        if parsed.path == "/api/search/query":
                             result = _handle_query(
                                 context.settings,
                                 user,
@@ -656,6 +728,11 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                 self._send_json(
                     {"error": "invalid_cursor", "message": str(exc)},
                     status=HTTPStatus.BAD_REQUEST,
+                )
+            except SearchAuthenticationError as exc:
+                self._send_json(
+                    {"error": "unauthorized", "message": str(exc) or "Anmeldung erforderlich."},
+                    status=HTTPStatus.UNAUTHORIZED,
                 )
             except SearchPermissionError as exc:
                 self._send_json(
@@ -711,15 +788,41 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
             except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
                 return
 
-        def _send_html(self, html_text: str) -> None:
+        def _send_html(
+            self,
+            html_text: str,
+            *,
+            status: HTTPStatus = HTTPStatus.OK,
+            headers: dict[str, str] | None = None,
+        ) -> None:
             body = html_text.encode("utf-8")
-            self.send_response(HTTPStatus.OK.value)
+            self.send_response(status.value)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self._send_security_headers(include_csp=True)
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                return
+
+        def _redirect(
+            self,
+            location: str,
+            *,
+            headers: dict[str, str] | None = None,
+        ) -> None:
+            self.send_response(HTTPStatus.SEE_OTHER.value)
+            self.send_header("Location", location)
+            self.send_header("Cache-Control", "no-store")
+            self._send_security_headers()
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
         def _send_binary(
             self,
@@ -758,6 +861,28 @@ def _build_handler(context: SearchServiceContext) -> type[BaseHTTPRequestHandler
                 raise ValueError("JSON body must be an object")
             return payload
 
+        def _form_body(self) -> dict[str, str]:
+            content_type = self.headers.get("Content-Type", "").partition(";")[0].strip()
+            if content_type != "application/x-www-form-urlencoded":
+                raise ValueError("invalid form content type")
+            raw_length = self.headers.get("Content-Length")
+            length = int(raw_length or "0")
+            if length <= 0 or length > 65_536:
+                raise ValueError("invalid request body size")
+            try:
+                fields = parse_qs(
+                    self.rfile.read(length).decode("utf-8"),
+                    keep_blank_values=True,
+                    max_num_fields=8,
+                )
+            except (UnicodeDecodeError, ValueError) as exc:
+                raise ValueError("invalid form body") from exc
+            username = (_one(fields, "username") or "").strip()
+            password = _one(fields, "password") or ""
+            if not username or len(username) > 320 or not password or len(password) > 4096:
+                raise ValueError("invalid credentials")
+            return {"username": username, "password": password}
+
     return SearchRequestHandler
 
 
@@ -767,6 +892,13 @@ def _collect_search_readiness(settings: SearchServiceSettings) -> dict[str, Any]
         _timed_readiness_check("authz", lambda: _search_authz_ready(settings)),
         _timed_readiness_check("ragflow", lambda: _search_ragflow_ready(settings)),
     ]
+    if settings.search_auth_mode == "openwebui_ldap":
+        checks.append(
+            _timed_readiness_check(
+                "identity_provider",
+                lambda: _search_openwebui_ldap_ready(settings),
+            )
+        )
     ready = all(check["status"] == "ok" for check in checks)
     return {"status": "ready" if ready else "not_ready", "checks": checks}
 
@@ -813,6 +945,18 @@ def _search_ragflow_ready(settings: SearchServiceSettings) -> None:
         follow_redirects=False,
     ) as client:
         response = client.get("/api/v1/datasets", params={"page": 1, "page_size": 1})
+        response.raise_for_status()
+
+
+def _search_openwebui_ldap_ready(settings: SearchServiceSettings) -> None:
+    with httpx.Client(
+        base_url=settings.search_openwebui_ldap_base_url,
+        timeout=2.0,
+        verify=settings.search_openwebui_ldap_httpx_verify,
+        follow_redirects=False,
+        trust_env=False,
+    ) as client:
+        response = client.get("/health")
         response.raise_for_status()
 
 
@@ -2492,6 +2636,202 @@ def _answer_snippet(value: object) -> str:
     if match:
         return match.group(1).strip()
     return _compact(text, 220)
+
+
+def _user_from_request(
+    settings: SearchServiceSettings,
+    headers: Any,
+    client_host: str,
+) -> SearchUser:
+    if settings.search_auth_mode == "openwebui_ldap":
+        return _user_from_search_session(settings, headers)
+    return _user_from_headers(settings, headers, client_host)
+
+
+def _authenticate_openwebui_ldap(
+    settings: SearchServiceSettings,
+    username: str,
+    password: str,
+) -> SearchUser:
+    clean_username = username.strip()
+    if not clean_username or len(clean_username) > 320 or not password or len(password) > 4096:
+        raise SearchAuthenticationError("Anmeldung fehlgeschlagen.")
+    try:
+        with httpx.Client(
+            base_url=settings.search_openwebui_ldap_base_url,
+            timeout=settings.search_openwebui_ldap_timeout_seconds,
+            verify=settings.search_openwebui_ldap_httpx_verify,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            response = client.post(
+                "/api/v1/auths/ldap",
+                json={"user": clean_username, "password": password},
+            )
+    except httpx.RequestError as exc:
+        raise SearchAuthenticationError("Der Anmeldedienst ist aktuell nicht erreichbar.") from exc
+    if response.status_code != HTTPStatus.OK.value:
+        raise SearchAuthenticationError("Anmeldung fehlgeschlagen.")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise SearchAuthenticationError(
+            "Der Anmeldedienst lieferte keine gültige Antwort."
+        ) from exc
+    if not isinstance(payload, dict):
+        raise SearchAuthenticationError("Der Anmeldedienst lieferte keine gültige Antwort.")
+    email = _bounded_identity_claim(payload.get("email"), max_length=320)
+    display_name = _bounded_identity_claim(payload.get("name"), max_length=320)
+    return SearchUser(
+        username=clean_username,
+        email=email,
+        display_name=display_name,
+    )
+
+
+def _sign_search_session(
+    settings: SearchServiceSettings,
+    user: SearchUser,
+    *,
+    now: int | None = None,
+) -> str:
+    issued_at = int(time.time()) if now is None else now
+    payload = {
+        "v": 1,
+        "username": user.username,
+        "email": user.email,
+        "display_name": user.display_name,
+        "iat": issued_at,
+        "exp": issued_at + settings.search_session_ttl_seconds,
+    }
+    payload_segment = _base64url_encode(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode(
+            "utf-8"
+        )
+    )
+    signature = hmac.new(
+        settings.search_session_secret.encode("utf-8"),
+        payload_segment.encode("ascii"),
+        sha256,
+    ).digest()
+    return f"{payload_segment}.{_base64url_encode(signature)}"
+
+
+def _verify_search_session(
+    settings: SearchServiceSettings,
+    token: str,
+    *,
+    now: int | None = None,
+) -> SearchUser:
+    if not token or len(token) > 8192:
+        raise SearchAuthenticationError("Anmeldung erforderlich.")
+    try:
+        payload_segment, signature_segment = token.split(".", 1)
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", payload_segment):
+            raise ValueError("invalid session payload")
+        payload_segment_bytes = payload_segment.encode("ascii")
+        received_signature = _base64url_decode(signature_segment)
+    except (TypeError, UnicodeEncodeError, ValueError) as exc:
+        raise SearchAuthenticationError("Anmeldung erforderlich.") from exc
+    expected_signature = hmac.new(
+        settings.search_session_secret.encode("utf-8"),
+        payload_segment_bytes,
+        sha256,
+    ).digest()
+    if not hmac.compare_digest(received_signature, expected_signature):
+        raise SearchAuthenticationError("Anmeldung erforderlich.")
+    try:
+        payload = json.loads(_base64url_decode(payload_segment).decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise SearchAuthenticationError("Anmeldung erforderlich.") from exc
+    if not isinstance(payload, dict) or payload.get("v") != 1:
+        raise SearchAuthenticationError("Anmeldung erforderlich.")
+    current_time = int(time.time()) if now is None else now
+    try:
+        issued_at = int(payload["iat"])
+        expires_at = int(payload["exp"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SearchAuthenticationError("Anmeldung erforderlich.") from exc
+    if (
+        issued_at > current_time + 60
+        or expires_at <= current_time
+        or expires_at - issued_at > settings.search_session_ttl_seconds
+    ):
+        raise SearchAuthenticationError("Die Sitzung ist abgelaufen. Bitte erneut anmelden.")
+    username = _bounded_identity_claim(payload.get("username"), max_length=320)
+    email = _bounded_identity_claim(payload.get("email"), max_length=320)
+    display_name = _bounded_identity_claim(payload.get("display_name"), max_length=320)
+    if not (username or email):
+        raise SearchAuthenticationError("Anmeldung erforderlich.")
+    return SearchUser(username=username, email=email, display_name=display_name)
+
+
+def _user_from_search_session(settings: SearchServiceSettings, headers: Any) -> SearchUser:
+    cookie_header = headers.get("Cookie")
+    if not cookie_header:
+        raise SearchAuthenticationError("Anmeldung erforderlich.")
+    cookies = SimpleCookie()
+    try:
+        cookies.load(cookie_header)
+    except CookieError as exc:
+        raise SearchAuthenticationError("Anmeldung erforderlich.") from exc
+    session_cookie = cookies.get(settings.search_session_cookie_name)
+    if session_cookie is None:
+        raise SearchAuthenticationError("Anmeldung erforderlich.")
+    return _verify_search_session(settings, session_cookie.value)
+
+
+def _session_user_or_none(settings: SearchServiceSettings, headers: Any) -> SearchUser | None:
+    try:
+        return _user_from_search_session(settings, headers)
+    except SearchAuthenticationError:
+        return None
+
+
+def _search_session_cookie(settings: SearchServiceSettings, token: str) -> str:
+    attributes = [
+        f"{settings.search_session_cookie_name}={token}",
+        "Path=/",
+        f"Max-Age={settings.search_session_ttl_seconds}",
+        "HttpOnly",
+        "SameSite=Lax",
+    ]
+    if settings.search_session_cookie_secure:
+        attributes.append("Secure")
+    return "; ".join(attributes)
+
+
+def _clear_search_session_cookie(settings: SearchServiceSettings) -> str:
+    attributes = [
+        f"{settings.search_session_cookie_name}=",
+        "Path=/",
+        "Max-Age=0",
+        "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+        "HttpOnly",
+        "SameSite=Lax",
+    ]
+    if settings.search_session_cookie_secure:
+        attributes.append("Secure")
+    return "; ".join(attributes)
+
+
+def _base64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _base64url_decode(value: str) -> bytes:
+    if not value or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+        raise ValueError("invalid base64url value")
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def _bounded_identity_claim(value: object, *, max_length: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    clean = value.strip()
+    if not clean or len(clean) > max_length or any(char in clean for char in "\r\n\x00"):
+        return None
+    return clean
 
 
 def _user_from_headers(

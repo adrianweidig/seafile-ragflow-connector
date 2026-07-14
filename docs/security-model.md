@@ -89,6 +89,13 @@ aus der authentifizierten Session neu. Eine öffentliche Produktionsbindung
 ohne Proxy-Allowlist wird beim Start abgelehnt; der Swarm-Stack veröffentlicht
 Search standardmäßig nicht über das Routing-Mesh.
 
+Im Modus `openwebui_ldap` übergibt Search die Anmeldedaten serverseitig an den
+konfigurierten LDAP-Endpunkt von OpenWebUI. OpenWebUI bleibt damit für
+LDAP-Bind, Nutzersuche und Gruppensynchronisierung zuständig. Search übernimmt
+nur die bestätigte Identität und erstellt daraus eine eigene HMAC-signierte,
+zeitlich begrenzte HttpOnly-Sitzung. OpenWebUI-Tokens und LDAP-Passwörter werden
+weder in die Sitzung aufgenommen noch im Connector gespeichert.
+
 ## Fail-Closed
 
 Mit `AUTHZ_API_FAIL_CLOSED=true` gilt:

@@ -65,7 +65,9 @@ Portainer-Start:
    gebündelte Variante `POSTGRES_PASSWORD`.
    `AUTHZ_API_SHARED_SECRET`, `SEARCH_AUTHZ_SHARED_SECRET`,
    `SEARCH_RAGFLOW_BASE_URL` und `SEARCH_RAGFLOW_API_KEY` für die
-   Wissenssuche setzen. OpenWebUI-Werte nur setzen, wenn
+   Wissenssuche setzen. Bei `SEARCH_AUTH_MODE=openwebui_ldap` zusätzlich
+   `SEARCH_OPENWEBUI_LDAP_BASE_URL` und ein eigenes starkes
+   `SEARCH_SESSION_SECRET` setzen. OpenWebUI-Werte nur setzen, wenn
    `OPENWEBUI_INTEGRATION_ENABLED=true` genutzt wird.
    Wenn interne Zertifikate genutzt werden, die CA-PEM-Datei in ein
    Host-Verzeichnis legen, `CONNECTOR_CERTS_HOST_DIR` auf dieses Verzeichnis

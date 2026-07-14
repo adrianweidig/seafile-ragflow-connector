@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -735,7 +736,7 @@ class SearchServiceSettings(BaseSettings):
     search_service_host: str = "0.0.0.0"  # nosec B104
     search_service_port: int = 8090
 
-    search_auth_mode: Literal["trusted_header"] = "trusted_header"
+    search_auth_mode: Literal["trusted_header", "openwebui_ldap"] = "trusted_header"
     search_trusted_username_header: str = "X-Forwarded-User"
     search_trusted_email_header: str = "X-Forwarded-Email"
     search_trusted_display_name_header: str = "X-Forwarded-Name"
@@ -743,6 +744,14 @@ class SearchServiceSettings(BaseSettings):
         default="",
         validation_alias="SEARCH_TRUSTED_PROXY_CIDRS",
     )
+    search_openwebui_ldap_base_url: str = "http://openwebui:8080"
+    search_openwebui_ldap_verify_ssl: bool = True
+    search_openwebui_ldap_ca_bundle: str | None = None
+    search_openwebui_ldap_timeout_seconds: int = 20
+    search_session_secret: str = "change-me"
+    search_session_ttl_seconds: int = 28_800
+    search_session_cookie_name: str = "connector_search_session"
+    search_session_cookie_secure: bool = True
 
     search_authz_base_url: str = "http://connector-controller:8080"
     search_authz_shared_secret: str = "change-me"
@@ -832,6 +841,7 @@ class SearchServiceSettings(BaseSettings):
     @field_validator(
         "search_authz_base_url",
         "search_ragflow_base_url",
+        "search_openwebui_ldap_base_url",
         "search_answer_llm_base_url",
         "search_seafile_public_base_url",
     )
@@ -848,7 +858,12 @@ class SearchServiceSettings(BaseSettings):
             return None
         return f"{base_url}/lib/{{repo_id}}/file{{path_quoted}}{{page_fragment}}"
 
-    @field_validator("connector_ca_bundle", "search_ragflow_ca_bundle", mode="before")
+    @field_validator(
+        "connector_ca_bundle",
+        "search_ragflow_ca_bundle",
+        "search_openwebui_ldap_ca_bundle",
+        mode="before",
+    )
     @classmethod
     def strip_optional_path(cls, value: object) -> object:
         if isinstance(value, str):
@@ -898,6 +913,8 @@ class SearchServiceSettings(BaseSettings):
         "search_pdf_render_max_mb",
         "search_answer_llm_timeout_seconds",
         "search_answer_llm_max_tokens",
+        "search_openwebui_ldap_timeout_seconds",
+        "search_session_ttl_seconds",
     )
     @classmethod
     def validate_search_positive_int(cls, value: int) -> int:
@@ -954,7 +971,11 @@ class SearchServiceSettings(BaseSettings):
                 f"postgresql+psycopg://{user}:{password}@"
                 f"{self.postgres_host}:{self.postgres_port}/{database}"
             )
-        for name in ("search_authz_base_url", "search_ragflow_base_url"):
+        for name in (
+            "search_authz_base_url",
+            "search_ragflow_base_url",
+            "search_openwebui_ldap_base_url",
+        ):
             value = getattr(self, name)
             if not _is_http_url(value):
                 msg = f"{name.upper()} must be an http or https URL"
@@ -968,7 +989,19 @@ class SearchServiceSettings(BaseSettings):
         if not self.search_enable_chat_mode and not self.search_enable_retrieval_mode:
             msg = "at least one search mode must be enabled"
             raise ValueError(msg)
-        for name in ("connector_ca_bundle", "search_ragflow_ca_bundle"):
+        production = self.app_env.strip().lower() in {"prod", "production"}
+        if self.search_auth_mode == "openwebui_ldap":
+            if production and self.search_session_secret.strip() in {"", "change-me"}:
+                msg = "SEARCH_SESSION_SECRET must be set for openwebui_ldap in production"
+                raise ValueError(msg)
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", self.search_session_cookie_name):
+                msg = "SEARCH_SESSION_COOKIE_NAME contains invalid characters"
+                raise ValueError(msg)
+        for name in (
+            "connector_ca_bundle",
+            "search_ragflow_ca_bundle",
+            "search_openwebui_ldap_ca_bundle",
+        ):
             value = getattr(self, name)
             if value:
                 validate_tls_file(str(value), label=name.upper())
@@ -987,6 +1020,14 @@ class SearchServiceSettings(BaseSettings):
         return build_service_httpx_verify(
             True,
             None,
+            fallback_ca_bundle=self.connector_ca_bundle,
+        )
+
+    @property
+    def search_openwebui_ldap_httpx_verify(self) -> VerifyConfig:
+        return build_service_httpx_verify(
+            self.search_openwebui_ldap_verify_ssl,
+            self.search_openwebui_ldap_ca_bundle,
             fallback_ca_bundle=self.connector_ca_bundle,
         )
 

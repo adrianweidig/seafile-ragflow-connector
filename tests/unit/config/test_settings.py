@@ -505,6 +505,36 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.search_answer_llm_max_tokens, 512)
         self.assertEqual(settings.search_answer_llm_temperature, 0.1)
 
+    def test_search_service_validates_openwebui_ldap_session_settings(self) -> None:
+        base = {
+            "search_authz_base_url": "http://connector-controller:8080",
+            "search_authz_shared_secret": "authz-secret",
+            "search_ragflow_base_url": "http://ragflow:9380",
+            "search_ragflow_api_key": "ragflow-key",
+            "search_auth_mode": "openwebui_ldap",
+        }
+
+        with self.assertRaisesRegex(ValueError, "SEARCH_SESSION_SECRET"):
+            SearchServiceSettings(**base)
+
+        settings = SearchServiceSettings(
+            **base,
+            search_session_secret="unit-test-search-session-secret",
+            search_openwebui_ldap_base_url="http://openwebui:8080/",
+            search_session_ttl_seconds=3600,
+        )
+
+        self.assertEqual(settings.search_openwebui_ldap_base_url, "http://openwebui:8080")
+        self.assertEqual(settings.search_session_ttl_seconds, 3600)
+        self.assertTrue(settings.search_session_cookie_secure)
+
+        with self.assertRaisesRegex(ValueError, "COOKIE_NAME"):
+            SearchServiceSettings(
+                **base,
+                search_session_secret="unit-test-search-session-secret",
+                search_session_cookie_name="invalid cookie name",
+            )
+
     def test_search_service_rejects_invalid_answer_llm_settings(self) -> None:
         base = {
             "search_authz_base_url": "http://connector-controller:8080",
