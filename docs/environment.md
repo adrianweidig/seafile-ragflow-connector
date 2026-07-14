@@ -75,10 +75,16 @@ Er benötigt keinen Seafile-Admin- oder Sync-Token.
 | `SEARCH_SERVICE_ENABLED` | optional | Laufzeitwert des Search-Prozesses. Deployment erfolgt über das Search-Overlay; einen definierten Container nicht mit `false` deaktivieren. |
 | `SEARCH_SERVICE_HOST`, `SEARCH_SERVICE_PORT` | optional | Bind-Adresse und Container-Port. |
 | `SEARCH_SERVICE_PUBLISHED_PORT` | optional | Host-Portbindung in Compose/Portainer, z. B. `127.0.0.1:18090`; in Swarm eine reine Portnummer wie `18090`. |
-| `SEARCH_AUTH_MODE` | optional | Aktuell `trusted_header`. |
+| `SEARCH_AUTH_MODE` | optional | `trusted_header` oder `openwebui_ldap`; Standard ist `trusted_header`. |
 | `SEARCH_TRUSTED_USERNAME_HEADER` | optional | Header für den Login-/Usernamen. |
 | `SEARCH_TRUSTED_EMAIL_HEADER` | optional | Header für die Nutzer-E-Mail; primärer ACL-Match-Key. |
 | `SEARCH_TRUSTED_DISPLAY_NAME_HEADER` | optional | Header für den Anzeigenamen in der GUI. |
+| `SEARCH_OPENWEBUI_LDAP_BASE_URL` | bei `openwebui_ldap` | Interne OpenWebUI-URL, deren LDAP-Endpunkt für die Anmeldung genutzt wird. |
+| `SEARCH_OPENWEBUI_LDAP_VERIFY_SSL`, `SEARCH_OPENWEBUI_LDAP_CA_BUNDLE` | optional | TLS-Prüfung und optionales CA-Bundle für Search -> OpenWebUI. |
+| `SEARCH_OPENWEBUI_LDAP_TIMEOUT_SECONDS` | optional | Timeout der LDAP-Anmeldung über OpenWebUI; Standard `20`. |
+| `SEARCH_SESSION_SECRET` | bei `openwebui_ldap` | HMAC-Secret für die lokale Search-Sitzung; im Produktionsmodus explizit setzen. |
+| `SEARCH_SESSION_TTL_SECONDS` | optional | Gültigkeit der Search-Sitzung; Standard `28800` Sekunden. |
+| `SEARCH_SESSION_COOKIE_NAME`, `SEARCH_SESSION_COOKIE_SECURE` | optional | Name und Secure-Attribut des Search-Sitzungscookies. |
 | `SEARCH_AUTHZ_BASE_URL` | ja | Interne URL zum Connector-Core, z. B. `http://connector-controller:8080`. |
 | `SEARCH_AUTHZ_SHARED_SECRET` | ja | Muss zum Authz-Secret im Core passen. |
 | `SEARCH_RAGFLOW_BASE_URL` | ja | RAGFlow-URL aus Sicht des Search-Containers. |

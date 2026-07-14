@@ -21,21 +21,27 @@ from seafile_ragflow_connector.openwebui.sources import (
 from seafile_ragflow_connector.persistence import Base, get_engine, get_session_factory
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.library import Library
+from seafile_ragflow_connector.search.auth_ui import render_login_html
 from seafile_ragflow_connector.search.server import (
+    SearchAuthenticationError,
     SearchBindError,
     SearchCancellation,
     SearchCancelledError,
     SearchPermissionError,
     SearchRequestCoordinator,
     SearchUser,
+    _authenticate_openwebui_ldap,
     _compose_answer_from_sources,
     _handle_chat,
     _handle_document_proxy,
     _handle_pdf_page_image_proxy,
     _handle_query,
     _search_results_from_ragflow,
+    _sign_search_session,
     _user_from_headers,
+    _user_from_request,
     _validate_trusted_header_boundary,
+    _verify_search_session,
 )
 from seafile_ragflow_connector.search.ui import SEARCH_HTML
 from seafile_ragflow_connector.sources.evidence import SourceDTO
@@ -69,6 +75,88 @@ class SearchServerTests(unittest.TestCase):
         with self.assertRaises(SearchPermissionError):
             _user_from_headers(settings, headers, "203.0.113.7")
 
+    def test_openwebui_ldap_identity_is_exchanged_for_signed_search_session(self) -> None:
+        settings = _settings(
+            search_auth_mode="openwebui_ldap",
+            search_session_secret="unit-test-search-session-secret",
+        )
+        original_httpx_client = search_server.httpx.Client
+
+        class _Response:
+            status_code = HTTPStatus.OK.value
+
+            @staticmethod
+            def json() -> dict[str, str]:
+                return {
+                    "email": "olaf@example.local",
+                    "name": "Olaf Beispiel",
+                    "token": "must-not-be-forwarded",
+                }
+
+        class _Client:
+            request_json: dict[str, str] | None = None
+
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                self.kwargs = kwargs
+
+            def __enter__(self) -> _Client:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def post(self, path: str, *, json: dict[str, str]) -> _Response:
+                self.__class__.request_json = json
+                self.path = path
+                return _Response()
+
+        try:
+            search_server.httpx.Client = _Client  # type: ignore[assignment]
+            user = _authenticate_openwebui_ldap(settings, "olaf", "test-password")
+        finally:
+            search_server.httpx.Client = original_httpx_client  # type: ignore[assignment]
+
+        self.assertEqual(user.username, "olaf")
+        self.assertEqual(user.email, "olaf@example.local")
+        self.assertEqual(user.display_name, "Olaf Beispiel")
+        self.assertEqual(
+            _Client.request_json,
+            {"user": "olaf", "password": "test-password"},
+        )
+
+        token = _sign_search_session(settings, user, now=1_000)
+        verified = _verify_search_session(settings, token, now=1_001)
+        self.assertEqual(verified, user)
+        current_token = _sign_search_session(settings, user)
+        session_user = _user_from_request(
+            settings,
+            {"Cookie": f"{settings.search_session_cookie_name}={current_token}"},
+            "203.0.113.7",
+        )
+        self.assertEqual(session_user, user)
+
+        payload_segment, signature_segment = token.split(".", 1)
+        replacement = "A" if signature_segment[0] != "A" else "B"
+        tampered = f"{payload_segment}.{replacement}{signature_segment[1:]}"
+        with self.assertRaises(SearchAuthenticationError):
+            _verify_search_session(settings, tampered, now=1_001)
+        with self.assertRaisesRegex(SearchAuthenticationError, "abgelaufen"):
+            _verify_search_session(
+                settings,
+                token,
+                now=1_000 + settings.search_session_ttl_seconds,
+            )
+
+    def test_login_ui_contains_ldap_form_without_embedded_credentials(self) -> None:
+        login_html = render_login_html("Anmeldung fehlgeschlagen.")
+
+        self.assertIn('action="/auth/login"', login_html)
+        self.assertIn('autocomplete="username"', login_html)
+        self.assertIn('autocomplete="current-password"', login_html)
+        self.assertIn("AD-/LDAP-Konto", login_html)
+        self.assertIn("Anmeldung fehlgeschlagen.", login_html)
+        self.assertNotIn("value=", login_html)
+
     def test_ui_contains_required_search_surface(self) -> None:
         self.assertIn("Wissenssuche", SEARCH_HTML)
         self.assertIn('data-theme-choice="light"', SEARCH_HTML)
@@ -76,6 +164,10 @@ class SearchServerTests(unittest.TestCase):
         self.assertIn("connector-search-theme", SEARCH_HTML)
         self.assertIn("selectAllProfiles", SEARCH_HTML)
         self.assertIn("clearProfiles", SEARCH_HTML)
+        self.assertIn('action="/auth/logout"', SEARCH_HTML)
+        self.assertIn("Abmelden", SEARCH_HTML)
+        self.assertIn("function requireActiveSession", SEARCH_HTML)
+        self.assertIn("window.location.assign('/auth/login')", SEARCH_HTML)
         self.assertIn("selectionCount", SEARCH_HTML)
         self.assertIn("Dokumente finden", SEARCH_HTML)
         self.assertIn("Antwort mit Quellen", SEARCH_HTML)

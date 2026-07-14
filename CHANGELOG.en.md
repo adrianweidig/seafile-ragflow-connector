@@ -10,6 +10,9 @@ retroactively.
 
 ### Added
 
+- Knowledge search can use the existing OpenWebUI LDAP/AD pipeline for login
+  and group synchronization, then manages its own short-lived signed browser
+  session with explicit logout.
 - Commit-pinned delta sync with confirmed snapshots/cursors, repository
   leases/fencing tokens, document versions, cleanup outbox, and a dedicated
   reconciliation plan.
