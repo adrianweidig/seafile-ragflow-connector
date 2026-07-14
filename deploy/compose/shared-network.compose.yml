@@ -7,7 +7,9 @@
 #
 # Start:
 #   docker compose --env-file connector.env \
-#     -f deploy/compose/shared-network.compose.yml up -d
+#     -f deploy/compose/shared-network.compose.yml \
+#     -f deploy/compose/bundled-state.compose.yml \
+#     -f deploy/compose/search.compose.yml up -d
 
 name: ${COMPOSE_PROJECT_NAME:-seafile-ragflow-connector-shared}
 
@@ -149,7 +151,7 @@ x-connector-env: &connector-env
   POSTGRES_PORT: 5432
   POSTGRES_DB: ${POSTGRES_DB:-seafile_ragflow_sync}
   POSTGRES_USER: ${POSTGRES_USER:-sync}
-  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
   DATABASE_URL: ${DATABASE_URL:-}
   REDIS_HOST: connector-redis
   REDIS_PORT: 6379
@@ -233,7 +235,7 @@ services:
       TZ: ${TZ:-Europe/Berlin}
       POSTGRES_DB: ${POSTGRES_DB:-seafile_ragflow_sync}
       POSTGRES_USER: ${POSTGRES_USER:-sync}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - connector-postgres-data:/var/lib/postgresql/data

@@ -196,6 +196,15 @@
       display: grid;
       gap: 6px;
     }
+    .nav-toggle {
+      background: var(--surface-2);
+      border-color: var(--border-strong);
+      color: var(--text);
+      display: none;
+      justify-content: center;
+      margin: 12px 0 4px;
+      width: 100%;
+    }
     .tab {
       background: transparent;
       color: var(--muted);
@@ -367,9 +376,12 @@
     .overview-grid {
       display: grid;
       gap: 14px;
-      grid-template-columns: minmax(340px, 1.15fr) minmax(280px, 0.9fr) minmax(280px, 0.9fr);
+      grid-template-columns: minmax(360px, 1fr) minmax(420px, 1.15fr);
       margin-bottom: 14px;
     }
+    .overview-grid > .status-stage { grid-column: 1; grid-row: 1; }
+    .overview-grid > .panel:nth-child(2) { grid-column: 2; grid-row: 1 / span 2; }
+    .overview-grid > .panel:nth-child(3) { grid-column: 1; grid-row: 2; }
     .status-stage {
       background:
         linear-gradient(135deg, color-mix(in srgb, var(--accent) 18%, var(--surface)), var(--surface) 58%),
@@ -479,6 +491,7 @@
       white-space: nowrap;
     }
     .panel-body { padding: 12px 14px; }
+    section > .panel + .panel { margin-top: 16px; }
     .metric-grid {
       display: grid;
       gap: 12px;
@@ -559,6 +572,7 @@
     #source-table, #target-table { min-width: 920px; }
     #openwebui-table { min-width: 1640px; }
     #workflow-table { min-width: 1380px; }
+    #cleanup-outbox-table { min-width: 1180px; }
     #log-table th:nth-child(1) { width: 17%; }
     #log-table th:nth-child(2) { width: 10%; }
     #log-table th:nth-child(3) { width: 15%; }
@@ -640,6 +654,7 @@
       flex-wrap: wrap;
       align-items: center;
     }
+    .cleanup-actions { margin-bottom: 12px; }
     .workflow-select {
       display: flex;
       align-items: center;
@@ -944,6 +959,30 @@
       color: var(--soft);
       padding: 5px 9px;
     }
+    .technical-details {
+      border-top: 1px solid var(--border);
+      margin-top: 14px;
+      padding-top: 10px;
+    }
+    .technical-details summary {
+      color: var(--muted);
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .workflow-progress {
+      align-items: center;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      display: grid;
+      gap: 10px;
+      grid-template-columns: minmax(160px, 1fr) minmax(180px, 2fr) auto;
+      margin-top: 14px;
+      padding: 12px;
+    }
+    .workflow-progress[hidden] { display: none; }
+    .workflow-progress progress { accent-color: var(--accent); width: 100%; }
+    .workflow-progress-actions { display: flex; gap: 8px; }
     @media (max-width: 1180px) {
       .app-shell { grid-template-columns: 1fr; }
       .sidebar {
@@ -954,6 +993,9 @@
         grid-template-columns: repeat(3, minmax(0, 1fr));
       }
       .overview-grid, .split { grid-template-columns: 1fr; }
+      .overview-grid > .status-stage,
+      .overview-grid > .panel:nth-child(2),
+      .overview-grid > .panel:nth-child(3) { grid-column: 1; grid-row: auto; }
       .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 720px) {
@@ -961,8 +1003,11 @@
       .topbar { align-items: stretch; flex-direction: column; position: static; }
       .actions { justify-content: stretch; }
       .actions > * { flex: 1; }
-      .nav { grid-template-columns: 1fr; }
+      .nav-toggle { display: inline-flex; }
+      .nav { display: none; grid-template-columns: 1fr; }
+      .sidebar.nav-open .nav { display: grid; }
       .metric-grid { grid-template-columns: 1fr; }
+      .workflow-progress { grid-template-columns: 1fr; }
       .state-value { font-size: 28px; }
       button, a.action, input, select { min-height: 44px; }
     }
@@ -984,7 +1029,8 @@
         <h1>Connector Dashboard</h1>
         <span>Seafile zu RAGFlow</span>
       </div>
-      <nav class="nav" aria-label="Dashboard Bereiche" role="tablist">
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-controls="dashboard-nav" aria-expanded="false"><span aria-hidden="true">☰</span><span id="nav-toggle-label">Dashboard Bereiche</span></button>
+      <nav class="nav" id="dashboard-nav" aria-label="Dashboard Bereiche" role="tablist">
         <button class="tab" id="tab-overview" data-tab="overview" role="tab" aria-controls="overview" aria-selected="true"><span class="tab-dot"></span>Übersicht</button>
         <button class="tab" id="tab-workflow" data-tab="workflow" role="tab" aria-controls="workflow" aria-selected="false" tabindex="-1"><span class="tab-dot"></span>Prüfablauf</button>
         <button class="tab" id="tab-syncs" data-tab="syncs" role="tab" aria-controls="syncs" aria-selected="false" tabindex="-1"><span class="tab-dot"></span>Sync-Läufe</button>
@@ -1094,6 +1140,7 @@
             <div class="workflow-controls">
               <label class="option"><input id="workflow-create-datasets" type="checkbox" checked><span data-i18n="workflow.createDatasets">RAGFlow-Dataset und Dokumente synchronisieren</span></label>
               <label class="option"><input id="workflow-sync-openwebui" type="checkbox" checked><span data-i18n="workflow.syncOpenWebUI">RAGFlow-Chat und OpenWebUI-Tool/Pipe erzeugen</span></label>
+              <label><span data-i18n="workflow.mode">Modus</span><select id="workflow-mode"><option value="delta" data-i18n="workflow.modeDelta">Delta</option><option value="full" data-i18n="workflow.modeFull">Vollständig</option><option value="reconcile" data-i18n="workflow.modeReconcile">Abgleichen und reparieren</option></select></label>
               <label><span data-i18n="workflow.scope">Seafile-Pfad</span><input id="workflow-scope" autocomplete="off" value="/"></label>
               <div class="workflow-actions">
                 <button class="ghost" id="workflow-load" type="button" data-i18n="workflow.refreshLibraries">Bibliotheken prüfen</button>
@@ -1101,7 +1148,22 @@
               </div>
             </div>
             <div class="table-wrap"><table id="workflow-table"></table></div>
-            <pre id="workflow-result" class="detail workflow-result"></pre>
+            <div id="workflow-progress" class="workflow-progress" role="status" hidden>
+              <div><strong id="workflow-progress-status">-</strong><div id="workflow-progress-label">-</div></div>
+              <progress id="workflow-progress-bar" max="1" value="0"></progress>
+              <div class="workflow-progress-actions"><button class="ghost" id="workflow-cancel" type="button" data-i18n="workflow.cancel">Abbrechen</button><button class="ghost" id="workflow-retry" type="button" data-i18n="workflow.retry">Erneut versuchen</button></div>
+            </div>
+            <details class="technical-details">
+              <summary data-i18n="section.technicalDetails">Technische Details</summary>
+              <pre id="workflow-result" class="detail workflow-result"></pre>
+            </details>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3 data-i18n="cleanup.title">Fehlgeschlagene Bereinigungen</h3><small id="cleanup-outbox-summary">-</small></div>
+          <div class="panel-body">
+            <div class="workflow-actions cleanup-actions"><button class="ghost" id="cleanup-outbox-refresh" type="button" data-i18n="cleanup.refresh">Bereinigungen aktualisieren</button></div>
+            <div class="table-wrap"><table id="cleanup-outbox-table"></table></div>
           </div>
         </div>
       </section>
@@ -1192,7 +1254,10 @@
             <div class="metric-grid" id="openwebui-metrics"></div>
             <div class="table-wrap"><table id="openwebui-table"></table></div>
             <div id="openwebui-pager" class="pager"></div>
-            <pre id="openwebui-detail" class="detail"></pre>
+            <details class="technical-details">
+              <summary data-i18n="section.technicalDetails">Technische Details</summary>
+              <pre id="openwebui-detail" class="detail"></pre>
+            </details>
           </div>
         </div>
       </section>
@@ -1207,8 +1272,12 @@
   </div>
 
   <script>
-    const PAGE_SIZE = 100;
+    const PAGE_SIZE = 25;
     const SUPPORTED_LANGUAGES = ['de', 'en', 'es', 'fr', 'it', 'pt', 'nl', 'pl', 'tr', 'uk', 'zh', 'ja', 'ar'];
+    function initialPage(name) {
+      const value = Number(new URLSearchParams(window.location.search).get('page_' + name) || 0);
+      return Number.isInteger(value) && value >= 0 ? value : 0;
+    }
     const I18N = {
       de: {
         'brand.subtitle': 'Seafile zu RAGFlow',
@@ -1309,6 +1378,7 @@
         'section.targetSystems': 'Zielsysteme',
         'section.openwebuiIntegration': 'OpenWebUI-Integration',
         'section.technicalDiagnostics': 'Technische Diagnose',
+        'section.technicalDetails': 'Technische Details',
         'diagnostics.maskedConfig': 'maskierte Konfiguration',
         'sync.detail': 'Detail',
         'titles.overview': 'Übersicht',
@@ -1385,6 +1455,10 @@
         'openwebui.confirmDeleteChat': 'RAGFlow-Chat löschen? Die Seafile-Bibliothek bleibt bestehen und der nächste OpenWebUI-Sync kann einen neuen Chat anlegen.',
         'workflow.createDatasets': 'RAGFlow-Dataset und Dokumente synchronisieren',
         'workflow.syncOpenWebUI': 'RAGFlow-Chat und OpenWebUI-Tool/Pipe erzeugen',
+        'workflow.mode': 'Modus',
+        'workflow.modeDelta': 'Delta',
+        'workflow.modeFull': 'Vollständig',
+        'workflow.modeReconcile': 'Abgleichen und reparieren',
         'workflow.scope': 'Seafile-Pfad',
         'workflow.refreshLibraries': 'Bibliotheken prüfen',
         'workflow.runSelected': 'Auswahl starten',
@@ -1397,9 +1471,21 @@
         'workflow.skipReason': 'Sperrgrund',
         'workflow.noSelection': 'Bitte mindestens eine sichtbare Bibliothek auswählen.',
         'workflow.running': 'Prüflauf läuft...',
+        'workflow.cancel': 'Abbrechen',
+        'workflow.retry': 'Erneut versuchen',
+        'workflow.progress': 'Jobs abgeschlossen',
         'workflow.notAvailable': 'Dashboard-Steuerung ist in diesem Prozess nicht verfügbar.',
         'workflow.lastResult': 'Letztes Ergebnis',
         'workflow.repo': 'Bibliothek',
+        'cleanup.title': 'Fehlgeschlagene Bereinigungen',
+        'cleanup.refresh': 'Bereinigungen aktualisieren',
+        'cleanup.count': 'offene Fehler',
+        'cleanup.targetType': 'Zieltyp',
+        'cleanup.action': 'Aktion',
+        'cleanup.attempts': 'Versuche',
+        'cleanup.retry': 'Jetzt erneut versuchen',
+        'cleanup.retrying': 'Wird eingeplant...',
+        'cleanup.unavailable': 'Bereinigungsstatus ist in diesem Prozess nicht verfügbar.',
         'api.error': 'API-Fehler'
       },
       en: {
@@ -1501,6 +1587,7 @@
         'section.targetSystems': 'Target systems',
         'section.openwebuiIntegration': 'OpenWebUI integration',
         'section.technicalDiagnostics': 'Technical diagnostics',
+        'section.technicalDetails': 'Technical details',
         'diagnostics.maskedConfig': 'masked configuration',
         'sync.detail': 'Detail',
         'titles.overview': 'Overview',
@@ -1577,6 +1664,10 @@
         'openwebui.confirmDeleteChat': 'Delete the RAGFlow chat? The Seafile library stays untouched and the next OpenWebUI sync can create a new chat.',
         'workflow.createDatasets': 'Synchronize RAGFlow dataset and documents',
         'workflow.syncOpenWebUI': 'Create RAGFlow chat and OpenWebUI tool/pipe',
+        'workflow.mode': 'Mode',
+        'workflow.modeDelta': 'Delta',
+        'workflow.modeFull': 'Full sync',
+        'workflow.modeReconcile': 'Reconcile and repair',
         'workflow.scope': 'Seafile path',
         'workflow.refreshLibraries': 'Check libraries',
         'workflow.runSelected': 'Start selection',
@@ -1589,9 +1680,21 @@
         'workflow.skipReason': 'Skip reason',
         'workflow.noSelection': 'Select at least one visible library.',
         'workflow.running': 'Workflow is running...',
+        'workflow.cancel': 'Cancel',
+        'workflow.retry': 'Retry',
+        'workflow.progress': 'jobs completed',
         'workflow.notAvailable': 'Dashboard control is not available in this process.',
         'workflow.lastResult': 'Last result',
         'workflow.repo': 'Library',
+        'cleanup.title': 'Failed cleanups',
+        'cleanup.refresh': 'Refresh cleanups',
+        'cleanup.count': 'open failures',
+        'cleanup.targetType': 'Target type',
+        'cleanup.action': 'Action',
+        'cleanup.attempts': 'Attempts',
+        'cleanup.retry': 'Retry now',
+        'cleanup.retrying': 'Scheduling...',
+        'cleanup.unavailable': 'Cleanup status is not available in this process.',
         'api.error': 'API error'
       }
     };
@@ -1631,20 +1734,31 @@
       return LOCALE_TAGS[currentLanguage] || 'de-DE';
     }
     const state = {
-      activeTab: 'overview',
+      activeTab: ['overview', 'workflow', 'syncs', 'changes', 'logs', 'systems', 'openwebui', 'diagnostics'].includes(new URLSearchParams(window.location.search).get('tab'))
+        ? new URLSearchParams(window.location.search).get('tab')
+        : 'overview',
       loading: false,
       pendingLoad: false,
       refreshTimer: null,
       refreshMs: Number(localStorage.getItem('connector-dashboard-refresh-ms') || '10000'),
-      pages: { syncs: 0, changes: 0, logs: 0, openwebui: 0 },
+      pages: {
+        syncs: initialPage('syncs'),
+        changes: initialPage('changes'),
+        logs: initialPage('logs'),
+        openwebui: initialPage('openwebui')
+      },
       sidebarStatus: null,
       sidebarUpdatedAt: null,
       titles: {},
       overviewData: null,
       systemsData: null,
       workflowData: null,
+      cleanupOutboxData: null,
       workflowSelected: new Set(),
       workflowRunning: false,
+      workflowRunId: null,
+      workflowPollTimer: null,
+      cleanupRetrying: new Set(),
       jobsCleanupRunning: false,
       openwebuiActionRunning: null
     };
@@ -1667,6 +1781,7 @@
       });
       document.querySelector('.brand span').textContent = t('brand.subtitle');
       document.querySelector('.nav').setAttribute('aria-label', t('nav.label'));
+      setText('nav-toggle-label', t('nav.label'));
       document.querySelector('[data-tab="overview"]').lastChild.textContent = t('nav.overview');
       document.querySelector('[data-tab="workflow"]').lastChild.textContent = t('nav.workflow');
       document.querySelector('[data-tab="syncs"]').lastChild.textContent = t('nav.syncs');
@@ -1923,15 +2038,39 @@
       label.textContent = start + '-' + end + ' ' + t('pager.of') + ' ' + page.total;
       const previous = document.createElement('button');
       previous.type = 'button';
+      previous.dataset.pagerAction = 'previous';
       previous.textContent = t('pager.previous');
       previous.disabled = page.offset <= 0;
-      previous.addEventListener('click', () => setPage(-1));
+      previous.addEventListener('click', async () => {
+        await setPage(-1);
+        const replacement = $(id).querySelector('[data-pager-action="previous"]');
+        if (replacement) replacement.focus();
+      });
       const next = document.createElement('button');
       next.type = 'button';
+      next.dataset.pagerAction = 'next';
       next.textContent = t('pager.next');
       next.disabled = !page.has_next;
-      next.addEventListener('click', () => setPage(1));
+      next.addEventListener('click', async () => {
+        await setPage(1);
+        const replacement = $(id).querySelector('[data-pager-action="next"]');
+        if (replacement) replacement.focus();
+      });
       node.append(label, previous, next);
+    }
+    function setPageState(name, delta, load) {
+      state.pages[name] = Math.max(0, state.pages[name] + delta);
+      const url = new URL(window.location.href);
+      url.searchParams.set('page_' + name, String(state.pages[name]));
+      window.history.replaceState({}, '', url);
+      return load();
+    }
+    function resetPageState(name, load) {
+      state.pages[name] = 0;
+      const url = new URL(window.location.href);
+      url.searchParams.delete('page_' + name);
+      window.history.replaceState({}, '', url);
+      return load();
     }
     function renderHealthRail(statusData) {
       const node = $('health-rail');
@@ -2081,6 +2220,7 @@
       }
       if (state.activeTab === 'workflow' && state.workflowData) {
         renderWorkflow(state.workflowData);
+        if (state.cleanupOutboxData) renderCleanupOutbox(state.cleanupOutboxData);
       }
     }
     async function loadOverview() {
@@ -2153,6 +2293,77 @@
       const data = await api('/api/workflow/libraries');
       state.workflowData = data;
       renderWorkflow(data);
+      await loadCleanupOutbox();
+      const savedRunId = localStorage.getItem('connector-dashboard-workflow-run-id');
+      if (savedRunId && !state.workflowRunId) {
+        state.workflowRunId = savedRunId;
+        scheduleWorkflowPoll(0);
+      }
+    }
+    function cleanupRetryCell(item) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'ghost';
+      const running = state.cleanupRetrying.has(item.id);
+      button.textContent = running ? t('cleanup.retrying') : t('cleanup.retry');
+      button.disabled = running;
+      button.addEventListener('click', () => retryCleanupOutbox(item));
+      return button;
+    }
+    function renderCleanupOutbox(data) {
+      if (data.unavailable) {
+        setText('cleanup-outbox-summary', t('cleanup.unavailable'));
+      } else {
+        setText('cleanup-outbox-summary', fmtNumber(data.count) + ' ' + t('cleanup.count'));
+      }
+      table('cleanup-outbox-table', [
+        'ID',
+        t('workflow.repo'),
+        t('cleanup.targetType'),
+        t('cleanup.action'),
+        t('table.status'),
+        t('cleanup.attempts'),
+        t('table.time'),
+        t('table.error'),
+        t('table.actions')
+      ], (data.items || []).map((item) => ({
+        ...item,
+        __cells: [
+          String(item.id),
+          compactText(item.repo_id, { threshold: 34 }),
+          compactText(item.target_type, { threshold: 30 }),
+          compactText(item.action, { threshold: 28 }),
+          status(item.status),
+          fmtNumber(item.attempts),
+          fmtDate(item.run_after),
+          compactText(item.error_message, { threshold: 56 }),
+          cleanupRetryCell(item)
+        ]
+      })));
+    }
+    async function loadCleanupOutbox() {
+      try {
+        const data = await api('/api/cleanup-outbox?status=dead&limit=100');
+        state.cleanupOutboxData = data;
+      } catch (_err) {
+        state.cleanupOutboxData = { count: 0, items: [], unavailable: true };
+      }
+      renderCleanupOutbox(state.cleanupOutboxData);
+    }
+    async function retryCleanupOutbox(item) {
+      if (state.cleanupRetrying.has(item.id)) return;
+      state.cleanupRetrying.add(item.id);
+      renderCleanupOutbox(state.cleanupOutboxData || { count: 0, items: [] });
+      showError('');
+      try {
+        await apiPost('/api/cleanup-outbox/' + encodeURIComponent(item.id) + '/retry', {});
+        await loadCleanupOutbox();
+      } catch (err) {
+        showError(err.message || String(err));
+      } finally {
+        state.cleanupRetrying.delete(item.id);
+        if (state.cleanupOutboxData) renderCleanupOutbox(state.cleanupOutboxData);
+      }
     }
     function workflowSelectionCell(library) {
       const wrapper = document.createElement('label');
@@ -2230,6 +2441,46 @@
     }
     function renderWorkflowResult(result) {
       $('workflow-result').textContent = t('workflow.lastResult') + '\n' + JSON.stringify(result, null, 2);
+      if (!result || !result.run_id) return;
+      const progress = result.progress || { completed: 0, total: (result.jobs || []).length };
+      const total = Math.max(1, Number(progress.total || 0));
+      const completed = Math.min(total, Number(progress.completed || 0));
+      $('workflow-progress').hidden = false;
+      setText('workflow-progress-status', status(result.status).textContent || result.status);
+      setText('workflow-progress-label', completed + '/' + Number(progress.total || 0) + ' ' + t('workflow.progress'));
+      $('workflow-progress-bar').max = total;
+      $('workflow-progress-bar').value = completed;
+      const terminal = ['succeeded', 'failed', 'cancelled'].includes(result.status);
+      $('workflow-cancel').hidden = terminal;
+      $('workflow-retry').hidden = !['failed', 'cancelled'].includes(result.status);
+      state.workflowRunning = !terminal;
+      if (state.workflowData) renderWorkflow(state.workflowData);
+    }
+    function scheduleWorkflowPoll(delay = 1500) {
+      if (!state.workflowRunId) return;
+      if (state.workflowPollTimer) clearTimeout(state.workflowPollTimer);
+      state.workflowPollTimer = setTimeout(refreshWorkflowRun, delay);
+    }
+    async function refreshWorkflowRun() {
+      if (!state.workflowRunId) return;
+      try {
+        const result = await api('/api/workflow/runs/' + encodeURIComponent(state.workflowRunId));
+        renderWorkflowResult(result);
+        if (result.status === 'succeeded') {
+          localStorage.removeItem('connector-dashboard-workflow-run-id');
+          state.workflowRunId = null;
+          if (state.activeTab === 'workflow') await loadWorkflow();
+          return;
+        }
+        if (['failed', 'cancelled'].includes(result.status)) {
+          if (state.activeTab === 'workflow') await loadWorkflow();
+          return;
+        }
+        scheduleWorkflowPoll();
+      } catch (err) {
+        showError(err.message || String(err));
+        scheduleWorkflowPoll(4000);
+      }
     }
     async function runWorkflow() {
       const repoIds = Array.from(state.workflowSelected);
@@ -2243,30 +2494,33 @@
       $('workflow-result').textContent = t('workflow.running');
       showError('');
       try {
-        const result = await apiPost('/api/workflow/run', {
+        const result = await apiPost('/api/workflow/runs', {
           repo_ids: repoIds,
           create_dataset: $('workflow-create-datasets').checked,
           sync_openwebui: $('workflow-sync-openwebui').checked,
+          mode: $('workflow-mode').value,
           scope: $('workflow-scope').value || '/'
         });
+        state.workflowRunId = result.run_id;
+        localStorage.setItem('connector-dashboard-workflow-run-id', result.run_id);
         renderWorkflowResult(result);
-        state.workflowData = {
-          enabled: true,
-          libraries: result.libraries || [],
-          summary: {
-            visible: (result.libraries || []).length,
-            selectable: (result.libraries || []).filter((item) => item.selectable).length,
-            with_dataset: (result.libraries || []).filter((item) => item.ragflow_dataset_id).length
-          }
-        };
-        renderWorkflow(state.workflowData);
+        scheduleWorkflowPoll();
       } catch (err) {
-        showError(err.message || String(err));
-      } finally {
         state.workflowRunning = false;
+        showError(err.message || String(err));
         if (state.activeTab === 'workflow') {
           await loadWorkflow().catch((err) => showError(err.message || String(err)));
         }
+      }
+    }
+    async function workflowAction(action) {
+      if (!state.workflowRunId) return;
+      showError('');
+      try {
+        await apiPost('/api/workflow/runs/' + encodeURIComponent(state.workflowRunId) + '/' + action, {});
+        scheduleWorkflowPoll(0);
+      } catch (err) {
+        showError(err.message || String(err));
       }
     }
     async function loadSyncs() {
@@ -2280,7 +2534,7 @@
         ...run,
         __cells: [compactText(run.sync_id, { threshold: 34 }), fmtDate(run.started_at), fmtDuration(run.duration_ms), status(run.status), fmtNumber(run.objects_checked), fmtNumber(run.objects_created), fmtNumber(run.objects_updated), fmtNumber(run.objects_deleted), fmtNumber(run.objects_skipped)]
       })), (run) => openSyncDetail(run.sync_id, false));
-      renderPager('sync-pager', data, (delta) => { state.pages.syncs = Math.max(0, state.pages.syncs + delta); loadSyncs(); });
+      renderPager('sync-pager', data, (delta) => setPageState('syncs', delta, loadSyncs));
     }
     async function openSyncDetail(syncId, switchTab = true) {
       if (switchTab && state.activeTab !== 'syncs') {
@@ -2343,7 +2597,7 @@
           compactText(change.error_message, { threshold: 48 })
         ]
       })));
-      renderPager('change-pager', data, (delta) => { state.pages.changes = Math.max(0, state.pages.changes + delta); loadChanges(); });
+      renderPager('change-pager', data, (delta) => setPageState('changes', delta, loadChanges));
     }
     async function loadLogs() {
       const offset = state.pages.logs * PAGE_SIZE;
@@ -2367,7 +2621,7 @@
         detail.hidden = false;
         detail.textContent = JSON.stringify(entry, null, 2);
       });
-      renderPager('log-pager', data, (delta) => { state.pages.logs = Math.max(0, state.pages.logs + delta); loadLogs(); });
+      renderPager('log-pager', data, (delta) => setPageState('logs', delta, loadLogs));
     }
     function renderSystems(data) {
       table('source-table', ['Repo-ID', 'Name', t('table.status'), t('table.headCommit'), t('table.lastSync'), t('table.error')], (data.source.libraries || []).map((library) => ({
@@ -2463,7 +2717,7 @@
           openwebuiActionCell(item)
         ]
       })));
-      renderPager('openwebui-pager', mappings, (delta) => { state.pages.openwebui = Math.max(0, state.pages.openwebui + delta); loadOpenWebUI(); });
+      renderPager('openwebui-pager', mappings, (delta) => setPageState('openwebui', delta, loadOpenWebUI));
       $('openwebui-detail').textContent = JSON.stringify({ status: statusData, capabilities, dry_run: dryRun }, null, 2);
     }
     async function loadDiagnostics() {
@@ -2510,6 +2764,12 @@
       document.querySelectorAll('main > section').forEach((section) => { section.hidden = true; });
       state.activeTab = name;
       $(name).hidden = false;
+      const url = new URL(window.location.href);
+      url.searchParams.set('tab', name);
+      window.history.replaceState({}, '', url);
+      const sidebar = document.querySelector('.sidebar');
+      sidebar.classList.remove('nav-open');
+      $('nav-toggle').setAttribute('aria-expanded', 'false');
       const title = state.titles[name] || [name, ''];
       setText('view-title', title[0]);
       setText('view-subtitle', title[1]);
@@ -2586,17 +2846,33 @@
         }
       });
     });
+    $('nav-toggle').addEventListener('click', () => {
+      const sidebar = document.querySelector('.sidebar');
+      const expanded = sidebar.classList.toggle('nav-open');
+      $('nav-toggle').setAttribute('aria-expanded', String(expanded));
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      const sidebar = document.querySelector('.sidebar');
+      if (!sidebar.classList.contains('nav-open')) return;
+      sidebar.classList.remove('nav-open');
+      $('nav-toggle').setAttribute('aria-expanded', 'false');
+      $('nav-toggle').focus();
+    });
     $('refresh-active').addEventListener('click', loadActive);
     $('workflow-load').addEventListener('click', loadWorkflow);
     $('workflow-run').addEventListener('click', runWorkflow);
-    $('sync-refresh').addEventListener('click', () => { state.pages.syncs = 0; loadSyncs(); });
-    $('change-refresh').addEventListener('click', () => { state.pages.changes = 0; loadChanges(); });
-    $('log-refresh').addEventListener('click', () => { state.pages.logs = 0; loadLogs(); });
+    $('workflow-cancel').addEventListener('click', () => workflowAction('cancel'));
+    $('workflow-retry').addEventListener('click', () => workflowAction('retry'));
+    $('cleanup-outbox-refresh').addEventListener('click', loadCleanupOutbox);
+    $('sync-refresh').addEventListener('click', () => resetPageState('syncs', loadSyncs));
+    $('change-refresh').addEventListener('click', () => resetPageState('changes', loadChanges));
+    $('log-refresh').addEventListener('click', () => resetPageState('logs', loadLogs));
     initLanguageSelect();
     applyLanguage();
     initThemeToggle();
     initAutoRefresh();
-    loadActive();
+    activateTab(state.activeTab);
   </script>
 </body>
 </html>

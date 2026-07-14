@@ -101,6 +101,23 @@ class _UploadDocumentHttpClient:
         return None
 
 
+class _RenameDocumentHttpClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, str]]] = []
+
+    def put(self, path: str, *, json: dict[str, str]) -> httpx.Response:
+        self.calls.append((path, dict(json)))
+        request = httpx.Request("PUT", f"http://ragflow.local{path}")
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"id": "doc-1", **json}},
+            request=request,
+        )
+
+    def close(self) -> None:
+        return None
+
+
 class _DeleteResponseHttpClient:
     def __init__(self, status_code: int, payload: dict[str, object]) -> None:
         self.status_code = status_code
@@ -368,6 +385,24 @@ class _KeywordCompatibilityErrorHttpClient:
 
 
 class RAGFlowClientTests(unittest.TestCase):
+    def test_rename_document_restores_friendly_remote_name(self) -> None:
+        http_client = _RenameDocumentHttpClient()
+        client = RAGFlowClient("http://ragflow.local", "token")
+        client._client = http_client  # type: ignore[assignment]
+
+        renamed = client.rename_document("dataset", "doc-1", "report.pdf")
+
+        self.assertEqual(renamed["name"], "report.pdf")
+        self.assertEqual(
+            http_client.calls,
+            [
+                (
+                    "/api/v1/datasets/dataset/documents/doc-1",
+                    {"name": "report.pdf"},
+                )
+            ],
+        )
+
     def test_missing_named_dataset_is_empty_list(self) -> None:
         client = RAGFlowClient("http://ragflow.local", "token")
         client._client = _MissingDatasetHttpClient()  # type: ignore[assignment]

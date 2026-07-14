@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
+import httpx
 import pytest
 
 from seafile_ragflow_connector.clients import seafile_sync
@@ -10,6 +11,7 @@ from seafile_ragflow_connector.clients.seafile_sync import (
     SeafileDownloadTooLargeError,
     SeafileSyncClient,
 )
+from seafile_ragflow_connector.sync.delta_sync import capture_commit_snapshot
 
 
 class _StreamResponse:
@@ -115,5 +117,107 @@ def test_streaming_download_enforces_limit_before_or_during_read(
     try:
         with pytest.raises(SeafileDownloadTooLargeError, match="configured limit"):
             client._download_url("https://seafile.example/file")
+    finally:
+        client.close()
+
+
+def test_commit_snapshot_and_revision_download_use_pinned_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/dir/"):
+            return httpx.Response(
+                200,
+                request=request,
+                json=[{"name": "a.txt", "type": "file", "id": "obj-a"}],
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            json="https://seafile.example/seafhttp/revision-token",
+        )
+
+    client = SeafileSyncClient("https://seafile.example", "sync-token")
+    client._client.close()
+    client._client = httpx.Client(  # type: ignore[assignment]
+        base_url="https://seafile.example",
+        headers={"Authorization": "Token sync-token"},
+        transport=httpx.MockTransport(handler),
+    )
+    monkeypatch.setattr(client, "_download_url", lambda url: url.encode())
+    try:
+        entries = client.list_dir_at_commit("repo", "commit-1", "/docs")
+        body = client.download_file_revision("repo", "/docs/a.txt", "commit-1")
+    finally:
+        client.close()
+
+    assert entries[0]["id"] == "obj-a"
+    assert body == b"https://seafile.example/seafhttp/revision-token"
+    assert requests[0].url.path == "/api/v2.1/repos/repo/commits/commit-1/dir/"
+    assert requests[0].url.params["path"] == "/docs"
+    assert requests[1].url.path == "/api2/repos/repo/file/revision/"
+    assert requests[1].url.params["commit_id"] == "commit-1"
+
+
+def test_commit_snapshot_recurses_with_hierarchical_path_parameter() -> None:
+    requested_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.params["path"]
+        requested_paths.append(path)
+        if path == "/":
+            entries = [
+                {"name": "docs", "type": "dir", "id": "dir-docs"},
+                {"name": "root.txt", "type": "file", "id": "obj-root"},
+            ]
+        elif path == "/docs":
+            entries = [
+                {"name": "nested.txt", "type": "file", "id": "obj-nested"}
+            ]
+        else:
+            pytest.fail(f"unexpected snapshot path: {path}")
+        return httpx.Response(200, request=request, json=entries)
+
+    client = SeafileSyncClient("https://seafile.example", "sync-token")
+    client._client.close()
+    client._client = httpx.Client(  # type: ignore[assignment]
+        base_url="https://seafile.example",
+        headers={"Authorization": "Token sync-token"},
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        snapshot = capture_commit_snapshot(client, "repo", "commit-1")
+    finally:
+        client.close()
+
+    assert requested_paths == ["/", "/docs"]
+    assert [entry.normalized_path for entry in snapshot] == [
+        "/docs",
+        "/docs/nested.txt",
+        "/root.txt",
+    ]
+
+
+def test_commit_snapshot_rejects_mixed_entry_lists() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            json=[{"name": "valid.txt", "type": "file"}, "invalid"],
+        )
+
+    client = SeafileSyncClient("https://seafile.example", "sync-token")
+    client._client.close()
+    client._client = httpx.Client(  # type: ignore[assignment]
+        base_url="https://seafile.example",
+        headers={"Authorization": "Token sync-token"},
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises(TypeError, match="commit directory entries"):
+            client.list_dir_at_commit("repo", "commit-1", "/")
     finally:
         client.close()

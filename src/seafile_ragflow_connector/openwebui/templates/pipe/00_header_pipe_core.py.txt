@@ -3,7 +3,7 @@ title: RAGFlow Dataset Pipe
 author: Seafile RAGFlow Connector
 version: 3.10.0
 owner: seafile-ragflow-connector
-artifact_version: 27
+artifact_version: 28
 """
 
 # =============================================================================
@@ -14,12 +14,11 @@ artifact_version: 27
 # Diese OpenWebUI-Pipe verbindet OpenWebUI mit einem eigenen Connector-Proxy,
 # der wiederum RAGFlow beziehungsweise ein RAGFlow-Dataset/Chat anspricht.
 #
-# Wichtig: Die Pipe ist als Audit-RAG-Pipe gebaut. Retrieval-Treffer sind
-# nicht nur Anhang, sondern die Beweiskette der Antwort. Die finale
+# Wichtig: Retrieval-Treffer bilden die Beweiskette der Antwort. Die finale
 # Chat-Nachricht soll zuerst eine echte KI-Antwort sein und jede wesentliche
-# Aussage mit Quellenmarken wie [S1] belegen. Standardmäßig folgt genau eine
-# sichtbare deutsche Audit-Nachweistabelle; native Citation-Events bleiben ein
-# optionaler Kompakt-/Debug-Pfad.
+# Aussage mit Quellenmarken wie [S1] belegen. Standardmäßig nutzt die Pipe
+# native OpenWebUI-Citations. Eine kompakte Markdown-Übersicht erscheint nur
+# als Fallback, wenn native Citation-Events fehlen oder unvollständig sind.
 #
 # Typische Datenflusskette:
 #
@@ -49,8 +48,8 @@ artifact_version: 27
 #   INJECT_RAG_SYSTEM_PROMPT=true
 #   SEND_GENERATIVE_RAG_HINTS=true
 #   RETRIEVAL_ONLY_FALLBACK=brief
-#   EMIT_CITATION_EVENTS=false
-#   SOURCE_DISPLAY_MODE=compact
+#   EMIT_CITATION_EVENTS=true
+#   SOURCE_DISPLAY_MODE=native
 #   APPEND_SOURCE_OVERVIEW=true
 #   SOURCE_MARKDOWN_MODE=compact
 #   SHOW_SOURCE_SCORES=true
@@ -80,7 +79,7 @@ artifact_version: 27
 # - Antwort zuerst, Quellen danach.
 # - Keine Roh-Chunks als Ersatz für eine Antwort.
 # - Native Citation-Events für klickbare Quellen verwenden.
-# - Markdown-Nachweistabelle im Audit-Modus sichtbar halten.
+# - Markdown-Nachweistabellen nur im expliziten Audit-Modus anzeigen.
 # - Wenn keine generierte Antwort vorliegt, klar diagnostizieren, warum.
 # =============================================================================
 
@@ -270,6 +269,8 @@ class SourceHit:
     used_in_answer: bool = False
     claim_ids: tuple[str, ...] = ()
     support_status: str = "not_evaluated"
+    source_dto_version: str = "v1"
+    status: str = "available"
     source_metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -384,6 +385,11 @@ class Pipe:
         MODEL_NAME: str = Field(
             default="",
             description="Anzeigename im OpenWebUI-Modellmenü.",
+        )
+
+        LANGUAGE: str = Field(
+            default="de",
+            description="Sprache für sichtbare Pipe-Status- und Quellenmeldungen.",
         )
 
         # Backend-Modell für RAGFlows OpenAI-kompatiblen Chat-Pfad. Der
@@ -544,11 +550,10 @@ class Pipe:
         # ------------------------------------------------------------------
         # 6) Quellen-UX in OpenWebUI
         # ------------------------------------------------------------------
-        # Native Citation-Events erzeugen zusätzliche OpenWebUI-Quellenbereiche.
-        # Im Audit-Standard bleiben sie deaktiviert, damit die sichtbare Antwort
-        # nur eine Quellen-ID-Systematik und eine deutsche Nachweistabelle zeigt.
+        # Native Citation-Events erzeugen die klickbare OpenWebUI-Quellenansicht.
+        # Sie sind der Standard; Markdown dient als fehlertoleranter Fallback.
         EMIT_CITATION_EVENTS: bool = Field(
-            default=False,
+            default=True,
             description="Sendet Quellen zusätzlich als native OpenWebUI-Citation-Events.",
         )
 
@@ -585,16 +590,17 @@ class Pipe:
         )
 
         # Primärer Quellenkanal:
-        #   compact        kurze, klickbare Quellenliste, Standard
-        #   audit          sichtbare Markdown-Nachweistabelle
-        #   debug          native Events plus Markdown, nur für Admin-Tests
+        #   native         native OpenWebUI-Citations, Standard
+        #   markdown_audit sichtbare Markdown-Nachweistabelle
+        #   both_debug     native Events plus Markdown, nur für Admin-Tests
         #   none           keine Quellenanzeige im Chat
         SOURCE_DISPLAY_MODE: str = Field(
-            default="compact",
-            description="Quellenanzeige: compact, audit, debug oder none.",
+            default="native",
+            description="Quellenanzeige: native, markdown_audit, both_debug oder none.",
         )
 
-        # Zusätzlicher Quellenblock im Antworttext, nur aktiv bei
+        # Zusätzlicher Quellenblock im Antworttext. Im nativen Standard wird
+        # dieser Modus nur als Fallback verwendet; explizit aktiv ist er bei
         # SOURCE_DISPLAY_MODE=markdown_audit oder both_debug:
         #   none     keine Markdown-Quellenübersicht
         #   audit    Nachweistabelle mit Quellen-ID, Fundstelle, Relevanz und Link
@@ -787,9 +793,11 @@ class Pipe:
         if answer_origin not in NON_GENERATED_ORIGINS:
             sources = _curate_sources_for_answer(sources, answer)
 
+        native_citations_complete = bool(sources)
         if _emit_citation_events(self.valves):
             for source in sources:
-                await _emit_event(__event_emitter__, _citation_event(source))
+                emitted = await _emit_event(__event_emitter__, _citation_event(source))
+                native_citations_complete = native_citations_complete and emitted
 
         if _emit_legacy_source_events(self.valves):
             for source in sources:
@@ -816,4 +824,9 @@ class Pipe:
             self.valves,
             answer_origin=answer_origin,
             diagnostics=data.get("diagnostics") if isinstance(data, Mapping) else None,
+            force_markdown_fallback=(
+                _emit_citation_events(self.valves)
+                and bool(sources)
+                and not native_citations_complete
+            ),
         )

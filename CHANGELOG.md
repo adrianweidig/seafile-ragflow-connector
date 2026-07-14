@@ -8,7 +8,41 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
-Keine Einträge.
+### Added
+
+- Commit-gepinnter Delta-Sync mit bestätigten Snapshots/Cursorn,
+  Repo-Leases/Fence-Tokens, Dokumentversionen, Cleanup-Outbox und eigenständigem
+  Reconcile-Plan.
+- Persistente Dashboard-Prüfläufe mit Fortschritt, Abbruch und Retry sowie neue
+  `library`-, `jobs`- und `doctor`-CLI-Kommandos.
+- Sichtbare fehlgeschlagene Zielbereinigungen im Dashboard sowie
+  `cleanup list`/`cleanup retry` für persistente operative Wiederholungen.
+- Explizite Compose-/Portainer-/Swarm-Profile für gebündelten oder externen
+  State und Core-only beziehungsweise Search.
+
+### Changed
+
+- Dashboard und Wissenssuche erhalten eine responsive, zustandserhaltende
+  Navigation, kompaktere Standardansichten und eingeklappte technische Details.
+- Search- und OpenWebUI-Quellen zeigen konsistente Nachweise, Abdeckung und
+  Fundstellen; laufende Suchanfragen können abgebrochen oder erneut gestartet
+  werden.
+- Opake, nutzer- und ACL-gebundene Result-Snapshots halten die Search-Pagination
+  über Folgeseiten stabil, ohne RAGFlow erneut ab Seite eins abzufragen.
+- Dashboard-Logs werden asynchron und gebündelt persistiert, damit der
+  Anwendungspfad bei hoher Lograte nicht auf Datenbank-Commits wartet;
+  vorübergehende Schreibfehler werden begrenzt wiederholt und endgültige
+  Verluste als Drop-Metrik gezählt.
+
+### Fixed
+
+- Deployment-Profile verwenden für Core und Search dasselbe Authz-Secret und
+  veröffentlichen Search in den unterstützten Standardprofilen konsistent.
+- Bibliotheks-Löschungen benötigen mehrere Beobachtungen und bei auffälligem
+  Massendelta eine Bestätigung, bevor Zielartefakte entfernt werden.
+- Wartende CLI-Syncs liefern bei Timeout, Abbruch oder endgültigem Jobfehler
+  einen fehlerhaften Exitcode; ungültige Konfigurationen erscheinen kompakt
+  statt als interner Python-Traceback.
 
 ## 2.5.6 - 2026-07-04
 

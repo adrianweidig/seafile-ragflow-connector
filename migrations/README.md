@@ -10,6 +10,8 @@ Dieser Ordner enthält Alembic-Migrationen für den dauerhaften Connector-State.
   OpenWebUI-Sync-State.
 - `0004_acl_search_profiles.py` ergänzt ACL-Snapshots und Search-Profile.
 - `0005_sync_job_deduplication.py` ergänzt atomische Deduplizierung aktiver Jobs.
+- `0006_sync_consistency_state.py` ergänzt Sync-Runs, commit-gepinnte Snapshots
+  und Cursor, Repo-Leases mit Fence-Token, Dokumentversionen und Cleanup-Outbox.
 
 Migrationen sind additiv zu behandeln. Bestehende Sync-Daten dürfen nicht
 verworfen werden, weil PostgreSQL die Quelle für Idempotenz, Reparatur und
@@ -27,3 +29,10 @@ aktive Jobs vollständig abgearbeitet werden. Die Migration bewahrt bestehende
 Jobs mit eindeutigen `legacy:<id>`-Schlüsseln, führt bereits vorhandene
 semantisch gleiche Jobs aber bewusst nicht zusammen. Die atomische
 Deduplizierung gilt für Jobs, die nach dem Upgrade neu eingereiht werden.
+
+Revision `0006_sync_consistency_state` ist additiv. Vor dem Upgrade müssen
+keine bestehenden Dokumentbindungen umgeschrieben werden; neue Sync-Läufe
+füllen Snapshot-, Cursor- und Versionszustand schrittweise. Für den produktiven
+Rollout trotzdem Controller, Reconciler und Worker gemeinsam auf denselben
+Image-Stand aktualisieren, damit kein älterer Prozess die neuen Jobfelder
+ignoriert.

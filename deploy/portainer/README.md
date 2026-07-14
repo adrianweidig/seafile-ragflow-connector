@@ -19,6 +19,12 @@ Die Abnahme nach dem Deploy ist in der
 [Admin-Erststart-Checkliste](../../docs/admin-first-start-checklist.md)
 zusammengefasst.
 
+Der Assistent erzeugt standardmäßig das Search-Profil mit gebündeltem State.
+Mit `ENTERPRISE_WITH_SEARCH=false` entsteht ein echtes Core-only-Bundle ohne
+Search-Service. `ENTERPRISE_STATE_MODE=external` verlangt `DATABASE_URL` und
+`REDIS_URL` und nimmt PostgreSQL sowie Redis aus dem gestarteten Bundle; ein
+lokales Dummy-Passwort ist dann nicht erforderlich.
+
 - `docker-compose.yml` definiert Controller, Worker, Reconciler, den separaten
   Search-Service, PostgreSQL, Redis, Volumes, Healthchecks sowie Dashboard- und
   Search-Portmapping.
@@ -55,7 +61,8 @@ Portainer-Start:
    variables` importieren.
 6. Die Minimalpflichtwerte ersetzen: `SEAFILE_BASE_URL`,
    `SEAFILE_ADMIN_TOKEN`, `SEAFILE_SYNC_USER_TOKEN`, `RAGFLOW_BASE_URL`,
-   `RAGFLOW_API_KEY` und `POSTGRES_PASSWORD` oder alternativ `DATABASE_URL`.
+   `RAGFLOW_API_KEY`, `AUTHZ_API_SHARED_SECRET` und für diese statische
+   gebündelte Variante `POSTGRES_PASSWORD`.
    `AUTHZ_API_SHARED_SECRET`, `SEARCH_AUTHZ_SHARED_SECRET`,
    `SEARCH_RAGFLOW_BASE_URL` und `SEARCH_RAGFLOW_API_KEY` für die
    Wissenssuche setzen. OpenWebUI-Werte nur setzen, wenn

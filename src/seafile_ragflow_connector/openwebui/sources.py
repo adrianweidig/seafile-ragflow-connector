@@ -16,7 +16,9 @@ from urllib.parse import quote
 
 from seafile_ragflow_connector.i18n import Localizer, localizer_for
 from seafile_ragflow_connector.sources.evidence import (
+    SOURCE_DTO_VERSION,
     build_text_fragment_url,
+    user_facing_document_name,
 )
 from seafile_ragflow_connector.sources.evidence import (
     locator_quality as shared_locator_quality,
@@ -94,6 +96,8 @@ class SourceHit:
     claim_ids: tuple[str, ...] = ()
     support_status: str = "not_evaluated"
     language: str = "de"
+    source_dto_version: str = SOURCE_DTO_VERSION
+    status: str = "available"
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -125,6 +129,8 @@ class SourceHit:
 
     def metadata(self) -> dict[str, Any]:
         values = {
+            "source_dto_version": self.source_dto_version,
+            "status": self.status,
             "rank": self.rank,
             "source_id": self.source_id or f"S{self.rank}",
             "dataset_id": self.dataset_id,
@@ -185,6 +191,8 @@ class SourceHit:
         if location and location != self.l10n.text("sources.missing_location"):
             citation_title = f"{title} · {location}"
         return {
+            "source_dto_version": self.source_dto_version,
+            "status": self.status,
             "name": title,
             "source_id": self.source_id or f"S{self.rank}",
             "document": [self.snippet or title],
@@ -971,6 +979,12 @@ def _source_hit_from_event(source: dict[str, Any], *, index: int) -> SourceHit:
             or "not_evaluated"
         ),
         language="de",
+        source_dto_version=str(
+            source.get("source_dto_version")
+            or metadata.get("source_dto_version")
+            or SOURCE_DTO_VERSION
+        ),
+        status=str(source.get("status") or metadata.get("status") or "available"),
         raw=dict(source),
     )
 
@@ -1301,6 +1315,8 @@ def _normalize_reference(
     if file_row:
         document_name = _safe_document_name_from_file_row(file_row) or document_name
     source_path = _source_path(raw, file_row)
+    if document_name or source_path:
+        document_name = user_facing_document_name(document_name, source_path)
     repo_id = _repo_id(raw, file_row)
     file_id = _first_text(raw, "file_id", "seafile_file_id", "seafile_obj_id", "obj_id")
     seafile_library_name = _first_text(raw, "seafile_library_name", "library_name")
@@ -1401,6 +1417,8 @@ def _normalize_reference(
         citation_label=citation_label,
         provider_citation_id=provider_citation_id,
         language=l10n.language,
+        source_dto_version=str(raw.get("source_dto_version") or SOURCE_DTO_VERSION),
+        status=str(raw.get("status") or "available"),
         raw=raw,
     )
 

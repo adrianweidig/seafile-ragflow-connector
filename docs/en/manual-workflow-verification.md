@@ -47,7 +47,7 @@ For Seafile to RAGFlow, set at least these values:
 | `SEAFILE_SYNC_USER_TOKEN` | Seafile API token for file downloads |
 | `RAGFLOW_BASE_URL` | RAGFlow API URL from the connector perspective |
 | `RAGFLOW_API_KEY` | RAGFlow target-user API key |
-| `POSTGRES_PASSWORD` or `DATABASE_URL` | Connector state database |
+| `POSTGRES_PASSWORD` or both `DATABASE_URL` and `REDIS_URL` | Bundled or external connector state |
 
 For OpenWebUI, add:
 

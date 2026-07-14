@@ -10,6 +10,7 @@ from seafile_ragflow_connector.jobs.job_store import JobStore
 from seafile_ragflow_connector.jobs.types import JobSpec, JobStatus, JobType
 from seafile_ragflow_connector.persistence import Base
 from seafile_ragflow_connector.persistence.models.job import SyncJob
+from seafile_ragflow_connector.persistence.sync_state import SyncStateStore
 
 
 def _store(
@@ -93,6 +94,52 @@ def test_semantically_identical_active_jobs_are_coalesced() -> None:
 
     assert second.job_id == first.job_id
     assert second.deduplicated is True
+
+
+def test_workflow_correlation_metadata_does_not_break_semantic_deduplication() -> None:
+    store = _store()
+    first = store.enqueue_with_result(
+        JobSpec(
+            JobType.SYNC_LIBRARY_DELTA,
+            repo_id="repo-1",
+            payload={"scope": "/", "workflow_run_id": "workflow-a"},
+        )
+    )
+    second = store.enqueue_with_result(
+        JobSpec(
+            JobType.SYNC_LIBRARY_DELTA,
+            repo_id="repo-1",
+            payload={"scope": "/", "workflow_run_id": "workflow-b"},
+        )
+    )
+
+    assert second.job_id == first.job_id
+    assert second.deduplicated is True
+
+
+def test_cancelling_workflow_does_not_cancel_attached_periodic_job() -> None:
+    store = _store()
+    state = SyncStateStore(store.session_factory)
+    state.create_run(
+        run_id="workflow",
+        repo_id=None,
+        mode="workflow",
+        status="queued",
+    )
+    periodic_job_id = store.enqueue(
+        JobSpec(JobType.SYNC_LIBRARY_DELTA, repo_id="repo-1")
+    )
+    store.subscribe_workflow(
+        "workflow",
+        periodic_job_id,
+        is_root=True,
+        owns_job=False,
+    )
+
+    assert store.cancel_workflow_subscription("workflow") == []
+    periodic_job = store.get(periodic_job_id)
+    assert periodic_job is not None
+    assert periodic_job.status == JobStatus.QUEUED.value
 
 
 def test_completed_job_frees_dedup_key_for_next_periodic_run() -> None:
@@ -326,3 +373,23 @@ def test_stale_recovery_cas_does_not_overwrite_fresh_heartbeat() -> None:
         assert job is not None
         assert job.status == JobStatus.RUNNING.value
         assert job.locked_by == "worker-a"
+
+
+def test_run_binding_listing_cancel_and_retry_are_persistent() -> None:
+    store = _store()
+    job_id = store.enqueue(JobSpec(JobType.SYNC_LIBRARY_DELTA, repo_id="repo"))
+
+    assert store.bind_run(job_id, "run-1")
+    assert [job.id for job in store.list_jobs(run_id="run-1")] == [job_id]
+    assert store.request_cancel(job_id)
+    cancelled = store.get(job_id)
+    assert cancelled is not None
+    assert cancelled.status == JobStatus.CANCELLED.value
+    assert cancelled.cancel_requested_at is not None
+
+    assert store.retry(job_id)
+    retried = store.get(job_id)
+    assert retried is not None
+    assert retried.status == JobStatus.QUEUED.value
+    assert retried.attempts == 0
+    assert retried.cancel_requested_at is None

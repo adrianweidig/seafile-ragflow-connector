@@ -22,8 +22,8 @@ auf. Nur erlaubte SearchProfiles werden an RAGFlow weitergegeben.
 | `GET /health` | rückwärtskompatibler Alias für `/livez` |
 | `GET /search` | Weboberfläche "Wissenssuche" |
 | `GET /api/search/profiles` | erlaubte Bibliotheken/Datasets für den Nutzer |
-| `POST /api/search/query` | Retrieval-Suche über erlaubte Datasets |
-| `POST /api/search/chat` | Antwortmodus mit Quellen aus erlaubten Datasets |
+| `POST /api/search/query` | paginierte Retrieval-Suche über erlaubte Datasets |
+| `POST /api/search/chat` | paginierter Antwortmodus mit Quellen aus erlaubten Datasets |
 | `GET /api/search/source/preview?token=...` | signierter Evidence-Viewer für eine Trefferpassage |
 | `GET /api/search/source/document?token=...` | authz-geprüfter same-origin Dokumentproxy für den nativen Browserviewer |
 
@@ -58,9 +58,10 @@ proxy_set_header X-Forwarded-Email $authenticated_email;
 proxy_set_header X-Forwarded-Name  $authenticated_display_name;
 ```
 
-Im Swarm-Stack wird Search nicht direkt über das Routing-Mesh veröffentlicht.
-Der authentifizierende Proxy muss am internen Overlay-Netz hängen; nur sein
-konkretes Netz gehört in die CIDR-Allowlist.
+Im Swarm-Standardprofil wird Search über
+`SEARCH_SERVICE_PUBLISHED_PORT` im Routing-Mesh veröffentlicht. Produktiv
+sollte davor ein authentifizierender Proxy stehen; nur dessen konkretes Netz
+gehört in die CIDR-Allowlist. Core-only lässt das Search-Modul vollständig weg.
 
 ## Autorisierung
 
@@ -112,10 +113,36 @@ Aus dem Template werden nur Suchparameter übernommen. Datasets, `kb_ids` oder
 Dokumentlisten aus RAGFlow werden ignoriert, damit die Seafile-ACL-Auswahl
 immer die einzige Berechtigungsgrenze bleibt.
 
-Die UI-Einstellung "Treffer" steuert die sichtbare Ergebnisanzahl. RAGFlows
-`top_k` ist dagegen der interne Kandidatenpool und bleibt standardmäßig `1024`.
-Dadurch kann RAGFlow sauber hybrid suchen, während die Oberfläche trotzdem nur
-eine kompakte Ergebnisliste zeigt.
+Die UI-Einstellung **Treffer pro Seite** steuert die Seitengröße (Standard 20,
+Maximum 100). Weitere Ergebnisse werden über einen opaken Cursor nachgeladen,
+der an Nutzer, Frage, Profilauswahl, die aktuelle Dataset-/ACL-Auflösung und den
+Service-Scope gebunden ist. Die erste Seite legt dafür einen kurzlebigen
+Result-Snapshot an; Folgeseiten lesen ausschließlich diesen Snapshot und bleiben
+daher auch bei veränderter Upstream-Rangfolge lücken- und duplikatfrei. Der
+ältere Request-Parameter `top_k` bleibt kompatibel. RAGFlows internes `top_k`
+ist dagegen der Kandidatenpool und bleibt standardmäßig `1024`. Dadurch kann
+RAGFlow sauber hybrid suchen, während die Oberfläche kompakte Seiten zeigt.
+
+Pro Request sind höchstens 25 Profile zulässig. Bis zu vier erlaubte Datasets
+werden parallel abgefragt; wenn RAGFlow für ein Dataset mehrere Seiten liefert,
+holt der Service sie bis zur benötigten Kandidatenmenge nach. Die Antwort
+enthält `request_id`, `timing_ms` und:
+
+```json
+{
+  "pagination": {"next_cursor": "…", "has_more": true},
+  "partial_failures": [
+    {"profile_id": "…", "reason": "dataset_not_ready"}
+  ]
+}
+```
+
+Ein einzelnes nicht bereites oder fehlerhaftes Dataset verwirft damit nicht die
+erfolgreichen Treffer anderer erlaubter Datasets. Der Cursor ist nicht als
+dauerhafte ID zu speichern oder manuell zu verändern. Result-Snapshots laufen
+nach 180 Sekunden ab und sind sowohl nach Anzahl als auch Speichergröße
+begrenzt. Bei `cursor_expired` startet die UI die Suche bewusst neu; ein
+ungültiger oder fremder Cursor wird nicht übernommen.
 
 Optionale Overrides:
 
@@ -177,6 +204,12 @@ Snippet, Score und den bestmöglichen Originallink. Dafür werden nur die bereit
 autorisierten RAGFlow-Treffer- und Metadaten in einem signierten Token genutzt;
 der Search-Service wird dadurch nicht zu einem generischen Seafile-Daten-Tunnel.
 
+Search und OpenWebUI verwenden dafür den versionierten `SourceDTO v1` mit
+stabilem Quellenmarker, Status, Locator, `viewer_url` und `original_url`.
+Bestehende `EvidenceHit`-Aufrufer bleiben kompatibel. OpenWebUI erhält native
+Citation-Events; kompaktes Quellen-Markdown wird nur genutzt, wenn die native
+Ausgabe nicht verfügbar oder unvollständig ist.
+
 Der zusätzliche Dokumentviewer verwendet `viewer_url` und ruft das Original über
 den Connector-Core ab. Der Search-Service speichert keinen Seafile-Admin- oder
 Sync-Token; er prüft Preview-Token und Nutzerheader, fragt die Authz-API und
@@ -228,6 +261,12 @@ Die GUI unter `/search` ist als Arbeitsoberfläche für Endnutzer gebaut:
 - Filterfeld für Bibliotheken
 - Umschaltung zwischen "Dokumente finden" und "Antwort mit Quellen"
 - dreispaltiges Desktop-Layout mit Quellenpanel
+- mobile Bereichsnavigation zwischen Antwort, Dokument und Quellen
+- serverseitig request-spezifisch abbrechen, exakt denselben fehlgeschlagenen
+  Request wiederholen und weitere Treffer per stabilem Snapshot-Cursor nachladen
+- letztes erfolgreiches Ergebnis bleibt während Loading, Abbruch und Fehler
+  sichtbar; nach Cursor-Ablauf startet ein Retry mit einer frischen Rangfolge
+- persistierte Bibliotheksauswahl und maximal 25 ausgewählte Profile
 - Kartenlayout für Ergebnisse mit `S1`-/`S2`-Quellenlabels
 - Quellenchips wählen dieselbe Quelle im Viewer aus
 - Dokumentname, Bibliothek, Pfad, Snippet, Score und Locator-Chip
@@ -248,6 +287,7 @@ kann das Overlay ergänzt werden:
 ```bash
 docker compose --env-file connector.env \
   -f deploy/compose/shared-network.compose.yml \
+  -f deploy/compose/bundled-state.compose.yml \
   -f deploy/compose/search.compose.yml up -d
 ```
 

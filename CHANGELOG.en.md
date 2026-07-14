@@ -8,7 +8,40 @@ retroactively.
 
 ## Unreleased
 
-No entries.
+### Added
+
+- Commit-pinned delta sync with confirmed snapshots/cursors, repository
+  leases/fencing tokens, document versions, cleanup outbox, and a dedicated
+  reconciliation plan.
+- Persistent dashboard verification runs with progress, cancellation, and
+  retry, plus new `library`, `jobs`, and `doctor` CLI commands.
+- Visible failed target cleanups in the dashboard plus `cleanup list` and
+  `cleanup retry` for persistent operational recovery jobs.
+- Explicit Compose, Portainer, and Swarm profiles for bundled or external state
+  and for core-only or Search deployments.
+
+### Changed
+
+- Dashboard and knowledge search now use responsive, state-preserving
+  navigation, denser default views, and collapsed technical details.
+- Search and OpenWebUI sources expose consistent evidence, coverage, and
+  locations; active searches can be cancelled or retried.
+- Opaque result snapshots bound to user and ACL state keep Search pagination
+  stable across follow-up pages without querying RAGFlow again from page one.
+- Dashboard logs are persisted asynchronously in batches so high log volume no
+  longer blocks application paths on individual database commits; transient
+  write failures are retried within bounds and permanent loss increments the
+  drop metric.
+
+### Fixed
+
+- Deployment profiles now share the same authorization secret between core and
+  Search and expose Search consistently in supported standard profiles.
+- Library deletion requires repeated observations and explicit confirmation for
+  suspicious mass changes before target artifacts are removed.
+- Waiting CLI syncs now return a failing exit code on timeout, cancellation, or
+  terminal job failure, and invalid configuration is reported concisely instead
+  of exposing an internal Python traceback.
 
 ## 2.5.6 - 2026-07-04
 

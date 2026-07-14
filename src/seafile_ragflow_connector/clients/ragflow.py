@@ -124,6 +124,22 @@ class RAGFlowClient:
             return data
         return {"data": data}
 
+    def rename_document(
+        self,
+        dataset_id: str,
+        document_id: str,
+        document_name: str,
+    ) -> dict[str, Any]:
+        data = unwrap_response(
+            self._client.put(
+                f"/api/v1/datasets/{dataset_id}/documents/{document_id}",
+                json={"name": document_name},
+            )
+        )
+        if isinstance(data, dict):
+            return data
+        return {"data": data}
+
     def delete_documents(self, dataset_id: str, document_ids: list[str]) -> Any:
         try:
             return self._delete_documents_once(dataset_id, document_ids)

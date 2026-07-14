@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -93,6 +94,12 @@ def run_browser_smoke(config: BrowserSmokeConfig) -> None:
             _assert_mobile_layout(mobile_page, url, config)
             mobile.close()
             browser.close()
+            cancelled = list(getattr(server, "cancelled_requests", []))
+            searched = list(getattr(server, "search_request_ids", []))
+            if not cancelled or not set(cancelled).intersection(searched):
+                raise AssertionError(
+                    "browser cancel did not send the active search request_id"
+                )
     except PlaywrightError as exc:
         if "Executable doesn't exist" in str(exc):
             raise RuntimeError(
@@ -108,6 +115,7 @@ def run_browser_smoke(config: BrowserSmokeConfig) -> None:
 def _start_fake_search_server() -> ThreadingHTTPServer:
     class SearchSmokeHandler(BaseHTTPRequestHandler):
         server_version = "ConnectorSearchSmoke/1.0"
+        retry_attempts = 0
 
         def do_GET(self) -> None:  # noqa: N802
             if self.path in {"/", "/search"}:
@@ -131,6 +139,18 @@ def _start_fake_search_server() -> ThreadingHTTPServer:
                                 "kind": "Bibliothek",
                             },
                         ],
+                        "capabilities": {
+                            "max_selected_profiles": 25,
+                            "default_page_size": 20,
+                            "max_page_size": 100,
+                            "max_parallel_profiles": 4,
+                            "cursor_pagination": True,
+                            "snapshot_pagination": True,
+                            "snapshot_ttl_seconds": 180,
+                            "snapshot_max_results": 200,
+                            "partial_results": True,
+                            "source_dto_version": "v1",
+                        },
                     }
                 )
                 return
@@ -141,10 +161,35 @@ def _start_fake_search_server() -> ThreadingHTTPServer:
             self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
 
         def do_POST(self) -> None:  # noqa: N802
-            if self.path not in {"/api/search/chat", "/api/search/query"}:
+            if self.path not in {
+                "/api/search/chat",
+                "/api/search/query",
+                "/api/search/cancel",
+            }:
                 self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
                 return
-            self._send_json(_search_response())
+            content_length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(content_length) if content_length else b"{}"
+            payload = json.loads(raw.decode("utf-8"))
+            request_id = str(payload.get("request_id") or "")
+            if self.path == "/api/search/cancel":
+                self.server.cancelled_requests.append(request_id)  # type: ignore[attr-defined]
+                self._send_json({"request_id": request_id, "cancelled": True})
+                return
+            self.server.search_request_ids.append(request_id)  # type: ignore[attr-defined]
+            question = str(payload.get("question") or "")
+            if question.startswith("Langsame Suche"):
+                time.sleep(1.0)
+            if question.startswith("Wiederholen"):
+                type(self).retry_attempts += 1
+                if type(self).retry_attempts == 1:
+                    self._send_json(
+                        {"message": "Temporärer Testfehler."},
+                        status=HTTPStatus.SERVICE_UNAVAILABLE,
+                    )
+                    return
+            cursor = str(payload.get("cursor") or "")
+            self._send_json(_search_response(second_page=cursor == "page-2"))
 
         def log_message(self, _format: str, *_args: object) -> None:
             return
@@ -155,7 +200,10 @@ def _start_fake_search_server() -> ThreadingHTTPServer:
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                return
 
         def _send_text(self, text: str) -> None:
             data = text.encode("utf-8")
@@ -176,9 +224,14 @@ def _start_fake_search_server() -> ThreadingHTTPServer:
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), SearchSmokeHandler)
+    server.cancelled_requests = []  # type: ignore[attr-defined]
+    server.search_request_ids = []  # type: ignore[attr-defined]
     thread = threading.Thread(target=server.serve_forever, name="search-smoke", daemon=True)
     thread.start()
     return server
@@ -205,6 +258,27 @@ def _assert_search_flow(page: Any, url: str, config: BrowserSmokeConfig) -> None
     highlighted = page.locator(".viewer-text-preview mark").inner_text(timeout=config.timeout_ms)
     if len(highlighted) > 120:
         raise AssertionError(f"highlight is too broad: {highlighted!r}")
+    page.get_by_role("button", name="Weitere Treffer laden").click(
+        timeout=config.timeout_ms
+    )
+    page.locator('.sources-panel [aria-label="S3 anzeigen"]').wait_for(
+        timeout=config.timeout_ms
+    )
+    page.get_by_text("1 weiterer Treffer geladen.").wait_for(timeout=config.timeout_ms)
+
+    page.get_by_label("Suchfrage").fill("Langsame Suche abbrechen")
+    page.get_by_role("button", name="Antwort generieren").click(timeout=config.timeout_ms)
+    page.get_by_role("button", name="Suche abbrechen").click(timeout=config.timeout_ms)
+    page.get_by_text("Suche abgebrochen.", exact=False).wait_for(timeout=config.timeout_ms)
+    page.get_by_text("Admin-Unterlagen für die Admin-Gruppe", exact=False).wait_for(
+        timeout=config.timeout_ms
+    )
+
+    page.get_by_label("Suchfrage").fill("Wiederholen nach Fehler")
+    page.get_by_role("button", name="Antwort generieren").click(timeout=config.timeout_ms)
+    page.get_by_role("button", name="Erneut versuchen").wait_for(timeout=config.timeout_ms)
+    page.get_by_role("button", name="Erneut versuchen").click(timeout=config.timeout_ms)
+    page.get_by_text("2 Treffer aus 2 Bibliotheken.").wait_for(timeout=config.timeout_ms)
     page.screenshot(path=str(config.output_dir / "search-desktop.png"), full_page=True)
     print(f"Search browser smoke passed: {config.output_dir / 'search-desktop.png'}")
 
@@ -215,15 +289,50 @@ def _assert_mobile_layout(page: Any, url: str, config: BrowserSmokeConfig) -> No
     page.get_by_role("heading", name="Bibliotheken").wait_for(timeout=config.timeout_ms)
     page.get_by_label("Suchfrage").fill("test")
     page.get_by_role("button", name="Antwort generieren").click(timeout=config.timeout_ms)
+    page.get_by_role("tab", name="Antwort").wait_for(timeout=config.timeout_ms)
+    if page.get_by_role("tab", name="Antwort").get_attribute("aria-selected") != "true":
+        raise AssertionError("mobile answer tab is not active after search")
+    page.get_by_role("tab", name="Quellen").click(timeout=config.timeout_ms)
     page.locator(".inline-sources").get_by_text("Quellen", exact=True).wait_for(
         timeout=config.timeout_ms
     )
-    page.get_by_text("Fundstellen prüfen").wait_for(timeout=config.timeout_ms)
+    page.locator('.inline-source-card[aria-label="S1 anzeigen"]').wait_for(
+        timeout=config.timeout_ms
+    )
+    page.locator('.inline-source-card[aria-label="S2 anzeigen"]').click(
+        timeout=config.timeout_ms
+    )
+    if page.get_by_role("tab", name="Dokument").get_attribute("aria-selected") != "true":
+        raise AssertionError("selecting a mobile source did not open the document tab")
+    page.locator(".viewer-title", has_text="admin-handbuch-test.md").wait_for(
+        timeout=config.timeout_ms
+    )
     page.screenshot(path=str(config.output_dir / "search-mobile.png"), full_page=True)
     print(f"Search browser smoke passed: {config.output_dir / 'search-mobile.png'}")
 
 
-def _search_response() -> dict[str, Any]:
+def _search_response(*, second_page: bool = False) -> dict[str, Any]:
+    if second_page:
+        sources = [
+            _source(
+                "S3",
+                "betriebsrat-handbuch.md",
+                "Testnetz User Handbuch",
+                "Eine weitere paginierte Fundstelle für den Browser-Smoke-Test.",
+            )
+        ]
+        return {
+            "question": "Welche Testnetz-Handbücher gibt es und wer darf sie sehen?",
+            "results": sources,
+            "partial_failures": [],
+            "pagination": {
+                "next_cursor": None,
+                "has_more": False,
+                "snapshot": True,
+                "snapshot_result_count": 3,
+            },
+            "diagnostics": {"profiles_allowed": 2, "profiles_denied": 0},
+        }
     sources = [
         _source(
             "S1",
@@ -255,6 +364,13 @@ def _search_response() -> dict[str, Any]:
             ],
         },
         "results": sources,
+        "partial_failures": [],
+        "pagination": {
+            "next_cursor": "page-2",
+            "has_more": True,
+            "snapshot": True,
+            "snapshot_result_count": 3,
+        },
         "diagnostics": {"profiles_allowed": 2, "profiles_denied": 0},
     }
 

@@ -43,6 +43,8 @@ Das bevorzugte Enterprise-Overlay bei eigener CA ist:
 ```bash
 docker compose --env-file connector.env \
   -f deploy/compose/openwebui.compose.yml \
+  -f deploy/compose/bundled-state.compose.yml \
+  -f deploy/compose/search.compose.yml \
   -f deploy/compose/enterprise-ca.compose.yml \
   config --quiet
 ```

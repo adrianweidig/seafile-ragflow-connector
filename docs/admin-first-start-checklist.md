@@ -54,7 +54,7 @@ Danach mindestens diese Werte setzen:
 | `SEAFILE_SYNC_USER_TOKEN` | API-Token für Datei-Downloads |
 | `RAGFLOW_BASE_URL` | RAGFlow-API-URL aus Sicht des Connector-Containers |
 | `RAGFLOW_API_KEY` | API-Key des RAGFlow-Zielusers |
-| `POSTGRES_PASSWORD` oder `DATABASE_URL` | Datenbankzugang für den Connector-State |
+| `POSTGRES_PASSWORD` oder gemeinsam `DATABASE_URL` und `REDIS_URL` | Gebündelter beziehungsweise externer Connector-State |
 
 OpenWebUI-, TLS-, Tuning- und Dashboard-Werte erst ergänzen, wenn sie für den
 gewählten Betriebsmodus wirklich gebraucht werden.
@@ -118,8 +118,11 @@ Environment-Bereich des Stacks.
 
 Nach einigen Minuten sollte der Stack diese Punkte erfüllen:
 
-- `connector-postgres`, `connector-redis`, `connector-controller`,
-  `connector-worker` und `connector-reconciler` laufen.
+- Beim Profil `bundled-state` laufen `connector-postgres` und
+  `connector-redis`; bei `external-state` sind beide absichtlich nicht
+  gestartet und die externen URLs sind erreichbar.
+- `connector-controller`, `connector-worker` und `connector-reconciler` laufen;
+  im Standardprofil zusätzlich `connector-search`, in Core-only bewusst nicht.
 - Die Logs von Controller, Worker und Reconciler enthalten keine fehlenden
   Pflichtvariablen und keine dauerhaften Authentifizierungsfehler.
 - `bash output/enterprise-compose/check-live.sh` oder der direkte

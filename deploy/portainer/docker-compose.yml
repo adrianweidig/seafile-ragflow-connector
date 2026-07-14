@@ -178,8 +178,8 @@ x-connector-env: &connector-env
   # -------------------------------------------------------------------
   # Connector-State: Datenbank und Queue innerhalb dieses Stacks
   # -------------------------------------------------------------------
-  # DATABASE_URL/REDIS_URL können externe Dienste überschreiben; ohne diese
-  # Werte werden die unten definierten lokalen Postgres-/Redis-Services genutzt.
+  # Diese statische Datei ist das bundled-state-Profil. Für external-state den
+  # Enterprise-Wizard verwenden; er entfernt die lokalen State-Dienste.
   POSTGRES_HOST: connector-postgres
   POSTGRES_PORT: 5432
   POSTGRES_DB: ${POSTGRES_DB:-seafile_ragflow_sync}
@@ -304,7 +304,9 @@ x-search-env: &search-env
   POSTGRES_USER: ${POSTGRES_USER:-sync}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
   DATABASE_URL: ${DATABASE_URL:-}
-  SEARCH_SERVICE_ENABLED: ${SEARCH_SERVICE_ENABLED:-true}
+  # Das statische Portainer-Standardprofil enthält Search. Für Core-only den
+  # Wizard mit ENTERPRISE_WITH_SEARCH=false verwenden.
+  SEARCH_SERVICE_ENABLED: "true"
   SEARCH_SERVICE_HOST: ${SEARCH_SERVICE_HOST:-0.0.0.0}
   SEARCH_SERVICE_PORT: ${SEARCH_SERVICE_PORT:-8090}
   SEARCH_AUTH_MODE: ${SEARCH_AUTH_MODE:-trusted_header}
@@ -386,9 +388,7 @@ x-search-common: &search-common
     start_period: 20s
 
 services:
-  # Persistenter Connector-State. Diese Dienste können durch DATABASE_URL und
-  # REDIS_URL ersetzt werden, bleiben aber als robuste Standardeinstellung im
-  # Stack enthalten.
+  # Persistenter Connector-State des statischen bundled-state-Profils.
   connector-postgres:
     image: ${POSTGRES_IMAGE:-postgres:16}
     pull_policy: ${POSTGRES_IMAGE_PULL_POLICY:-missing}

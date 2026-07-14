@@ -2,6 +2,7 @@
   "cli": {
     "app_help": "Offline-ready Seafile to RAGFlow connector",
     "output_json": "Print machine-readable JSON.",
+    "configuration_invalid": "Invalid configuration: {details}",
     "init_db": {
       "help": "Create or update connector state tables.",
       "done": "Database initialized"
@@ -41,15 +42,61 @@
     "check_config": {
       "help": "Load and validate configuration without contacting external services."
     },
+    "doctor": {
+      "help": "Diagnose local configuration truth and optional state services.",
+      "effective": "Print the effective redacted configuration.",
+      "live": "Also check database and Redis reachability.",
+      "notes": {
+        "acl_subfolders": "Subfolder permissions are not evaluated separately yet.",
+        "acl_share_links": "Share links are not included in the ACL snapshot yet.",
+        "sync_user_email": "Informational only; the sync token controls access.",
+        "validate_dataset": "Created and bound datasets are always read in the current path.",
+        "preserve_filename": "Source path and original name are currently always retained as metadata.",
+        "reparse": "Changed dataset settings do not trigger an automatic reparse yet.",
+        "full_sync_fallback": "Delta sync always falls back to full sync without a reliable baseline.",
+        "archive_dataset": "Deleted libraries can currently be retained or deleted, but not archived.",
+        "library_concurrency": "Concurrency is provided by worker replicas; each worker runs one job serially.",
+        "upload_workers": "Uploads currently run serially within each worker process.",
+        "parse_workers": "Parse jobs currently run serially within each worker process.",
+        "upload_batch": "The current upload path processes files individually.",
+        "parse_batch": "Parse jobs do not use a configurable batch size yet.",
+        "inflight": "The inflight limit is not used as a runtime throttle yet.",
+        "runtime_path": "Used by the container entrypoint for writable runtime paths.",
+        "outbound_policy": "Documents operational intent; the process does not enforce a network policy.",
+        "telemetry": "Documents operational intent; the connector currently has no telemetry."
+      }
+    },
+    "library": {
+      "help": "Plan, synchronize, and inspect libraries.",
+      "status_help": "Show the locally known library and cursor state.",
+      "plan_help": "Build a reconciliation plan without remote mutations.",
+      "sync_help": "Queue a persistent delta or full synchronization job.",
+      "reconcile_help": "Plan reconciliation or run it as a fenced repair job.",
+      "missing": "Library {repo_id} is not present in connector state."
+    },
     "dashboard": {
       "help": "Run the read-only HTTP dashboard as a foreground process.",
       "disabled": "Dashboard disabled; set CONNECTOR_DASHBOARD_ENABLED=true to start it"
     },
     "jobs": {
+      "help": "Inspect and control persistent connector jobs.",
+      "list_help": "Filter jobs by status and library.",
+      "show_help": "Show one job including retries and error state.",
+      "cancel_help": "Cancel a queued job or request cooperative cancellation.",
+      "retry_help": "Queue a dead or cancelled job again.",
+      "not_found": "Job {job_id} was not found.",
+      "disappeared": "Job {job_id} disappeared while waiting.",
+      "unknown_status": "Unknown job status: {values}. Allowed: {allowed}.",
       "requires_repo_id": "{job_type} requires repo_id",
       "upload_requires_file": "UPLOAD_FILE requires file_path",
       "delete_requires_file": "DELETE_FILE requires file_path",
       "sync_mode_error": "SYNC_OPENWEBUI mode must be disabled, dry-run, sync or repair"
+    },
+    "cleanup": {
+      "help": "Inspect and retry failed target cleanups.",
+      "list_help": "Filter the cleanup outbox by status and library.",
+      "retry_help": "Queue a failed target cleanup again as a persistent job.",
+      "unknown_status": "Unknown cleanup status: {values}. Allowed: {allowed}."
     }
   },
   "settings": {

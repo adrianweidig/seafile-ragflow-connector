@@ -266,6 +266,17 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
         if tab == "workflow":
             _wait_for_text(page, "#workflow-summary", "nicht verfügbar", config.timeout_ms)
             _require_text(page, "#workflow-table", "Keine Einträge")
+            _require_text(page, "#workflow", "Fehlgeschlagene Bereinigungen")
+            _wait_for_text(
+                page,
+                "#cleanup-outbox-summary",
+                "nicht verfügbar",
+                config.timeout_ms,
+            )
+            page.screenshot(
+                path=str(config.output_dir / "dashboard-workflow.png"),
+                full_page=True,
+            )
         if tab == "logs":
             _wait_for_text(page, "#log-total", "Logeinträge", config.timeout_ms)
             _require_text(page, "#log-table", "STUFE")
@@ -319,7 +330,12 @@ def _assert_dashboard_flow(page: Any, url: str, config: BrowserSmokeConfig) -> N
     mobile_screenshot = config.output_dir / "dashboard-mobile.png"
     page.screenshot(path=str(desktop_screenshot), full_page=True)
     page.set_viewport_size({"width": 390, "height": 844})
+    _require_visible(page, "#nav-toggle", "mobile navigation toggle")
+    _require_attribute(page, "#nav-toggle", "aria-expanded", "false")
+    page.locator("#nav-toggle").click(timeout=config.timeout_ms)
+    _require_attribute(page, "#nav-toggle", "aria-expanded", "true")
     page.locator('[data-tab="openwebui"]').click(timeout=config.timeout_ms)
+    _require_attribute(page, "#nav-toggle", "aria-expanded", "false")
     page.wait_for_selector("#openwebui:not([hidden])", timeout=config.timeout_ms)
     _wait_for_text(page, "#openwebui-metrics", "known mappings", config.timeout_ms)
     _require_text(page, "#openwebui-summary", "ready")

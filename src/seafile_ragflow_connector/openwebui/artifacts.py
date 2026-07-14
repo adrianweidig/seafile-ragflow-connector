@@ -9,7 +9,7 @@ from seafile_ragflow_connector.domain.naming import slugify
 from seafile_ragflow_connector.i18n import SUPPORTED_LANGUAGES, Localizer
 from seafile_ragflow_connector.utils.hashing import sha256_json, sha256_text
 
-ARTIFACT_VERSION = "27"
+ARTIFACT_VERSION = "28"
 _IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 _PIPE_TEMPLATE_PACKAGE = "seafile_ragflow_connector.openwebui.templates.pipe"
 _PIPE_TEMPLATE_FRAGMENTS = (
@@ -21,6 +21,32 @@ _PIPE_TEMPLATE_FRAGMENTS = (
     "50_text_cleanup_urls.py.txt",
 )
 
+TOOL_MANAGED_VALVES = frozenset(
+    {
+        "ARTIFACT_ID",
+        "CONNECTOR_PROXY_BASE_URL",
+        "CONNECTOR_PROXY_SHARED_SECRET",
+        "CONNECTOR_PROXY_VERIFY_SSL",
+        "CONNECTOR_PROXY_CA_BUNDLE",
+        "DATASET_ID",
+    }
+)
+PIPE_MANAGED_VALVES = frozenset(
+    {
+        "ARTIFACT_ID",
+        "CONNECTOR_PROXY_BASE_URL",
+        "CONNECTOR_PROXY_SHARED_SECRET",
+        "CONNECTOR_PROXY_VERIFY_SSL",
+        "CONNECTOR_PROXY_CA_BUNDLE",
+        "DATASET_ID",
+        "RAGFLOW_CHAT_ID",
+        "MODEL_ID",
+        "ANSWER_LLM_BASE_URL",
+        "ANSWER_LLM_API_KEY",
+        "ANSWER_LLM_MODEL",
+    }
+)
+
 
 @dataclass(frozen=True)
 class OpenWebUIArtifactSpec:
@@ -30,6 +56,7 @@ class OpenWebUIArtifactSpec:
     valves: dict[str, object]
     payload: dict[str, object]
     definition_hash: str
+    managed_valve_keys: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -80,7 +107,15 @@ def build_tool_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "access_grants": [],
     }
     definition_hash = _definition_hash(payload, valves)
-    return OpenWebUIArtifactSpec(artifact_id, name, content, valves, payload, definition_hash)
+    return OpenWebUIArtifactSpec(
+        artifact_id,
+        name,
+        content,
+        valves,
+        payload,
+        definition_hash,
+        TOOL_MANAGED_VALVES,
+    )
 
 
 def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
@@ -101,6 +136,7 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "RAGFLOW_CHAT_ID": inputs.ragflow_chat_id or "",
         "MODEL_ID": model_name,
         "MODEL_NAME": display_model_name,
+        "LANGUAGE": l10n.language,
         "RAGFLOW_MODEL_ID": "model",
         "TOP_K": 8,
         "INJECT_RAG_SYSTEM_PROMPT": True,
@@ -118,12 +154,12 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         "STATUS_UPDATES": True,
         "STATUS_MODE": "minimal",
         "HIDE_FINAL_STATUS": False,
-        "EMIT_CITATION_EVENTS": False,
+        "EMIT_CITATION_EVENTS": True,
         "EMIT_LEGACY_SOURCE_EVENTS": False,
         "MAX_SOURCE_EVENTS": 20,
         "SHOW_SOURCE_SCORES": True,
         "SHOW_SOURCE_DEBUG": False,
-        "SOURCE_DISPLAY_MODE": "compact",
+        "SOURCE_DISPLAY_MODE": "native",
         "SOURCE_MARKDOWN_MODE": "compact",
         "APPEND_SOURCE_OVERVIEW": True,
         "SHOW_LOCATOR_QUALITY": True,
@@ -148,6 +184,7 @@ def build_pipe_spec(inputs: DatasetArtifactInputs) -> OpenWebUIArtifactSpec:
         valves,
         payload,
         definition_hash,
+        PIPE_MANAGED_VALVES,
     )
 
 
@@ -211,7 +248,7 @@ def _tool_content() -> str:
         author: Seafile RAGFlow Connector
         version: 1.4.2
         owner: seafile-ragflow-connector
-        artifact_version: 27
+        artifact_version: 28
         """
 
         import httpx
@@ -381,9 +418,17 @@ def _tool_content() -> str:
                     show_debug=self.valves.SHOW_SOURCE_DEBUG,
                     language=self.valves.LANGUAGE,
                 )
+                native_citations_complete = bool(sources) and bool(__event_emitter__)
                 if __event_emitter__:
                     for source in sources:
-                        await __event_emitter__({"type": "source", "data": source})
+                        try:
+                            await __event_emitter__(_citation_event(source))
+                        except Exception:
+                            native_citations_complete = False
+                            logging.getLogger(__name__).warning(
+                                "OpenWebUI citation event emission failed",
+                                exc_info=True,
+                            )
                     await __event_emitter__(
                         {
                             "type": "status",
@@ -396,11 +441,21 @@ def _tool_content() -> str:
                             },
                         }
                     )
-                return data.get("answer") or _source_markdown(
+                answer = str(data.get("answer") or "").strip()
+                if native_citations_complete:
+                    return answer or _msg(self.valves.LANGUAGE, "sources.heading")
+                if not sources:
+                    return answer or _msg(self.valves.LANGUAGE, "sources.no_sources")
+                source_markdown = _source_markdown(
                     sources,
                     show_scores=self.valves.SHOW_SOURCE_SCORES,
                     show_debug=self.valves.SHOW_SOURCE_DEBUG,
                     language=self.valves.LANGUAGE,
+                )
+                return (
+                    f"{answer}\\n\\n{source_markdown}".strip()
+                    if answer and source_markdown
+                    else answer or source_markdown
                 )
 
             '''
@@ -580,6 +635,8 @@ def _artifact_source_helpers() -> str:
             repo_id: str | None = None
             file_type: str | None = None
             source_metadata: dict[str, Any] = Field(default_factory=dict)
+            source_dto_version: str = "v1"
+            status: str = "available"
 
 
         def _normalize_sources(sources, *, show_scores=True, show_debug=False, language="de"):
@@ -625,6 +682,12 @@ def _artifact_source_helpers() -> str:
                 repo_id=_string_or_none(metadata.get("repo_id")),
                 file_type=_string_or_none(metadata.get("file_type")),
                 source_metadata=dict(metadata),
+                source_dto_version=str(
+                    source.get("source_dto_version")
+                    or metadata.get("source_dto_version")
+                    or "v1"
+                ),
+                status=str(source.get("status") or metadata.get("status") or "available"),
             )
 
 
@@ -632,6 +695,8 @@ def _artifact_source_helpers() -> str:
             metadata = dict(hit.source_metadata)
             metadata.update(
                 {
+                    "source_dto_version": hit.source_dto_version,
+                    "status": hit.status,
                     "rank": hit.rank,
                     "score": hit.score,
                     "relevance": _relevance(hit.score, language=language),
@@ -643,6 +708,8 @@ def _artifact_source_helpers() -> str:
             )
             metadata = {key: value for key, value in metadata.items() if value not in (None, "")}
             return {
+                "source_dto_version": hit.source_dto_version,
+                "status": hit.status,
                 "name": hit.title,
                 "url": hit.preview_url,
                 "preview_url": hit.preview_url,
@@ -656,6 +723,24 @@ def _artifact_source_helpers() -> str:
                 "source_metadata": metadata,
                 "metadata": [metadata],
                 "source": {"name": hit.title, "url": hit.preview_url},
+            }
+
+
+        def _citation_event(source):
+            metadata = _metadata(source)
+            return {
+                "type": "citation",
+                "data": {
+                    "document": list(
+                        source.get("document")
+                        or [source.get("text") or source.get("name") or "Quelle"]
+                    ),
+                    "metadata": [metadata],
+                    "source": source.get("source") or {
+                        "name": source.get("name") or "Quelle",
+                        "url": source.get("preview_url") or source.get("original_url"),
+                    },
+                },
             }
 
 

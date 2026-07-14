@@ -91,12 +91,15 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
         "SEAFILE_ADMIN_TOKEN": "seafile-admin-secret",
         "SEAFILE_SYNC_USER_TOKEN": "seafile-sync-secret",
         "RAGFLOW_API_KEY": "ragflow-secret",
+        "AUTHZ_API_SHARED_SECRET": "authz-secret",
         "OPENWEBUI_ADMIN_API_KEY": "openwebui-secret",
         "POSTGRES_PASSWORD": "postgres-secret",
         "CONNECTOR_DASHBOARD_AUTH_PASSWORD": "dashboard-secret",
         "OPENWEBUI_PROXY_SHARED_SECRET": "proxy-secret",
     }
     env = os.environ.copy()
+    env.pop("SSL_CERT_FILE", None)
+    env.pop("REQUESTS_CA_BUNDLE", None)
     env.update(
         {
             "ENTERPRISE_NONINTERACTIVE": "true",
@@ -144,6 +147,11 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
     assert "SEAFILE_PUBLIC_BASE_URL=https://files.internal" in generated_env
     assert "SEAFILE_FILE_URL_TEMPLATE=\n" in generated_env
     assert "RAGFLOW_CA_BUNDLE=/certs/company-root-ca.pem" in generated_env
+    assert "AUTHZ_API_SHARED_SECRET=authz-secret" in generated_env
+    assert "SEARCH_AUTHZ_SHARED_SECRET=authz-secret" in generated_env
+    assert "SEARCH_RAGFLOW_BASE_URL=https://ragflow.internal" in generated_env
+    assert "SEARCH_RAGFLOW_API_KEY=ragflow-secret" in generated_env
+    assert "SEARCH_SERVICE_ENABLED=true" in generated_env
     assert "OPENWEBUI_SOURCE_PREVIEW_MODE=connector_viewer" in generated_env
     assert "OPENWEBUI_PROXY_PUBLIC_BASE_URL=https://connector.internal" in generated_env
     assert "CONNECTOR_STARTUP_CHECK=infra" in generated_env
@@ -151,6 +159,8 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
 
     compose_files = (output_dir / "compose-files.txt").read_text(encoding="utf-8")
     assert "deploy/compose/external-services.compose.yml" in compose_files
+    assert "deploy/compose/bundled-state.compose.yml" in compose_files
+    assert "deploy/compose/search.compose.yml" in compose_files
     assert "deploy/compose/enterprise-ca.compose.yml" in compose_files
 
     helper_scripts = "\n".join(
@@ -228,7 +238,71 @@ def test_enterprise_compose_wizard_generates_installable_defaults_without_ca_or_
 
     compose_files = (output_dir / "compose-files.txt").read_text(encoding="utf-8")
     assert "deploy/compose/external-services.compose.yml" in compose_files
+    assert "deploy/compose/bundled-state.compose.yml" in compose_files
+    assert "deploy/compose/search.compose.yml" in compose_files
     assert "deploy/compose/enterprise-ca.compose.yml" not in compose_files
+
+
+def test_enterprise_compose_wizard_supports_external_state_and_core_only(
+    tmp_path: Path,
+) -> None:
+    bash = _find_portable_bash()
+
+    output_env = tmp_path / "connector.env"
+    output_dir = tmp_path / "generated"
+    env = os.environ.copy()
+    env.update(
+        {
+            "ENTERPRISE_NONINTERACTIVE": "true",
+            "ENTERPRISE_ASSUME_YES": "true",
+            "ENTERPRISE_RUN_CONFIG_CHECK": "false",
+            "ENTERPRISE_PORTAINER_BUNDLE": "false",
+            "ENTERPRISE_MODE": "external",
+            "ENTERPRISE_STATE_MODE": "external",
+            "ENTERPRISE_WITH_SEARCH": "false",
+            "ENTERPRISE_WITH_OPENWEBUI": "false",
+            "ENTERPRISE_SEAFILE_BASE_URL": "https://seafile.internal",
+            "ENTERPRISE_RAGFLOW_BASE_URL": "https://ragflow.internal",
+            "SEAFILE_ADMIN_TOKEN": "seafile-admin-secret",
+            "SEAFILE_SYNC_USER_TOKEN": "seafile-sync-secret",
+            "RAGFLOW_API_KEY": "ragflow-secret",
+            "AUTHZ_API_SHARED_SECRET": "authz-secret",
+            "DATABASE_URL": "postgresql://sync:db-secret@database.internal/connector",
+            "REDIS_URL": "redis://:redis-secret@redis.internal/0",
+            "CONNECTOR_DASHBOARD_AUTH_PASSWORD": "dashboard-secret",
+        }
+    )
+
+    subprocess.run(
+        [
+            bash,
+            str(SCRIPT),
+            "--non-interactive",
+            "--assume-yes",
+            "--no-config-check",
+            "--output-env",
+            str(output_env),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=ROOT_DIR,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    generated_env = output_env.read_text(encoding="utf-8")
+    assert "POSTGRES_PASSWORD=\n" in generated_env
+    assert "DATABASE_URL=postgresql://sync:db-secret@database.internal/connector" in generated_env
+    assert "REDIS_URL=redis://:redis-secret@redis.internal/0" in generated_env
+    assert "SEARCH_SERVICE_ENABLED=false" in generated_env
+
+    compose_files = (output_dir / "compose-files.txt").read_text(encoding="utf-8")
+    assert "deploy/compose/external-services.compose.yml" in compose_files
+    assert "deploy/compose/external-state.compose.yml" in compose_files
+    assert "deploy/compose/bundled-state.compose.yml" not in compose_files
+    assert "deploy/compose/search.compose.yml" not in compose_files
 
 
 def test_enterprise_compose_wizard_keeps_proxy_ca_empty_for_internal_http(
@@ -257,6 +331,7 @@ def test_enterprise_compose_wizard_keeps_proxy_ca_empty_for_internal_http(
             "SEAFILE_ADMIN_TOKEN": "seafile-admin-secret",
             "SEAFILE_SYNC_USER_TOKEN": "seafile-sync-secret",
             "RAGFLOW_API_KEY": "ragflow-secret",
+            "AUTHZ_API_SHARED_SECRET": "authz-secret",
             "OPENWEBUI_ADMIN_API_KEY": "openwebui-secret",
             "POSTGRES_PASSWORD": "postgres-secret",
             "CONNECTOR_DASHBOARD_AUTH_PASSWORD": "dashboard-secret",
@@ -324,6 +399,7 @@ def test_enterprise_compose_wizard_generates_portainer_bundle_when_docker_is_ava
         "SEAFILE_ADMIN_TOKEN": "seafile-admin-secret",
         "SEAFILE_SYNC_USER_TOKEN": "seafile-sync-secret",
         "RAGFLOW_API_KEY": "ragflow-secret",
+        "AUTHZ_API_SHARED_SECRET": "authz-secret",
         "OPENWEBUI_ADMIN_API_KEY": "openwebui-secret",
         "POSTGRES_PASSWORD": "postgres-secret",
         "CONNECTOR_DASHBOARD_AUTH_PASSWORD": "dashboard-secret",
@@ -376,3 +452,73 @@ def test_enterprise_compose_wizard_generates_portainer_bundle_when_docker_is_ava
     assert str(ca_file) not in rendered_compose
     for secret in secret_values.values():
         assert secret not in rendered_compose
+
+
+def test_enterprise_compose_wizard_renders_external_state_core_only_bundle(
+    tmp_path: Path,
+) -> None:
+    bash = _find_portable_bash()
+    docker = shutil.which("docker")
+    if not docker:
+        pytest.skip("Docker Compose is required for Portainer bundle generation")
+    try:
+        subprocess.run(
+            [docker, "compose", "version"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError:
+        pytest.skip("Docker Compose is not available")
+
+    output_env = tmp_path / "connector.env"
+    output_dir = tmp_path / "generated"
+    env = os.environ.copy()
+    env.update(
+        {
+            "ENTERPRISE_NONINTERACTIVE": "true",
+            "ENTERPRISE_ASSUME_YES": "true",
+            "ENTERPRISE_RUN_CONFIG_CHECK": "false",
+            "ENTERPRISE_MODE": "external",
+            "ENTERPRISE_STATE_MODE": "external",
+            "ENTERPRISE_WITH_SEARCH": "false",
+            "ENTERPRISE_WITH_OPENWEBUI": "false",
+            "ENTERPRISE_SEAFILE_BASE_URL": "https://seafile.internal",
+            "ENTERPRISE_RAGFLOW_BASE_URL": "https://ragflow.internal",
+            "SEAFILE_ADMIN_TOKEN": "seafile-admin-secret",
+            "SEAFILE_SYNC_USER_TOKEN": "seafile-sync-secret",
+            "RAGFLOW_API_KEY": "ragflow-secret",
+            "AUTHZ_API_SHARED_SECRET": "authz-secret",
+            "DATABASE_URL": "postgresql://sync:db-secret@database.internal/connector",
+            "REDIS_URL": "redis://:redis-secret@redis.internal/0",
+            "CONNECTOR_DASHBOARD_AUTH_PASSWORD": "dashboard-secret",
+        }
+    )
+
+    subprocess.run(
+        [
+            bash,
+            str(SCRIPT),
+            "--non-interactive",
+            "--assume-yes",
+            "--no-config-check",
+            "--output-env",
+            str(output_env),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=ROOT_DIR,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    rendered_compose = (output_dir / "portainer-compose.yml").read_text(encoding="utf-8")
+    assert "connector-controller:" in rendered_compose
+    assert rendered_compose.count("\n  connector-postgres:\n") == 1
+    assert rendered_compose.count("\n  connector-redis:\n") == 1
+    assert rendered_compose.count("    profiles:\n      - bundled-state") >= 2
+    assert "connector-search:" not in rendered_compose
+    assert "db-secret" not in rendered_compose
+    assert "redis-secret" not in rendered_compose

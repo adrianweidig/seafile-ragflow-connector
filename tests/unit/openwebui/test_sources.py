@@ -717,6 +717,32 @@ class OpenWebUISourceTests(unittest.TestCase):
 
         self.assertEqual(sources[0]["name"], "html_fragmente.md")
 
+    def test_normalize_sources_hides_recovery_upload_names_without_metadata(self) -> None:
+        operation_id = "0123456789abcdef0123456789abcdef"
+        sources = normalize_sources(
+            {
+                "chunks": [
+                    {
+                        "id": "chunk-pdf",
+                        "document_name": f"report.__connector_{operation_id}.pdf",
+                        "content": "PDF-Treffer",
+                        "score": 0.9,
+                    },
+                    {
+                        "id": "chunk-text",
+                        "document_name": f"notes.__connector_{operation_id}.txt",
+                        "content": "Text-Treffer",
+                        "score": 0.8,
+                    },
+                ]
+            },
+            settings=self._settings(),
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+        )
+
+        self.assertEqual([source["name"] for source in sources], ["report.pdf", "notes.txt"])
+
     def test_extract_answer_unwraps_native_ragflow_data_payload(self) -> None:
         answer = extract_answer(
             {

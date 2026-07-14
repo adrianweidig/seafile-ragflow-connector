@@ -17,7 +17,14 @@ from seafile_ragflow_connector.app.metrics import (
     jobs_running,
 )
 from seafile_ragflow_connector.jobs.types import JobSpec, JobStatus, JobType
+from seafile_ragflow_connector.persistence.models.dashboard import DashboardSyncRun
 from seafile_ragflow_connector.persistence.models.job import SyncJob
+from seafile_ragflow_connector.persistence.models.sync_state import (
+    CleanupOutbox,
+    SyncRun,
+    WorkflowCleanupSubscription,
+    WorkflowJobSubscription,
+)
 from seafile_ragflow_connector.utils.retry import exponential_backoff_seconds
 
 ACTIVE_JOB_STATUSES = (
@@ -26,6 +33,27 @@ ACTIVE_JOB_STATUSES = (
     JobStatus.RUNNING.value,
 )
 ACTIVE_JOB_INDEX_PREDICATE = text("status IN ('queued', 'retrying', 'running')")
+
+
+def _aggregate_workflow_status(statuses: list[str]) -> str:
+    if not statuses:
+        return "queued"
+    if any(status == JobStatus.DEAD.value for status in statuses):
+        return "failed"
+    if any(status == JobStatus.RUNNING.value for status in statuses):
+        return "running"
+    if any(status == JobStatus.RETRYING.value for status in statuses):
+        return "retrying"
+    if any(status == JobStatus.QUEUED.value for status in statuses):
+        return "queued"
+    if all(status == JobStatus.CANCELLED.value for status in statuses):
+        return "cancelled"
+    if all(
+        status in {JobStatus.SUCCEEDED.value, JobStatus.CANCELLED.value}
+        for status in statuses
+    ):
+        return "succeeded"
+    return "queued"
 
 
 @dataclass(frozen=True)
@@ -175,6 +203,491 @@ class JobStore:
                     .execution_options(synchronize_session=False)
                 ),
             )
+            session.commit()
+            return bool(result.rowcount)
+
+    def get(self, job_id: int) -> SyncJob | None:
+        with self.session_factory() as session:
+            job = session.get(SyncJob, job_id)
+            if job is not None:
+                session.expunge(job)
+            return job
+
+    def list_jobs(
+        self,
+        *,
+        statuses: tuple[JobStatus, ...] | None = None,
+        repo_id: str | None = None,
+        run_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SyncJob]:
+        if limit <= 0 or limit > 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        with self.session_factory() as session:
+            stmt = select(SyncJob).order_by(SyncJob.created_at.desc()).limit(limit)
+            if statuses:
+                stmt = stmt.where(SyncJob.status.in_([status.value for status in statuses]))
+            if repo_id is not None:
+                stmt = stmt.where(SyncJob.repo_id == repo_id)
+            if run_id is not None:
+                stmt = stmt.where(SyncJob.run_id == run_id)
+            jobs = list(session.scalars(stmt).all())
+            for job in jobs:
+                session.expunge(job)
+            return jobs
+
+    def bind_run(self, job_id: int, run_id: str) -> bool:
+        with self.session_factory() as session:
+            result = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(SyncJob)
+                    .where(SyncJob.id == job_id)
+                    .values(run_id=run_id)
+                ),
+            )
+            session.commit()
+            return bool(result.rowcount)
+
+    def bind_run_if_unbound(self, job_id: int, run_id: str) -> bool:
+        with self.session_factory() as session:
+            result = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(SyncJob)
+                    .where(SyncJob.id == job_id)
+                    .where(or_(SyncJob.run_id.is_(None), SyncJob.run_id == run_id))
+                    .values(run_id=run_id)
+                ),
+            )
+            session.commit()
+            return bool(result.rowcount)
+
+    def subscribe_workflow(
+        self,
+        workflow_run_id: str,
+        job_id: int,
+        *,
+        is_root: bool = False,
+        owns_job: bool = False,
+    ) -> None:
+        with self.session_factory() as session:
+            subscription = session.get(
+                WorkflowJobSubscription,
+                (workflow_run_id, job_id),
+            )
+            if subscription is None:
+                session.add(
+                    WorkflowJobSubscription(
+                        workflow_run_id=workflow_run_id,
+                        job_id=job_id,
+                        is_root=is_root,
+                        owns_job=owns_job,
+                    )
+                )
+            else:
+                subscription.is_root = subscription.is_root or is_root
+                subscription.owns_job = subscription.owns_job or owns_job
+                subscription.cancelled_at = None
+            session.commit()
+
+    def inherit_workflow_subscriptions(
+        self,
+        parent_job_id: int,
+        child_job_id: int,
+        *,
+        child_created: bool,
+    ) -> None:
+        with self.session_factory() as session:
+            subscriptions = list(
+                session.scalars(
+                    select(WorkflowJobSubscription)
+                    .where(WorkflowJobSubscription.job_id == parent_job_id)
+                    .where(WorkflowJobSubscription.cancelled_at.is_(None))
+                ).all()
+            )
+            inherited = [
+                (subscription.workflow_run_id, bool(subscription.owns_job))
+                for subscription in subscriptions
+            ]
+        for workflow_run_id, parent_owns_job in inherited:
+            self.subscribe_workflow(
+                workflow_run_id,
+                child_job_id,
+                owns_job=child_created and parent_owns_job,
+            )
+
+    def subscribe_cleanup_from_job(self, parent_job_id: int, outbox_id: int) -> None:
+        with self.session_factory() as session:
+            workflow_ids = list(
+                session.scalars(
+                    select(WorkflowJobSubscription.workflow_run_id)
+                    .where(WorkflowJobSubscription.job_id == parent_job_id)
+                    .where(WorkflowJobSubscription.cancelled_at.is_(None))
+                ).all()
+            )
+            for workflow_run_id in workflow_ids:
+                subscription = session.get(
+                    WorkflowCleanupSubscription,
+                    (workflow_run_id, outbox_id),
+                )
+                if subscription is None:
+                    session.add(
+                        WorkflowCleanupSubscription(
+                            workflow_run_id=workflow_run_id,
+                            outbox_id=outbox_id,
+                        )
+                    )
+                else:
+                    subscription.cancelled_at = None
+            session.commit()
+
+    def workflow_jobs(self, workflow_run_id: str) -> list[SyncJob]:
+        with self.session_factory() as session:
+            jobs = list(
+                session.scalars(
+                    select(SyncJob)
+                    .join(
+                        WorkflowJobSubscription,
+                        WorkflowJobSubscription.job_id == SyncJob.id,
+                    )
+                    .where(
+                        WorkflowJobSubscription.workflow_run_id == workflow_run_id
+                    )
+                    .where(WorkflowJobSubscription.cancelled_at.is_(None))
+                    .order_by(SyncJob.id)
+                ).all()
+            )
+            for job in jobs:
+                session.expunge(job)
+            return jobs
+
+    def workflow_cleanup_rows(self, workflow_run_id: str) -> list[CleanupOutbox]:
+        with self.session_factory() as session:
+            rows = list(
+                session.scalars(
+                    select(CleanupOutbox)
+                    .join(
+                        WorkflowCleanupSubscription,
+                        WorkflowCleanupSubscription.outbox_id == CleanupOutbox.id,
+                    )
+                    .where(
+                        WorkflowCleanupSubscription.workflow_run_id == workflow_run_id
+                    )
+                    .where(WorkflowCleanupSubscription.cancelled_at.is_(None))
+                    .order_by(CleanupOutbox.id)
+                ).all()
+            )
+            for row in rows:
+                session.expunge(row)
+            return rows
+
+    def cancel_workflow_subscription(self, workflow_run_id: str) -> list[int]:
+        now = datetime.now(UTC)
+        with self.session_factory() as session:
+            subscriptions = list(
+                session.scalars(
+                    select(WorkflowJobSubscription)
+                    .where(
+                        WorkflowJobSubscription.workflow_run_id == workflow_run_id
+                    )
+                    .where(WorkflowJobSubscription.cancelled_at.is_(None))
+                ).all()
+            )
+            job_ids = [int(subscription.job_id) for subscription in subscriptions]
+            owned_job_ids = {
+                int(subscription.job_id)
+                for subscription in subscriptions
+                if subscription.owns_job
+            }
+            for subscription in subscriptions:
+                subscription.cancelled_at = now
+            for cleanup_subscription in session.scalars(
+                select(WorkflowCleanupSubscription)
+                .where(WorkflowCleanupSubscription.workflow_run_id == workflow_run_id)
+                .where(WorkflowCleanupSubscription.cancelled_at.is_(None))
+            ):
+                cleanup_subscription.cancelled_at = now
+            self._set_workflow_parent_status(
+                session,
+                workflow_run_id,
+                "cancelled",
+                terminal=True,
+                error_count=0,
+                total=len(job_ids),
+            )
+            session.commit()
+        cancelled_jobs: list[int] = []
+        for job_id in owned_job_ids:
+            with self.session_factory() as session:
+                subscribers = session.scalar(
+                    select(func.count(WorkflowJobSubscription.workflow_run_id))
+                    .where(WorkflowJobSubscription.job_id == job_id)
+                    .where(WorkflowJobSubscription.cancelled_at.is_(None))
+                )
+            if not subscribers and self.request_cancel(job_id):
+                cancelled_jobs.append(job_id)
+        return cancelled_jobs
+
+    def resume_workflow_subscription(self, workflow_run_id: str) -> list[int]:
+        with self.session_factory() as session:
+            subscriptions = list(
+                session.scalars(
+                    select(WorkflowJobSubscription).where(
+                        WorkflowJobSubscription.workflow_run_id == workflow_run_id
+                    )
+                ).all()
+            )
+            for subscription in subscriptions:
+                subscription.cancelled_at = None
+            for cleanup_subscription in session.scalars(
+                select(WorkflowCleanupSubscription).where(
+                    WorkflowCleanupSubscription.workflow_run_id == workflow_run_id
+                )
+            ):
+                cleanup_subscription.cancelled_at = None
+            self._set_workflow_parent_status(
+                session,
+                workflow_run_id,
+                "queued",
+                terminal=False,
+                error_count=0,
+                total=len(subscriptions),
+            )
+            session.commit()
+            return [int(subscription.job_id) for subscription in subscriptions]
+
+    def refresh_workflow_parents_for_job(self, job_id: int) -> None:
+        with self.session_factory() as session:
+            workflow_ids = list(
+                session.scalars(
+                    select(WorkflowJobSubscription.workflow_run_id)
+                    .where(WorkflowJobSubscription.job_id == job_id)
+                    .where(WorkflowJobSubscription.cancelled_at.is_(None))
+                ).all()
+            )
+        for workflow_run_id in workflow_ids:
+            self.refresh_workflow_parent(workflow_run_id)
+
+    def refresh_workflow_parents_for_cleanup(self, outbox_id: int) -> None:
+        with self.session_factory() as session:
+            workflow_ids = list(
+                session.scalars(
+                    select(WorkflowCleanupSubscription.workflow_run_id)
+                    .where(WorkflowCleanupSubscription.outbox_id == outbox_id)
+                    .where(WorkflowCleanupSubscription.cancelled_at.is_(None))
+                ).all()
+            )
+        for workflow_run_id in workflow_ids:
+            self.refresh_workflow_parent(workflow_run_id)
+
+    def refresh_workflow_parents_for_repo_cleanup(self, repo_id: str) -> None:
+        with self.session_factory() as session:
+            workflow_ids = list(
+                session.scalars(
+                    select(WorkflowCleanupSubscription.workflow_run_id)
+                    .join(
+                        CleanupOutbox,
+                        CleanupOutbox.id == WorkflowCleanupSubscription.outbox_id,
+                    )
+                    .where(CleanupOutbox.repo_id == repo_id)
+                    .where(WorkflowCleanupSubscription.cancelled_at.is_(None))
+                    .distinct()
+                ).all()
+            )
+        for workflow_run_id in workflow_ids:
+            self.refresh_workflow_parent(workflow_run_id)
+
+    def refresh_workflow_parent(self, workflow_run_id: str) -> str:
+        jobs = self.workflow_jobs(workflow_run_id)
+        cleanup_rows = self.workflow_cleanup_rows(workflow_run_id)
+        statuses = [str(job.status) for job in jobs]
+        statuses.extend(
+            JobStatus.DEAD.value
+            if row.status == "dead"
+            else (
+                JobStatus.SUCCEEDED.value
+                if row.status in {"completed", "cancelled", "superseded"}
+                else JobStatus.RETRYING.value
+            )
+            for row in cleanup_rows
+        )
+        if statuses:
+            status = _aggregate_workflow_status(statuses)
+        else:
+            with self.session_factory() as session:
+                parent = session.get(SyncRun, workflow_run_id)
+                status = (
+                    "cancelled"
+                    if parent is not None and parent.status == "cancelled"
+                    else "queued"
+                )
+        terminal = status in {"succeeded", "failed", "cancelled"}
+        error_count = sum(value == JobStatus.DEAD.value for value in statuses)
+        with self.session_factory() as session:
+            self._set_workflow_parent_status(
+                session,
+                workflow_run_id,
+                status,
+                terminal=terminal,
+                error_count=error_count,
+                total=len(statuses),
+            )
+            session.commit()
+        return status
+
+    @staticmethod
+    def _set_workflow_parent_status(
+        session: Session,
+        workflow_run_id: str,
+        status: str,
+        *,
+        terminal: bool,
+        error_count: int,
+        total: int,
+    ) -> None:
+        now = datetime.now(UTC)
+        run = session.get(SyncRun, workflow_run_id)
+        if run is not None:
+            run.status = status
+            run.progress = {"completed": total if terminal else 0, "total": total}
+            run.error_message = "workflow child failed" if status == "failed" else None
+            run.finished_at = now if terminal else None
+        dashboard_run = session.get(DashboardSyncRun, workflow_run_id)
+        if dashboard_run is not None:
+            dashboard_run.status = status
+            dashboard_run.objects_checked = total
+            dashboard_run.errors_count = error_count
+            dashboard_run.summary = f"Workflow {status}: {total} Arbeitsschritte"
+            dashboard_run.ended_at = now if terminal else None
+            if terminal:
+                started_at = dashboard_run.started_at
+                if started_at.tzinfo is None:
+                    started_at = started_at.replace(tzinfo=UTC)
+                dashboard_run.duration_ms = int(
+                    (now - started_at).total_seconds() * 1000
+                )
+            else:
+                dashboard_run.duration_ms = None
+
+    def set_fence_token(self, job_id: int, *, worker_id: str, fence_token: int) -> bool:
+        with self.session_factory() as session:
+            result = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(SyncJob)
+                    .where(SyncJob.id == job_id)
+                    .where(SyncJob.status == JobStatus.RUNNING.value)
+                    .where(SyncJob.locked_by == worker_id)
+                    .values(fence_token=fence_token)
+                ),
+            )
+            session.commit()
+            return bool(result.rowcount)
+
+    def request_cancel(self, job_id: int) -> bool:
+        now = datetime.now(UTC)
+        with self.session_factory() as session:
+            job = session.get(SyncJob, job_id)
+            if job is None or job.status not in ACTIVE_JOB_STATUSES:
+                return False
+            if job.status in {JobStatus.QUEUED.value, JobStatus.RETRYING.value}:
+                job.status = JobStatus.CANCELLED.value
+                job.locked_by = None
+                job.locked_at = None
+            job.cancel_requested_at = now
+            self._refresh_queue_metrics(session)
+            session.commit()
+            return True
+
+    def cancel_requested(self, job_id: int, *, worker_id: str | None = None) -> bool:
+        with self.session_factory() as session:
+            stmt = select(SyncJob.cancel_requested_at).where(SyncJob.id == job_id)
+            if worker_id is not None:
+                stmt = stmt.where(SyncJob.locked_by == worker_id)
+            value = session.scalar(stmt)
+        return value is not None
+
+    def mark_cancelled(self, job_id: int, *, worker_id: str) -> bool:
+        with self.session_factory() as session:
+            result = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(SyncJob)
+                    .where(SyncJob.id == job_id)
+                    .where(SyncJob.status == JobStatus.RUNNING.value)
+                    .where(SyncJob.locked_by == worker_id)
+                    .values(
+                        status=JobStatus.CANCELLED.value,
+                        locked_by=None,
+                        locked_at=None,
+                    )
+                ),
+            )
+            if result.rowcount:
+                self._refresh_queue_metrics(session)
+            session.commit()
+            return bool(result.rowcount)
+
+    def defer_without_attempt(
+        self,
+        job_id: int,
+        error: str,
+        *,
+        worker_id: str,
+        delay_seconds: int = 30,
+    ) -> bool:
+        if delay_seconds <= 0:
+            raise ValueError("delay_seconds must be positive")
+        with self.session_factory() as session:
+            result = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(SyncJob)
+                    .where(SyncJob.id == job_id)
+                    .where(SyncJob.status == JobStatus.RUNNING.value)
+                    .where(SyncJob.locked_by == worker_id)
+                    .values(
+                        status=JobStatus.RETRYING.value,
+                        attempts=SyncJob.attempts - 1,
+                        run_after=datetime.now(UTC) + timedelta(seconds=delay_seconds),
+                        error_message=error[:4000],
+                        locked_by=None,
+                        locked_at=None,
+                    )
+                ),
+            )
+            if result.rowcount:
+                self._refresh_queue_metrics(session)
+            session.commit()
+            return bool(result.rowcount)
+
+    def retry(self, job_id: int) -> bool:
+        with self.session_factory() as session:
+            result = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(SyncJob)
+                    .where(SyncJob.id == job_id)
+                    .where(
+                        SyncJob.status.in_(
+                            [JobStatus.DEAD.value, JobStatus.CANCELLED.value]
+                        )
+                    )
+                    .values(
+                        status=JobStatus.QUEUED.value,
+                        attempts=0,
+                        run_after=datetime.now(UTC),
+                        error_message=None,
+                        cancel_requested_at=None,
+                        locked_by=None,
+                        locked_at=None,
+                        fence_token=None,
+                    )
+                ),
+            )
+            if result.rowcount:
+                self._refresh_queue_metrics(session)
             session.commit()
             return bool(result.rowcount)
 

@@ -41,6 +41,43 @@ jobs:
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
       - run: uv sync --locked --all-extras
       - run: uv run python scripts/verify.py --skip-sync --skip-compose
+      - name: Validate supported deployment profiles
+        env:
+          AUTHZ_API_SHARED_SECRET: ci-authz-secret
+          POSTGRES_PASSWORD: ci-bundled-state-password
+          DATABASE_URL: postgresql+psycopg://connector:ci@database.invalid/connector
+          REDIS_URL: redis://redis.invalid/0
+          SEAFILE_BASE_URL: http://seafile.invalid
+          SEAFILE_ADMIN_TOKEN: ci-seafile-admin
+          SEAFILE_SYNC_USER_TOKEN: ci-seafile-sync
+          RAGFLOW_BASE_URL: http://ragflow.invalid
+          RAGFLOW_API_KEY: ci-ragflow
+          SEARCH_AUTHZ_SHARED_SECRET: ci-authz-secret
+          SEARCH_RAGFLOW_BASE_URL: http://ragflow.invalid
+          SEARCH_RAGFLOW_API_KEY: ci-ragflow
+        run: |
+          docker compose --env-file connector.env.example \
+            -f deploy/compose/external-services.compose.yml \
+            -f deploy/compose/bundled-state.compose.yml \
+            -f deploy/compose/search.compose.yml config --quiet
+          POSTGRES_PASSWORD= docker compose --env-file connector.env.example \
+            -f deploy/compose/external-services.compose.yml \
+            -f deploy/compose/external-state.compose.yml \
+            -f deploy/compose/search.compose.yml config --quiet
+          docker compose --env-file connector.env.example \
+            -f deploy/compose/external-services.compose.yml \
+            -f deploy/compose/bundled-state.compose.yml config --quiet
+          docker stack config \
+            -c deploy/swarm/docker-stack.yml \
+            -c deploy/swarm/bundled-state.yml \
+            -c deploy/swarm/search.yml >/dev/null
+          POSTGRES_PASSWORD= docker stack config \
+            -c deploy/swarm/docker-stack.yml \
+            -c deploy/swarm/external-state.yml \
+            -c deploy/swarm/search.yml >/dev/null
+          POSTGRES_PASSWORD= docker stack config \
+            -c deploy/swarm/docker-stack.yml \
+            -c deploy/swarm/external-state.yml >/dev/null
       - name: Measure coverage
         run: |
           uv run --no-sync coverage run -m pytest

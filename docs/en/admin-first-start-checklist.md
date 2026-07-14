@@ -54,7 +54,7 @@ Set at least these values:
 | `SEAFILE_SYNC_USER_TOKEN` | API token for file downloads |
 | `RAGFLOW_BASE_URL` | RAGFlow API URL from the connector container |
 | `RAGFLOW_API_KEY` | API key of the RAGFlow target user |
-| `POSTGRES_PASSWORD` or `DATABASE_URL` | Database access for connector state |
+| `POSTGRES_PASSWORD` or both `DATABASE_URL` and `REDIS_URL` | Bundled or external connector state |
 
 Only add OpenWebUI, TLS, tuning, and dashboard values when they are needed for
 the selected operating mode.
@@ -117,8 +117,12 @@ or `portainer.env` go into the stack environment section.
 
 After a few minutes, the stack should meet these criteria:
 
-- `connector-postgres`, `connector-redis`, `connector-controller`,
-  `connector-worker`, and `connector-reconciler` are running.
+- With `bundled-state`, `connector-postgres` and `connector-redis` are running;
+  with `external-state`, both are intentionally absent and the external URLs
+  are reachable.
+- `connector-controller`, `connector-worker`, and `connector-reconciler` are
+  running; the standard profile also runs `connector-search`, while core-only
+  intentionally omits it.
 - Controller, worker, and reconciler logs do not show missing required
   variables or persistent authentication failures.
 - `bash output/enterprise-compose/check-live.sh` or the direct
