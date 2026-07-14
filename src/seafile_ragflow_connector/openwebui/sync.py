@@ -478,7 +478,18 @@ class OpenWebUISyncService:
             chat_id = str(existing[0].get("id"))
             updated = self.ragflow_client.update_chat(chat_id, payload)
             return str(updated.get("id") or chat_id), "updated"
-        created = self.ragflow_client.create_chat(payload)
+        try:
+            created = self.ragflow_client.create_chat(payload)
+        except ApiError as exc:
+            if not _is_dataset_without_parsed_files(exc):
+                raise
+            self.log.info(
+                "openwebui.sync.ragflow_chat.deferred",
+                dataset_id=dataset_id,
+                ragflow_chat_name=chat_name,
+                reason="dataset_without_parsed_files",
+            )
+            return None, "deferred"
         return str(created.get("id")), "created"
 
     def _ensure_template_chat(self, *, mode: str, sync_id: str) -> None:
@@ -1106,6 +1117,14 @@ def _chat_name(_namespace: str, dataset_name: str, dataset_id: str) -> str:
     if slug.startswith("rag_"):
         slug = slug[4:] or "dataset"
     return f"RAG_{slug}_{sha256_text(dataset_id)[:8]}"
+
+
+def _is_dataset_without_parsed_files(exc: ApiError) -> bool:
+    payload = exc.payload
+    if not isinstance(payload, dict) or payload.get("code") not in (102, "102"):
+        return False
+    message = str(payload.get("message", "")).lower()
+    return "dataset" in message and "parsed file" in message
 
 
 def _pending_replacement_cleanup(snapshot: Any) -> dict[str, list[str]]:

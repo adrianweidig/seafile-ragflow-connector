@@ -7,6 +7,7 @@ try:
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool
 
+    from seafile_ragflow_connector.clients.http import ApiError
     from seafile_ragflow_connector.clients.openwebui import OpenWebUICapabilities
     from seafile_ragflow_connector.config.settings import Settings
     from seafile_ragflow_connector.openwebui.sync import OpenWebUISyncService
@@ -58,6 +59,24 @@ class _FakeRAGFlowClient:
     def delete_chats(self, chat_ids: list[str]):
         self.deleted_chats.append(chat_ids)
         return True
+
+
+class _InitiallyEmptyDatasetRAGFlowClient(_FakeRAGFlowClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.dataset_ready = False
+
+    def create_chat(self, payload: dict[str, object]):
+        if payload.get("dataset_ids") and not self.dataset_ready:
+            raise ApiError(
+                "API returned an error code",
+                status_code=200,
+                payload={
+                    "code": 102,
+                    "message": "The dataset dataset-1 doesn't own parsed file",
+                },
+            )
+        return super().create_chat(payload)
 
 
 class _FakeOpenWebUIClient:
@@ -303,6 +322,51 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         with session_factory() as session:
             mapping = session.query(OpenWebUIDatasetMapping).one()
             self.assertEqual(mapping.artifact_version, "28")
+
+    def test_sync_defers_chat_for_empty_dataset_and_retries_after_parsing(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Empty",
+                    name_slug="empty",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Empty Dataset",
+                    status="active",
+                )
+            )
+            session.commit()
+        ragflow = _InitiallyEmptyDatasetRAGFlowClient()
+        openwebui = _FakeOpenWebUIClient()
+        service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=ragflow,  # type: ignore[arg-type]
+            openwebui_client=openwebui,  # type: ignore[arg-type]
+        )
+
+        empty = service.sync_once()
+
+        self.assertEqual(empty.failed, 0)
+        self.assertEqual(empty.chats_created, 0)
+        self.assertEqual(empty.tools_created, 1)
+        self.assertEqual(empty.pipes_created, 1)
+        with session_factory() as session:
+            mapping = session.query(OpenWebUIDatasetMapping).one()
+            self.assertEqual(mapping.sync_status, "synced")
+            self.assertIsNone(mapping.ragflow_chat_id)
+
+        ragflow.dataset_ready = True
+        parsed = service.sync_once()
+
+        self.assertEqual(parsed.failed, 0)
+        self.assertEqual(parsed.chats_created, 1)
+        self.assertEqual(parsed.tools_updated, 1)
+        self.assertEqual(parsed.pipes_updated, 1)
+        with session_factory() as session:
+            mapping = session.query(OpenWebUIDatasetMapping).one()
+            self.assertEqual(mapping.ragflow_chat_id, "chat-2")
 
     def test_sync_merges_search_template_chat_settings_into_dataset_chat(self) -> None:
         session_factory = _session_factory(self)
