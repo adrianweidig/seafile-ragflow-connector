@@ -65,8 +65,8 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         self.assertTrue(tool.valves["CONNECTOR_PROXY_VERIFY_SSL"])
         self.assertEqual(tool.valves["CONNECTOR_PROXY_CA_BUNDLE"], "")
         self.assertIn("owner: seafile-ragflow-connector", tool.content)
-        self.assertIn("artifact_version: 28", tool.content)
-        self.assertIn("artifact_version: 28", pipe.content)
+        self.assertIn("artifact_version: 29", tool.content)
+        self.assertIn("artifact_version: 29", pipe.content)
         self.assertFalse(tool.valves["TLS_DEBUG"])
         self.assertEqual(tool.valves["SHOW_SOURCE_SCORES"], True)
         self.assertEqual(tool.valves["LANGUAGE"], "de")
@@ -284,6 +284,43 @@ class OpenWebUIArtifactTests(unittest.TestCase):
         )
 
         self.assertEqual(answer, "")
+
+    def test_pipe_removes_stale_urls_from_synthesis_history_and_answer(self) -> None:
+        namespace = _pipe_namespace()
+        preview_url = (
+            "https://conn.top.secret/api/openwebui/sources/preview?token=signed-preview"
+        )
+        external_url = "https://docs.example.invalid/handbook"
+
+        history = namespace["_recent_messages_for_synthesis"](
+            [
+                {"role": "user", "content": "Was steht im Handbuch?"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        f"Die Regel steht im Handbuch [S1](<{preview_url}>). "
+                        f"Weitere Informationen: {external_url}"
+                    ),
+                },
+                {"role": "user", "content": "Und wie lautet die Frist?"},
+            ]
+        )
+
+        self.assertEqual(
+            history[1]["content"],
+            "Die Regel steht im Handbuch [S1]. Weitere Informationen:",
+        )
+        self.assertNotIn("http", history[1]["content"])
+
+        answer = namespace["_postprocess_synthesized_answer"](
+            f"Die Frist beträgt sechs Monate [S1](<{preview_url}>). Siehe {external_url}.",
+            [{"name": "handbuch.pdf", "text": "Die Frist beträgt sechs Monate."}],
+            "Wie lautet die Frist?",
+        )
+
+        self.assertIn("sechs Monate [S1]", answer)
+        self.assertNotIn("sources/preview", answer)
+        self.assertIn(external_url, answer)
 
     def test_pipe_treats_file_content_questions_as_content_intent(self) -> None:
         namespace = _pipe_namespace()
