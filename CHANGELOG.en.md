@@ -8,8 +8,19 @@ retroactively.
 
 ## Unreleased
 
+## 2.6.0 - 2026-07-19
+
 ### Added
 
+- The dashboard embedded in `connector-controller` now also serves as an
+  interactive administration surface: connector work and individual Seafile
+  libraries can be persistently enabled, disabled, paused, and resumed, while
+  delta, full, and reconciliation runs can be started, paused, resumed,
+  stopped, and retried selectively.
+- Library and run views expose the current processing phase plus file and
+  parsing progress, including pending, successful, and failed documents.
+- Administration actions are persistently audited with actor, target,
+  before/after state, and result without storing passwords or other secrets.
 - Knowledge search can use the existing OpenWebUI LDAP/AD pipeline for login
   and group synchronization, then manages its own short-lived signed browser
   session with explicit logout.
@@ -25,6 +36,16 @@ retroactively.
 
 ### Changed
 
+- Mutating dashboard actions are separated from read-only status access and
+  are accepted only when control is enabled, dashboard authentication is
+  configured, and JSON carries `X-Connector-Admin-Action: 1`; global stop and
+  run stop/cancel also require `{"confirm":"STOP"}`. The standalone
+  `connector dashboard` command remains an intentionally read-only status
+  view; administration is available only in the running controller and never
+  controls containers or Portainer services.
+- `CONNECTOR_AUTOMATION_INITIAL_STATE=stopped` provides a scheduler-free first
+  start. The backward-compatible default remains `running`, and an existing
+  persisted operator state is never overwritten.
 - Dashboard and knowledge search now use responsive, state-preserving
   navigation, denser default views, and collapsed technical details.
 - Search and OpenWebUI sources expose consistent evidence, coverage, and

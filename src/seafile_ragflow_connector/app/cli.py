@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, Never, cast
@@ -47,10 +47,16 @@ from seafile_ragflow_connector.domain.ragflow_search_settings import (
     ensure_search_template,
 )
 from seafile_ragflow_connector.i18n import localizer_for, t
+from seafile_ragflow_connector.jobs.context import (
+    JobDeferredError,
+    current_job_id,
+    job_cancellation_requested,
+)
 from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
 from seafile_ragflow_connector.jobs.scheduler import PeriodicTask, SimpleScheduler
 from seafile_ragflow_connector.jobs.types import JobSpec, JobStatus, JobType
 from seafile_ragflow_connector.jobs.worker import WorkerRunner
+from seafile_ragflow_connector.persistence.admin_control import AdminControlStore
 from seafile_ragflow_connector.persistence.db import (
     database_revisions,
     get_session_factory,
@@ -60,6 +66,7 @@ from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.persistence.models.sync_state import FileDocumentVersion
 from seafile_ragflow_connector.search.server import SearchServiceContext, serve_search_forever
 from seafile_ragflow_connector.security.access_control import ACLSnapshotService
+from seafile_ragflow_connector.sync.orchestrator import SyncCancelledError
 from seafile_ragflow_connector.sync.target_cleanup import LibrarySourceLike, TargetCleanupService
 from seafile_ragflow_connector.utils.redaction import redact_mapping
 
@@ -224,7 +231,7 @@ def cleanup_orphans(
     runtime = build_runtime(settings)
     extra_openwebui_client: OpenWebUIClient | None = None
     try:
-        current_libraries = runtime.orchestrator.discover_libraries()
+        current_libraries = runtime.orchestrator.discover_libraries(full_visibility=True)
         openwebui_client = runtime.openwebui_client
         if openwebui_client is None and settings.openwebui_admin_api_key:
             extra_openwebui_client = OpenWebUIClient(
@@ -393,6 +400,7 @@ def controller() -> None:
                     openwebui_sync_service=runtime.openwebui_sync_service,
                     job_store=runtime.job_store,
                     signal_queue=runtime.signal_queue,
+                    control_store=runtime.orchestrator.admin_control_store,
                 )
             )
         except DashboardBindError as exc:
@@ -406,38 +414,48 @@ def controller() -> None:
         )
 
     def discover() -> None:
+        if not _automatic_cycles_enabled_guarded(runtime, log):
+            return
         specs = _discover_job_specs(runtime)
+        if not _automatic_cycle_continues_guarded(runtime, log):
+            return
         _enqueue_specs(runtime.job_store, runtime.signal_queue, specs)
         log.info("controller.discovery.enqueued", count=len(specs))
 
     def delta() -> None:
+        if not _automatic_cycles_enabled_guarded(runtime, log):
+            return
         specs = runtime.orchestrator.discover_job_specs()
+        if not _automatic_cycle_continues_guarded(runtime, log):
+            return
         _enqueue_specs(runtime.job_store, runtime.signal_queue, specs)
         log.info("controller.delta.enqueued", count=len(specs))
-        stale = runtime.job_store.requeue_stale_running_jobs(
-            older_than_seconds=settings.job_lease_seconds
-        )
-        log.info(
-            "controller.stale_jobs.requeued",
-            count=stale.retrying,
-            dead=stale.dead,
-        )
-        purged = runtime.job_store.purge_completed_jobs(
-            older_than_days=settings.job_history_retention_days
-        )
-        log.info("controller.completed_jobs.purged", count=purged)
+
+    def maintenance() -> None:
+        _maintain_job_queue(runtime, settings, log)
 
     def template() -> None:
+        if not _automatic_cycles_enabled_guarded(runtime, log):
+            return
+        libraries = runtime.orchestrator.discover_libraries(trigger="automatic")
+        if not _automatic_cycle_continues_guarded(runtime, log):
+            return
         specs = [
             JobSpec(JobType.REFRESH_DATASET_SETTINGS, repo_id=library.repo_id)
-            for library in runtime.orchestrator.discover_libraries()
+            for library in libraries
         ]
         _enqueue_specs(runtime.job_store, runtime.signal_queue, specs)
         log.info("controller.settings_refresh.enqueued", count=len(specs))
 
     def search_template() -> None:
+        if not _automatic_cycles_enabled_guarded(runtime, log):
+            return
         if not settings.ragflow_search_template_enabled:
-            _ensure_search_answer_chat(runtime, log)
+            _ensure_search_answer_chat(
+                runtime,
+                log,
+                checkpoint=lambda: _automatic_cycle_continues_guarded(runtime, log),
+            )
             return
         resolved = ensure_search_template(
             runtime.ragflow_client,
@@ -450,26 +468,49 @@ def controller() -> None:
             template_id=resolved.template_id,
             warnings=list(resolved.warnings),
         )
-        _ensure_search_answer_chat(runtime, log)
+        if not _automatic_cycle_continues_guarded(runtime, log):
+            return
+        _ensure_search_answer_chat(
+            runtime,
+            log,
+            checkpoint=lambda: _automatic_cycle_continues_guarded(runtime, log),
+        )
 
     def openwebui() -> None:
-        _sync_openwebui_controller_guarded(runtime, log)
+        if (
+            not _automatic_cycles_enabled_guarded(runtime, log)
+            or not _openwebui_sync_enabled(runtime)
+            or runtime.openwebui_sync_service is None
+        ):
+            return
+        _enqueue_specs(
+            runtime.job_store,
+            runtime.signal_queue,
+            [JobSpec(JobType.SYNC_OPENWEBUI, payload={"trigger": "automatic"})],
+        )
 
     def acl_snapshot() -> None:
-        summary = _sync_acl_snapshot(runtime)
+        if not _automatic_cycles_enabled_guarded(runtime, log):
+            return
+        summary = _sync_acl_snapshot(
+            runtime,
+            checkpoint=lambda: _automatic_cycle_continues_guarded(runtime, log),
+        )
         log.info("controller.acl_snapshot.synced", **summary)
 
-    search_template()
-    if (
-        settings.openwebui_sync_on_startup
-        and settings.openwebui_effective_sync_mode != "disabled"
-        and runtime.openwebui_sync_service is not None
-    ):
-        openwebui()
+    if _automatic_cycles_enabled_guarded(runtime, log):
+        search_template()
+        if (
+            settings.openwebui_sync_on_startup
+            and settings.openwebui_effective_sync_mode != "disabled"
+            and runtime.openwebui_sync_service is not None
+        ):
+            openwebui()
 
     tasks = [
         PeriodicTask("discovery", settings.discovery_interval_seconds, discover),
         PeriodicTask("delta", settings.delta_sync_interval_seconds, delta),
+        PeriodicTask("maintenance", settings.delta_sync_interval_seconds, maintenance),
         PeriodicTask("template", settings.ragflow_template_refresh_seconds, template),
         PeriodicTask(
             "search_template",
@@ -488,6 +529,19 @@ def controller() -> None:
     if settings.openwebui_effective_sync_mode != "disabled":
         tasks.append(PeriodicTask("openwebui", settings.openwebui_sync_interval_seconds, openwebui))
     scheduler = SimpleScheduler(tasks)
+    try:
+        control_state = runtime.orchestrator.admin_control_store.workflow().state
+    except Exception as exc:
+        log.warning(
+            "controller.control_state_failed",
+            error_class=type(exc).__name__,
+        )
+    else:
+        log.info(
+            "controller.control_state",
+            configured_initial_state=settings.connector_automation_initial_state,
+            effective_state=control_state,
+        )
     log.info(
         "controller.started",
         intervals_seconds={task.name: task.interval_seconds for task in tasks},
@@ -529,10 +583,14 @@ def reconciler() -> None:
     log = structlog.get_logger(__name__)
 
     def reconcile() -> None:
+        if not _automatic_cycles_enabled_guarded(runtime, log):
+            return
         specs = [
             JobSpec(JobType.RECONCILE_LIBRARY, repo_id=library.repo_id)
-            for library in runtime.orchestrator.discover_libraries()
+            for library in runtime.orchestrator.discover_libraries(trigger="automatic")
         ]
+        if not _automatic_cycle_continues_guarded(runtime, log):
+            return
         _enqueue_specs(runtime.job_store, runtime.signal_queue, specs)
         log.info("reconciler.enqueued", count=len(specs))
 
@@ -564,6 +622,12 @@ def check_config(
             "allow_unknown_text_files": settings.allow_unknown_text_files,
             "dataset_settings_source": settings.dataset_settings_source,
             "connector_dashboard_enabled": settings.connector_dashboard_enabled,
+            "connector_dashboard_control_enabled": (
+                settings.connector_dashboard_control_enabled
+            ),
+            "connector_automation_initial_state": (
+                settings.connector_automation_initial_state
+            ),
             "connector_dashboard_host": settings.connector_dashboard_host,
             "connector_dashboard_port": settings.connector_dashboard_port,
             "authz_api_enabled": settings.authz_api_enabled,
@@ -633,6 +697,7 @@ def doctor(
             "app_env": settings.app_env,
             "language": localizer_for(settings).language,
             "dashboard_enabled": settings.connector_dashboard_enabled,
+            "dashboard_control_enabled": settings.connector_dashboard_control_enabled,
             "authz_enabled": settings.authz_api_enabled,
             "openwebui_mode": settings.openwebui_effective_sync_mode,
         },
@@ -696,7 +761,11 @@ def library_sync(
     """Bibliothek als persistentes Delta- oder Vollsync-Job einplanen."""
     job_type = JobType.SYNC_LIBRARY_FULL if mode == "full" else JobType.SYNC_LIBRARY_DELTA
     payload = _enqueue_cli_job(
-        JobSpec(job_type, repo_id=repo_id, payload={"scope": scope}),
+        JobSpec(
+            job_type,
+            repo_id=repo_id,
+            payload={"scope": scope, "trigger": "manual"},
+        ),
         wait=wait,
         timeout_seconds=timeout_seconds,
     )
@@ -717,7 +786,11 @@ def library_reconcile(
         library_plan(repo_id=repo_id, scope=scope, json_output=json_output)
         return
     payload = _enqueue_cli_job(
-        JobSpec(JobType.RECONCILE_LIBRARY, repo_id=repo_id, payload={"scope": scope}),
+        JobSpec(
+            JobType.RECONCILE_LIBRARY,
+            repo_id=repo_id,
+            payload={"scope": scope, "trigger": "manual"},
+        ),
         wait=wait,
         timeout_seconds=timeout_seconds,
     )
@@ -841,7 +914,7 @@ def cleanup_retry(
                 JobSpec(
                     JobType.PROCESS_CLEANUP_OUTBOX,
                     repo_id=repo_id,
-                    payload={"outbox_id": outbox_id},
+                    payload={"outbox_id": outbox_id, "trigger": "manual"},
                 )
             )
             if not result.deduplicated:
@@ -866,6 +939,17 @@ def cleanup_retry(
         raise typer.Exit(1)
 
 
+def _standalone_dashboard_context(store: Any, settings: Settings) -> DashboardContext:
+    control_store = AdminControlStore(store.session_factory)
+    control_store.initialize_workflow(settings.connector_automation_initial_state)
+    return DashboardContext(
+        store,
+        settings,
+        PROCESS_STARTED_AT,
+        control_store=control_store,
+    )
+
+
 @app.command()
 def dashboard() -> None:
     """Lesendes HTTP-Dashboard als Vordergrundprozess starten."""
@@ -881,8 +965,9 @@ def dashboard() -> None:
     if store is None:
         typer.echo(l10n.text("cli.dashboard.disabled"))
         return
+    context = _standalone_dashboard_context(store, settings)
     try:
-        serve_dashboard_forever(DashboardContext(store, settings, PROCESS_STARTED_AT))
+        serve_dashboard_forever(context)
     except DashboardBindError as exc:
         log.error("dashboard.bind_failed", error=str(exc))
         raise typer.Exit(1) from exc
@@ -936,6 +1021,21 @@ def _enqueue_specs(
                 job_type=spec.job_type,
                 error=str(exc),
             )
+
+
+def _maintain_job_queue(runtime: Runtime, settings: Settings, log: Any) -> None:
+    stale = runtime.job_store.requeue_stale_running_jobs(
+        older_than_seconds=settings.job_lease_seconds
+    )
+    log.info(
+        "controller.stale_jobs.requeued",
+        count=stale.retrying,
+        dead=stale.dead,
+    )
+    purged = runtime.job_store.purge_completed_jobs(
+        older_than_days=settings.job_history_retention_days
+    )
+    log.info("controller.completed_jobs.purged", count=purged)
 
 
 def _library_status_payload(library: Library) -> dict[str, Any]:
@@ -1075,6 +1175,7 @@ def _enqueue_cli_job(
     wait: bool,
     timeout_seconds: int,
 ) -> dict[str, Any]:
+    spec = _job_spec_with_trigger(spec, "manual")
     settings = _bootstrap()
     init_database(settings.database_url)
     session_factory = get_session_factory(settings.database_url)
@@ -1082,6 +1183,15 @@ def _enqueue_cli_job(
         with session_factory() as session:
             if session.get(Library, spec.repo_id) is None:
                 raise typer.BadParameter(t("cli.library.missing", repo_id=spec.repo_id))
+        control = AdminControlStore(session_factory).library(spec.repo_id)
+        if not control.runnable:
+            raise typer.BadParameter(
+                t(
+                    "cli.library.controlled",
+                    repo_id=spec.repo_id,
+                    state=control.state,
+                )
+            )
     store = JobStore(
         session_factory,
         default_max_attempts=settings.job_max_attempts,
@@ -1181,7 +1291,41 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
             return
         if runtime.openwebui_sync_service is None or spec.repo_id is None:
             return
-        runtime.openwebui_sync_service.sync_once(repo_ids={spec.repo_id})
+        if job_cancellation_requested():
+            raise SyncCancelledError("OpenWebUI scheduling interrupted")
+        trigger = str(spec.payload.get("trigger") or "automatic")
+        payload: dict[str, Any] = {
+            "repo_ids": [spec.repo_id],
+            "trigger": trigger,
+        }
+        workflow_run_id = str(spec.payload.get("workflow_run_id") or "").strip()
+        if workflow_run_id:
+            payload["workflow_run_id"] = workflow_run_id
+        child = runtime.job_store.enqueue_with_result(
+            JobSpec(
+                JobType.SYNC_OPENWEBUI,
+                repo_id=spec.repo_id,
+                payload=payload,
+            )
+        )
+        parent_job_id = current_job_id()
+        if parent_job_id is not None:
+            runtime.job_store.inherit_workflow_subscriptions(
+                parent_job_id,
+                child.job_id,
+                child_created=not child.deduplicated,
+            )
+        if child.deduplicated:
+            return
+        try:
+            runtime.signal_queue.signal(child.job_id)
+        except Exception as exc:
+            structlog.get_logger(__name__).warning(
+                "job.signal_failed",
+                job_id=child.job_id,
+                job_type=JobType.SYNC_OPENWEBUI,
+                error=str(exc),
+            )
 
     def ensure_dataset(spec: JobSpec) -> None:
         repo_id = _require_repo_id(spec)
@@ -1247,6 +1391,8 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
     def sync_openwebui(spec: JobSpec) -> None:
         if runtime.openwebui_sync_service is None:
             return
+        if job_cancellation_requested():
+            raise SyncCancelledError("OpenWebUI sync interrupted")
         mode = spec.payload.get("mode")
         if mode is not None and str(mode) not in {"disabled", "dry-run", "sync", "repair"}:
             raise ValueError(t("cli.jobs.sync_mode_error"))
@@ -1262,7 +1408,7 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
             repo_ids=repo_ids,
         )
 
-    return {
+    handlers = {
         JobType.DISCOVER_LIBRARIES: lambda spec: _enqueue_specs(
             runtime.job_store,
             runtime.signal_queue,
@@ -1282,9 +1428,18 @@ def _build_job_handlers(runtime: Runtime) -> dict[JobType, Callable[[JobSpec], N
         JobType.RECONCILE_RAGFLOW_DATASET: check_parse,
         JobType.SYNC_OPENWEBUI: sync_openwebui,
     }
+    return {
+        job_type: _guard_job_handler(runtime, handler)
+        for job_type, handler in handlers.items()
+    }
 
 
-def _ensure_search_answer_chat(runtime: Runtime, log: Any) -> None:
+def _ensure_search_answer_chat(
+    runtime: Runtime,
+    log: Any,
+    *,
+    checkpoint: Callable[[], bool] | None = None,
+) -> None:
     settings = runtime.settings
     if settings.search_answer_generation_mode != "ragflow_chat":
         return
@@ -1296,6 +1451,8 @@ def _ensure_search_answer_chat(runtime: Runtime, log: Any) -> None:
         )
         return
     payload = build_search_answer_chat_payload(settings.ragflow_search_answer_chat_name)
+    if checkpoint is not None and not checkpoint():
+        return
     try:
         existing = runtime.ragflow_client.list_chats(name=settings.ragflow_search_answer_chat_name)
     except Exception as exc:  # pragma: no cover - deployment-specific startup guard
@@ -1326,6 +1483,8 @@ def _ensure_search_answer_chat(runtime: Runtime, log: Any) -> None:
             created=False,
         )
         return
+    if checkpoint is not None and not checkpoint():
+        return
     try:
         created = runtime.ragflow_client.create_chat(payload)
     except Exception as exc:  # pragma: no cover - deployment-specific startup guard
@@ -1352,6 +1511,8 @@ def _mapping_id(value: dict[str, Any]) -> str | None:
 
 
 def _discover_job_specs(runtime: Runtime) -> list[JobSpec]:
+    if not _automatic_cycles_enabled_guarded(runtime, structlog.get_logger(__name__)):
+        return []
     specs = runtime.orchestrator.discover_job_specs()
     if _openwebui_sync_enabled(runtime):
         specs.append(JobSpec(JobType.SYNC_OPENWEBUI))
@@ -1366,7 +1527,11 @@ def _sync_openwebui_if_enabled(runtime: Runtime) -> dict[str, Any] | None:
 
 
 def _sync_openwebui_controller_guarded(runtime: Runtime, log: Any) -> None:
-    if not _openwebui_sync_enabled(runtime) or runtime.openwebui_sync_service is None:
+    if (
+        not _automatic_cycles_enabled_guarded(runtime, log)
+        or not _openwebui_sync_enabled(runtime)
+        or runtime.openwebui_sync_service is None
+    ):
         return
     try:
         runtime.openwebui_sync_service.sync_once()
@@ -1384,17 +1549,101 @@ def _sync_acl_snapshot_if_enabled(runtime: Runtime) -> dict[str, Any] | None:
     return _sync_acl_snapshot(runtime)
 
 
-def _sync_acl_snapshot(runtime: Runtime) -> dict[str, Any]:
+class _CheckpointingAdminClient:
+    def __init__(self, client: Any, checkpoint: Callable[[], bool]) -> None:
+        self._client = client
+        self._checkpoint = checkpoint
+
+    def iter_libraries(self) -> Iterator[dict[str, Any]]:
+        libraries = iter(self._client.iter_libraries())
+        while True:
+            if not self._checkpoint():
+                raise SyncCancelledError("automatic ACL snapshot interrupted")
+            try:
+                yield next(libraries)
+            except StopIteration:
+                return
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+
+def _sync_acl_snapshot(
+    runtime: Runtime,
+    *,
+    checkpoint: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
+    admin_client = runtime.admin_client
+    if checkpoint is not None:
+        admin_client = cast(Any, _CheckpointingAdminClient(admin_client, checkpoint))
     summary = ACLSnapshotService(
         settings=runtime.settings,
         session_factory=runtime.orchestrator.session_factory,
-        admin_client=runtime.admin_client,
+        admin_client=admin_client,
     ).refresh_once()
     return dict(summary.__dict__)
 
 
 def _openwebui_sync_enabled(runtime: Runtime) -> bool:
     return runtime.settings.openwebui_effective_sync_mode != "disabled"
+
+
+def _automatic_cycles_enabled(runtime: Runtime) -> bool:
+    workflow = runtime.orchestrator.admin_control_store.workflow()
+    return workflow.automation_enabled and not workflow.queue_paused
+
+
+def _automatic_cycles_enabled_guarded(runtime: Runtime, log: Any) -> bool:
+    try:
+        return _automatic_cycles_enabled(runtime)
+    except Exception as exc:
+        log.warning(
+            "controller.automation_check_failed",
+            error_class=type(exc).__name__,
+        )
+        return False
+
+
+def _automatic_cycle_continues_guarded(runtime: Runtime, log: Any) -> bool:
+    try:
+        return not runtime.orchestrator.admin_control_store.workflow().queue_paused
+    except Exception as exc:
+        log.warning(
+            "controller.automation_check_failed",
+            error_class=type(exc).__name__,
+        )
+        return False
+
+
+def _job_spec_with_trigger(spec: JobSpec, trigger: str) -> JobSpec:
+    return JobSpec(
+        spec.job_type,
+        repo_id=spec.repo_id,
+        file_path=spec.file_path,
+        payload={**spec.payload, "trigger": trigger},
+        priority=spec.priority,
+        max_attempts=spec.max_attempts,
+    )
+
+
+def _guard_job_handler(
+    runtime: Runtime,
+    handler: Callable[[JobSpec], None],
+) -> Callable[[JobSpec], None]:
+    def guarded(spec: JobSpec) -> None:
+        if spec.repo_id is not None:
+            control = runtime.orchestrator.admin_control_store.library(spec.repo_id)
+            if not control.runnable:
+                raise JobDeferredError(
+                    t(
+                        "cli.library.controlled",
+                        repo_id=spec.repo_id,
+                        state=control.state,
+                    )
+                )
+        handler(spec)
+
+    return guarded
 
 
 def _require_repo_id(spec: JobSpec) -> str:

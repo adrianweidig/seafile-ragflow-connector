@@ -45,6 +45,7 @@ class SyncJob(Base):
     run_id: Mapped[str | None] = mapped_column(Text)
     fence_token: Mapped[int | None] = mapped_column(BigInteger)
     cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pause_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

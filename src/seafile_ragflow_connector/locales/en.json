@@ -72,7 +72,8 @@
       "plan_help": "Build a reconciliation plan without remote mutations.",
       "sync_help": "Queue a persistent delta or full synchronization job.",
       "reconcile_help": "Plan reconciliation or run it as a fenced repair job.",
-      "missing": "Library {repo_id} is not present in connector state."
+      "missing": "Library {repo_id} is not present in connector state.",
+      "controlled": "Library {repo_id} is {state} and cannot be mutated."
     },
     "dashboard": {
       "help": "Run the read-only HTTP dashboard as a foreground process.",

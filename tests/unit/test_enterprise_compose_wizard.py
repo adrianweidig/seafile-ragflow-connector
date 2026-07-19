@@ -114,6 +114,7 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
             "ENTERPRISE_RAGFLOW_BASE_URL": "https://ragflow.internal",
             "ENTERPRISE_OPENWEBUI_BASE_URL": "https://openwebui.internal",
             "ENTERPRISE_CONNECTOR_PUBLIC_BASE_URL": "https://connector.internal",
+            "CONNECTOR_DASHBOARD_CONTROL_ENABLED": "true",
             **secret_values,
         }
     )
@@ -154,6 +155,8 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
     assert "SEARCH_SERVICE_ENABLED=true" in generated_env
     assert "OPENWEBUI_SOURCE_PREVIEW_MODE=connector_viewer" in generated_env
     assert "OPENWEBUI_PROXY_PUBLIC_BASE_URL=https://connector.internal" in generated_env
+    assert "CONNECTOR_DASHBOARD_CONTROL_ENABLED=true" in generated_env
+    assert "CONNECTOR_AUTOMATION_INITIAL_STATE=stopped" in generated_env
     assert "CONNECTOR_STARTUP_CHECK=infra" in generated_env
     assert "CONNECTOR_BOOTSTRAP_CHECK_LIVE=false" in generated_env
 
@@ -186,6 +189,8 @@ def test_enterprise_compose_wizard_generates_installable_defaults_without_ca_or_
     output_env = tmp_path / "connector.env"
     output_dir = tmp_path / "generated"
     env = os.environ.copy()
+    env.pop("CONNECTOR_DASHBOARD_CONTROL_ENABLED", None)
+    env.pop("CONNECTOR_AUTOMATION_INITIAL_STATE", None)
     env.update(
         {
             "ENTERPRISE_NONINTERACTIVE": "true",
@@ -235,6 +240,8 @@ def test_enterprise_compose_wizard_generates_installable_defaults_without_ca_or_
     assert "SEAFILE_PUBLIC_BASE_URL=https://seafile.internal" in generated_env
     assert "CONNECTOR_STARTUP_CHECK=infra" in generated_env
     assert "CONNECTOR_BOOTSTRAP_CHECK_LIVE=false" in generated_env
+    assert "CONNECTOR_DASHBOARD_CONTROL_ENABLED=false" in generated_env
+    assert "CONNECTOR_AUTOMATION_INITIAL_STATE=running" in generated_env
 
     compose_files = (output_dir / "compose-files.txt").read_text(encoding="utf-8")
     assert "deploy/compose/external-services.compose.yml" in compose_files

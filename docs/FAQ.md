@@ -34,10 +34,14 @@ Retries und Backpressure für Worker-Prozesse.
 
 ## Ist das Dashboard geschützt?
 
-Ja, wenn `CONNECTOR_DASHBOARD_AUTH_USERNAME` und
-`CONNECTOR_DASHBOARD_AUTH_PASSWORD` gesetzt sind. Dann schützt HTTP Basic Auth
-die Weboberfläche, die Status-API und die Dashboard-Workflow-Steuerung. Die
-OpenWebUI-Proxy-Endpunkte nutzen weiterhin ihr separates
+Die lesende Oberfläche kann per `CONNECTOR_DASHBOARD_AUTH_USERNAME` und
+`CONNECTOR_DASHBOARD_AUTH_PASSWORD` mit HTTP Basic Auth geschützt werden. Die
+schreibende Adminsteuerung ist zusätzlich standardmäßig aus und benötigt
+`CONNECTOR_DASHBOARD_CONTROL_ENABLED=true`, ein aktiviertes Dashboard,
+vollständige Basic Auth, JSON sowie `X-Connector-Admin-Action: 1`. Globaler Stop
+und Stop/Cancel eines Laufs verlangen außerdem `{"confirm":"STOP"}`. Für LAN-
+Zugriff gehört Basic Auth hinter
+HTTPS. Die OpenWebUI-Proxy-Endpunkte nutzen weiterhin ihr separates
 `OPENWEBUI_PROXY_SHARED_SECRET`.
 
 ## Darf `*_VERIFY_SSL=false` produktiv genutzt werden?

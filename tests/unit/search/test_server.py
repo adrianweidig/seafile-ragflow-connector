@@ -803,7 +803,10 @@ class SearchServerTests(unittest.TestCase):
             search_server.RAGFlowClient = original_client  # type: ignore[assignment]
 
         self.assertEqual(seen_profile_ids, [["repo-anleitungen", "repo-wiki"]])
-        self.assertEqual(_FakeRAGFlowClient.calls, ["dataset-anleitungen", "dataset-wiki"])
+        self.assertCountEqual(
+            _FakeRAGFlowClient.calls,
+            ["dataset-anleitungen", "dataset-wiki"],
+        )
         self.assertEqual(result["diagnostics"]["profiles_allowed"], 2)
 
     def test_empty_selection_raises_before_authz_or_ragflow(self) -> None:

@@ -31,6 +31,7 @@ from seafile_ragflow_connector.jobs.context import (
 )
 from seafile_ragflow_connector.jobs.job_store import JobStore
 from seafile_ragflow_connector.jobs.types import JobSpec, JobType
+from seafile_ragflow_connector.persistence.admin_control import AdminControlStore
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.persistence.models.sync_state import (
@@ -124,6 +125,7 @@ class SyncOrchestrator:
         delete_dataset_when_library_deleted: bool = True,
         refresh_dataset_settings: bool = True,
         dashboard_store: DashboardEventStore | None = None,
+        admin_control_store: AdminControlStore | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.admin_client = admin_client
@@ -136,6 +138,7 @@ class SyncOrchestrator:
         self.delete_dataset_when_library_deleted = delete_dataset_when_library_deleted
         self.refresh_dataset_settings = refresh_dataset_settings
         self.dashboard_store = dashboard_store
+        self.admin_control_store = admin_control_store or AdminControlStore(session_factory)
         self.dataset_provisioner = DatasetProvisioner(
             ragflow_client,
             template_dataset_name=template_dataset_name,
@@ -149,10 +152,24 @@ class SyncOrchestrator:
         self.reconciler = Reconciler(session_factory, ragflow_client)
         self.log = structlog.get_logger(__name__)
 
-    def discover_libraries(self) -> list[DiscoveredLibrary]:
-        discovered: list[DiscoveredLibrary] = []
+    def discover_libraries(
+        self,
+        *,
+        full_visibility: bool = False,
+        trigger: str = "manual",
+    ) -> list[DiscoveredLibrary]:
+        visible: list[tuple[DiscoveredLibrary, str | None, bool]] = []
         current_repo_ids: set[str] = set()
-        for raw in self.admin_client.iter_libraries():
+        libraries = iter(self.admin_client.iter_libraries())
+        while True:
+            self._raise_if_automatic_cycle_interrupted(
+                trigger,
+                "automatic library discovery interrupted",
+            )
+            try:
+                raw = next(libraries)
+            except StopIteration:
+                break
             libraries_seen_total.inc()
             library = normalize_library(raw)
             current_repo_ids.add(library.repo_id)
@@ -168,18 +185,60 @@ class SyncOrchestrator:
                 dataset_id = db_library.ragflow_dataset_id
                 session.commit()
             self.job_store.refresh_workflow_parents_for_repo_cleanup(library.repo_id)
+            visible.append((library, dataset_id, skipped))
             if skipped:
                 self.log.info("library.skipped", repo_id=library.repo_id, reason=reason)
                 continue
-            self._ensure_parse_status_job(library.repo_id, dataset_id)
-            discovered.append(library)
-        self._cleanup_missing_libraries(current_repo_ids)
+        self._raise_if_automatic_cycle_interrupted(
+            trigger,
+            "automatic library discovery interrupted before missing-library cleanup",
+        )
+        self._cleanup_missing_libraries(current_repo_ids, trigger=trigger)
+        controls = self.admin_control_store.libraries(
+            [library.repo_id for library, _dataset_id, _skipped in visible]
+        )
+        discovered: list[DiscoveredLibrary] = []
+        for library, dataset_id, skipped in visible:
+            self._raise_if_automatic_cycle_interrupted(
+                trigger,
+                "automatic library discovery interrupted before job scheduling",
+            )
+            if skipped:
+                if full_visibility:
+                    discovered.append(library)
+                continue
+            control = controls[library.repo_id]
+            if control.runnable:
+                self._ensure_parse_status_job(
+                    library.repo_id,
+                    dataset_id,
+                    trigger=trigger,
+                )
+                discovered.append(library)
+                continue
+            self.log.info(
+                "library.controlled",
+                repo_id=library.repo_id,
+                state=control.state,
+            )
+            if full_visibility:
+                discovered.append(library)
         return discovered
 
     def discover_job_specs(self) -> list[JobSpec]:
+        try:
+            workflow = self.admin_control_store.workflow()
+        except Exception as exc:
+            self.log.warning(
+                "automation.enabled_check_failed",
+                error_class=type(exc).__name__,
+            )
+            return []
+        if not workflow.automation_enabled or workflow.queue_paused:
+            return []
         return [
             JobSpec(JobType.SYNC_LIBRARY_DELTA, repo_id=library.repo_id)
-            for library in self.discover_libraries()
+            for library in self.discover_libraries(trigger="automatic")
         ]
 
     def sync_once(self) -> SyncSummary:
@@ -217,6 +276,7 @@ class SyncOrchestrator:
         return summary
 
     def ensure_dataset_for_repo(self, repo_id: str) -> str:
+        self.assert_library_runnable(repo_id)
         active_lease = current_repo_lease(repo_id)
         if active_lease is None:
             with self._mutation_scope(
@@ -312,6 +372,7 @@ class SyncOrchestrator:
         return self.dataset_provisioner.result_from_existing_dataset(source, resolved)
 
     def sync_library_full(self, repo_id: str, *, scope: str = "/") -> SyncSummary:
+        self.assert_library_runnable(repo_id)
         normalized_scope = normalize_seafile_path(scope)
         sync_id = new_sync_id(repo_id)
         with self._mutation_scope(repo_id, owner_id=f"sync:{sync_id}") as lease:
@@ -331,6 +392,11 @@ class SyncOrchestrator:
                 baseline_commit_id=baseline_commit_id,
                 target_commit_id=target_commit_id,
                 fence_token=lease.fence_token,
+                progress=self._file_sync_progress(
+                    files_total=0,
+                    files_processed=0,
+                    phase="preparing",
+                ),
             )
             snapshot_id: int | None = None
             snapshot_entries: list[SnapshotEntry] | None = None
@@ -383,6 +449,10 @@ class SyncOrchestrator:
                 self.sync_state_store.update_run(
                     run_id,
                     status="cancelled" if cancelled else "failed",
+                    progress=self._terminal_run_progress(
+                        run_id,
+                        terminal_phase="cancelled" if cancelled else "failed",
+                    ),
                     error_message=None if cancelled else str(exc)[:4000],
                     finished=True,
                 )
@@ -435,6 +505,14 @@ class SyncOrchestrator:
                     if not entry.is_directory
                 )
             source_files = list(source_files_iter)
+            files_total = len(source_files)
+            self.sync_state_store.update_run(
+                sync_id,
+                progress=self._file_sync_progress(
+                    files_total=files_total,
+                    files_processed=0,
+                ),
+            )
             source_paths = {
                 normalize_seafile_path(path) for path, _item in source_files
             }
@@ -526,7 +604,22 @@ class SyncOrchestrator:
                         # Keep delete_missing_files from deleting the old document before
                         # the replacement reached the current parse state.
                         seen_paths.add(previous_path)
+                self.sync_state_store.update_run(
+                    sync_id,
+                    progress=self._file_sync_progress(
+                        files_total=files_total,
+                        files_processed=files_seen,
+                    ),
+                )
 
+            self.sync_state_store.update_run(
+                sync_id,
+                progress=self._file_sync_progress(
+                    files_total=files_total,
+                    files_processed=files_seen,
+                    phase="cleanup",
+                ),
+            )
             files_deleted = self.delete_missing_files(
                 repo_id,
                 dataset_id,
@@ -607,6 +700,7 @@ class SyncOrchestrator:
             unbind_contextvars("sync_id")
 
     def sync_library_delta(self, repo_id: str, *, scope: str = "/") -> SyncSummary:
+        self.assert_library_runnable(repo_id)
         normalized_scope = normalize_seafile_path(scope)
         with self._mutation_scope(
             repo_id,
@@ -634,6 +728,11 @@ class SyncOrchestrator:
                     baseline_commit_id=cursor.commit_id,
                     target_commit_id=target_commit_id,
                     fence_token=lease.fence_token,
+                    progress=self._delta_sync_progress(
+                        changes_total=0,
+                        changes_processed=0,
+                        phase="syncing",
+                    ),
                 )
                 summary = SyncSummary(libraries_synced=1)
                 self._ensure_parse_status_job(
@@ -681,7 +780,10 @@ class SyncOrchestrator:
                 baseline_commit_id=cursor.commit_id,
                 target_commit_id=target_commit_id,
                 fence_token=lease.fence_token,
-                progress={"changes": len(changes), "processed": 0},
+                progress=self._delta_sync_progress(
+                    changes_total=len(changes),
+                    changes_processed=0,
+                ),
             )
             files_uploaded = 0
             files_deleted = 0
@@ -726,7 +828,10 @@ class SyncOrchestrator:
                             )
                     self.sync_state_store.update_run(
                         run_id,
-                        progress={"changes": len(changes), "processed": index},
+                        progress=self._delta_sync_progress(
+                            changes_total=len(changes),
+                            changes_processed=index,
+                        ),
                     )
                 self.repo_lease_store.assert_owned(lease)
                 if not self.sync_state_store.advance_cursor(
@@ -770,6 +875,10 @@ class SyncOrchestrator:
                 self.sync_state_store.update_run(
                     run_id,
                     status="cancelled" if cancelled else "failed",
+                    progress=self._terminal_run_progress(
+                        run_id,
+                        terminal_phase="cancelled" if cancelled else "failed",
+                    ),
                     error_message=None if cancelled else str(exc)[:4000],
                     finished=True,
                 )
@@ -843,6 +952,8 @@ class SyncOrchestrator:
         scope: str = "/",
         execute: bool = False,
     ) -> ReconcilePlan:
+        if execute:
+            self.assert_library_runnable(repo_id)
         with self._mutation_scope(
             repo_id,
             owner_id=f"reconcile:{new_sync_id(repo_id)}",
@@ -926,6 +1037,7 @@ class SyncOrchestrator:
         lease: RepoLeaseHandle | None = None,
     ) -> FileSyncResult:
         if lease is None:
+            self.assert_library_runnable(repo_id)
             with self._mutation_scope(
                 repo_id,
                 owner_id=f"file:{new_sync_id(repo_id)}",
@@ -941,14 +1053,17 @@ class SyncOrchestrator:
                     lease=acquired,
                 )
         self.repo_lease_store.assert_owned(lease)
+        self._raise_if_job_interrupted("file sync interrupted before download")
         if source_commit_id and hasattr(self.sync_client, "download_file_revision"):
             data = self.sync_client.download_file_revision(repo_id, path, source_commit_id)
         else:
             data = self.sync_client.download_file(repo_id, path)
+        self._raise_if_job_interrupted("file sync interrupted after download")
         classification = classify_file(path, data, self.file_policy)
         artifact = None
         if classification.should_ingest:
             artifact = prepare_ingestion_artifact(classification, data)
+        self._raise_if_job_interrupted("file sync interrupted after conversion")
 
         pending_version_id: int | None = None
         resume_document_id: str | None = None
@@ -976,6 +1091,9 @@ class SyncOrchestrator:
                         path,
                         fence_token=lease.fence_token if lease else None,
                         run_id=self._correlation_run_id(sync_id),
+                    )
+                    self._raise_if_job_interrupted(
+                        "file sync interrupted before cleanup processing"
                     )
                     self.process_cleanup_outbox(repo_id=repo_id, lease=lease)
                 self.log.info(
@@ -1056,6 +1174,9 @@ class SyncOrchestrator:
                 if pending_version.state == "parsing" and resume_document_id:
                     db_file.sync_status = "parsing"
                     session.commit()
+                    self._raise_if_job_interrupted(
+                        "file sync interrupted before parse-status scheduling"
+                    )
                     self._ensure_parse_status_job(
                         repo_id,
                         dataset_id,
@@ -1072,6 +1193,9 @@ class SyncOrchestrator:
             session.commit()
 
             if unchanged and old_document_id:
+                self._raise_if_job_interrupted(
+                    "file sync interrupted before document verification"
+                )
                 unchanged = self._ragflow_document_exists(
                     dataset_id,
                     old_document_id,
@@ -1125,6 +1249,7 @@ class SyncOrchestrator:
                 )
 
         settings_hash = None
+        self._raise_if_job_interrupted("file sync interrupted before dataset settings")
         if self.refresh_dataset_settings:
             settings = self.dataset_settings_service.refresh(dataset_id)
             settings_hash = settings.settings_hash
@@ -1137,6 +1262,7 @@ class SyncOrchestrator:
                     settings_payload=settings.settings_payload,
                 )
                 session.commit()
+        self._raise_if_job_interrupted("file sync interrupted after dataset settings")
 
         if pending_version_id is None:
             with self.session_factory() as session:
@@ -1192,12 +1318,14 @@ class SyncOrchestrator:
         if resume_document_id is None:
             if lease is not None:
                 self.repo_lease_store.assert_owned(lease)
+            self._raise_if_job_interrupted("file sync interrupted before upload recovery")
             recovered = self._recover_managed_upload(
                 dataset_id,
                 managed_document_name=managed_document_name,
                 upload_operation_id=upload_operation_id,
             )
             if recovered is None:
+                self._raise_if_job_interrupted("file sync interrupted before upload")
                 document = self.ragflow_client.upload_document(
                     dataset_id,
                     document_name=managed_document_name,
@@ -1207,10 +1335,12 @@ class SyncOrchestrator:
                 uploaded_now = True
             else:
                 document = recovered
+            self._raise_if_job_interrupted("file sync interrupted after upload")
             document_id = str(document.get("id") or document.get("document_id") or "")
             if not document_id:
                 msg = f"RAGFlow upload response did not contain a document id for {path}"
                 raise RuntimeError(msg)
+            self._raise_if_job_interrupted("file sync interrupted before metadata")
             self._update_managed_document_metadata(
                 dataset_id,
                 document_id,
@@ -1219,6 +1349,7 @@ class SyncOrchestrator:
                 repo_id=repo_id,
                 path=path,
             )
+            self._raise_if_job_interrupted("file sync interrupted after metadata")
             with self.session_factory() as session:
                 stored_version = session.get(FileDocumentVersion, pending_version_id)
                 if stored_version is None:
@@ -1229,6 +1360,7 @@ class SyncOrchestrator:
                 session.commit()
         else:
             document_id = resume_document_id
+            self._raise_if_job_interrupted("file sync interrupted before metadata")
             self._update_managed_document_metadata(
                 dataset_id,
                 document_id,
@@ -1237,6 +1369,8 @@ class SyncOrchestrator:
                 repo_id=repo_id,
                 path=path,
             )
+            self._raise_if_job_interrupted("file sync interrupted after metadata")
+        self._raise_if_job_interrupted("file sync interrupted before rename")
         self._restore_friendly_document_name(
             dataset_id,
             document_id,
@@ -1245,9 +1379,12 @@ class SyncOrchestrator:
             repo_id=repo_id,
             path=path,
         )
+        self._raise_if_job_interrupted("file sync interrupted after rename")
         if lease is not None:
             self.repo_lease_store.assert_owned(lease)
+        self._raise_if_job_interrupted("file sync interrupted before parse")
         self.ragflow_client.parse_documents(dataset_id, [document_id])
+        self._raise_if_job_interrupted("file sync interrupted after parse")
 
         with self.session_factory() as session:
             db_file = self._get_file(session, repo_id, normalize_seafile_path(path))
@@ -1262,6 +1399,9 @@ class SyncOrchestrator:
             stored_version.parse_status = "UNSTART"
             stored_version.error_message = None
             session.commit()
+        self._raise_if_job_interrupted(
+            "file sync interrupted before parse-status scheduling"
+        )
         self._ensure_parse_status_job(
             repo_id,
             dataset_id,
@@ -1318,6 +1458,7 @@ class SyncOrchestrator:
         lease: RepoLeaseHandle | None = None,
     ) -> bool:
         if lease is None:
+            self.assert_library_runnable(repo_id)
             with self._mutation_scope(
                 repo_id,
                 owner_id=f"delete:{new_sync_id(repo_id)}",
@@ -1402,6 +1543,8 @@ class SyncOrchestrator:
         sync_id: str | None = None,
         lease: RepoLeaseHandle | None = None,
     ) -> int:
+        if lease is None:
+            self.assert_library_runnable(repo_id)
         normalized_scope = normalize_seafile_path(scope)
         deleted = 0
         with self.session_factory() as session:
@@ -1418,6 +1561,7 @@ class SyncOrchestrator:
             ]
 
         for row in missing:
+            self._raise_if_job_interrupted("missing-file cleanup interrupted")
             removed = self.delete_file(
                 repo_id,
                 dataset_id,
@@ -1457,6 +1601,7 @@ class SyncOrchestrator:
         *,
         raise_if_pending: bool = False,
     ) -> int:
+        self.assert_library_runnable(repo_id)
         with self._mutation_scope(
             repo_id,
             owner_id=f"parse:{new_sync_id(repo_id)}",
@@ -1490,6 +1635,7 @@ class SyncOrchestrator:
                     )
                 ).all()
                 for version in versions:
+                    self._raise_if_job_interrupted("parse-status update interrupted")
                     assert version.document_id is not None
                     document = by_id.get(version.document_id)
                     if document is None:
@@ -1560,6 +1706,7 @@ class SyncOrchestrator:
                 session.commit()
 
             for document_id in retry_ids:
+                self._raise_if_job_interrupted("document reparse interrupted")
                 self.repo_lease_store.assert_owned(lease)
                 try:
                     self.ragflow_client.parse_documents(dataset_id, [document_id])
@@ -1582,6 +1729,7 @@ class SyncOrchestrator:
                             retry_version.state = "parsing"
                             session.commit()
             for version_id, document_id, previous_dataset_id in cleanup:
+                self._raise_if_job_interrupted("document cleanup enqueue interrupted")
                 self._enqueue_cleanup(
                     repo_id=repo_id,
                     target_type="ragflow_document",
@@ -1591,6 +1739,7 @@ class SyncOrchestrator:
                     fence_token=lease.fence_token,
                     run_id=self._correlation_run_id(),
                 )
+            self._raise_if_job_interrupted("document cleanup interrupted")
             self.process_cleanup_outbox(repo_id=repo_id, lease=lease)
             self._ensure_parse_status_job(
                 repo_id,
@@ -1612,6 +1761,13 @@ class SyncOrchestrator:
                         delay_seconds=30,
                     )
             return updated
+
+    def assert_library_runnable(self, repo_id: str) -> None:
+        control = self.admin_control_store.library(repo_id)
+        if not control.runnable:
+            raise ValueError(
+                f"library {repo_id!r} is {control.state} and cannot be mutated"
+            )
 
     @contextmanager
     def _mutation_scope(
@@ -1639,6 +1795,30 @@ class SyncOrchestrator:
     def _cancellation_requested(self, run_id: str) -> bool:
         return job_cancellation_requested() or self.sync_state_store.cancel_requested(run_id)
 
+    @staticmethod
+    def _raise_if_job_interrupted(message: str) -> None:
+        if job_cancellation_requested():
+            raise SyncCancelledError(message)
+
+    def _raise_if_automatic_cycle_interrupted(
+        self,
+        trigger: str,
+        message: str,
+    ) -> None:
+        if trigger != "automatic":
+            return
+        if current_job_id() is not None:
+            self._raise_if_job_interrupted(message)
+            return
+        try:
+            queue_paused = self.admin_control_store.workflow().queue_paused
+        except Exception as exc:
+            raise SyncCancelledError(
+                f"{message}: workflow control could not be verified"
+            ) from exc
+        if queue_paused:
+            raise SyncCancelledError(message)
+
     def _current_parent_run_id(self) -> str | None:
         run_id = current_job_run_id()
         return run_id if run_id and self.sync_state_store.get_run(run_id) is not None else None
@@ -1646,6 +1826,16 @@ class SyncOrchestrator:
     def _correlation_run_id(self, fallback: str | None = None) -> str | None:
         run_id = current_job_run_id() or fallback
         return run_id if run_id and self.sync_state_store.get_run(run_id) is not None else None
+
+    def _current_execution_trigger(self, *, default: str = "manual") -> str:
+        job_id = current_job_id()
+        if job_id is None:
+            return default
+        job = self.job_store.get(job_id)
+        if job is None:
+            return default
+        trigger = str((job.payload or {}).get("trigger") or "").strip().lower()
+        return trigger if trigger in {"automatic", "manual"} else "automatic"
 
     def _library_dataset_id(self, repo_id: str) -> str | None:
         with self.session_factory() as session:
@@ -1696,6 +1886,57 @@ class SyncOrchestrator:
             "dead_cleanup": dead_cleanup,
         }
 
+    @staticmethod
+    def _file_sync_progress(
+        *,
+        files_total: int,
+        files_processed: int,
+        phase: str = "syncing",
+    ) -> dict[str, int | float | str]:
+        total = max(0, files_total)
+        processed = min(max(0, files_processed), total)
+        percent = 0.0 if total == 0 else round(processed * 100.0 / total, 2)
+        return {
+            "phase": phase,
+            "files_total": total,
+            "files_processed": processed,
+            "total": total,
+            "completed": processed,
+            "percent": percent,
+        }
+
+    @staticmethod
+    def _delta_sync_progress(
+        *,
+        changes_total: int,
+        changes_processed: int,
+        phase: str = "syncing",
+    ) -> dict[str, int | float | str]:
+        total = max(0, changes_total)
+        processed = min(max(0, changes_processed), total)
+        percent = 0.0 if total == 0 else round(processed * 100.0 / total, 2)
+        return {
+            "phase": phase,
+            "changes": total,
+            "processed": processed,
+            "total": total,
+            "completed": processed,
+            "percent": percent,
+        }
+
+    def _terminal_run_progress(
+        self,
+        run_id: str,
+        *,
+        terminal_phase: str,
+    ) -> dict[str, Any]:
+        run = self.sync_state_store.get_run(run_id)
+        progress = dict(run.progress or {}) if run is not None else {}
+        previous_phase = str(progress.get("phase") or "unknown")
+        progress["phase"] = terminal_phase
+        progress[f"{terminal_phase}_phase"] = previous_phase
+        return progress
+
     def _complete_or_wait_for_async_work(
         self,
         run_id: str,
@@ -1703,11 +1944,23 @@ class SyncOrchestrator:
         progress: Mapping[str, Any],
     ) -> str:
         counts = self._async_work_counts(repo_id)
+        run = self.sync_state_store.get_run(run_id)
+        existing_progress = dict(run.progress or {}) if run is not None else {}
+        if counts["pending_parse"] or counts["dead_parse"]:
+            phase = "parsing"
+        elif counts["pending_cleanup"] or counts["dead_cleanup"]:
+            phase = "cleanup"
+        else:
+            phase = "completed"
         merged_progress = {
+            **existing_progress,
             **dict(progress),
             **counts,
             "sync_phase_complete": True,
+            "phase": phase,
         }
+        if phase == "completed":
+            merged_progress["percent"] = 100.0
         if counts["dead_parse"] or counts["dead_cleanup"]:
             error = (
                 "asynchronous sync work failed: "
@@ -1788,6 +2041,7 @@ class SyncOrchestrator:
         dataset_id: str | None,
         *,
         run_id: str | None = None,
+        trigger: str | None = None,
     ) -> int | None:
         if not dataset_id:
             return None
@@ -1804,11 +2058,15 @@ class SyncOrchestrator:
             )
         if not pending:
             return None
+        payload = {"dataset_id": dataset_id}
+        resolved_trigger = trigger or self._current_execution_trigger()
+        if resolved_trigger == "manual":
+            payload["trigger"] = "manual"
         result = self.job_store.enqueue_with_result(
             JobSpec(
                 JobType.CHECK_PARSE_STATUS,
                 repo_id=repo_id,
-                payload={"dataset_id": dataset_id},
+                payload=payload,
                 max_attempts=5,
             )
         )
@@ -2039,6 +2297,7 @@ class SyncOrchestrator:
         limit: int = 100,
     ) -> int:
         if lease is None:
+            self.assert_library_runnable(repo_id)
             active = current_repo_lease(repo_id)
             if active is None:
                 with self._mutation_scope(
@@ -2065,6 +2324,15 @@ class SyncOrchestrator:
             )
         completed = 0
         for row_id in row_ids:
+            self._raise_if_job_interrupted("cleanup outbox interrupted")
+            control = self.admin_control_store.library(repo_id)
+            if not control.runnable:
+                self.log.info(
+                    "cleanup.outbox_controlled",
+                    repo_id=repo_id,
+                    state=control.state,
+                )
+                break
             with self.session_factory() as session:
                 row = session.get(CleanupOutbox, row_id)
                 if row is None or row.status not in {"pending", "retrying"}:
@@ -2098,6 +2366,15 @@ class SyncOrchestrator:
                 document_version_id = row.document_version_id
             try:
                 self.repo_lease_store.assert_owned(lease)
+                self._raise_if_job_interrupted("cleanup outbox interrupted")
+                control = self.admin_control_store.library(repo_id)
+                if not control.runnable:
+                    self.log.info(
+                        "cleanup.outbox_controlled",
+                        repo_id=repo_id,
+                        state=control.state,
+                    )
+                    break
                 if target_type == "ragflow_document":
                     if not dataset_id:
                         raise ValueError("document cleanup requires dataset_id")
@@ -2106,6 +2383,8 @@ class SyncOrchestrator:
                     self.ragflow_client.delete_datasets([target_id])
                 else:
                     raise ValueError(f"unsupported cleanup target type: {target_type}")
+            except SyncCancelledError:
+                raise
             except Exception as exc:
                 with self.session_factory() as session:
                     row = session.scalar(
@@ -2202,6 +2481,7 @@ class SyncOrchestrator:
             if row is None or row.status != "dead":
                 return None
             repo_id = row.repo_id
+            self.assert_library_runnable(repo_id)
             library = session.get(Library, repo_id)
             if (
                 row.target_type == "ragflow_dataset"
@@ -2279,8 +2559,45 @@ class SyncOrchestrator:
         db_library.last_error = None
         return db_library
 
-    def _cleanup_missing_libraries(self, current_repo_ids: set[str]) -> None:
+    @staticmethod
+    def _protect_controlled_library_target(
+        session: Session,
+        library: Library,
+        *,
+        now: datetime,
+    ) -> None:
+        for cleanup in session.scalars(
+            select(CleanupOutbox)
+            .where(CleanupOutbox.repo_id == library.repo_id)
+            .where(CleanupOutbox.target_type == "ragflow_dataset")
+            .where(CleanupOutbox.status.in_(["pending", "retrying", "dead"]))
+        ):
+            cleanup.status = "superseded"
+            cleanup.completed_at = now
+            cleanup.error_message = "library target protected by admin control"
+        library.missing_since = None
+        library.last_missing_observation_at = None
+        library.missing_observations = 0
+        library.deletion_state = "active"
+        library.status = "active"
+        library.last_error = None
+
+    def _cleanup_missing_libraries(
+        self,
+        current_repo_ids: set[str],
+        *,
+        trigger: str = "manual",
+    ) -> None:
         now = datetime.now(UTC)
+        with self.session_factory() as session:
+            missing_repo_ids = list(
+                session.scalars(
+                    select(Library.repo_id)
+                    .where(Library.repo_id.not_in(current_repo_ids))
+                    .where(Library.status != "deleted")
+                ).all()
+            )
+        controls = self.admin_control_store.libraries(missing_repo_ids)
         with self.session_factory() as session:
             missing = session.scalars(
                 select(Library)
@@ -2299,7 +2616,18 @@ class SyncOrchestrator:
                 repo_key = str(cleanup_repo_id)
                 if cleanup_status == "dead" or repo_key not in cleanup_statuses:
                     cleanup_statuses[repo_key] = str(cleanup_status)
+            actionable_missing: list[Library] = []
             for row in missing:
+                control = controls.get(row.repo_id)
+                if control is None or not control.runnable:
+                    self._protect_controlled_library_target(session, row, now=now)
+                    self.log.info(
+                        "library.missing_cleanup_controlled",
+                        repo_id=row.repo_id,
+                        state=control.state if control is not None else "unavailable",
+                    )
+                    continue
+                actionable_missing.append(row)
                 row.missing_since = row.missing_since or now
                 last_observed = row.last_missing_observation_at
                 if last_observed is None or _as_utc(last_observed) <= (
@@ -2322,13 +2650,13 @@ class SyncOrchestrator:
                     row.deletion_state = "missing"
                     row.status = "missing"
             mass_guard = (
-                len(missing) >= 3
+                len(actionable_missing) >= 3
                 and bool(total_known)
-                and len(missing) / int(total_known or 1) > 0.20
+                and len(actionable_missing) / int(total_known or 1) > 0.20
             )
             eligible = [
                 row
-                for row in missing
+                for row in actionable_missing
                 if row.missing_observations >= 3
                 and row.missing_since is not None
                 and _as_utc(row.missing_since) <= now - timedelta(hours=24)
@@ -2350,9 +2678,25 @@ class SyncOrchestrator:
             session.commit()
 
         for item in items:
+            self._raise_if_automatic_cycle_interrupted(
+                trigger,
+                "automatic missing-library cleanup interrupted",
+            )
             repo_id = str(item["repo_id"])
             dataset_id = str(item["dataset_id"] or "")
             try:
+                control = self.admin_control_store.library(repo_id)
+                if not control.runnable:
+                    with self.session_factory() as session:
+                        db_library = session.get(Library, repo_id)
+                        if db_library is not None and db_library.status != "deleted":
+                            self._protect_controlled_library_target(
+                                session,
+                                db_library,
+                                now=datetime.now(UTC),
+                            )
+                            session.commit()
+                    continue
                 self.log.info(
                     "library.deleted_detected",
                     repo_id=repo_id,
@@ -2393,6 +2737,14 @@ class SyncOrchestrator:
                 )
 
     def confirm_missing_library_deletion(self, repo_id: str) -> bool:
+        control = self.admin_control_store.library(repo_id)
+        if not control.runnable:
+            self.log.info(
+                "library.delete_confirmation_controlled",
+                repo_id=repo_id,
+                state=control.state,
+            )
+            return False
         with self.session_factory() as session:
             library = session.get(Library, repo_id)
             if library is None or library.deletion_state != "awaiting_confirmation":
@@ -2413,8 +2765,31 @@ class SyncOrchestrator:
                     dataset_id=dataset_id,
                     fence_token=lease.fence_token,
                 )
-                self.process_cleanup_outbox(repo_id=repo_id, lease=lease)
+                completed = self.process_cleanup_outbox(repo_id=repo_id, lease=lease)
+            if completed == 0 and not self.admin_control_store.library(repo_id).runnable:
+                with self.session_factory() as session:
+                    library = session.get(Library, repo_id)
+                    if library is not None and library.status != "deleted":
+                        self._protect_controlled_library_target(
+                            session,
+                            library,
+                            now=datetime.now(UTC),
+                        )
+                        session.commit()
+                return False
         else:
+            control = self.admin_control_store.library(repo_id)
+            if not control.runnable:
+                with self.session_factory() as session:
+                    library = session.get(Library, repo_id)
+                    if library is not None and library.status != "deleted":
+                        self._protect_controlled_library_target(
+                            session,
+                            library,
+                            now=datetime.now(UTC),
+                        )
+                        session.commit()
+                return False
             with self.session_factory() as session:
                 library = session.get(Library, repo_id)
                 if library is not None:

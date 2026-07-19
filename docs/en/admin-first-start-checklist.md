@@ -86,11 +86,36 @@ docker compose \
   run --rm connector-controller connector check-live
 ```
 
-When `CONNECTOR_DASHBOARD_ENABLED=true` is set, a dashboard password should be
-set as well. For local access,
+The interactive administration surface requires
+`CONNECTOR_DASHBOARD_ENABLED=true`,
+`CONNECTOR_DASHBOARD_CONTROL_ENABLED=true`, and non-empty values for
+`CONNECTOR_DASHBOARD_AUTH_USERNAME` and
+`CONNECTOR_DASHBOARD_AUTH_PASSWORD`. Keep the control switch `false` for a
+read-only dashboard. For local access,
 `CONNECTOR_DASHBOARD_PUBLISHED_PORT=127.0.0.1:18080` is the safer default; LAN
 access should be published intentionally and protected with network or reverse
-proxy controls.
+proxy controls plus HTTPS. Production requires a randomly generated password;
+known example passwords are rejected.
+
+## Prepare an Isolated First Start
+
+Before the very first stack start, set this in the operator environment:
+
+```env
+CONNECTOR_DASHBOARD_ENABLED=true
+CONNECTOR_DASHBOARD_CONTROL_ENABLED=true
+CONNECTOR_AUTOMATION_INITIAL_STATE=stopped
+```
+
+This value is applied only when the global control state is created for the
+first time. `stopped` atomically initializes automation as disabled and the
+queue as paused before the controller scheduler or a worker can begin work. It
+never overwrites a persisted operator state. The backward-compatible `running`
+default permits immediate automatic cycles and therefore cannot guarantee an
+isolated first start. During upgrades, drain existing jobs before changing the
+version; the initial value does not cancel old jobs.
+The real, non-empty Basic Auth values described above must also be present
+before startup; otherwise there is no safe UI activation path.
 
 ## Start
 
@@ -113,9 +138,21 @@ In Portainer, use `deploy/portainer/docker-compose.yml` or the generated
 `portainer-compose.yml` as stack content. Values from `connector.env.example`
 or `portainer.env` go into the stack environment section.
 
+## Configure Immediately After Start
+
+The controller dashboard must now show the global state as `stopped`. Run
+**Check libraries**, disable or pause every non-test library, and leave exactly
+one small test library active. Global **Resume** only releases the queue pause;
+automation remains `deactivated`, so the selected manual run can start in
+isolation. Choose global **Start** only when automatic scheduling is intended
+for every remaining runnable library. If the first visible state is not
+`stopped`, the initial value was set too late or a persisted state already
+exists; stop in a controlled way and resolve existing jobs before assuming
+isolation.
+
 ## Success Criteria After Start
 
-After a few minutes, the stack should meet these criteria:
+First, the infrastructure should meet these criteria:
 
 - With `bundled-state`, `connector-postgres` and `connector-redis` are running;
   with `external-state`, both are intentionally absent and the external URLs
@@ -129,12 +166,19 @@ After a few minutes, the stack should meet these criteria:
   `docker compose run --rm connector-controller connector check-live` exits
   successfully.
 - The dashboard is reachable when enabled.
+- The browser route terminates at the `connector-controller` dashboard, not a
+  separate `connector dashboard` process. Only the controller variant exposes
+  the interactive **Administration** area.
 - `/api/health` reports dashboard, database, Redis, Seafile, and RAGFlow as
   `ok` or shows a concrete external error that can be fixed.
-- RAGFlow contains one dataset per relevant Seafile library, created from the
-  template, or the template is created when auto-create is enabled.
-- Initial files are uploaded and parse status is visible in the dashboard or in
-  RAGFlow.
+- RAGFlow contains one dataset for every Seafile library that was deliberately
+  enabled afterward, created from the template, or the template is created when
+  auto-create is enabled.
+- After explicitly starting the test-library run, initial files are uploaded
+  and parse status is visible in the dashboard or in RAGFlow.
+- The library table shows the operator state plus parsing counters for
+  `tracked`, `done`, `pending`, and `failed`; a started run keeps phase and
+  progress across a browser refresh.
 - If OpenWebUI integration is enabled, chat, tool, pipe, or custom model entries
   appear after a real sync or repair run.
 
@@ -144,6 +188,9 @@ Before exposing the setup to end users, also check:
 
 - The dashboard is reachable only by administrators and protected with Basic
   Auth or upstream access controls.
+- Mutating requests accept only JSON with `X-Connector-Admin-Action: 1`; the UI
+  adds the header automatically. Global stop and run stop/cancel require a
+  visible `STOP` confirmation.
 - The visible language fits the target users. German is the default; English
   and additional dashboard languages can be selected in the UI or through
   `CONNECTOR_LANGUAGE`.
@@ -153,6 +200,8 @@ Before exposing the setup to end users, also check:
   contents.
 - A small test dataset was synchronized successfully before large libraries are
   enabled.
+- Delta, pause, resume, and stop/retry were checked on one small test library.
+  Stop and pause control connector work, never Portainer containers.
 
 ## If It Does Not Turn Green
 
@@ -163,6 +212,7 @@ Before exposing the setup to end users, also check:
 | Seafile or RAGFlow is unreachable | Internal container URL versus host/browser URL |
 | Certificate error | Set CA bundle through `CONNECTOR_CA_BUNDLE`, `SEAFILE_CA_BUNDLE`, `RAGFLOW_CA_BUNDLE`, or `OPENWEBUI_CA_BUNDLE` |
 | Dashboard unreachable | `CONNECTOR_DASHBOARD_ENABLED`, port mapping, bind address, and port conflicts |
+| Administration is missing or a mutation is rejected | Controller route, `CONNECTOR_DASHBOARD_CONTROL_ENABLED`, complete Basic Auth, HTTPS proxy, and JSON/admin header |
 | Dashboard health is `degraded` | Open the detail row and fix DB, Redis, tokens, and target URLs first |
 | No datasets appear | Seafile admin permissions, RAGFlow template, and `RAGFLOW_TEMPLATE_AUTO_CREATE` |
 | OpenWebUI artifacts are missing | `OPENWEBUI_INTEGRATION_ENABLED`, `OPENWEBUI_SYNC_MODE`, and proxy reachability from the OpenWebUI container |
@@ -170,9 +220,15 @@ Before exposing the setup to end users, also check:
 `*_VERIFY_SSL=false` is only a short-term diagnostic aid. For production,
 repair the certificate chain with CA bundles instead.
 
-## Then
+## CLI Fallback
 
-For the first production-like run, start small:
+Start the isolated test-library delta run through **Start selection** and follow
+the phase, file counters, and parsing counters to a terminal state. Exercise
+pause/resume and stop/retry only on this disposable test run. Global stop leaves
+the controller and dashboard running; container operations remain in Portainer
+or Docker Compose.
+
+When interactive control is intentionally disabled, use this CLI fallback:
 
 ```bash
 docker compose \
@@ -185,6 +241,6 @@ For a generated enterprise Compose setup, use the same Compose files as
 `output/enterprise-compose/up.sh`. In Portainer, run the same command as a
 one-off controller task or from a shell inside the controller container.
 
-Then check the dashboard, RAGFlow datasets, OpenWebUI artifacts, and the audit
-export. Enable larger libraries or automated schedules only after that run is
-stable.
+Then check the dashboard's persistent change/audit history, RAGFlow datasets,
+OpenWebUI artifacts, and the audit export. Enable larger libraries and automated
+schedules through the administration surface only after that run is stable.

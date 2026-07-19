@@ -16,13 +16,14 @@ from html import escape
 from html.parser import HTMLParser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
-from urllib.parse import parse_qs, urlparse
+from typing import Any, cast
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 import structlog
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from seafile_ragflow_connector.clients.http import ApiError
 from seafile_ragflow_connector.clients.openwebui import OpenWebUIClient
@@ -56,10 +57,15 @@ from seafile_ragflow_connector.openwebui.sources import (
     render_sources_markdown,
     verify_preview_token,
 )
+from seafile_ragflow_connector.persistence.admin_control import (
+    AdminControlStore,
+    ControlAuditWriter,
+)
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.persistence.models.openwebui import OpenWebUIDatasetMapping
 from seafile_ragflow_connector.persistence.models.search import SearchProfile
+from seafile_ragflow_connector.persistence.models.sync_state import FileDocumentVersion
 from seafile_ragflow_connector.persistence.sync_state import SyncStateStore
 from seafile_ragflow_connector.security.access_control import (
     AccessControlService,
@@ -112,6 +118,7 @@ class DashboardContext:
     openwebui_sync_service: Any | None = None
     job_store: Any | None = None
     signal_queue: Any | None = None
+    control_store: Any | None = None
 
 
 def start_dashboard_server(context: DashboardContext, *, background: bool = True) -> DashboardServerHandle:
@@ -234,6 +241,9 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                     systems = context.store.systems()
                     systems["transport"] = context.settings.connector_transport_status
                     self._send_json(systems)
+                    return
+                if parsed.path == "/api/workflow/control":
+                    self._send_json(_handle_workflow_control(context))
                     return
                 if parsed.path == "/api/workflow/libraries":
                     self._send_json(_handle_workflow_libraries(context))
@@ -359,6 +369,8 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            admin_actor: str | None = None
+            admin_body: dict[str, Any] | None = None
             try:
                 if parsed.path == "/api/authz/check":
                     payload, status = _handle_authz_check(
@@ -384,54 +396,158 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/api/openwebui/proxy/chat":
                     self._send_json(_handle_openwebui_chat(context, self._json_body(), self.headers.get("Authorization")))
                     return
+                if _is_dashboard_admin_mutation_path(parsed.path):
+                    admin_actor, guard_payload, guard_status = _dashboard_admin_guard(
+                        context,
+                        authorization=self.headers.get("Authorization"),
+                        content_type=self.headers.get("Content-Type"),
+                        admin_action=self.headers.get("X-Connector-Admin-Action"),
+                        fetch_site=self.headers.get("Sec-Fetch-Site"),
+                    )
+                    if guard_payload is not None:
+                        if (
+                            admin_actor is not None
+                            and _admin_audit_scope(parsed.path) is not None
+                        ):
+                            _record_admin_audit(
+                                context,
+                                actor=admin_actor,
+                                action=_admin_audit_action(parsed.path),
+                                target=_admin_audit_target(parsed.path),
+                                before=None,
+                                after=None,
+                                result="rejected",
+                                status=guard_status,
+                            )
+                        if guard_status == HTTPStatus.UNAUTHORIZED:
+                            self._send_auth_required()
+                        else:
+                            self._send_json(guard_payload, status=guard_status)
+                        return
+                    assert admin_actor is not None
+                    try:
+                        admin_body = self._json_body()
+                    except ValueError as exc:
+                        _record_admin_audit(
+                            context,
+                            actor=admin_actor,
+                            action=_admin_audit_action(parsed.path),
+                            target=_admin_audit_target(parsed.path),
+                            before=None,
+                            after=None,
+                            result="failed",
+                            status=HTTPStatus.BAD_REQUEST,
+                            error_type=type(exc).__name__,
+                        )
+                        raise
+                else:
+                    admin_actor = None
+                    admin_body = None
+                if parsed.path.startswith("/api/workflow/control/"):
+                    parts = [part for part in parsed.path.split("/") if part]
+                    if len(parts) != 4 or parts[:3] != ["api", "workflow", "control"]:
+                        self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+                        return
+                    payload, status = _handle_workflow_control_action(
+                        context,
+                        unquote(parts[3]),
+                        admin_body or {},
+                        actor=admin_actor,
+                    )
+                    self._send_json(payload, status=status)
+                    return
+                if parsed.path.startswith("/api/workflow/libraries/"):
+                    parts = [part for part in parsed.path.split("/") if part]
+                    if len(parts) != 5 or parts[:3] != ["api", "workflow", "libraries"]:
+                        self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+                        return
+                    payload, status = _handle_workflow_library_action(
+                        context,
+                        unquote(parts[3]),
+                        unquote(parts[4]),
+                        actor=admin_actor,
+                    )
+                    self._send_json(payload, status=status)
+                    return
                 if parsed.path in {"/api/workflow/run", "/api/workflow/runs"}:
-                    if not context.settings.connector_dashboard_enabled:
-                        self._send_json({"error": "dashboard disabled"}, status=HTTPStatus.NOT_FOUND)
-                        return
-                    if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
-                        self._send_auth_required()
-                        return
-                    payload, status = _handle_workflow_run(context, self._json_body())
+                    payload, status = _handle_workflow_run(
+                        context,
+                        admin_body or {},
+                        actor=admin_actor,
+                    )
                     self._send_json(payload, status=status)
                     return
                 if parsed.path.startswith("/api/workflow/runs/"):
-                    if not context.settings.connector_dashboard_enabled:
-                        self._send_json({"error": "dashboard disabled"}, status=HTTPStatus.NOT_FOUND)
-                        return
-                    if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
-                        self._send_auth_required()
-                        return
                     parts = [part for part in parsed.path.split("/") if part]
                     if len(parts) != 5 or parts[:3] != ["api", "workflow", "runs"]:
                         self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
                         return
-                    workflow_run_id, action = parts[3], parts[4]
-                    payload, status = _handle_workflow_run_action(context, workflow_run_id, action)
+                    workflow_run_id, action = unquote(parts[3]), unquote(parts[4])
+                    payload, status = _handle_workflow_run_action(
+                        context,
+                        workflow_run_id,
+                        action,
+                        admin_body or {},
+                        actor=admin_actor,
+                    )
                     self._send_json(payload, status=status)
                     return
                 if parsed.path == "/api/jobs/dead/cleanup":
-                    if not context.settings.connector_dashboard_enabled:
-                        self._send_json({"error": "dashboard disabled"}, status=HTTPStatus.NOT_FOUND)
-                        return
-                    if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
-                        self._send_auth_required()
-                        return
-                    self._send_json(_handle_dead_jobs_cleanup(context))
+                    _record_admin_audit(
+                        context,
+                        actor=admin_actor or "unknown",
+                        action="cleanup_dead_jobs",
+                        target="jobs:dead",
+                        before=None,
+                        after=None,
+                        result="attempted",
+                        status=HTTPStatus.OK,
+                    )
+                    try:
+                        cleanup_payload = _handle_dead_jobs_cleanup(context)
+                    except Exception as exc:
+                        _record_admin_audit(
+                            context,
+                            actor=admin_actor or "unknown",
+                            action="cleanup_dead_jobs",
+                            target="jobs:dead",
+                            before=None,
+                            after=None,
+                            result="failed",
+                            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                            error_type=type(exc).__name__,
+                        )
+                        raise
+                    _record_admin_audit(
+                        context,
+                        actor=admin_actor or "unknown",
+                        action="cleanup_dead_jobs",
+                        target="jobs:dead",
+                        before=None,
+                        after=dict(cleanup_payload),
+                        result="success",
+                        status=HTTPStatus.OK,
+                    )
+                    self._send_json(cleanup_payload)
                     return
                 if parsed.path.startswith("/api/cleanup-outbox/") and parsed.path.endswith(
                     "/retry"
                 ):
-                    if not context.settings.connector_dashboard_enabled:
-                        self._send_json({"error": "dashboard disabled"}, status=HTTPStatus.NOT_FOUND)
-                        return
-                    if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
-                        self._send_auth_required()
-                        return
                     if (
                         context.orchestrator is None
                         or context.job_store is None
                         or context.signal_queue is None
                     ):
+                        _record_admin_audit(
+                            context,
+                            actor=admin_actor or "unknown",
+                            action="retry_cleanup_outbox",
+                            target=_admin_audit_target(parsed.path),
+                            before=None,
+                            after=None,
+                            result="failed",
+                            status=HTTPStatus.SERVICE_UNAVAILABLE,
+                        )
                         self._send_json(
                             {"error": "orchestrator unavailable"},
                             status=HTTPStatus.SERVICE_UNAVAILABLE,
@@ -441,51 +557,125 @@ def _build_handler(context: DashboardContext) -> type[BaseHTTPRequestHandler]:
                     if len(parts) != 4 or parts[:2] != ["api", "cleanup-outbox"]:
                         self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
                         return
-                    outbox_id = int(parts[2])
-                    repo_id = context.orchestrator.requeue_cleanup_outbox(outbox_id)
-                    if repo_id is None:
-                        self._send_json(
-                            {"outbox_id": outbox_id, "retried": False},
-                            status=HTTPStatus.CONFLICT,
+                    try:
+                        outbox_id = int(parts[2])
+                    except ValueError as exc:
+                        _record_admin_audit(
+                            context,
+                            actor=admin_actor or "unknown",
+                            action="retry_cleanup_outbox",
+                            target=_admin_audit_target(parsed.path),
+                            before=None,
+                            after=None,
+                            result="failed",
+                            status=HTTPStatus.BAD_REQUEST,
+                            error_type=type(exc).__name__,
                         )
-                        return
-                    enqueue_result = context.job_store.enqueue_with_result(
-                        JobSpec(
-                            JobType.PROCESS_CLEANUP_OUTBOX,
-                            repo_id=repo_id,
-                            payload={"outbox_id": outbox_id},
-                        )
+                        raise
+                    cleanup_target = f"cleanup-outbox:{outbox_id}"
+                    _record_admin_audit(
+                        context,
+                        actor=admin_actor or "unknown",
+                        action="retry_cleanup_outbox",
+                        target=cleanup_target,
+                        before=None,
+                        after=None,
+                        result="attempted",
+                        status=HTTPStatus.ACCEPTED,
                     )
-                    retry_payload: dict[str, Any] = {
-                        "outbox_id": outbox_id,
-                        "retried": True,
-                        "job_id": enqueue_result.job_id,
-                        "deduplicated": enqueue_result.deduplicated,
-                    }
-                    if not enqueue_result.deduplicated:
-                        try:
-                            context.signal_queue.signal(enqueue_result.job_id)
-                        except Exception as exc:
-                            signal_warning = type(exc).__name__
-                            retry_payload["signal_warning"] = signal_warning
-                            structlog.get_logger(__name__).warning(
-                                "dashboard.cleanup_retry_signal_failed",
-                                job_id=enqueue_result.job_id,
-                                error_type=signal_warning,
-                            )
+                    try:
+                        retry_payload, retry_status = _handle_cleanup_outbox_retry(
+                            context,
+                            outbox_id,
+                        )
+                    except Exception as exc:
+                        _record_admin_audit(
+                            context,
+                            actor=admin_actor or "unknown",
+                            action="retry_cleanup_outbox",
+                            target=cleanup_target,
+                            before=None,
+                            after=None,
+                            result="failed",
+                            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                            error_type=type(exc).__name__,
+                        )
+                        raise
+                    _record_admin_audit(
+                        context,
+                        actor=admin_actor or "unknown",
+                        action="retry_cleanup_outbox",
+                        target=cleanup_target,
+                        before=None,
+                        after=dict(retry_payload),
+                        result="success" if retry_status == HTTPStatus.ACCEPTED else "failed",
+                        status=retry_status,
+                    )
                     self._send_json(
                         retry_payload,
-                        status=HTTPStatus.ACCEPTED,
+                        status=retry_status,
                     )
                     return
                 if parsed.path == "/api/openwebui/artifacts/delete":
-                    if not context.settings.connector_dashboard_enabled:
-                        self._send_json({"error": "dashboard disabled"}, status=HTTPStatus.NOT_FOUND)
-                        return
-                    if not _dashboard_auth_ok(context.settings, self.headers.get("Authorization")):
-                        self._send_auth_required()
-                        return
-                    self._send_json(_handle_openwebui_artifact_delete(context, self._json_body()))
+                    artifact_payload = admin_body or {}
+                    try:
+                        artifact_kind = _required_text(artifact_payload, "target").strip().lower()
+                        mapping_id = _required_int(artifact_payload, "mapping_id")
+                        if artifact_kind not in {"pipe", "chat", "dataset"}:
+                            raise ValueError("target muss pipe, chat oder dataset sein.")
+                    except ValueError as exc:
+                        _record_admin_audit(
+                            context,
+                            actor=admin_actor or "unknown",
+                            action="delete_openwebui_artifact",
+                            target="openwebui:artifact",
+                            before=None,
+                            after=None,
+                            result="failed",
+                            status=HTTPStatus.BAD_REQUEST,
+                            error_type=type(exc).__name__,
+                        )
+                        raise
+                    artifact_target = f"openwebui:{artifact_kind}:{mapping_id}"
+                    _record_admin_audit(
+                        context,
+                        actor=admin_actor or "unknown",
+                        action="delete_openwebui_artifact",
+                        target=artifact_target,
+                        before={"mapping_id": mapping_id, "target": artifact_kind},
+                        after=None,
+                        result="attempted",
+                        status=HTTPStatus.OK,
+                    )
+                    try:
+                        delete_payload = _handle_openwebui_artifact_delete(
+                            context,
+                            artifact_payload,
+                        )
+                    except Exception as exc:
+                        _record_admin_audit(
+                            context,
+                            actor=admin_actor or "unknown",
+                            action="delete_openwebui_artifact",
+                            target=artifact_target,
+                            before={"mapping_id": mapping_id, "target": artifact_kind},
+                            after=None,
+                            result="failed",
+                            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                            error_type=type(exc).__name__,
+                        )
+                        raise
+                    _record_admin_audit(
+                        context,
+                        actor=admin_actor or "unknown",
+                        action="delete_openwebui_artifact",
+                        target=artifact_target,
+                        before={"mapping_id": mapping_id, "target": artifact_kind},
+                        after=dict(delete_payload),
+                        result="success",
+                        status=HTTPStatus.OK,
+                    )
+                    self._send_json(delete_payload)
                     return
                 self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
             except AuthzDeniedError:
@@ -626,6 +816,249 @@ def _dashboard_auth_ok(settings: Settings, authorization: str | None) -> bool:
         expected_password.encode("utf-8"),
     )
     return username_matches and password_matches
+
+
+def _dashboard_admin_guard(
+    context: DashboardContext,
+    *,
+    authorization: str | None,
+    content_type: str | None,
+    admin_action: str | None,
+    fetch_site: str | None,
+) -> tuple[str | None, dict[str, Any] | None, HTTPStatus]:
+    settings = context.settings
+    actor = _dashboard_admin_actor(settings, authorization)
+    if not settings.connector_dashboard_enabled:
+        return actor, {"error": "dashboard disabled"}, HTTPStatus.NOT_FOUND
+    if actor is None:
+        return (
+            None,
+            {"error": "unauthorized", "message": "Dashboard-Anmeldung erforderlich."},
+            HTTPStatus.UNAUTHORIZED,
+        )
+    if not settings.connector_dashboard_control_enabled:
+        return (
+            actor,
+            {
+                "error": "forbidden",
+                "message": "Dashboard-Steuerung ist nicht aktiviert.",
+            },
+            HTTPStatus.FORBIDDEN,
+        )
+    media_type = str(content_type or "").partition(";")[0].strip().lower()
+    if media_type != "application/json":
+        return (
+            actor,
+            {
+                "error": "unsupported media type",
+                "message": "Adminaktionen müssen als application/json gesendet werden.",
+            },
+            HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+        )
+    if admin_action != "1":
+        return (
+            actor,
+            {
+                "error": "forbidden",
+                "message": "Der Adminaktions-Header fehlt oder ist ungültig.",
+            },
+            HTTPStatus.FORBIDDEN,
+        )
+    normalized_fetch_site = str(fetch_site or "").strip().lower()
+    if normalized_fetch_site not in {"", "none", "same-origin"}:
+        return (
+            actor,
+            {
+                "error": "forbidden",
+                "message": "Site-übergreifende Adminaktionen werden abgewiesen.",
+            },
+            HTTPStatus.FORBIDDEN,
+        )
+    if not _workflow_control_available(context):
+        return (
+            actor,
+            {
+                "error": "admin control unavailable",
+                "message": (
+                    "Dashboard-Steuerung ist nur im laufenden Controller verfügbar."
+                ),
+            },
+            HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+    return actor, None, HTTPStatus.OK
+
+
+def _dashboard_admin_actor(settings: Settings, authorization: str | None) -> str | None:
+    expected_username = settings.connector_dashboard_auth_username
+    expected_password = settings.connector_dashboard_auth_password
+    if not expected_username or not expected_password:
+        return None
+    username, password = _parse_basic_auth(authorization)
+    if username is None or password is None:
+        return None
+    username_matches = hmac.compare_digest(
+        username.encode("utf-8"),
+        expected_username.encode("utf-8"),
+    )
+    password_matches = hmac.compare_digest(
+        password.encode("utf-8"),
+        expected_password.encode("utf-8"),
+    )
+    return username if username_matches and password_matches else None
+
+
+def _is_dashboard_admin_mutation_path(path: str) -> bool:
+    return (
+        path in {
+            "/api/workflow/run",
+            "/api/workflow/runs",
+            "/api/jobs/dead/cleanup",
+            "/api/openwebui/artifacts/delete",
+        }
+        or path.startswith("/api/workflow/control/")
+        or path.startswith("/api/workflow/libraries/")
+        or path.startswith("/api/workflow/runs/")
+        or (path.startswith("/api/cleanup-outbox/") and path.endswith("/retry"))
+    )
+
+
+def _admin_audit_scope(path: str) -> str | None:
+    if path.startswith("/api/workflow/control/"):
+        return "global"
+    if path.startswith("/api/workflow/libraries/"):
+        return "library"
+    if path in {"/api/workflow/run", "/api/workflow/runs"} or path.startswith(
+        "/api/workflow/runs/"
+    ):
+        return "run"
+    if path == "/api/jobs/dead/cleanup":
+        return "maintenance"
+    if path.startswith("/api/cleanup-outbox/") and path.endswith("/retry"):
+        return "cleanup"
+    if path == "/api/openwebui/artifacts/delete":
+        return "artifact"
+    return None
+
+
+def _admin_audit_action(path: str) -> str:
+    if path in {"/api/workflow/run", "/api/workflow/runs"}:
+        return "start"
+    if path == "/api/jobs/dead/cleanup":
+        return "cleanup_dead_jobs"
+    if path.startswith("/api/cleanup-outbox/") and path.endswith("/retry"):
+        return "retry_cleanup_outbox"
+    if path == "/api/openwebui/artifacts/delete":
+        return "delete_openwebui_artifact"
+    parts = [unquote(part) for part in path.split("/") if part]
+    return parts[-1] if parts else "unknown"
+
+
+def _admin_audit_target(path: str) -> str:
+    scope = _admin_audit_scope(path)
+    parts = [unquote(part) for part in path.split("/") if part]
+    if scope == "global":
+        return "workflow"
+    if scope == "library" and len(parts) >= 4:
+        return f"library:{parts[3]}"
+    if scope == "run":
+        if path in {"/api/workflow/run", "/api/workflow/runs"}:
+            return "workflow:new"
+        if len(parts) >= 4:
+            return f"workflow:{parts[3]}"
+    if scope == "maintenance":
+        return "jobs:dead"
+    if scope == "cleanup" and len(parts) >= 3:
+        return f"cleanup-outbox:{parts[2]}"
+    if scope == "artifact":
+        return "openwebui:artifact"
+    return path
+
+
+def _record_admin_audit(
+    context: DashboardContext,
+    *,
+    actor: str,
+    action: str,
+    target: str,
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+    result: str,
+    status: HTTPStatus | None = None,
+    error_type: str | None = None,
+    session: Session | None = None,
+) -> None:
+    scope = target.partition(":")[0] if ":" in target else "global"
+    details: dict[str, Any] = {
+        "actor": actor,
+        "action": action,
+        "target": target,
+        "before": before,
+        "after": after,
+        "result": result,
+    }
+    if status is not None:
+        details["http_status"] = int(status)
+    if error_type is not None:
+        details["error_type"] = error_type
+    event_status = (
+        "succeeded"
+        if result == "success"
+        else "pending"
+        if result == "attempted"
+        else "failed"
+    )
+    if session is not None:
+        context.store.stage_change(
+            session,
+            sync_id=None,
+            action=f"dashboard.admin.{action}",
+            change_type=f"admin_{scope}_action",
+            status=event_status,
+            object_name=target,
+            target_path=target,
+            source_system="dashboard",
+            target_system="connector",
+            details=details,
+        )
+        return
+    context.store.record_change(
+        sync_id=None,
+        action=f"dashboard.admin.{action}",
+        change_type=f"admin_{scope}_action",
+        status=event_status,
+        object_name=target,
+        target_path=target,
+        source_system="dashboard",
+        target_system="connector",
+        details=details,
+    )
+
+
+def _control_audit_writer(
+    context: DashboardContext,
+    *,
+    actor: str,
+    action: str,
+    target: str,
+) -> ControlAuditWriter:
+    def write(
+        session: Session,
+        before: dict[str, object],
+        after: dict[str, object],
+    ) -> None:
+        _record_admin_audit(
+            context,
+            actor=actor,
+            action=action,
+            target=target,
+            before=before,
+            after=after,
+            result="attempted",
+            status=HTTPStatus.ACCEPTED,
+            session=session,
+        )
+
+    return write
 
 
 def _parse_basic_auth(authorization: str | None) -> tuple[str | None, str | None]:
@@ -995,6 +1428,7 @@ def _safe_config(settings: Settings) -> dict[str, Any]:
         "reconcile_interval_seconds": settings.reconcile_interval_seconds,
         "delete_ragflow_docs_on_seafile_delete": settings.delete_ragflow_docs_on_seafile_delete,
         "connector_dashboard_enabled": settings.connector_dashboard_enabled,
+        "connector_dashboard_control_enabled": settings.connector_dashboard_control_enabled,
         "connector_dashboard_host": settings.connector_dashboard_host,
         "connector_dashboard_port": settings.connector_dashboard_port,
         "connector_dashboard_max_log_entries": settings.connector_dashboard_max_log_entries,
@@ -1031,6 +1465,43 @@ def _handle_dead_jobs_cleanup(context: DashboardContext) -> dict[str, Any]:
     cleaned = int(result.get("cleaned_jobs") or 0)
     message = f"{cleaned} tote Jobs bereinigt." if cleaned else "Keine toten Jobs vorhanden."
     return {**result, "message": message}
+
+
+def _handle_cleanup_outbox_retry(
+    context: DashboardContext,
+    outbox_id: int,
+) -> tuple[dict[str, Any], HTTPStatus]:
+    assert context.orchestrator is not None
+    assert context.job_store is not None
+    assert context.signal_queue is not None
+    repo_id = context.orchestrator.requeue_cleanup_outbox(outbox_id)
+    if repo_id is None:
+        return {"outbox_id": outbox_id, "retried": False}, HTTPStatus.CONFLICT
+    enqueue_result = context.job_store.enqueue_with_result(
+        JobSpec(
+            JobType.PROCESS_CLEANUP_OUTBOX,
+            repo_id=repo_id,
+            payload={"outbox_id": outbox_id},
+        )
+    )
+    retry_payload: dict[str, Any] = {
+        "outbox_id": outbox_id,
+        "retried": True,
+        "job_id": enqueue_result.job_id,
+        "deduplicated": enqueue_result.deduplicated,
+    }
+    if not enqueue_result.deduplicated:
+        try:
+            context.signal_queue.signal(enqueue_result.job_id)
+        except Exception as exc:
+            signal_warning = type(exc).__name__
+            retry_payload["signal_warning"] = signal_warning
+            structlog.get_logger(__name__).warning(
+                "dashboard.cleanup_retry_signal_failed",
+                job_id=enqueue_result.job_id,
+                error_type=signal_warning,
+            )
+    return retry_payload, HTTPStatus.ACCEPTED
 
 
 def _handle_openwebui_artifact_delete(
@@ -1164,6 +1635,266 @@ def _delete_ragflow_dataset_artifact(context: DashboardContext, mapping_id: int)
     )
 
 
+WORKFLOW_GLOBAL_ACTIONS = ["start", "deactivate", "pause", "resume", "stop"]
+WORKFLOW_LIBRARY_ACTIONS = ["enable", "disable", "pause", "resume"]
+WORKFLOW_RUN_ACTIONS = ["pause", "resume", "stop", "cancel", "retry"]
+WORKFLOW_RUN_ACTIONS_BY_STATUS: dict[str, list[str]] = {
+    "queued": ["pause", "stop", "cancel"],
+    "retrying": ["pause", "stop", "cancel"],
+    "running": ["pause", "stop", "cancel"],
+    "paused": ["resume", "stop", "cancel"],
+    "failed": ["retry"],
+    "cancelled": ["retry"],
+    "stopped": ["retry"],
+    "succeeded": [],
+}
+
+
+def _admin_control_store(context: DashboardContext) -> AdminControlStore:
+    if context.control_store is not None:
+        return cast(AdminControlStore, context.control_store)
+    session_factory = (
+        context.job_store.session_factory
+        if context.job_store is not None
+        else context.store.session_factory
+    )
+    return AdminControlStore(session_factory)
+
+
+def _workflow_control_available(context: DashboardContext) -> bool:
+    return bool(
+        context.settings.connector_dashboard_enabled
+        and context.settings.connector_dashboard_control_enabled
+        and context.orchestrator is not None
+        and context.job_store is not None
+        and context.signal_queue is not None
+    )
+
+
+def _workflow_active_counts(context: DashboardContext) -> dict[str, int]:
+    raw = context.job_store.active_counts() if context.job_store is not None else {}
+    return {
+        "queued": int(raw.get(JobStatus.QUEUED.value, 0)),
+        "retrying": int(raw.get(JobStatus.RETRYING.value, 0)),
+        "running": int(raw.get(JobStatus.RUNNING.value, 0)),
+        "paused": int(raw.get("paused", 0)),
+    }
+
+
+def _workflow_capabilities(enabled: bool, *, state: str | None = None) -> dict[str, list[str]]:
+    global_actions_by_state = {
+        "running": ["deactivate", "pause", "stop"],
+        "paused": ["start", "deactivate", "resume", "stop"],
+        "deactivated": ["start", "pause", "stop"],
+        "stopped": ["start", "resume", "stop"],
+    }
+    return {
+        "global_actions": (
+            list(global_actions_by_state.get(str(state), WORKFLOW_GLOBAL_ACTIONS))
+            if enabled
+            else []
+        ),
+        "library_actions": list(WORKFLOW_LIBRARY_ACTIONS) if enabled else [],
+        "run_actions": list(WORKFLOW_RUN_ACTIONS) if enabled else [],
+    }
+
+
+def _workflow_run_actions(status: str, *, enabled: bool = True) -> list[str]:
+    if not enabled:
+        return []
+    return list(WORKFLOW_RUN_ACTIONS_BY_STATUS.get(status, []))
+
+
+def _handle_workflow_control(context: DashboardContext) -> dict[str, Any]:
+    snapshot = _admin_control_store(context).workflow().to_payload()
+    control_enabled = _workflow_control_available(context)
+    return {
+        "control_enabled": control_enabled,
+        **snapshot,
+        "active_jobs": _workflow_active_counts(context),
+        "capabilities": _workflow_capabilities(
+            control_enabled,
+            state=str(snapshot["state"]),
+        ),
+    }
+
+
+def _handle_workflow_control_action(
+    context: DashboardContext,
+    action: str,
+    payload: dict[str, Any],
+    *,
+    actor: str | None,
+) -> tuple[dict[str, Any], HTTPStatus]:
+    resolved_actor = actor or "unknown"
+    target = "workflow"
+    if action not in WORKFLOW_GLOBAL_ACTIONS:
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action or "unknown",
+            target=target,
+            before=None,
+            after=None,
+            result="failed",
+            status=HTTPStatus.NOT_FOUND,
+        )
+        return {"error": "not found"}, HTTPStatus.NOT_FOUND
+    if not _workflow_control_available(context):
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action,
+            target=target,
+            before=None,
+            after=None,
+            result="failed",
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+        return (
+            {
+                "error": "control unavailable",
+                "message": "Dashboard-Steuerung benötigt Controller, Job-Queue und Signalweg.",
+            },
+            HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+    assert context.orchestrator is not None
+    assert context.job_store is not None
+    assert context.signal_queue is not None
+    if action == "stop" and payload.get("confirm") != "STOP":
+        before = _admin_control_store(context).workflow().to_payload()
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action,
+            target=target,
+            before=before,
+            after=before,
+            result="failed",
+            status=HTTPStatus.BAD_REQUEST,
+        )
+        return (
+            {
+                "error": "confirmation required",
+                "message": "Stop erfordert confirm=STOP.",
+            },
+            HTTPStatus.BAD_REQUEST,
+        )
+    updates: dict[str, tuple[bool | None, bool | None]] = {
+        "start": (True, False),
+        "deactivate": (False, None),
+        "pause": (None, True),
+        "resume": (None, False),
+        "stop": (False, True),
+    }
+    automation_enabled, queue_paused = updates[action]
+    control_store = _admin_control_store(context)
+    before = control_store.workflow().to_payload()
+    try:
+        locked_before, after = control_store.update_workflow(
+            updated_by=resolved_actor,
+            automation_enabled=automation_enabled,
+            queue_paused=queue_paused,
+            audit_writer=_control_audit_writer(
+                context,
+                actor=resolved_actor,
+                action=action,
+                target=target,
+            ),
+        )
+        before = locked_before.to_payload()
+        response: dict[str, Any] = {
+            "control_enabled": True,
+            **after.to_payload(),
+            "action": action,
+        }
+        changed_job_ids: list[int] = []
+        signal_warnings: list[int] = []
+        if action in {"start", "resume"}:
+            changed_job_ids = context.job_store.resume_global_pause()
+            for job_id in changed_job_ids:
+                try:
+                    context.signal_queue.signal(job_id)
+                except Exception as exc:
+                    signal_warnings.append(job_id)
+                    structlog.get_logger(__name__).warning(
+                        "dashboard.workflow_resume_signal_failed",
+                        job_id=job_id,
+                        error_type=type(exc).__name__,
+                    )
+        if action == "start":
+            spec = JobSpec(
+                JobType.DISCOVER_LIBRARIES,
+                payload={"trigger": "admin_start"},
+            )
+            enqueue_result = context.job_store.enqueue_with_result(spec)
+            enqueued = [
+                {
+                    "job_id": enqueue_result.job_id,
+                    "job_type": spec.job_type.value,
+                    "repo_id": spec.repo_id,
+                    "deduplicated": enqueue_result.deduplicated,
+                }
+            ]
+            if not enqueue_result.deduplicated:
+                try:
+                    context.signal_queue.signal(enqueue_result.job_id)
+                except Exception as exc:
+                    signal_warnings.append(enqueue_result.job_id)
+                    structlog.get_logger(__name__).warning(
+                        "dashboard.workflow_start_signal_failed",
+                        job_id=enqueue_result.job_id,
+                        error_type=type(exc).__name__,
+                    )
+            response["jobs"] = enqueued
+        elif action == "pause":
+            changed_job_ids = context.job_store.request_pause_all()
+        elif action == "stop":
+            changed_job_ids = context.job_store.request_cancel_all()
+            response["cancel_requested_job_ids"] = changed_job_ids
+        response["changed_job_ids"] = changed_job_ids
+        if signal_warnings:
+            response["signal_warning_job_ids"] = signal_warnings
+        response["active_jobs"] = _workflow_active_counts(context)
+        response["capabilities"] = _workflow_capabilities(
+            True,
+            state=str(after.state),
+        )
+        audit_after = {
+            **after.to_payload(),
+            "changed_job_ids": changed_job_ids,
+            "signal_warning_job_ids": signal_warnings,
+        }
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action,
+            target=target,
+            before=before,
+            after=audit_after,
+            result="success",
+            status=HTTPStatus.ACCEPTED,
+        )
+        return response, HTTPStatus.ACCEPTED
+    except Exception as exc:
+        try:
+            actual_after = control_store.workflow().to_payload()
+        except Exception:
+            actual_after = before
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action,
+            target=target,
+            before=before,
+            after=actual_after,
+            result="partial" if actual_after != before else "failed",
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            error_type=type(exc).__name__,
+        )
+        raise
+
+
 def _handle_workflow_libraries(context: DashboardContext) -> dict[str, Any]:
     if context.orchestrator is None or context.job_store is None or context.signal_queue is None:
         return {
@@ -1186,9 +1917,194 @@ def _handle_workflow_libraries(context: DashboardContext) -> dict[str, Any]:
     }
 
 
+def _known_workflow_repo_ids(context: DashboardContext) -> set[str]:
+    stored_libraries, _ = _stored_workflow_state(context)
+    known = set(stored_libraries)
+    if context.orchestrator is not None:
+        known.update(str(item["repo_id"]) for item in _visible_workflow_libraries(context))
+    return known
+
+
+def _handle_workflow_library_action(
+    context: DashboardContext,
+    repo_id: str,
+    action: str,
+    *,
+    actor: str | None,
+) -> tuple[dict[str, Any], HTTPStatus]:
+    resolved_actor = actor or "unknown"
+    normalized_repo_id = repo_id.strip()
+    target = f"library:{normalized_repo_id or repo_id}"
+    if action not in WORKFLOW_LIBRARY_ACTIONS:
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action or "unknown",
+            target=target,
+            before=None,
+            after=None,
+            result="failed",
+            status=HTTPStatus.NOT_FOUND,
+        )
+        return {"error": "not found"}, HTTPStatus.NOT_FOUND
+    if context.job_store is None or context.orchestrator is None or context.signal_queue is None:
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action,
+            target=target,
+            before=None,
+            after=None,
+            result="failed",
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+        return {"error": "control unavailable"}, HTTPStatus.SERVICE_UNAVAILABLE
+    if not normalized_repo_id or normalized_repo_id not in _known_workflow_repo_ids(context):
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action,
+            target=target,
+            before=None,
+            after=None,
+            result="failed",
+            status=HTTPStatus.NOT_FOUND,
+        )
+        return {"error": "library not found"}, HTTPStatus.NOT_FOUND
+    updates: dict[str, tuple[bool | None, bool | None]] = {
+        "enable": (True, False),
+        "disable": (False, None),
+        "pause": (None, True),
+        "resume": (None, False),
+    }
+    enabled, paused = updates[action]
+    control_store = _admin_control_store(context)
+    before_snapshot = control_store.libraries([normalized_repo_id])[normalized_repo_id]
+    before = before_snapshot.to_payload()
+    try:
+        locked_before, after = control_store.update_library(
+            normalized_repo_id,
+            updated_by=resolved_actor,
+            enabled=enabled,
+            paused=paused,
+            audit_writer=_control_audit_writer(
+                context,
+                actor=resolved_actor,
+                action=action,
+                target=target,
+            ),
+        )
+        before = locked_before.to_payload()
+        if action in {"disable", "pause"}:
+            changed_job_ids = context.job_store.request_repo_pause(normalized_repo_id)
+        elif after.runnable:
+            changed_job_ids = context.job_store.resume_repo(normalized_repo_id)
+            for job_id in changed_job_ids:
+                try:
+                    context.signal_queue.signal(job_id)
+                except Exception as exc:
+                    structlog.get_logger(__name__).warning(
+                        "dashboard.library_resume_signal_failed",
+                        repo_id=normalized_repo_id,
+                        job_id=job_id,
+                        error_type=type(exc).__name__,
+                    )
+        else:
+            changed_job_ids = []
+        control_payload = after.to_payload()
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action,
+            target=target,
+            before=before,
+            after={**control_payload, "changed_job_ids": changed_job_ids},
+            result="success",
+            status=HTTPStatus.ACCEPTED,
+        )
+        return (
+            {
+                "repo_id": normalized_repo_id,
+                "action": action,
+                "admin_state": control_payload["state"],
+                "admin_enabled": control_payload["enabled"],
+                "admin_paused": control_payload["paused"],
+                "admin_control": control_payload,
+                "changed_job_ids": changed_job_ids,
+            },
+            HTTPStatus.ACCEPTED,
+        )
+    except Exception as exc:
+        try:
+            actual_after = control_store.libraries([normalized_repo_id])[
+                normalized_repo_id
+            ].to_payload()
+        except Exception:
+            actual_after = before
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action,
+            target=target,
+            before=before,
+            after=actual_after,
+            result="partial" if actual_after != before else "failed",
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            error_type=type(exc).__name__,
+        )
+        raise
+
+
 def _handle_workflow_run(
     context: DashboardContext,
     payload: dict[str, Any],
+    *,
+    actor: str | None,
+) -> tuple[dict[str, Any], HTTPStatus]:
+    resolved_actor = actor or "unknown"
+    try:
+        result, status = _handle_workflow_run_impl(
+            context,
+            payload,
+            actor=resolved_actor,
+        )
+    except Exception as exc:
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action="start",
+            target="workflow:new",
+            before=None,
+            after=None,
+            result="failed",
+            status=HTTPStatus.BAD_REQUEST if isinstance(exc, ValueError) else HTTPStatus.INTERNAL_SERVER_ERROR,
+            error_type=type(exc).__name__,
+        )
+        raise
+    if status.value >= 400:
+        failed_run_id = str(result.get("run_id") or "").strip()
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action="start",
+            target=(f"workflow:{failed_run_id}" if failed_run_id else "workflow:new"),
+            before=None,
+            after={
+                "run_id": failed_run_id or None,
+                "status": result.get("status"),
+                "scheduled_jobs": len(result.get("jobs") or []),
+            },
+            result="failed",
+            status=status,
+        )
+    return result, status
+
+
+def _handle_workflow_run_impl(
+    context: DashboardContext,
+    payload: dict[str, Any],
+    *,
+    actor: str,
 ) -> tuple[dict[str, Any], HTTPStatus]:
     if (
         context.orchestrator is None
@@ -1201,6 +2117,15 @@ def _handle_workflow_run(
                 "message": "Dashboard-Steuerung ist nur mit laufendem Controller und Job-Queue verfügbar.",
             },
             HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+    workflow_control = _admin_control_store(context).workflow()
+    if workflow_control.queue_paused:
+        return (
+            {
+                "error": "queue paused",
+                "message": "Manuelle Läufe sind bei pausierter Queue nicht erlaubt.",
+            },
+            HTTPStatus.CONFLICT,
         )
     repo_ids = _workflow_repo_ids(payload)
     create_dataset = _workflow_bool(payload, "create_dataset", default=True)
@@ -1223,8 +2148,36 @@ def _handle_workflow_run(
     ]
     if skipped:
         raise ValueError("Nicht auswählbare Bibliotheken: " + ", ".join(skipped))
+    library_controls = _admin_control_store(context).libraries(repo_ids)
+    blocked = [repo_id for repo_id in repo_ids if not library_controls[repo_id].runnable]
+    if blocked:
+        return (
+            {
+                "error": "library blocked",
+                "message": "Deaktivierte oder pausierte Bibliotheken: " + ", ".join(blocked),
+                "repo_ids": blocked,
+            },
+            HTTPStatus.CONFLICT,
+        )
 
     workflow_run_id = new_sync_id("workflow")
+    _record_admin_audit(
+        context,
+        actor=actor,
+        action="start",
+        target=f"workflow:{workflow_run_id}",
+        before={"exists": False},
+        after={
+            "exists": True,
+            "status": "queued",
+            "repo_ids": repo_ids,
+            "mode": mode,
+            "scope": scope,
+            "trigger": "manual",
+        },
+        result="attempted",
+        status=HTTPStatus.ACCEPTED,
+    )
     sync_state_store = SyncStateStore(context.job_store.session_factory)
     sync_state_store.create_run(
         run_id=workflow_run_id,
@@ -1234,68 +2187,156 @@ def _handle_workflow_run(
         status="queued",
         progress={"selected_repositories": len(repo_ids)},
     )
-    jobs: list[dict[str, Any]] = []
-    signal_job_ids: list[int] = []
-    for repo_id in repo_ids:
-        if create_dataset:
-            job_type = {
-                "delta": JobType.SYNC_LIBRARY_DELTA,
-                "full": JobType.SYNC_LIBRARY_FULL,
-                "reconcile": JobType.RECONCILE_LIBRARY,
-            }[mode]
-            spec = JobSpec(
-                job_type,
-                repo_id=repo_id,
-                payload={
-                    "scope": scope,
-                    "workflow_run_id": workflow_run_id,
-                    "sync_openwebui": sync_openwebui,
-                },
-            )
-        else:
-            spec = JobSpec(
-                JobType.SYNC_OPENWEBUI,
-                repo_id=repo_id,
-                payload={
-                    "repo_ids": [repo_id],
-                    "workflow_run_id": workflow_run_id,
-                },
-            )
-        enqueue_result = context.job_store.enqueue_with_result(spec)
-        context.job_store.subscribe_workflow(
-            workflow_run_id,
-            enqueue_result.job_id,
-            is_root=True,
-            owns_job=not enqueue_result.deduplicated,
-        )
-        if not enqueue_result.deduplicated:
-            context.job_store.bind_run(enqueue_result.job_id, workflow_run_id)
-            signal_job_ids.append(enqueue_result.job_id)
-        jobs.append(
-            {
-                "job_id": enqueue_result.job_id,
-                "repo_id": repo_id,
-                "job_type": spec.job_type.value,
-                "deduplicated": enqueue_result.deduplicated,
-            }
-        )
-
     details = {
         "kind": "workflow_parent",
         "mode": mode,
         "scope": scope,
         "repo_ids": repo_ids,
-        "job_ids": [item["job_id"] for item in jobs],
+        "job_ids": [],
         "create_dataset": create_dataset,
         "sync_openwebui": sync_openwebui,
+        "trigger": "manual",
+        "actor": actor,
     }
     context.store.create_sync_run(
         sync_id=workflow_run_id,
         source="dashboard",
         target="job-queue",
         status="queued",
+        summary="Workflow wird eingeplant",
+        details=details,
+    )
+    jobs: list[dict[str, Any]] = []
+    signal_job_ids: list[int] = []
+    created_job_ids: list[int] = []
+    try:
+        for repo_id in repo_ids:
+            if create_dataset:
+                job_type = {
+                    "delta": JobType.SYNC_LIBRARY_DELTA,
+                    "full": JobType.SYNC_LIBRARY_FULL,
+                    "reconcile": JobType.RECONCILE_LIBRARY,
+                }[mode]
+                spec = JobSpec(
+                    job_type,
+                    repo_id=repo_id,
+                    payload={
+                        "scope": scope,
+                        "workflow_run_id": workflow_run_id,
+                        "sync_openwebui": sync_openwebui,
+                        "trigger": "manual",
+                    },
+                )
+            else:
+                spec = JobSpec(
+                    JobType.SYNC_OPENWEBUI,
+                    repo_id=repo_id,
+                    payload={
+                        "repo_ids": [repo_id],
+                        "workflow_run_id": workflow_run_id,
+                        "trigger": "manual",
+                    },
+                )
+            enqueue_result = context.job_store.enqueue_with_result(spec)
+            jobs.append(
+                {
+                    "job_id": enqueue_result.job_id,
+                    "repo_id": repo_id,
+                    "job_type": spec.job_type.value,
+                    "deduplicated": enqueue_result.deduplicated,
+                }
+            )
+            if not enqueue_result.deduplicated:
+                created_job_ids.append(enqueue_result.job_id)
+            context.job_store.subscribe_workflow(
+                workflow_run_id,
+                enqueue_result.job_id,
+                is_root=True,
+                owns_job=not enqueue_result.deduplicated,
+            )
+            if not enqueue_result.deduplicated:
+                context.job_store.bind_run(enqueue_result.job_id, workflow_run_id)
+                signal_job_ids.append(enqueue_result.job_id)
+    except Exception as exc:
+        aborted_job_ids: list[int] = []
+        try:
+            aborted_job_ids.extend(
+                context.job_store.cancel_workflow_subscription(workflow_run_id)
+            )
+        except Exception as abort_exc:
+            structlog.get_logger(__name__).warning(
+                "dashboard.workflow_abort_failed",
+                workflow_run_id=workflow_run_id,
+                error_type=type(abort_exc).__name__,
+            )
+        for job_id in created_job_ids:
+            try:
+                if context.job_store.request_cancel(job_id):
+                    aborted_job_ids.append(job_id)
+            except Exception as abort_exc:
+                structlog.get_logger(__name__).warning(
+                    "dashboard.workflow_job_abort_failed",
+                    workflow_run_id=workflow_run_id,
+                    job_id=job_id,
+                    error_type=type(abort_exc).__name__,
+                )
+        failed_details = {
+            **details,
+            "job_ids": [item["job_id"] for item in jobs],
+            "scheduling_failed": True,
+            "scheduling_error_type": type(exc).__name__,
+            "aborted_job_ids": sorted(set(aborted_job_ids)),
+        }
+        sync_state_store.update_run(
+            workflow_run_id,
+            status="failed",
+            progress={
+                "selected_repositories": len(repo_ids),
+                "scheduled_repositories": len(jobs),
+                "scheduling_failed": True,
+            },
+            error_message="workflow scheduling failed",
+            finished=True,
+        )
+        context.store.finish_sync_run(
+            sync_id=workflow_run_id,
+            status="failed",
+            objects_checked=len(jobs),
+            objects_created=0,
+            objects_updated=0,
+            objects_deleted=0,
+            objects_skipped=max(0, len(repo_ids) - len(jobs)),
+            errors_count=1,
+            summary=(
+                f"Workflow-Einplanung fehlgeschlagen: {len(jobs)}/{len(repo_ids)} Jobs erstellt"
+            ),
+            details=failed_details,
+        )
+        return (
+            {
+                "error": "workflow scheduling failed",
+                "message": "Der Lauf wurde dauerhaft als fehlgeschlagen erfasst; bereits eingeplante Jobs wurden abgebrochen.",
+                "status": "failed",
+                "run_id": workflow_run_id,
+                "status_url": f"/api/workflow/runs/{workflow_run_id}",
+                "jobs": jobs,
+                "aborted_job_ids": sorted(set(aborted_job_ids)),
+            },
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+
+    details = {**details, "job_ids": [item["job_id"] for item in jobs]}
+    context.store.finish_sync_run(
+        sync_id=workflow_run_id,
+        status="queued",
+        objects_checked=len(jobs),
+        objects_created=0,
+        objects_updated=0,
+        objects_deleted=0,
+        objects_skipped=0,
         summary=f"{len(jobs)} Workflow-Jobs eingeplant",
         details=details,
+        terminal=False,
     )
     for job_id in signal_job_ids:
         try:
@@ -1306,6 +2347,24 @@ def _handle_workflow_run(
                 job_id=job_id,
                 error=str(exc),
             )
+    _record_admin_audit(
+        context,
+        actor=actor,
+        action="start",
+        target=f"workflow:{workflow_run_id}",
+        before={"exists": False},
+        after={
+            "exists": True,
+            "status": "queued",
+            "repo_ids": repo_ids,
+            "mode": mode,
+            "scope": scope,
+            "trigger": "manual",
+            "job_ids": [item["job_id"] for item in jobs],
+        },
+        result="success",
+        status=HTTPStatus.ACCEPTED,
+    )
     return (
         {
             "status": "queued",
@@ -1316,6 +2375,7 @@ def _handle_workflow_run(
             "selected_repo_ids": repo_ids,
             "create_dataset": create_dataset,
             "sync_openwebui": sync_openwebui,
+            "trigger": "manual",
             "jobs": jobs,
         },
         HTTPStatus.ACCEPTED,
@@ -1354,19 +2414,66 @@ def _handle_workflow_run_status(
 
     statuses = [str(job.status) for job in jobs]
     statuses.extend(_workflow_cleanup_status(row.status) for row in cleanup_rows)
-    status = context.job_store.refresh_workflow_parent(workflow_run_id)
+    scheduling_failed = bool(details.get("scheduling_failed"))
+    if scheduling_failed:
+        status = str(parent.get("status") or "failed")
+        refreshed_parent = parent
+    else:
+        status = context.job_store.refresh_workflow_parent(workflow_run_id)
+        refreshed_parent = context.store.get_sync_run(workflow_run_id) or parent
+    refreshed_details = dict(refreshed_parent.get("details") or {})
+    details = refreshed_details
+    admin_paused = bool(refreshed_details.get("admin_paused"))
     completed = sum(
         value in {JobStatus.SUCCEEDED.value, JobStatus.CANCELLED.value, JobStatus.DEAD.value}
         for value in statuses
     )
+    total = len(statuses)
+    partial_jobs = 0.0
+    for repo_id in details.get("repo_ids") or []:
+        repo_jobs = [job for job in jobs if str(job.repo_id or "") == str(repo_id)]
+        active_file_job = any(
+            str(job.status) not in WORKFLOW_TERMINAL_JOB_STATUSES
+            and _workflow_job_phase(str(job.job_type)) == "files"
+            for job in repo_jobs
+        )
+        if not active_file_job:
+            continue
+        child_progress = _workflow_child_run_progress(
+            [run for run in child_runs if str(run.repo_id or "") == str(repo_id)]
+        )
+        if child_progress is not None:
+            partial_jobs += float(child_progress["percent"]) / 100.0
+    progress = {
+        "completed": completed,
+        "total": total,
+        "percent": round(min(float(total), completed + partial_jobs) * 100 / total, 2)
+        if total
+        else 0.0,
+    }
+    job_payloads = [_workflow_job_payload(job) for job in jobs]
+    phases = _workflow_phases(jobs, cleanup_rows)
+    phase = _current_workflow_phase(phases)
+    libraries = _workflow_run_libraries(
+        context,
+        details.get("repo_ids") or [],
+        jobs,
+        child_runs,
+        run_paused=admin_paused,
+    )
     payload = {
         "run_id": workflow_run_id,
         "status": status,
-        "progress": {"completed": completed, "total": len(statuses)},
+        "progress": progress,
+        "phase": phase,
+        "phases": phases,
+        "libraries": libraries,
+        "paused": status == "paused",
         "mode": details.get("mode"),
         "scope": details.get("scope"),
+        "trigger": details.get("trigger"),
         "selected_repo_ids": details.get("repo_ids") or [],
-        "jobs": [_workflow_job_payload(job) for job in jobs],
+        "jobs": job_payloads,
         "sync_runs": [
             {
                 "run_id": run.id,
@@ -1390,9 +2497,20 @@ def _handle_workflow_run_status(
             for row in cleanup_rows
         ],
         "started_at": parent.get("started_at"),
-        "finished_at": parent.get("ended_at"),
+        "finished_at": refreshed_parent.get("ended_at"),
+        "capabilities": {
+            "run_actions": (
+                []
+                if scheduling_failed
+                else _workflow_run_actions(
+                    status,
+                    enabled=_workflow_control_available(context),
+                )
+            )
+        },
     }
-    if status in {"succeeded", "failed", "cancelled"} and parent.get("status") != status:
+    terminal_statuses = {"succeeded", "failed", "cancelled", "stopped"}
+    if status in terminal_statuses and parent.get("status") != status:
         context.store.finish_sync_run(
             sync_id=workflow_run_id,
             status=status,
@@ -1407,13 +2525,6 @@ def _handle_workflow_run_status(
         )
         refreshed = context.store.get_sync_run(workflow_run_id)
         payload["finished_at"] = refreshed.get("ended_at") if refreshed is not None else None
-    sync_state_store.update_run(
-        workflow_run_id,
-        status=status,
-        progress={"completed": completed, "total": len(statuses)},
-        error_message=("workflow child failed" if status == "failed" else None),
-        finished=status in {"succeeded", "failed", "cancelled"},
-    )
     return payload, HTTPStatus.OK
 
 
@@ -1421,52 +2532,204 @@ def _handle_workflow_run_action(
     context: DashboardContext,
     workflow_run_id: str,
     action: str,
+    payload: dict[str, Any],
+    *,
+    actor: str | None,
 ) -> tuple[dict[str, Any], HTTPStatus]:
-    if action not in {"cancel", "retry"}:
+    resolved_actor = actor or "unknown"
+    target = f"workflow:{workflow_run_id}"
+    if action not in WORKFLOW_RUN_ACTIONS:
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action or "unknown",
+            target=target,
+            before=None,
+            after=None,
+            result="failed",
+            status=HTTPStatus.NOT_FOUND,
+        )
         return {"error": "not found"}, HTTPStatus.NOT_FOUND
     parent = context.store.get_sync_run(workflow_run_id)
     if parent is None or (parent.get("details") or {}).get("kind") != "workflow_parent":
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action,
+            target=target,
+            before=None,
+            after=None,
+            result="failed",
+            status=HTTPStatus.NOT_FOUND,
+        )
         return {"error": "workflow run not found"}, HTTPStatus.NOT_FOUND
     if context.job_store is None or context.signal_queue is None:
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action,
+            target=target,
+            before={"status": parent.get("status")},
+            after={"status": parent.get("status")},
+            result="failed",
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        )
         return {"error": "job queue unavailable"}, HTTPStatus.SERVICE_UNAVAILABLE
+    before = {
+        "status": parent.get("status"),
+        "details": dict(parent.get("details") or {}),
+    }
+    current_payload, _ = _handle_workflow_run_status(context, workflow_run_id)
+    current_status = str(current_payload.get("status") or parent.get("status") or "")
+    before["status"] = current_status
+    allowed_actions = _workflow_run_actions(current_status)
+    if action not in allowed_actions:
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action,
+            target=target,
+            before=before,
+            after=before,
+            result="failed",
+            status=HTTPStatus.CONFLICT,
+        )
+        return (
+            {
+                "error": "invalid workflow transition",
+                "message": (
+                    f"Aktion {action} ist für Workflow-Status {current_status} nicht zulässig."
+                ),
+                "status": current_status,
+                "allowed_actions": allowed_actions,
+            },
+            HTTPStatus.CONFLICT,
+        )
+    if action in {"stop", "cancel"} and payload.get("confirm") != "STOP":
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action,
+            target=target,
+            before=before,
+            after=before,
+            result="failed",
+            status=HTTPStatus.BAD_REQUEST,
+        )
+        return (
+            {
+                "error": "confirmation required",
+                "message": "Stop oder Abbruch erfordert confirm=STOP.",
+            },
+            HTTPStatus.BAD_REQUEST,
+        )
+    intended_status = {
+        "pause": "paused",
+        "resume": "queued",
+        "stop": "stopped",
+        "cancel": "cancelled",
+        "retry": "queued",
+    }[action]
+    _record_admin_audit(
+        context,
+        actor=resolved_actor,
+        action=action,
+        target=target,
+        before=before,
+        after={"status": intended_status},
+        result="attempted",
+        status=HTTPStatus.ACCEPTED,
+    )
     changed: list[int] = []
-    if action == "cancel":
-        changed = context.job_store.cancel_workflow_subscription(workflow_run_id)
-        return {
+    signal_warnings: list[int] = []
+    try:
+        if action == "pause":
+            changed = context.job_store.request_workflow_pause(workflow_run_id)
+        elif action == "resume":
+            changed = context.job_store.resume_workflow_pause(workflow_run_id)
+        elif action in {"stop", "cancel"}:
+            changed = (
+                context.job_store.stop_workflow_subscription(workflow_run_id)
+                if action == "stop"
+                else context.job_store.cancel_workflow_subscription(workflow_run_id)
+            )
+        else:
+            for job_id in context.job_store.resume_workflow_subscription(workflow_run_id):
+                retried = context.job_store.retry(job_id)
+                job = context.job_store.get(job_id)
+                if retried or (
+                    job is not None
+                    and str(job.status)
+                    in {JobStatus.QUEUED.value, JobStatus.RETRYING.value}
+                ):
+                    changed.append(job_id)
+            context.job_store.refresh_workflow_parent(workflow_run_id)
+        if action in {"resume", "retry"}:
+            for job_id in changed:
+                try:
+                    context.signal_queue.signal(job_id)
+                except Exception as exc:
+                    signal_warnings.append(job_id)
+                    structlog.get_logger(__name__).warning(
+                        "dashboard.workflow_signal_failed",
+                        job_id=job_id,
+                        error_type=type(exc).__name__,
+                    )
+        after_parent = context.store.get_sync_run(workflow_run_id) or {}
+        after = {
+            "status": after_parent.get("status", intended_status),
+            "changed_job_ids": changed,
+            "signal_warning_job_ids": signal_warnings,
+        }
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action,
+            target=target,
+            before=before,
+            after=after,
+            result="success",
+            status=HTTPStatus.ACCEPTED,
+        )
+        response: dict[str, Any] = {
             "run_id": workflow_run_id,
             "action": action,
+            "status": after["status"],
             "changed_job_ids": changed,
-            "detached": True,
-        }, HTTPStatus.ACCEPTED
-    for job_id in context.job_store.resume_workflow_subscription(workflow_run_id):
-        if context.job_store.retry(job_id):
-            changed.append(job_id)
-            try:
-                context.signal_queue.signal(job_id)
-            except Exception as exc:
-                structlog.get_logger(__name__).warning(
-                    "dashboard.workflow_signal_failed",
-                    job_id=job_id,
-                    error=str(exc),
-                )
-    return {
-        "run_id": workflow_run_id,
-        "action": action,
-        "changed_job_ids": changed,
-    }, HTTPStatus.ACCEPTED
+        }
+        if action in {"stop", "cancel"}:
+            response["detached"] = True
+        if signal_warnings:
+            response["signal_warning_job_ids"] = signal_warnings
+        return response, HTTPStatus.ACCEPTED
+    except Exception as exc:
+        after_parent = context.store.get_sync_run(workflow_run_id) or {}
+        actual_after = {"status": after_parent.get("status")}
+        _record_admin_audit(
+            context,
+            actor=resolved_actor,
+            action=action,
+            target=target,
+            before=before,
+            after=actual_after,
+            result="partial" if actual_after.get("status") != before.get("status") else "failed",
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            error_type=type(exc).__name__,
+        )
+        raise
 
 
 def _aggregate_workflow_status(statuses: list[str]) -> str:
     if not statuses:
         return "queued"
-    if any(status == JobStatus.DEAD.value for status in statuses):
-        return "failed"
     if any(status == JobStatus.RUNNING.value for status in statuses):
         return "running"
     if any(status == JobStatus.RETRYING.value for status in statuses):
         return "retrying"
     if any(status == JobStatus.QUEUED.value for status in statuses):
         return "queued"
+    if any(status == JobStatus.DEAD.value for status in statuses):
+        return "failed"
     if all(status == JobStatus.CANCELLED.value for status in statuses):
         return "cancelled"
     if all(status in {JobStatus.SUCCEEDED.value, JobStatus.CANCELLED.value} for status in statuses):
@@ -1489,7 +2752,7 @@ def _workflow_sync_run_status(status: str) -> str:
 def _workflow_cleanup_status(status: str) -> str:
     if status == "dead":
         return JobStatus.DEAD.value
-    if status == "completed":
+    if status in {"completed", "cancelled", "superseded"}:
         return JobStatus.SUCCEEDED.value
     return JobStatus.RETRYING.value
 
@@ -1512,15 +2775,279 @@ def _cleanup_outbox_payload(row: Any) -> dict[str, Any]:
     }
 
 
+WORKFLOW_PHASE_DEFINITIONS: list[tuple[str, str]] = [
+    ("discovery", "Bibliotheken erkennen"),
+    ("dataset", "RAGFlow-Dataset vorbereiten"),
+    ("files", "Dateien synchronisieren"),
+    ("parsing", "Dokumente parsen"),
+    ("cleanup", "Bereinigung"),
+    ("openwebui", "OpenWebUI synchronisieren"),
+]
+
+WORKFLOW_JOB_PHASES = {
+    JobType.DISCOVER_LIBRARIES.value: "discovery",
+    JobType.ENSURE_RAGFLOW_DATASET.value: "dataset",
+    JobType.REFRESH_DATASET_SETTINGS.value: "dataset",
+    JobType.SYNC_LIBRARY_FULL.value: "files",
+    JobType.SYNC_LIBRARY_DELTA.value: "files",
+    JobType.CLASSIFY_FILE.value: "files",
+    JobType.PREPARE_INGESTION_ARTIFACT.value: "files",
+    JobType.UPLOAD_FILE.value: "files",
+    JobType.DELETE_FILE.value: "files",
+    JobType.RECONCILE_LIBRARY.value: "files",
+    JobType.RECONCILE_RAGFLOW_DATASET.value: "files",
+    JobType.PARSE_DOCUMENTS.value: "parsing",
+    JobType.REPARSE_DOCUMENTS.value: "parsing",
+    JobType.CHECK_PARSE_STATUS.value: "parsing",
+    JobType.PROCESS_CLEANUP_OUTBOX.value: "cleanup",
+    JobType.SYNC_OPENWEBUI.value: "openwebui",
+}
+
+WORKFLOW_TERMINAL_JOB_STATUSES = {
+    JobStatus.SUCCEEDED.value,
+    JobStatus.CANCELLED.value,
+    JobStatus.DEAD.value,
+}
+
+
+def _workflow_job_phase(job_type: str) -> str:
+    return WORKFLOW_JOB_PHASES.get(str(job_type), "files")
+
+
+def _workflow_phases(jobs: list[Any], cleanup_rows: list[Any]) -> list[dict[str, Any]]:
+    jobs_by_phase: dict[str, list[Any]] = {}
+    for job in jobs:
+        jobs_by_phase.setdefault(_workflow_job_phase(str(job.job_type)), []).append(job)
+    cleanup_statuses = [_workflow_cleanup_status(str(row.status)) for row in cleanup_rows]
+    phases: list[dict[str, Any]] = []
+    for name, label in WORKFLOW_PHASE_DEFINITIONS:
+        phase_jobs = jobs_by_phase.get(name, [])
+        statuses = [str(job.status) for job in phase_jobs]
+        if name == "cleanup":
+            statuses.extend(cleanup_statuses)
+        if not statuses:
+            continue
+        completed = sum(status in WORKFLOW_TERMINAL_JOB_STATUSES for status in statuses)
+        total = len(statuses)
+        paused = bool(phase_jobs) and all(
+            (
+                str(job.status) in WORKFLOW_TERMINAL_JOB_STATUSES
+                or (
+                    job.pause_requested_at is not None
+                    and job.cancel_requested_at is None
+                )
+            )
+            for job in phase_jobs
+        ) and any(
+            job.pause_requested_at is not None and job.cancel_requested_at is None
+            for job in phase_jobs
+        )
+        phases.append(
+            {
+                "name": name,
+                "label": label,
+                "status": _workflow_phase_status(statuses, paused=paused),
+                "percent": round(completed * 100 / total, 2) if total else 0.0,
+                "completed": completed,
+                "total": total,
+            }
+        )
+    return phases
+
+
+def _workflow_phase_status(statuses: list[str], *, paused: bool) -> str:
+    if paused:
+        return "paused"
+    if any(status == JobStatus.RUNNING.value for status in statuses):
+        return "running"
+    if any(status == JobStatus.RETRYING.value for status in statuses):
+        return "retrying"
+    if any(status == JobStatus.QUEUED.value for status in statuses):
+        return "queued"
+    if any(status == JobStatus.DEAD.value for status in statuses):
+        return "failed"
+    if all(status == JobStatus.CANCELLED.value for status in statuses):
+        return "cancelled"
+    return "succeeded"
+
+
+def _current_workflow_phase(phases: list[dict[str, Any]]) -> str | None:
+    for phase in phases:
+        if phase["status"] in {"running", "retrying", "queued", "paused"}:
+            return str(phase["name"])
+    for phase in phases:
+        if phase["status"] == "failed":
+            return str(phase["name"])
+    return str(phases[-1]["name"]) if phases else None
+
+
+def _workflow_run_libraries(
+    context: DashboardContext,
+    repo_ids: list[str],
+    jobs: list[Any],
+    child_runs: list[Any],
+    *,
+    run_paused: bool,
+) -> list[dict[str, Any]]:
+    normalized_repo_ids = list(
+        dict.fromkeys(str(repo_id) for repo_id in repo_ids if str(repo_id))
+    )
+    with context.store.session_factory() as session:
+        names = {
+            str(row.repo_id): str(row.name)
+            for row in session.scalars(
+                select(Library).where(Library.repo_id.in_(normalized_repo_ids))
+            ).all()
+        }
+    parsing_by_repo = _workflow_parsing_by_repo(context, normalized_repo_ids)
+    rows: list[dict[str, Any]] = []
+    for repo_id in normalized_repo_ids:
+        repo_jobs = [job for job in jobs if str(job.repo_id or "") == repo_id]
+        statuses = [str(job.status) for job in repo_jobs]
+        completed = sum(status in WORKFLOW_TERMINAL_JOB_STATUSES for status in statuses)
+        total = len(statuses)
+        job_progress = {
+            "completed": completed,
+            "total": total,
+            "percent": round(completed * 100 / total, 2) if total else 0.0,
+        }
+        paused = run_paused or any(
+            job.pause_requested_at is not None and job.cancel_requested_at is None
+            for job in repo_jobs
+        )
+        repo_child_runs = [run for run in child_runs if str(run.repo_id or "") == repo_id]
+        child_progress = _workflow_child_run_progress(repo_child_runs)
+        paused = paused or any(
+            bool((run.progress or {}).get("admin_paused")) for run in repo_child_runs
+        )
+        if statuses:
+            status = "paused" if paused else _aggregate_workflow_status(statuses)
+        elif repo_child_runs:
+            status = str(repo_child_runs[0].status)
+        else:
+            status = "queued"
+        phase = next(
+            (
+                _workflow_job_phase(str(job.job_type))
+                for job in repo_jobs
+                if str(job.status) not in WORKFLOW_TERMINAL_JOB_STATUSES
+            ),
+            None,
+        )
+        if phase is None:
+            phase = next(
+                (
+                    str((run.progress or {}).get("phase"))
+                    for run in repo_child_runs
+                    if (run.progress or {}).get("phase")
+                ),
+                _workflow_job_phase(str(repo_jobs[-1].job_type)) if repo_jobs else None,
+            )
+        active_file_job = any(
+            str(job.status) not in WORKFLOW_TERMINAL_JOB_STATUSES
+            and _workflow_job_phase(str(job.job_type)) == "files"
+            for job in repo_jobs
+        )
+        displayed_progress = (
+            child_progress if active_file_job and child_progress is not None else job_progress
+        )
+        rows.append(
+            {
+                "repo_id": repo_id,
+                "name": names.get(repo_id, repo_id),
+                "status": status,
+                "paused": paused,
+                "phase": phase,
+                "progress": displayed_progress,
+                "job_progress": job_progress,
+                "file_progress": child_progress,
+                "parsing": parsing_by_repo.get(repo_id, _empty_parsing_progress()),
+            }
+        )
+    return rows
+
+
+def _workflow_child_run_progress(child_runs: list[Any]) -> dict[str, int | float] | None:
+    active_candidates = [
+        run
+        for run in child_runs
+        if str(run.status) not in {"succeeded", "failed", "cancelled", "stopped"}
+        and _workflow_run_has_file_progress(run)
+    ]
+    terminal_candidates = [
+        run
+        for run in child_runs
+        if str(run.status) in {"succeeded", "failed", "cancelled", "stopped"}
+        and _workflow_run_has_file_progress(run)
+    ]
+    candidates = active_candidates or terminal_candidates
+    if not candidates:
+        return None
+    run = max(
+        candidates,
+        key=lambda item: (
+            item.started_at.timestamp() if getattr(item, "started_at", None) else 0.0
+        ),
+    )
+    raw = dict(run.progress or {})
+    total = max(0, int(raw.get("total", raw.get("files_total", raw.get("changes", 0))) or 0))
+    completed = max(
+        0,
+        int(
+            raw.get(
+                "completed",
+                raw.get("files_processed", raw.get("processed", 0)),
+            )
+            or 0
+        ),
+    )
+    completed = min(completed, total) if total else completed
+    raw_percent = raw.get("percent")
+    try:
+        percent = float(raw_percent) if raw_percent is not None else 0.0
+    except (TypeError, ValueError):
+        percent = 0.0
+    if raw_percent is None and total:
+        percent = completed * 100 / total
+    return {
+        "completed": completed,
+        "total": total,
+        "percent": round(max(0.0, min(100.0, percent)), 2),
+    }
+
+
+def _workflow_run_has_file_progress(run: Any) -> bool:
+    progress = getattr(run, "progress", None)
+    return isinstance(progress, dict) and bool(
+        {"total", "files_total", "changes"}.intersection(progress)
+    )
+
+
 def _workflow_job_payload(job: Any) -> dict[str, Any]:
+    status = str(job.status)
+    paused = bool(
+        job.pause_requested_at is not None
+        and job.cancel_requested_at is None
+        and status not in WORKFLOW_TERMINAL_JOB_STATUSES
+    )
     return {
         "job_id": int(job.id),
         "job_type": str(job.job_type),
         "repo_id": job.repo_id,
-        "status": str(job.status),
+        "status": status,
+        "effective_status": "paused" if paused else status,
+        "phase": _workflow_job_phase(str(job.job_type)),
+        "percent": 100.0 if status in WORKFLOW_TERMINAL_JOB_STATUSES else 0.0,
+        "paused": paused,
         "attempts": int(job.attempts),
         "max_attempts": int(job.max_attempts),
         "error": job.error_message,
+        "pause_requested_at": (
+            job.pause_requested_at.isoformat() if job.pause_requested_at else None
+        ),
+        "cancel_requested_at": (
+            job.cancel_requested_at.isoformat() if job.cancel_requested_at else None
+        ),
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
     }
@@ -1576,7 +3103,77 @@ def _visible_workflow_libraries(context: DashboardContext) -> list[dict[str, Any
                 },
             }
         )
+    repo_ids = [str(item["repo_id"]) for item in rows]
+    controls = _admin_control_store(context).libraries(repo_ids)
+    parsing_by_repo = _workflow_parsing_by_repo(context, repo_ids)
+    for item in rows:
+        repo_id = str(item["repo_id"])
+        control_payload = controls[repo_id].to_payload()
+        item["admin_state"] = control_payload["state"]
+        item["admin_enabled"] = control_payload["enabled"]
+        item["admin_paused"] = control_payload["paused"]
+        item["admin_updated_at"] = control_payload["updated_at"]
+        item["admin_control"] = control_payload
+        item["parsing"] = parsing_by_repo.get(repo_id, _empty_parsing_progress())
     return sorted(rows, key=lambda item: str(item["name"]).lower())
+
+
+def _empty_parsing_progress() -> dict[str, int | float]:
+    return {
+        "tracked": 0,
+        "total": 0,
+        "done": 0,
+        "completed": 0,
+        "pending": 0,
+        "running": 0,
+        "failed": 0,
+        "percent": 0.0,
+    }
+
+
+def _workflow_parsing_by_repo(
+    context: DashboardContext,
+    repo_ids: list[str] | set[str] | tuple[str, ...],
+) -> dict[str, dict[str, int | float]]:
+    normalized = list(dict.fromkeys(str(value) for value in repo_ids if str(value)))
+    if not normalized:
+        return {}
+    with context.store.session_factory() as session:
+        rows = session.execute(
+            select(
+                FileDocumentVersion.repo_id,
+                FileDocumentVersion.file_id,
+                FileDocumentVersion.id,
+                FileDocumentVersion.state,
+            )
+            .where(FileDocumentVersion.repo_id.in_(normalized))
+            .order_by(
+                FileDocumentVersion.repo_id,
+                FileDocumentVersion.file_id,
+                FileDocumentVersion.id.desc(),
+            )
+        ).all()
+    latest: dict[tuple[str, int], str] = {}
+    for repo_id, file_id, _version_id, state in rows:
+        latest.setdefault((str(repo_id), int(file_id)), str(state or "unknown"))
+    result = {repo_id: _empty_parsing_progress() for repo_id in normalized}
+    for (repo_id, _file_id), state in latest.items():
+        counters = result.setdefault(repo_id, _empty_parsing_progress())
+        counters["tracked"] += 1
+        counters["total"] += 1
+        if state in {"current", "superseded"}:
+            counters["done"] += 1
+            counters["completed"] += 1
+        elif state == "dead":
+            counters["failed"] += 1
+        else:
+            counters["pending"] += 1
+            if state in {"uploaded", "parsing", "retryable_failed"}:
+                counters["running"] += 1
+    for counters in result.values():
+        total = int(counters["total"])
+        counters["percent"] = round(int(counters["done"]) * 100 / total, 2) if total else 0.0
+    return result
 
 
 def _stored_workflow_state(

@@ -32,9 +32,11 @@ x-connector-env: &connector-env
   REQUESTS_CA_BUNDLE: ${REQUESTS_CA_BUNDLE:-}
 
   # -------------------------------------------------------------------
-  # Lesendes Dashboard und geschützter OpenWebUI-Proxy
+  # Im Controller optional interaktives Dashboard und geschützter OpenWebUI-Proxy
   # -------------------------------------------------------------------
   CONNECTOR_DASHBOARD_ENABLED: ${CONNECTOR_DASHBOARD_ENABLED:-false}
+  CONNECTOR_DASHBOARD_CONTROL_ENABLED: ${CONNECTOR_DASHBOARD_CONTROL_ENABLED:-false}
+  CONNECTOR_AUTOMATION_INITIAL_STATE: ${CONNECTOR_AUTOMATION_INITIAL_STATE:-running}
   CONNECTOR_DASHBOARD_HOST: ${CONNECTOR_DASHBOARD_HOST:-0.0.0.0}
   CONNECTOR_DASHBOARD_PORT: ${CONNECTOR_DASHBOARD_PORT:-8080}
   CONNECTOR_DASHBOARD_MAX_LOG_ENTRIES: ${CONNECTOR_DASHBOARD_MAX_LOG_ENTRIES:-5000}
@@ -435,6 +437,10 @@ services:
   connector-controller:
     <<: *connector-common
     command: ["controller"]
+    networks:
+      connector-net:
+        aliases:
+          - connector-dashboard
     healthcheck:
       test:
         - CMD-SHELL

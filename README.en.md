@@ -17,7 +17,7 @@
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml"><img alt="Docker image" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml/badge.svg?branch=master"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml/badge.svg?branch=master"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="pyproject.toml"><img alt="Version 2.5.6" src="https://img.shields.io/badge/version-2.5.6-informational.svg"></a>
+  <a href="pyproject.toml"><img alt="Version 2.6.0" src="https://img.shields.io/badge/version-2.6.0-informational.svg"></a>
 </p>
 
 ## Overview
@@ -38,6 +38,7 @@ not have to live inside OpenWebUI function code.
 | Demo | [Demo video](#demo) |
 | Quick start | [Docker Compose](#docker-compose-quick-start) or [Portainer](#portainer-start) |
 | Admin first start | [first-start checklist](docs/en/admin-first-start-checklist.md) |
+| Dashboard administration | [interactive surface](#dashboard-administration), [safe operations](docs/operations.md#dashboard-im-betrieb) |
 | Configuration | [`connector.env.example`](connector.env.example), [environment reference](docs/environment.md) |
 | Operations | [operations guide](docs/operations.md) |
 | Architecture | [architecture](docs/architecture.md) |
@@ -73,7 +74,8 @@ browser-friendly derivative of the same recording.
 | Sync and delete | Commit-pinned snapshots and cursors provide real delta runs. When no trustworthy baseline exists, the connector falls back to a controlled full sync. Deletions are propagated to RAGFlow and optionally OpenWebUI. |
 | Drift repair | A reconciliation plan compares the Seafile snapshot, connector state, and RAGFlow; repairs run as persistent, deduplicated jobs. |
 | OpenWebUI | Auditable `Seafile · <dataset>` custom models with German evidence tables by default, stable `[S1]` source IDs, claim coverage, source roles, scores, locators, and connector preview links. |
-| Operations | PostgreSQL state, Redis jobs, dashboard workflow control, targeted connector-owned artifact deletion, health, metrics, Excel audit export, TLS/CA bundles, GHCR, Portainer, Compose, and Swarm. |
+| Dashboard and administration | Persistent global and per-library controls, delta/full/reconcile runs, processing and parsing progress, targeted connector-owned artifact deletion, health, metrics, logs, and Excel audit export. |
+| Operations | PostgreSQL state, Redis jobs, TLS/CA bundles, GHCR, Portainer, Compose, and Swarm. |
 | Quality | Ruff, strict mypy, pytest, unittest, CodeQL, Docker build workflow, and Dependabot. |
 
 ## Internationalization
@@ -175,6 +177,58 @@ For Compose and Portainer, tune the schedule with
 `RECONCILE_INTERVAL_SECONDS`, `RAGFLOW_TEMPLATE_REFRESH_SECONDS`, and
 `OPENWEBUI_SYNC_INTERVAL_SECONDS`.
 
+## Dashboard Administration
+
+The HTTP dashboard embedded in the running `connector-controller` is both the
+existing log and status view and an interactive administration surface. Its
+**Administration** area lists every library visible to the configured Seafile
+admin token and provides separate control levels:
+
+- Administrators can globally start, deactivate, pause, resume, or stop
+  connector work. Start enables automation, releases the queue, and triggers
+  discovery immediately; deactivate only prevents new automation; stop turns
+  automation off, pauses the queue, and requests cooperative cancellation of
+  active jobs.
+- Each Seafile library has a persistent `active`, `paused`, or `disabled`
+  policy and can be selected for a delta, full, or reconciliation run.
+- A concrete run can be paused, resumed, stopped, or retried after a terminal
+  failure or stop.
+
+These actions control the connector scheduler, queue, workers, and reconciler;
+they never start or stop containers or Portainer services. The dashboard and
+diagnostics therefore remain reachable while connector work is paused,
+stopped, or disabled. Pause and stop are cooperative: an in-flight download,
+upload, or RAGFlow request finishes before the next safe checkpoint. A paused
+job returns to the queue there; stop or cancellation wins over pause. Completed
+target-side effects are not rolled back and can be completed safely with
+resume, retry, or reconciliation.
+
+Library and run views expose the current phase plus file and parsing counters.
+Parsing reports `tracked`, `done`, `pending`, `failed`, and a percentage
+derived from those known counts; missing RAGFlow values are not guessed. Control
+policies and runs are stored in PostgreSQL and survive browser and controller
+restarts.
+
+The standalone `connector dashboard` command intentionally starts a read-only
+status view. It has no runtime controller, job queue, or signalling path and
+therefore cannot expose administration actions. Production administration must
+use the published `connector-controller` route.
+
+Mutating actions require `CONNECTOR_DASHBOARD_CONTROL_ENABLED=true` in addition
+to the dashboard switch. The setting is valid only with an enabled dashboard
+and fully configured Basic authentication. Mutations require
+`Content-Type: application/json` and `X-Connector-Admin-Action: 1`; global stop
+and run stop/cancel additionally require `{"confirm":"STOP"}`. LAN access requires HTTPS through a
+reverse proxy or an equivalently protected internal path. Connector controls
+never modify Seafile libraries and never receive
+Portainer or Docker credentials.
+
+For an isolated first-ever start, set
+`CONNECTOR_AUTOMATION_INITIAL_STATE=stopped` before `up -d`. It initializes the
+global state once, before the first scheduler cycle; later restarts always
+preserve the persisted operator state. Without the variable, the
+backward-compatible initial state remains `running`.
+
 ## Portainer Start
 
 1. Create a new stack in Portainer.
@@ -190,7 +244,7 @@ Use the enterprise wizard for a core-only or external-state Portainer bundle:
 removes the local state containers from the started model.
 
 For production-like deployments, pin `CONNECTOR_IMAGE` to a fixed release tag
-such as `ghcr.io/adrianweidig/seafile-ragflow-connector:2.5.6` after that
+such as `ghcr.io/adrianweidig/seafile-ragflow-connector:2.6.0` after that
 release has been published. Treat `latest` as a convenience tag for smoke tests
 and fresh test environments.
 The first acceptance path after deployment is summarized in the
@@ -211,7 +265,7 @@ The package exposes the `connector` command:
 | `connector cleanup list`, `retry` | Inspect failed target cleanups and queue persistent retries |
 | `connector cleanup-orphans` | Plan or delete connector-owned orphan target artifacts |
 | `connector openwebui-sync-once` | Run one OpenWebUI sync pass |
-| `connector dashboard` | Start the standalone status dashboard |
+| `connector dashboard` | Start the standalone read-only status dashboard without administration controls |
 | `connector controller`, `worker`, `reconciler` | Start runtime processes |
 
 ## Development

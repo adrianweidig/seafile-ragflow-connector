@@ -72,7 +72,8 @@
       "plan_help": "Reconcile-Plan ohne Remote-Mutationen erstellen.",
       "sync_help": "Bibliothek als persistenten Delta- oder Vollsync-Job einplanen.",
       "reconcile_help": "Reconcile planen oder als gefencten Reparaturjob ausführen.",
-      "missing": "Bibliothek {repo_id} ist im Connector-State nicht vorhanden."
+      "missing": "Bibliothek {repo_id} ist im Connector-State nicht vorhanden.",
+      "controlled": "Bibliothek {repo_id} ist {state} und kann nicht verändert werden."
     },
     "dashboard": {
       "help": "Lesendes HTTP-Dashboard als Vordergrundprozess starten.",

@@ -210,14 +210,26 @@ installierten System-CAs.
 | `RAGFLOW_TEMPLATE_REFRESH_SECONDS` | optional | Intervall für Aktualisierung der Dataset-Einstellungen. Default `1800` Sekunden, also 30 Minuten. Werte unter 60 Sekunden werden abgelehnt. |
 | `RAGFLOW_PUBLIC_BASE_URL`, `RAGFLOW_DOCUMENT_URL_TEMPLATE` | optional | öffentliche RAGFlow-Links in Quellen. |
 | `CONNECTOR_DASHBOARD_ENABLED` | optional | Dashboard starten; für OpenWebUI-Proxy nötig. |
+| `CONNECTOR_DASHBOARD_CONTROL_ENABLED` | optional | Default `false`; aktiviert die schreibende Adminsteuerung ausschließlich im Controller. `true` erfordert `CONNECTOR_DASHBOARD_ENABLED=true` sowie nicht leere Basic-Auth-Werte. |
+| `CONNECTOR_AUTOMATION_INITIAL_STATE` | optional | `running` (rückwärtskompatibler Default) oder `stopped`; gilt nur beim erstmaligen Erzeugen des globalen Steuerzustands. Für einen schedulerfreien Erststart vor dem ersten Stack-Start `stopped` setzen. Persistierter Zustand gewinnt danach. |
 | `CONNECTOR_DASHBOARD_HOST`, `CONNECTOR_DASHBOARD_PORT` | optional | Bind-Adresse und Port im Container. |
 | `CONNECTOR_DASHBOARD_PUBLISHED_PORT` | optional | Host-Portbindung in Compose. |
 | `CONNECTOR_DASHBOARD_MAX_LOG_ENTRIES`, `CONNECTOR_DASHBOARD_MAX_EVENT_ENTRIES`, `CONNECTOR_DASHBOARD_MAX_SYNC_RUNS`, `CONNECTOR_DASHBOARD_LOG_PAGE_SIZE`, `CONNECTOR_DASHBOARD_MAX_FIELD_LENGTH` | optional | Speicher- und Anzeigegrenzen des Dashboards. |
-| `CONNECTOR_DASHBOARD_AUTH_USERNAME`, `CONNECTOR_DASHBOARD_AUTH_PASSWORD` | optional | HTTP Basic Auth für Dashboard-UI, Status-API und Workflow-Steuerung; beide Werte zusammen setzen. |
+| `CONNECTOR_DASHBOARD_AUTH_USERNAME`, `CONNECTOR_DASHBOARD_AUTH_PASSWORD` | optional | HTTP Basic Auth für Dashboard-UI und Status-API; beide Werte zusammen setzen. Für `CONNECTOR_DASHBOARD_CONTROL_ENABLED=true` sind beide nicht leer zwingend; in Produktion werden bekannte Beispielpasswörter abgewiesen. |
 | `CONNECTOR_DOCKER_NETWORK_EXTERNAL`, `CONNECTOR_DOCKER_NETWORK_NAME` | optional | eigenes Netz per Default; bei vorhandenem externem Netz den realen Netzwerknamen setzen. |
 | `CONNECTOR_SWARM_NETWORK_NAME` | optional | Overlay-Netzname für Swarm. |
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_HOST`, `POSTGRES_PORT` | optional | Defaults reichen im Stack. |
 | `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB` | optional | Defaults reichen im Stack. |
+
+`CONNECTOR_DASHBOARD_CONTROL_ENABLED` erweitert nur das in den Controller
+eingebettete Dashboard. Der eigenständige Prozess `connector dashboard` bleibt
+lesend. Adminmutationen benötigen zusätzlich gültige Basic Auth,
+`Content-Type: application/json` und `X-Connector-Admin-Action: 1`; globaler
+Stop sowie Stop/Cancel eines Laufs verlangen `{"confirm":"STOP"}`. Diese
+Browsergrenze wird nicht auf interne
+Authz- oder OpenWebUI-Proxy-POSTs übertragen. Für einen Zugriff außerhalb des
+lokalen Hosts gehört die Oberfläche hinter HTTPS und eine administrative
+Netzwerk- oder Reverse-Proxy-Grenze.
 
 ## Tuning und Policy
 

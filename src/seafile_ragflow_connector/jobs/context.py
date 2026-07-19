@@ -8,6 +8,10 @@ _cancel_check: ContextVar[Callable[[], bool] | None] = ContextVar(
     "job_cancel_check",
     default=None,
 )
+_pause_check: ContextVar[Callable[[], bool] | None] = ContextVar(
+    "job_pause_check",
+    default=None,
+)
 _job_id: ContextVar[int | None] = ContextVar("job_id", default=None)
 _job_run_id: ContextVar[str | None] = ContextVar("job_run_id", default=None)
 
@@ -24,6 +28,12 @@ class JobDeferredError(RuntimeError):
 
 def job_cancellation_requested() -> bool:
     check = _cancel_check.get()
+    pause_check = _pause_check.get()
+    return bool((check and check()) or (pause_check and pause_check()))
+
+
+def job_pause_requested() -> bool:
+    check = _pause_check.get()
     return bool(check and check())
 
 
@@ -42,6 +52,15 @@ def activate_job_cancellation(check: Callable[[], bool]) -> Iterator[None]:
         yield
     finally:
         _cancel_check.reset(token)
+
+
+@contextmanager
+def activate_job_pause(check: Callable[[], bool]) -> Iterator[None]:
+    token: Token[Callable[[], bool] | None] = _pause_check.set(check)
+    try:
+        yield
+    finally:
+        _pause_check.reset(token)
 
 
 @contextmanager

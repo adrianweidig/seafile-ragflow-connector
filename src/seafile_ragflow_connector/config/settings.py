@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     connector_ca_bundle: str | None = None
 
     connector_dashboard_enabled: bool = False
+    connector_dashboard_control_enabled: bool = False
+    connector_automation_initial_state: Literal["running", "stopped"] = "running"
     connector_dashboard_host: str = "0.0.0.0"  # nosec B104
     connector_dashboard_port: int = 8080
     connector_dashboard_max_log_entries: int = 5000
@@ -529,6 +531,35 @@ class Settings(BaseSettings):
                 "CONNECTOR_DASHBOARD_AUTH_PASSWORD must be set together"
             )
             raise ValueError(msg)
+        if self.connector_dashboard_control_enabled:
+            if not self.connector_dashboard_enabled:
+                raise ValueError(
+                    "CONNECTOR_DASHBOARD_ENABLED must be true when "
+                    "CONNECTOR_DASHBOARD_CONTROL_ENABLED is true"
+                )
+            if not (
+                self.connector_dashboard_auth_username
+                and self.connector_dashboard_auth_password
+            ):
+                raise ValueError(
+                    "CONNECTOR_DASHBOARD_AUTH_USERNAME and "
+                    "CONNECTOR_DASHBOARD_AUTH_PASSWORD are required when "
+                    "CONNECTOR_DASHBOARD_CONTROL_ENABLED is true"
+                )
+            if self.app_env.strip().lower() in {"prod", "production"} and (
+                self.connector_dashboard_auth_password.strip().lower()
+                in {
+                    "change-me",
+                    "change-me-dashboard-password",
+                    "changeme",
+                    "your-password",
+                    "your_password",
+                }
+            ):
+                raise ValueError(
+                    "CONNECTOR_DASHBOARD_AUTH_PASSWORD must not use a known "
+                    "placeholder when dashboard control is enabled in production"
+                )
         if not self.database_url:
             if not self.postgres_password:
                 msg = "DATABASE_URL or POSTGRES_PASSWORD must be set"
