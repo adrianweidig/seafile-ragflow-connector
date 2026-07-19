@@ -8,6 +8,21 @@ retroactively.
 
 ## Unreleased
 
+## 2.6.1 - 2026-07-19
+
+### Fixed
+
+- Updated Seafile files continue parsing in RAGFlow under a unique transitional
+  name while the active previous version still occupies the final document
+  name. Once parsing succeeds, the previous version is removed through the
+  persistent cleanup outbox and the readable name is restored.
+- During several rapid changes to the same file, only the newest document
+  version can become active; even a version that has not been uploaded yet
+  prevents an outdated promotion.
+- Document promotion and the cleanup request for the previous version are
+  stored atomically so a pause, cancellation, or process failure cannot leave
+  an orphaned RAGFlow document without a cleanup request.
+
 ## 2.6.0 - 2026-07-19
 
 ### Added

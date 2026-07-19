@@ -8,6 +8,22 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+## 2.6.1 - 2026-07-19
+
+### Fixed
+
+- Aktualisierte Seafile-Dateien werden in RAGFlow weiterhin unter einem
+  eindeutigen Übergangsnamen geparst, wenn die noch aktive Altversion den
+  endgültigen Dokumentnamen belegt. Nach erfolgreichem Parsing wird die
+  Altversion über die persistente Cleanup-Outbox entfernt und der lesbare Name
+  wiederhergestellt.
+- Bei mehreren schnellen Änderungen derselben Datei kann ausschließlich die
+  neueste Dokumentversion aktiv werden; auch noch nicht hochgeladene Versionen
+  blockieren die veraltete Promotion.
+- Dokument-Promotion und Löschauftrag für die Altversion werden atomar
+  gespeichert, damit Pause, Abbruch oder Prozessausfall kein verwaistes
+  RAGFlow-Dokument ohne Cleanup-Auftrag hinterlassen.
+
 ## 2.6.0 - 2026-07-19
 
 ### Added

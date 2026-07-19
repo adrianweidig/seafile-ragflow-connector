@@ -405,7 +405,7 @@ benötigt:
 ```text
 install/connector.env.example
 install/deploy/portainer/
-docker-images/seafile-ragflow-connector_2.6.0_linux-amd64.docker-image.tar
+docker-images/seafile-ragflow-connector_2.6.1_linux-amd64.docker-image.tar
 docker-images/postgres_16_linux-amd64.docker-image.tar
 docker-images/valkey_8_linux-amd64.docker-image.tar
 docker-images/redis_7_compat_linux-amd64.docker-image.tar
