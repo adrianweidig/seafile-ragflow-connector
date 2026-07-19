@@ -1929,7 +1929,6 @@ class SyncOrchestrator:
             pending_parse = sum(
                 state
                 in {
-                    "pending_upload",
                     "uploaded",
                     "parsing",
                     "retryable_failed",
@@ -2268,6 +2267,7 @@ class SyncOrchestrator:
         run_id: str | None = None,
     ) -> bool:
         normalized_path = normalize_seafile_path(path)
+        cleanup_outbox_ids: set[int] = set()
         with self.session_factory() as session:
             db_file = session.scalar(
                 select(File).where(
@@ -2275,30 +2275,48 @@ class SyncOrchestrator:
                     File.normalized_path == normalized_path,
                 )
             )
-            if db_file is None or not db_file.ragflow_document_id:
-                if db_file is not None and delete_file_row:
+            if db_file is None:
+                return False
+            self._ensure_current_document_version(session, db_file, dataset_id)
+            session.flush()
+            versions = session.scalars(
+                select(FileDocumentVersion)
+                .where(FileDocumentVersion.file_id == db_file.id)
+                .where(FileDocumentVersion.dataset_id == dataset_id)
+                .where(FileDocumentVersion.document_id.is_not(None))
+                .order_by(FileDocumentVersion.id)
+            ).all()
+            if not versions:
+                if delete_file_row:
                     session.delete(db_file)
                     session.commit()
                 return False
-            version_id = self._ensure_current_document_version(session, db_file, dataset_id)
             file_id = int(db_file.id)
-            document_id = db_file.ragflow_document_id
+            for version in versions:
+                assert version.document_id is not None
+                cleanup_outbox_ids.add(
+                    self._enqueue_cleanup_in_session(
+                        session,
+                        repo_id=repo_id,
+                        target_type="ragflow_document",
+                        target_id=version.document_id,
+                        dataset_id=version.dataset_id,
+                        file_id=file_id,
+                        document_version_id=int(version.id),
+                        fence_token=fence_token,
+                        run_id=run_id,
+                        payload={
+                            "wait_for_document_id": wait_for_document_id,
+                            "delete_file_row": delete_file_row,
+                            "clear_binding": not delete_file_row,
+                        },
+                    )
+                )
             session.commit()
-        self._enqueue_cleanup(
-            repo_id=repo_id,
-            target_type="ragflow_document",
-            target_id=document_id,
-            dataset_id=dataset_id,
-            file_id=file_id,
-            document_version_id=version_id,
-            fence_token=fence_token,
-            run_id=run_id,
-            payload={
-                "wait_for_document_id": wait_for_document_id,
-                "delete_file_row": delete_file_row,
-                "clear_binding": not delete_file_row,
-            },
-        )
+        parent_job_id = current_job_id()
+        if parent_job_id is not None:
+            for outbox_id in cleanup_outbox_ids:
+                self.job_store.subscribe_cleanup_from_job(parent_job_id, outbox_id)
         return True
 
     def _enqueue_cleanup(
@@ -2595,7 +2613,21 @@ class SyncOrchestrator:
                 if file_id is not None:
                     db_file = session.get(File, file_id)
                     if db_file is not None and payload.get("delete_file_row"):
-                        session.delete(db_file)
+                        remaining_cleanup = int(
+                            session.scalar(
+                                select(func.count(CleanupOutbox.id))
+                                .where(CleanupOutbox.file_id == file_id)
+                                .where(CleanupOutbox.id != row_id)
+                                .where(
+                                    CleanupOutbox.status.in_(
+                                        ["pending", "retrying", "dead"]
+                                    )
+                                )
+                            )
+                            or 0
+                        )
+                        if remaining_cleanup == 0:
+                            session.delete(db_file)
                     elif (
                         db_file is not None
                         and payload.get("clear_binding")

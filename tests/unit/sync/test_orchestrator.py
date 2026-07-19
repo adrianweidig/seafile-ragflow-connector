@@ -1396,7 +1396,75 @@ class OrchestratorUploadTests(unittest.TestCase):
                 ["current", "superseded", "pending_upload"],
             )
         self.assertIn(["version-two"], ragflow_client.deleted_ids)
-        self.assertEqual(orchestrator._async_work_counts("repo")["pending_parse"], 1)
+        self.assertEqual(orchestrator._async_work_counts("repo")["pending_parse"], 0)
+
+    def test_delete_file_cleans_current_and_pending_ragflow_documents(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo"))
+            db_file = File(
+                repo_id="repo",
+                path="/docs/report.pdf",
+                normalized_path="/docs/report.pdf",
+                ragflow_document_id="current-doc",
+                ragflow_document_name="report.pdf",
+                sync_status="parsing",
+                parse_status="DONE",
+            )
+            session.add(db_file)
+            session.flush()
+            session.add_all(
+                [
+                    FileDocumentVersion(
+                        file_id=db_file.id,
+                        repo_id="repo",
+                        normalized_path=db_file.normalized_path,
+                        dataset_id="dataset",
+                        document_id="current-doc",
+                        document_name="report.pdf",
+                        state="current",
+                        parse_status="DONE",
+                    ),
+                    FileDocumentVersion(
+                        file_id=db_file.id,
+                        repo_id="repo",
+                        normalized_path=db_file.normalized_path,
+                        dataset_id="dataset",
+                        document_id="pending-doc",
+                        document_name="report.pdf",
+                        state="parsing",
+                        parse_status="RUNNING",
+                    ),
+                ]
+            )
+            session.commit()
+
+        ragflow_client = _FakeRAGFlowClient()
+        ragflow_client.documents = [
+            {"id": "current-doc", "name": "report.pdf", "run": "DONE"},
+            {"id": "pending-doc", "name": "managed-report.pdf", "run": "RUNNING"},
+        ]
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        deleted = orchestrator.delete_file("repo", "dataset", "/docs/report.pdf")
+
+        self.assertTrue(deleted)
+        self.assertEqual(
+            ragflow_client.deleted_ids,
+            [["current-doc"], ["pending-doc"]],
+        )
+        with session_factory() as session:
+            self.assertEqual(session.query(File).count(), 0)
+            cleanup = session.query(CleanupOutbox).order_by(CleanupOutbox.id).all()
+            self.assertEqual([row.status for row in cleanup], ["completed", "completed"])
 
     def test_stale_pending_version_older_than_current_is_not_resumed(self) -> None:
         session_factory = _session_factory(self)
