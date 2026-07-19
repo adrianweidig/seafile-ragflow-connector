@@ -47,7 +47,11 @@ einzelnen Deployment-Pfaden fehlen.
    setzen.
 8. `SEAFILE_BASE_URL` und `RAGFLOW_BASE_URL` auf die aus dem
    Connector-Container erreichbaren URLs setzen.
-9. Stack starten und die Logs von `connector-controller`, `connector-worker` und
+9. Für einen isolierten allerersten Start zusätzlich Dashboard-Control mit
+   echten Basic-Auth-Werten aktivieren und
+   `CONNECTOR_AUTOMATION_INITIAL_STATE=stopped` setzen. Der allgemeine
+   rückwärtskompatible Default bleibt `running`.
+10. Stack starten und die Logs von `connector-controller`, `connector-worker` und
    `connector-reconciler` prüfen.
 
 Der Stack stellt Seafile und RAGFlow nicht bereit. Beide Systeme bleiben extern
@@ -55,6 +59,10 @@ und müssen über die konfigurierten URLs erreichbar sein.
 Nach dem Deploy sollte die
 [Admin-Erststart-Checkliste](admin-first-start-checklist.md) einmal vollständig
 durchlaufen werden, bevor größere Libraries oder Endnutzer freigegeben werden.
+Bei einem Upgrade zuerst alte Controller-, Worker- und Reconciler-Arbeit
+kontrolliert leeren und die Rollen ohne Überlappung ersetzen. Der Initialwert
+wirkt nur beim Fehlen des globalen State-Row und kann einen bereits laufenden
+Worker der alten Version nicht rückwirkend stoppen.
 
 Es gibt zwei unterstützte Netzwerkvarianten:
 
@@ -192,14 +200,16 @@ werden. Außerdem veröffentlicht Swarm Dashboard-Ports über das Routing-Mesh;
 zentrale Vorlage noch `127.0.0.1:18080` enthält, muss der Wert für Swarm auf
 `18080` geändert werden.
 
-## Datenbank-Upgrade auf Revision 0006
+## Datenbank-Upgrade auf Revision 0007 (`head`)
 
 Revision `0006_sync_consistency_state` ergänzt aufbauend auf der atomischen
 Job-Deduplizierung aus `0005` commit-gepinnte Snapshots und Cursor, Sync-Runs,
-Repo-Leases mit Fence-Token, Dokumentversionen und die Cleanup-Outbox. Vor einem
-produktiven Upgrade zuerst ein PostgreSQL-Backup erstellen. Danach Controller
-und Reconciler als Job-Produzenten stoppen und die Worker vorhandene Jobs
-abarbeiten lassen:
+Repo-Leases mit Fence-Token, Dokumentversionen und die Cleanup-Outbox. Revision
+`0007_dashboard_admin_control` ergänzt daran die persistente globale und
+bibliotheksspezifische Adminsteuerung sowie `pause_requested_at` für Jobs. Vor
+einem produktiven Upgrade auf Alembic-`head` zuerst ein PostgreSQL-Backup
+erstellen. Danach Controller und Reconciler als Job-Produzenten stoppen und die
+Worker vorhandene Jobs abarbeiten lassen:
 
 ```bash
 docker compose --env-file connector.env \
@@ -236,12 +246,18 @@ Compose-Datei enthält ein Portmapping für den Controller:
 
 ```env
 CONNECTOR_DASHBOARD_ENABLED=true
+CONNECTOR_DASHBOARD_CONTROL_ENABLED=true
 CONNECTOR_DASHBOARD_HOST=0.0.0.0
 CONNECTOR_DASHBOARD_PORT=8080
 CONNECTOR_DASHBOARD_PUBLISHED_PORT=127.0.0.1:18080
 CONNECTOR_DASHBOARD_AUTH_USERNAME=admin
-CONNECTOR_DASHBOARD_AUTH_PASSWORD=change-me-dashboard-password
+CONNECTOR_DASHBOARD_AUTH_PASSWORD=
 ```
+
+Vor dem Start muss `CONNECTOR_DASHBOARD_AUTH_PASSWORD` über den Secret-Store
+oder die geschützte Runtime-Umgebung mit einem zufällig erzeugten Passwort
+gesetzt werden. Leere Werte und bekannte Beispielpasswörter werden bei
+aktivierter Adminsteuerung absichtlich abgewiesen.
 
 Damit ist die Oberfläche auf dem Docker-Host unter `http://127.0.0.1:18080`
 erreichbar. Für LAN-Zugriff kann `CONNECTOR_DASHBOARD_PUBLISHED_PORT=18080`
@@ -249,17 +265,79 @@ gesetzt werden. Soll die Oberfläche nicht erreichbar sein, bleibt
 `CONNECTOR_DASHBOARD_ENABLED=false` gesetzt oder das Portmapping wird in
 Portainer entfernt.
 
-Die Oberfläche schützt UI, Status-API und Workflow-Steuerung per HTTP Basic
-Auth, sobald `CONNECTOR_DASHBOARD_AUTH_USERNAME` und
-`CONNECTOR_DASHBOARD_AUTH_PASSWORD` gesetzt sind. Sie zeigt keine Secrets, lädt
-keine CDN-Assets nach und löscht keine Seafile-Bibliotheken. Im Tab
-**Prüfablauf** können die mit dem aktuellen Seafile-API-Key sichtbaren
-Bibliotheken ausgewählt und für RAGFlow-Dataset-/Dokument-Sync sowie optionalen
-OpenWebUI-Chat-/Tool-/Pipe-Sync gestartet werden. Im OpenWebUI-Tab können
-connector-eigene Pipes, RAGFlow-Chats und RAGFlow-Datasets gezielt entfernt
-werden, damit ein Folgesync sie sauber neu anlegen kann. Der Dark-/Light-Modus
-und die Auto-Refresh-Auswahl laufen rein im Browser. Wählbar sind aus, 5
-Sekunden, 10 Sekunden und 1 Minute.
+Die veröffentlichte Route muss auf den `connector-controller` zeigen. Nur sein
+eingebettetes Dashboard besitzt Orchestrator, JobStore und Redis-Signalweg für
+Adminaktionen. Ein separat gestarteter Prozess `connector dashboard` zeigt
+denselben Status lesend, aber keine funktionierende Steuerung. Ein älteres
+Deployment mit eigenem Dashboard-Container muss vor dem Upgrade entsprechend
+auf die Controller-Route umgestellt werden.
+
+Im Bereich **Administration** sind drei Ebenen getrennt:
+
+| Ebene | Bedienung | Persistenz und Wirkung |
+| --- | --- | --- |
+| Gesamter Connector | Start, Deaktivieren, Pause, Fortsetzen, Stop | Gilt vor bibliotheksspezifischen Regeln und steuert fachliche Connector-Arbeit, nicht den Container. |
+| Seafile-Bibliothek | Aktivieren, Deaktivieren, Pause, Fortsetzen; Delta, Voll oder Reconcile starten | Bleibt in PostgreSQL über Neustarts erhalten. Deaktivieren ist kein Seafile-Löschereignis und löscht keine Zielartefakte. |
+| Konkreter Lauf | Pause, Fortsetzen, Stop, Retry | Pause ist fortsetzbar; Stop ist terminal und benötigt für einen neuen Versuch Retry. |
+
+Global hat jede Aktion eine bewusst enge Semantik:
+
+- **Start** aktiviert die Automatik, gibt die Queue frei und stößt sofort eine
+  Discovery an.
+- **Deaktivieren** verhindert neue automatische Planung. Bereits eingeplante
+  oder laufende Arbeit wird dadurch nicht pauschal abgebrochen.
+- **Pause** verhindert neue Job-Claims; laufende Jobs halten kooperativ am
+  nächsten sicheren Checkpoint und kehren dort wartend nach `queued` zurück.
+- **Fortsetzen** gibt die Queue wieder frei.
+- **Stop** schaltet die Automatik aus, pausiert die Queue und fordert für aktive
+  Jobs kooperativen Abbruch an. Die Stop-Bestätigung betrifft Connector-Arbeit;
+  Controller und Dashboard bleiben erreichbar.
+
+`CONNECTOR_AUTOMATION_INITIAL_STATE` gilt nur beim erstmaligen Erzeugen dieses
+globalen Zustands. `stopped` setzt Automatik aus und Queue pausiert, bevor neue
+Runtime-Rollen Scheduler oder Claims starten; `running` ist der
+rückwärtskompatible Default. Danach gewinnt immer der persistierte
+Operatorzustand, unabhängig von späteren Env-Änderungen.
+
+Stop und Pause unterbrechen keine bereits laufende externe Operation, etwa
+einen Download, RAGFlow-Upload oder Parse-Aufruf. Die UI zeigt deshalb den
+angeforderten Zwischenzustand bis zum sicheren Checkpoint. Erfolgreiche
+Teiljobs, bestätigte Cursor und bereits veröffentlichte Dokumentversionen
+werden beim Fortsetzen nicht blind wiederholt. Reconcile bleibt der sichere
+Weg für Zieldrift.
+
+Die Bibliothekstabelle zeigt neben der Operatorrichtlinie die bekannte
+Verarbeitungsphase sowie Datei- und Parsing-Fortschritt. Für Parsing werden
+wartende, laufende, erfolgreiche und fehlgeschlagene Dokumente getrennt
+gezählt. Ein Prozentwert erscheint nur bei bekanntem Nenner; für unbekannte
+RAGFlow-Werte bleibt die Zählerdarstellung maßgeblich. Läufe und
+Operatorzustände sind serverseitig persistent, die Auswahl im Formular,
+Dark-/Light-Modus und Auto-Refresh dagegen Browserzustand.
+
+### Sicherer Adminzugriff
+
+`CONNECTOR_DASHBOARD_CONTROL_ENABLED` ist standardmäßig `false`. `true` ist nur
+gültig, wenn auch `CONNECTOR_DASHBOARD_ENABLED=true` sowie nicht leere Werte für
+`CONNECTOR_DASHBOARD_AUTH_USERNAME` und
+`CONNECTOR_DASHBOARD_AUTH_PASSWORD` gesetzt sind. Jede Mutation muss als JSON
+gesendet werden und den Header `X-Connector-Admin-Action: 1` tragen; die
+Dashboard-Oberfläche setzt ihn selbst. Fehlt eine Bedingung, arbeitet die
+Steuer-API fail closed. Globaler Stop sowie Stop/Cancel eines Laufs verlangen
+zusätzlich die exakte JSON-Bestätigung `{"confirm":"STOP"}`; die UI holt sie
+für ihre Stop-Aktionen sichtbar ein.
+
+Basic Auth verschlüsselt die Verbindung nicht. Für LAN-Zugriff muss das
+Dashboard hinter HTTPS und einer auf Administratoren begrenzten Netzwerk- oder
+Reverse-Proxy-Regel liegen. Die lokale Bindung `127.0.0.1:18080` kann für einen
+SSH-Tunnel oder lokalen Reverse Proxy beibehalten werden. `/livez`, `/readyz`
+und `/metrics` sind getrennte Monitoring-Endpunkte; interne Authz- und
+OpenWebUI-Proxy-Routen verwenden weiterhin ihre eigenen Secrets.
+
+Das Dashboard zeigt keine Secrets, lädt keine CDN-Assets nach und löscht keine
+Seafile-Bibliotheken. Im OpenWebUI-Tab können connector-eigene Pipes, RAGFlow-
+Chats und RAGFlow-Datasets gezielt entfernt werden, damit ein Folgesync sie
+sauber neu anlegen kann. Eine solche Artefaktlöschung ist nicht die Wirkung von
+Pause oder Deaktivieren.
 Der Health-Bereich prüft Dashboard, Datenbank, Redis, Seafile-Admin-API,
 RAGFlow-API und Sync-Job-Zustand. Für Seafile, RAGFlow und OpenWebUI zeigt er
 zusätzlich den aktuell gewählten Transport (`https` oder `http`), die effektive
@@ -282,16 +360,56 @@ vorübergehender Ausfall externer Dienste Dashboard und Diagnosezugriff nicht
 als Prozessausfall markiert. Deployment-Gates, die echte Einsatzbereitschaft
 verlangen, prüfen zusätzlich `/readyz`.
 
+### Kontrollierter erster Adminlauf
+
+1. Mit Basic Auth an der Controller-Route anmelden und prüfen, dass der Bereich
+   **Administration** verfügbar ist. Ist nur Status sichtbar, Control-Schalter,
+   Auth-Werte und die tatsächlich veröffentlichte Containerroute prüfen.
+2. Der rückwärtskompatible Ausgangszustand ist global `running`; unbekannte
+   Bibliotheken gelten als aktiv. Deshalb nicht zunächst **Start** drücken. Für
+   einen isolierten Erstlauf zuerst **Deaktivieren** wählen, bestehende
+   eingeplante oder laufende Arbeit auslaufen lassen oder kontrolliert
+   pausieren/stoppen und dann **Bibliotheken prüfen** ausführen.
+3. Alle Nicht-Testbibliotheken deaktivieren oder pausieren, nur eine kleine
+   Testbibliothek aktiv lassen und dafür über **Auswahl starten** einen
+   Delta-Lauf starten. Global **Start** erst wählen, wenn automatische Planung
+   für alle verbleibenden ausführbaren Bibliotheken ausdrücklich erwünscht ist.
+4. Für diese Bibliothek aktuelle Phase, Datei-
+   sowie Parsing-Zähler bis zum terminalen Zustand beobachten.
+5. Pause und Fortsetzen an einem kontrollierten Lauf prüfen. Bei einer bereits
+   laufenden externen Operation ist eine kurze Verzögerung bis zum sicheren
+   Checkpoint erwartet.
+6. Stop nur an einem entbehrlichen Testlauf prüfen. Danach Retry auslösen und
+   sicherstellen, dass bestätigte Arbeit nicht dupliziert wird.
+7. Einen Reconcile-Lauf ausführen und anschließend RAGFlow-Dataset,
+   Dokumentstatus, Connector-Logs und die persistente Änderungs-/Audit-Historie
+   abgleichen.
+
+Containerstart, Containerstopp, Image-Update und Rollback bleiben Aufgaben von
+Portainer beziehungsweise Docker Compose. Die Schaltflächen im Dashboard sind
+dafür absichtlich nicht zuständig.
+
 ## Offline-Bundle
 
-Ein produktives Release sollte enthalten:
+Das übergabefertige Release ist ein geprüftes `.7z` außerhalb des Git-
+Worktrees. Es bündelt Anleitung, Inhalts-/Commitnachweis, interne Prüfsummen,
+Installationsdokumentation, Portainer-/Compose-Dateien, Wheel, Source-
+Distribution, Source-ZIP, Git-Bundle sowie getrennte Docker-Image-Tars für
+Connector, PostgreSQL, das produktive Valkey und den Redis-7-
+Kompatibilitätsfallback. Die Mindeststruktur und Abschlussprüfung steht im
+[Release-Prozess](RELEASE_PROCESS.md#offline-bundle-als-7z).
+
+Für den reinen Import auf dem Zielhost werden daraus mindestens diese Teile
+benötigt:
 
 ```text
-docker-compose.yml
-connector.env.example
-images/
-  seafile-ragflow-portainer-images.tar
-SHA256SUMS
+install/connector.env.example
+install/deploy/portainer/
+docker-images/seafile-ragflow-connector_2.6.0_linux-amd64.docker-image.tar
+docker-images/postgres_16_linux-amd64.docker-image.tar
+docker-images/valkey_8_linux-amd64.docker-image.tar
+docker-images/redis_7_compat_linux-amd64.docker-image.tar
+SHA256SUMS.txt
 ```
 
 In `connector.env` dann entweder die Image-Namen aus den importierten Tar-Dateien
@@ -310,7 +428,8 @@ Artefakte nachladen.
 Der GitHub-Actions-Workflow `release-artifact` erzeugt bei Pushes auf `master`
 oder `main` ein Repository-ZIP, `release-notes.md` und `SHA256SUMS` als
 Actions-Artefakt. Dieses Artefakt ist der reproduzierbare Code-Stand für ein
-Offline-Bundle; Docker-Images und deren Export bleiben separate
+Offline-Bundle, aber nicht das fertige Airgap-`.7z`; Docker-Images, Python-
+Distributionen, Paketmanifest und externe `.7z`-Prüfsumme bleiben separate
 Maintainer-Schritte.
 
 ## Lokale WSL-/Docker-Prüfung
@@ -508,6 +627,26 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
   Bind-Fehler wird als `dashboard.bind_failed` geloggt.
 - Dashboard nicht erreichbar: `CONNECTOR_DASHBOARD_ENABLED`, Host-/Portbindung
   und das Portmapping in Portainer prüfen.
+- Administration fehlt: prüfen, ob der Browser wirklich den Controller und
+  nicht einen separaten `connector dashboard` Prozess erreicht. Danach
+  `CONNECTOR_DASHBOARD_CONTROL_ENABLED=true` sowie vollständige Basic-Auth-
+  Werte prüfen.
+- Adminaktion liefert `403` oder `415`: Anmeldung erneuern und sicherstellen,
+  dass die Anfrage `Content-Type: application/json` sowie
+  `X-Connector-Admin-Action: 1` enthält. Globaler Stop sowie Stop/Cancel eines
+  Laufs benötigen zusätzlich `{"confirm":"STOP"}`. Die normale UI setzt diese
+  Werte für ihre Stop-Aktionen selbst.
+- Globaler Status `deactivated`: Nur die Automatik ist aus; die Queue bleibt
+  frei. `paused` hält neue Claims bei bestehender Automatik, `stopped`
+  kombiniert ausgeschaltete Automatik, pausierte Queue und Cancel-Anforderung
+  für aktive Jobs. Diese Zustände stoppen keinen Container.
+- Bibliothek `disabled` oder `paused`: Manuelle und automatische Läufe werden
+  absichtlich abgewiesen. Die Bibliothek bleibt vorhanden und darf keine
+  Zielbereinigung auslösen; erst Aktivieren beziehungsweise Fortsetzen gibt sie
+  wieder frei.
+- Parsing-Fortschritt bleibt bei `pending`: `tracked`, `done`, `failed`, Phase
+  und Jobdetails prüfen. Pause/Stop kann erst am nächsten sicheren Checkpoint
+  greifen; RAGFlow-Parserfehler danach per Retry oder Reconcile behandeln.
 - Dashboard-Health zeigt `degraded`: Details im Health-Bereich öffnen und
   Datenbank, Redis, Seafile-Admin-Token, RAGFlow-API-Key sowie Template-Dataset
   prüfen. Einzelne externe Checks haben kurze Timeouts und blockieren die UI

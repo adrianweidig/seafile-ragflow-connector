@@ -15,7 +15,11 @@ try:
     )
     from seafile_ragflow_connector.jobs.types import JobStatus, JobType
     from seafile_ragflow_connector.persistence.db import Base
-    from seafile_ragflow_connector.persistence.models import DashboardLogEntry, SyncJob
+    from seafile_ragflow_connector.persistence.models import (
+        DashboardChangeEvent,
+        DashboardLogEntry,
+        SyncJob,
+    )
 except ModuleNotFoundError as exc:
     if exc.name != "sqlalchemy":
         raise
@@ -35,6 +39,24 @@ def _session_factory(test_case: unittest.TestCase):
 
 @unittest.skipIf(create_engine is None, "sqlalchemy is not installed in this Python environment")
 class DashboardEventStoreTests(unittest.TestCase):
+    def test_stage_change_uses_callers_transaction(self) -> None:
+        session_factory = _session_factory(self)
+        store = DashboardEventStore(session_factory, DashboardLimits())
+
+        with session_factory() as session:
+            store.stage_change(
+                session,
+                sync_id=None,
+                action="dashboard.admin.pause",
+                change_type="admin_global_action",
+                status="pending",
+                details={"actor": "admin"},
+            )
+            session.rollback()
+
+        with session_factory() as session:
+            self.assertEqual(session.query(DashboardChangeEvent).count(), 0)
+
     def test_log_history_is_bounded_filterable_and_paginated(self) -> None:
         session_factory = _session_factory(self)
         store = DashboardEventStore(

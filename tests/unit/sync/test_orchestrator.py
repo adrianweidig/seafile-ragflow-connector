@@ -11,6 +11,7 @@ try:
     from seafile_ragflow_connector.clients.http import ApiError
     from seafile_ragflow_connector.dashboard.store import DashboardEventStore, DashboardLimits
     from seafile_ragflow_connector.domain.file_classification import FilePolicy
+    from seafile_ragflow_connector.jobs.context import activate_job_pause
     from seafile_ragflow_connector.jobs.types import JobSpec, JobStatus, JobType
     from seafile_ragflow_connector.jobs.worker import WorkerRunner
     from seafile_ragflow_connector.persistence.db import Base
@@ -24,8 +25,10 @@ try:
     )
     from seafile_ragflow_connector.persistence.sync_state import RepoLeaseBusyError
     from seafile_ragflow_connector.sync.orchestrator import (
+        FileSyncResult,
         ParseDeadError,
         ParsePendingError,
+        SyncCancelledError,
         SyncOrchestrator,
     )
     from seafile_ragflow_connector.utils.hashing import sha256_bytes
@@ -95,8 +98,10 @@ class _CancellingSeafileSyncClient(_FakeSeafileSyncClient):
 class _FakeSeafileAdminClient:
     def __init__(self, libraries: list[dict[str, object]] | None = None) -> None:
         self.libraries = libraries or []
+        self.iter_calls = 0
 
     def iter_libraries(self):
+        self.iter_calls += 1
         return iter(self.libraries)
 
 
@@ -254,6 +259,328 @@ def _session_factory(test_case: unittest.TestCase):
 
 @unittest.skipIf(create_engine is None, "sqlalchemy is not installed in this Python environment")
 class OrchestratorUploadTests(unittest.TestCase):
+    def test_automatic_discovery_stops_before_seafile_when_deactivated(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo",
+                    name="Demo",
+                    name_slug="demo",
+                    status="active",
+                )
+            )
+            session.commit()
+        admin_client = _FakeSeafileAdminClient([])
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=admin_client,  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+        orchestrator.admin_control_store.update_workflow(
+            updated_by="test",
+            automation_enabled=False,
+        )
+
+        self.assertEqual(orchestrator.discover_job_specs(), [])
+        self.assertEqual(admin_client.iter_calls, 0)
+        with session_factory() as session:
+            library = session.get(Library, "repo")
+            assert library is not None
+            self.assertEqual(library.status, "active")
+
+    def test_automatic_discovery_stops_before_seafile_when_queue_is_paused(self) -> None:
+        session_factory = _session_factory(self)
+        admin_client = _FakeSeafileAdminClient([{"id": "repo", "name": "Demo"}])
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=admin_client,  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+        orchestrator.admin_control_store.update_workflow(
+            updated_by="test",
+            queue_paused=True,
+        )
+
+        self.assertEqual(orchestrator.discover_job_specs(), [])
+        self.assertEqual(admin_client.iter_calls, 0)
+
+    def test_running_automatic_discovery_stops_before_next_library_when_paused(
+        self,
+    ) -> None:
+        session_factory = _session_factory(self)
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(
+                [
+                    {"id": "repo-1", "name": "First"},
+                    {"id": "repo-2", "name": "Second"},
+                ]
+            ),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+        workflow = orchestrator.admin_control_store.workflow
+        checks = 0
+
+        def pause_after_first_library():
+            nonlocal checks
+            checks += 1
+            if checks == 2:
+                orchestrator.admin_control_store.update_workflow(
+                    updated_by="test",
+                    queue_paused=True,
+                )
+            return workflow()
+
+        orchestrator.admin_control_store.workflow = pause_after_first_library  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(SyncCancelledError, "library discovery"):
+            orchestrator.discover_libraries(trigger="automatic")
+
+        with session_factory() as session:
+            self.assertIsNotNone(session.get(Library, "repo-1"))
+            self.assertIsNone(session.get(Library, "repo-2"))
+            self.assertEqual(session.query(SyncJob).count(), 0)
+
+    def test_discovery_filters_controls_but_full_visibility_keeps_all_sources(self) -> None:
+        session_factory = _session_factory(self)
+        admin_client = _FakeSeafileAdminClient(
+            [
+                {"id": "active", "name": "Active"},
+                {"id": "paused", "name": "Paused"},
+                {"id": "disabled", "name": "Disabled"},
+                {"id": "encrypted", "name": "Encrypted", "encrypted": True},
+            ]
+        )
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=admin_client,  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+        orchestrator.admin_control_store.update_library(
+            "paused",
+            updated_by="test",
+            paused=True,
+        )
+        orchestrator.admin_control_store.update_library(
+            "disabled",
+            updated_by="test",
+            enabled=False,
+        )
+
+        discovered = orchestrator.discover_libraries()
+        full_visibility = orchestrator.discover_libraries(full_visibility=True)
+        specs = orchestrator.discover_job_specs()
+
+        self.assertEqual([library.repo_id for library in discovered], ["active"])
+        self.assertEqual(
+            {library.repo_id for library in full_visibility},
+            {"active", "paused", "disabled", "encrypted"},
+        )
+        self.assertEqual([spec.repo_id for spec in specs], ["active"])
+        self.assertNotIn("trigger", specs[0].payload)
+        self.assertEqual(
+            specs[0].dedup_key(),
+            JobSpec(JobType.SYNC_LIBRARY_DELTA, repo_id="active").dedup_key(),
+        )
+        with session_factory() as session:
+            self.assertEqual(session.get(Library, "paused").status, "active")
+            self.assertEqual(session.get(Library, "disabled").status, "active")
+            self.assertEqual(session.get(Library, "encrypted").status, "skipped:encrypted")
+
+    def test_controlled_library_rejects_direct_mutating_work_before_run_creation(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo"))
+            session.commit()
+        ragflow_client = _FakeRAGFlowClient()
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+        orchestrator.admin_control_store.update_library(
+            "repo",
+            updated_by="test",
+            paused=True,
+        )
+
+        for action in (
+            lambda: orchestrator.sync_library_full("repo"),
+            lambda: orchestrator.sync_library_delta("repo"),
+            lambda: orchestrator.reconcile_library("repo", execute=True),
+            lambda: orchestrator.ensure_dataset_for_repo("repo"),
+        ):
+            with self.assertRaisesRegex(ValueError, "paused"):
+                action()
+
+        with session_factory() as session:
+            self.assertEqual(session.query(SyncRun).count(), 0)
+        self.assertEqual(ragflow_client.operations, [])
+        self.assertEqual(ragflow_client.created_datasets, [])
+
+    def test_deactivated_automation_does_not_block_manual_full_sync(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo",
+                    name="Demo",
+                    name_slug="demo",
+                    status="active",
+                    ragflow_dataset_id="dataset",
+                    ragflow_dataset_name="Demo",
+                )
+            )
+            session.commit()
+        sync_client = _FakeSeafileSyncClient(b"content")
+        sync_client.items = []
+        ragflow_client = _FakeRAGFlowClient()
+        ragflow_client.datasets_by_id["dataset"] = {"id": "dataset", "name": "Demo"}
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=sync_client,
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+        orchestrator.admin_control_store.update_workflow(
+            updated_by="test",
+            automation_enabled=False,
+        )
+
+        summary = orchestrator.sync_library_full("repo")
+
+        self.assertEqual(summary.libraries_synced, 1)
+        with session_factory() as session:
+            run = session.query(SyncRun).filter_by(mode="full").one()
+            self.assertEqual(run.status, "succeeded")
+            self.assertEqual(run.progress["phase"], "completed")
+
+    def test_full_sync_persists_monotonic_per_file_progress(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo",
+                    name="Demo",
+                    name_slug="demo",
+                    status="active",
+                    ragflow_dataset_id="dataset",
+                    ragflow_dataset_name="Demo",
+                )
+            )
+            session.commit()
+        sync_client = _FakeSeafileSyncClient(b"content")
+        sync_client.items = [
+            {"name": "a.pdf", "type": "file"},
+            {"name": "b.pdf", "type": "file"},
+        ]
+        ragflow_client = _FakeRAGFlowClient()
+        ragflow_client.datasets_by_id["dataset"] = {"id": "dataset", "name": "Demo"}
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=sync_client,
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+        orchestrator.sync_file = lambda *_args, **_kwargs: FileSyncResult(  # type: ignore[method-assign]
+            uploaded=False,
+            skipped=True,
+            document_id=None,
+            change_type="unchanged",
+        )
+        snapshots: list[dict[str, object]] = []
+        update_run = orchestrator.sync_state_store.update_run
+
+        def recording_update(run_id: str, **kwargs: object) -> bool:
+            progress = kwargs.get("progress")
+            if isinstance(progress, dict):
+                snapshots.append(dict(progress))
+            return update_run(run_id, **kwargs)  # type: ignore[arg-type]
+
+        orchestrator.sync_state_store.update_run = recording_update  # type: ignore[method-assign]
+
+        orchestrator.sync_library_full("repo")
+
+        syncing = [item for item in snapshots if item.get("phase") == "syncing"]
+        self.assertEqual(
+            [item["files_processed"] for item in syncing],
+            [0, 1, 2],
+        )
+        self.assertEqual([item["files_total"] for item in syncing], [2, 2, 2])
+        self.assertEqual([item["percent"] for item in syncing], [0.0, 50.0, 100.0])
+        with session_factory() as session:
+            run = session.query(SyncRun).filter_by(mode="full").one()
+            self.assertEqual(run.status, "succeeded")
+            self.assertEqual(run.progress["phase"], "completed")
+            self.assertEqual(run.progress["files_processed"], 2)
+            self.assertEqual(run.progress["files_total"], 2)
+            self.assertEqual(run.progress["percent"], 100.0)
+
+    def test_full_sync_failure_preserves_progress_and_marks_failed_phase(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo",
+                    name="Demo",
+                    name_slug="demo",
+                    status="active",
+                    ragflow_dataset_id="dataset",
+                    ragflow_dataset_name="Demo",
+                )
+            )
+            session.commit()
+        ragflow_client = _FakeRAGFlowClient()
+        ragflow_client.datasets_by_id["dataset"] = {"id": "dataset", "name": "Demo"}
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FailingSeafileSyncClient(b"content"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
+            orchestrator.sync_library_full("repo")
+
+        with session_factory() as session:
+            run = session.query(SyncRun).filter_by(mode="full").one()
+            self.assertEqual(run.status, "failed")
+            self.assertEqual(run.progress["phase"], "failed")
+            self.assertEqual(run.progress["failed_phase"], "preparing")
+            self.assertEqual(run.progress["completed"], 0)
+            self.assertEqual(run.progress["total"], 0)
+            self.assertEqual(run.progress["percent"], 0.0)
+
     def test_reconcile_plan_requires_fresh_repository_lease(self) -> None:
         session_factory = _session_factory(self)
         with session_factory() as session:
@@ -320,7 +647,7 @@ class OrchestratorUploadTests(unittest.TestCase):
             assert job is not None
             self.assertEqual(job.status, JobStatus.CANCELLED.value)
             self.assertEqual(run.status, "cancelled")
-            self.assertEqual(session.query(FileDocumentVersion).count(), 1)
+            self.assertEqual(session.query(FileDocumentVersion).count(), 0)
 
     def test_healthy_parse_polling_does_not_consume_failure_retry_budget(self) -> None:
         session_factory = _session_factory(self)
@@ -489,6 +816,14 @@ class OrchestratorUploadTests(unittest.TestCase):
         self.assertIsNotNone(cursor)
         assert cursor is not None
         self.assertEqual(cursor.commit_id, "c2")
+        with session_factory() as session:
+            run = session.query(SyncRun).filter_by(mode="delta").one()
+            self.assertEqual(run.progress["phase"], "parsing")
+            self.assertEqual(run.progress["changes"], 1)
+            self.assertEqual(run.progress["processed"], 1)
+            self.assertEqual(run.progress["completed"], 1)
+            self.assertEqual(run.progress["total"], 1)
+            self.assertEqual(run.progress["percent"], 100.0)
 
     def test_full_sync_rename_keeps_old_document_until_new_parse_is_current(self) -> None:
         session_factory = _session_factory(self)
@@ -561,6 +896,10 @@ class OrchestratorUploadTests(unittest.TestCase):
             cleanup = session.query(CleanupOutbox).one()
             self.assertEqual(cleanup.status, "pending")
             self.assertEqual(cleanup.payload["wait_for_document_id"], "new-doc")
+            sync_run = session.query(SyncRun).filter_by(mode="full").one()
+            self.assertEqual(sync_run.progress["phase"], "parsing")
+            self.assertEqual(sync_run.progress["files_processed"], 1)
+            self.assertEqual(sync_run.progress["files_total"], 1)
         self.assertEqual(ragflow_client.deleted_ids, [])
         run = dashboard_store.list_sync_runs(
             status=None,
@@ -580,6 +919,11 @@ class OrchestratorUploadTests(unittest.TestCase):
             self.assertEqual(renamed.normalized_path, "/renamed.pdf")
             self.assertEqual(renamed.ragflow_document_id, "new-doc")
             self.assertEqual(session.query(CleanupOutbox).one().status, "completed")
+            sync_run = session.query(SyncRun).filter_by(mode="full").one()
+            self.assertEqual(sync_run.status, "succeeded")
+            self.assertEqual(sync_run.progress["phase"], "completed")
+            self.assertEqual(sync_run.progress["files_processed"], 1)
+            self.assertEqual(sync_run.progress["files_total"], 1)
         self.assertEqual(ragflow_client.deleted_ids, [["old-doc"]])
         completed_run = dashboard_store.get_sync_run(str(run["sync_id"]))
         self.assertIsNotNone(completed_run)
@@ -686,6 +1030,108 @@ class OrchestratorUploadTests(unittest.TestCase):
         self.assertEqual(ragflow_client.metadata_updates[0][2]["source_path"], "/docs/report.pdf")
         self.assertEqual(ragflow_client.metadata_updates[0][2]["document_name"], "report.pdf")
         self.assertEqual(ragflow_client.parsed_ids, [["new-doc"]])
+
+    def test_sync_file_checkpoints_cover_each_remote_pipeline_boundary(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo"))
+            session.commit()
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"%PDF-1.4\ncontent"),
+            ragflow_client=_RenamingRAGFlowClient(),  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+        checkpoints: list[str] = []
+        orchestrator._raise_if_job_interrupted = checkpoints.append  # type: ignore[method-assign]
+
+        orchestrator.sync_file("repo", "dataset", "/docs/report.pdf")
+
+        self.assertEqual(
+            checkpoints,
+            [
+                "file sync interrupted before download",
+                "file sync interrupted after download",
+                "file sync interrupted after conversion",
+                "file sync interrupted before dataset settings",
+                "file sync interrupted after dataset settings",
+                "file sync interrupted before upload recovery",
+                "file sync interrupted before upload",
+                "file sync interrupted after upload",
+                "file sync interrupted before metadata",
+                "file sync interrupted after metadata",
+                "file sync interrupted before rename",
+                "file sync interrupted after rename",
+                "file sync interrupted before parse",
+                "file sync interrupted after parse",
+                "file sync interrupted before parse-status scheduling",
+            ],
+        )
+
+    def test_sync_file_pause_after_metadata_prevents_rename_and_parse(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo"))
+            session.commit()
+        ragflow_client = _RenamingRAGFlowClient()
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"%PDF-1.4\ncontent"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        with (
+            activate_job_pause(lambda: "metadata" in ragflow_client.operations),
+            self.assertRaisesRegex(SyncCancelledError, "after metadata"),
+        ):
+            orchestrator.sync_file("repo", "dataset", "/docs/report.pdf")
+
+        self.assertEqual(ragflow_client.operations, ["upload", "metadata"])
+        self.assertEqual(ragflow_client.renamed_documents, [])
+        self.assertEqual(ragflow_client.parsed_ids, [])
+
+    def test_sync_file_pause_after_download_prevents_conversion_and_upload(self) -> None:
+        class _TrackingSyncClient(_FakeSeafileSyncClient):
+            def __init__(self) -> None:
+                super().__init__(b"%PDF-1.4\ncontent")
+                self.downloaded = False
+
+            def download_file(self, repo_id: str, path: str) -> bytes:
+                self.downloaded = True
+                return super().download_file(repo_id, path)
+
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo"))
+            session.commit()
+        sync_client = _TrackingSyncClient()
+        ragflow_client = _RenamingRAGFlowClient()
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=sync_client,
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        with (
+            activate_job_pause(lambda: sync_client.downloaded),
+            self.assertRaisesRegex(SyncCancelledError, "after download"),
+        ):
+            orchestrator.sync_file("repo", "dataset", "/docs/report.pdf")
+
+        self.assertEqual(ragflow_client.operations, [])
+        with session_factory() as session:
+            self.assertEqual(session.query(File).count(), 0)
 
     def test_missing_ragflow_document_is_reuploaded_even_when_file_hash_matches(self) -> None:
         session_factory = _session_factory(self)
@@ -1093,6 +1539,81 @@ class OrchestratorUploadTests(unittest.TestCase):
         self.assertEqual(dataset_id, "dataset")
         self.assertEqual(ragflow_client.created_datasets[0]["name"], "connector_template")
 
+    def test_controlled_missing_libraries_keep_target_state_and_supersede_cleanup(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            for repo_id in ("paused", "disabled"):
+                session.add(
+                    Library(
+                        repo_id=repo_id,
+                        name=repo_id.title(),
+                        name_slug=repo_id,
+                        status="awaiting_confirmation",
+                        deletion_state="awaiting_confirmation",
+                        ragflow_dataset_id=f"dataset-{repo_id}",
+                        missing_since=datetime.now(UTC) - timedelta(hours=25),
+                        missing_observations=3,
+                    )
+                )
+                session.add(
+                    File(
+                        repo_id=repo_id,
+                        path="/keep.pdf",
+                        normalized_path="/keep.pdf",
+                    )
+                )
+                session.add(
+                    CleanupOutbox(
+                        repo_id=repo_id,
+                        target_type="ragflow_dataset",
+                        target_id=f"dataset-{repo_id}",
+                        dataset_id=f"dataset-{repo_id}",
+                        action="delete",
+                        status="pending",
+                    )
+                )
+            session.commit()
+        ragflow_client = _FakeRAGFlowClient()
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient([]),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+        orchestrator.admin_control_store.update_library(
+            "paused",
+            updated_by="test",
+            paused=True,
+        )
+        orchestrator.admin_control_store.update_library(
+            "disabled",
+            updated_by="test",
+            enabled=False,
+        )
+
+        self.assertEqual(orchestrator.discover_libraries(), [])
+
+        for repo_id in ("paused", "disabled"):
+            self.assertFalse(orchestrator.confirm_missing_library_deletion(repo_id))
+        self.assertEqual(ragflow_client.deleted_dataset_ids, [])
+        with session_factory() as session:
+            libraries = session.query(Library).order_by(Library.repo_id).all()
+            self.assertEqual({library.status for library in libraries}, {"active"})
+            self.assertEqual(
+                {library.deletion_state for library in libraries},
+                {"active"},
+            )
+            self.assertTrue(all(library.missing_since is None for library in libraries))
+            self.assertTrue(all(library.missing_observations == 0 for library in libraries))
+            self.assertEqual(session.query(File).count(), 2)
+            self.assertEqual(
+                {row.status for row in session.query(CleanupOutbox).all()},
+                {"superseded"},
+            )
+
     def test_deleted_seafile_library_deletes_ragflow_dataset_without_touching_seafile(self) -> None:
         session_factory = _session_factory(self)
         with session_factory() as session:
@@ -1402,6 +1923,49 @@ class OrchestratorUploadTests(unittest.TestCase):
         self.assertIsNotNone(workflow)
         assert workflow is not None
         self.assertEqual(workflow.status, "succeeded")
+
+    def test_cleanup_outbox_stops_before_next_remote_delete_when_paused(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo"))
+            session.add_all(
+                [
+                    CleanupOutbox(
+                        repo_id="repo",
+                        target_type="ragflow_document",
+                        target_id=f"doc-{index}",
+                        dataset_id="dataset",
+                        action="delete",
+                        status="pending",
+                    )
+                    for index in range(2)
+                ]
+            )
+            session.commit()
+        ragflow_client = _FakeRAGFlowClient()
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        with (
+            activate_job_pause(lambda: bool(ragflow_client.deleted_ids)),
+            self.assertRaisesRegex(SyncCancelledError, "cleanup outbox"),
+        ):
+            orchestrator.process_cleanup_outbox(repo_id="repo")
+
+        self.assertEqual(ragflow_client.deleted_ids, [["doc-0"]])
+        with session_factory() as session:
+            statuses = [
+                row.status
+                for row in session.query(CleanupOutbox).order_by(CleanupOutbox.id)
+            ]
+            self.assertEqual(statuses, ["completed", "pending"])
 
     def test_delete_unknown_file_is_skipped_without_ragflow_delete(self) -> None:
         session_factory = _session_factory(self)

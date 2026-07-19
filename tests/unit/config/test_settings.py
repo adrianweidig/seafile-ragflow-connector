@@ -108,6 +108,8 @@ class SettingsTests(unittest.TestCase):
         settings = Settings(**values)
 
         self.assertFalse(settings.connector_dashboard_enabled)
+        self.assertFalse(settings.connector_dashboard_control_enabled)
+        self.assertEqual(settings.connector_automation_initial_state, "running")
         self.assertEqual(settings.connector_dashboard_host, "0.0.0.0")
         self.assertEqual(settings.connector_dashboard_port, 8080)
         self.assertEqual(settings.connector_dashboard_max_log_entries, 5000)
@@ -122,6 +124,20 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(settings.search_acl_sync_enabled)
         self.assertFalse(settings.search_acl_include_subfolder_permissions)
         self.assertFalse(settings.search_acl_include_share_links)
+
+    def test_automation_initial_state_accepts_only_running_or_stopped(self) -> None:
+        values = self.base_values()
+        values["database_url"] = "postgresql+psycopg://custom/db"
+
+        values["connector_automation_initial_state"] = "stopped"
+        self.assertEqual(
+            Settings(**values).connector_automation_initial_state,
+            "stopped",
+        )
+
+        values["connector_automation_initial_state"] = "paused"
+        with self.assertRaises(ValueError):
+            Settings(**values)
 
     def test_automation_intervals_default_to_30_minutes(self) -> None:
         values = self.base_values()
@@ -266,6 +282,51 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(settings.connector_dashboard_auth_username, "admin")
         self.assertEqual(settings.connector_dashboard_auth_password, "secret")
+
+    def test_dashboard_control_requires_dashboard_and_basic_auth(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "connector_dashboard_control_enabled": True,
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "CONNECTOR_DASHBOARD_ENABLED"):
+            Settings(**values)
+
+        values["connector_dashboard_enabled"] = True
+        with self.assertRaisesRegex(
+            ValueError,
+            "CONNECTOR_DASHBOARD_AUTH_USERNAME",
+        ):
+            Settings(**values)
+
+        values["connector_dashboard_auth_username"] = "admin"
+        values["connector_dashboard_auth_password"] = "secret"
+        settings = Settings(**values)
+
+        self.assertTrue(settings.connector_dashboard_control_enabled)
+
+    def test_dashboard_control_rejects_example_password_in_production(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "app_env": "production",
+                "database_url": "postgresql+psycopg://custom/db",
+                "connector_dashboard_enabled": True,
+                "connector_dashboard_control_enabled": True,
+                "connector_dashboard_auth_username": "admin",
+                "connector_dashboard_auth_password": "change-me-dashboard-password",
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "known placeholder"):
+            Settings(**values)
+
+        values["app_env"] = "development"
+        settings = Settings(**values)
+        self.assertTrue(settings.connector_dashboard_control_enabled)
 
     def test_openwebui_defaults_to_disabled_without_required_secrets(self) -> None:
         values = self.base_values()

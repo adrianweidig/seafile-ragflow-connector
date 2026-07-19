@@ -23,6 +23,7 @@ from seafile_ragflow_connector.dashboard.store import DashboardEventStore, Dashb
 from seafile_ragflow_connector.domain.file_classification import FilePolicy
 from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
 from seafile_ragflow_connector.openwebui.sync import OpenWebUISyncService
+from seafile_ragflow_connector.persistence.admin_control import AdminControlStore
 from seafile_ragflow_connector.persistence.db import get_engine, get_session_factory, init_database
 from seafile_ragflow_connector.sync.orchestrator import SyncOrchestrator
 
@@ -69,6 +70,9 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
         _retry(lambda: init_database(settings.database_url), "database")
     _retry(lambda: check_redis(settings.redis_url), "redis")
     session_factory = get_session_factory(settings.database_url)
+    admin_control_store = AdminControlStore(session_factory)
+    if initialize_database:
+        admin_control_store.initialize_workflow(settings.connector_automation_initial_state)
     dashboard_store = build_dashboard_store(settings, session_factory)
     seafile_url = settings.seafile_internal_url or settings.seafile_base_url
     admin_client = SeafileAdminClient(
@@ -111,6 +115,7 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
         delete_dataset_when_library_deleted=settings.delete_dataset_when_library_deleted,
         refresh_dataset_settings=settings.ragflow_refresh_dataset_settings,
         dashboard_store=dashboard_store,
+        admin_control_store=admin_control_store,
     )
     return Runtime(
         settings=settings,
@@ -132,6 +137,7 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
             ragflow_client=ragflow_client,
             openwebui_client=openwebui_client,
             dashboard_store=dashboard_store,
+            admin_control_store=admin_control_store,
         ),
         dashboard_store=dashboard_store,
     )

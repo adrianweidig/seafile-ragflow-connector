@@ -1,6 +1,6 @@
 # Release-Prozess
 
-Dieses Repository enthält aktuell Paketmetadaten mit Version `2.5.6`, einen
+Dieses Repository enthält aktuell Paketmetadaten mit Version `2.6.0`, einen
 Docker-Publish-Workflow für GHCR und einen einfachen SemVer-Release-Pfad. Dieser
 Prozess beschreibt einen vorsichtigen Maintainer-Ablauf für zukünftige Releases.
 
@@ -19,10 +19,34 @@ python scripts/verify.py --with-compose
 
 ## Version und Changelog
 
-1. Version in `pyproject.toml` prüfen und bei Bedarf erhöhen.
-2. `CHANGELOG.md` aus `Unreleased` in einen Release-Abschnitt überführen.
-3. README, `docs/`, `connector.env.example` und Deployment-Artefakte auf Konsistenz prüfen.
-4. Keine Secrets, lokalen Env-Dateien oder privaten Zertifikate committen.
+1. Version in `pyproject.toml`,
+   `src/seafile_ragflow_connector/__init__.py` und `uv.lock` konsistent setzen.
+2. `CHANGELOG.md` und `CHANGELOG.en.md` aus `Unreleased` in denselben datierten
+   Release-Abschnitt überführen. Für diesen Stand ist das
+   `2.6.0 - 2026-07-19`.
+3. Versionsbadge, README-Image-Beispiele, `connector.env.example`, Portainer-
+   Env-Beispiel und Release-Dokumentation abgleichen.
+4. README, `docs/`, Deployment-Artefakte und Admin-Erststart-Checklisten auf
+   denselben Dashboard-Control-Vertrag prüfen.
+5. Metadatatest und Lock-Konsistenz ausführen:
+
+   ```bash
+   uv run --offline --no-sync pytest tests/unit/test_release_metadata.py
+   uv lock --check
+   ```
+
+6. Keine Secrets, lokalen Env-Dateien oder privaten Zertifikate committen.
+
+Für 2.6.0 gehört zur Release-Abnahme außerdem ein Browser-Smoke gegen das im
+`connector-controller` eingebettete Dashboard: Basic Auth, globales
+Pause/Fortsetzen, Bibliotheks-Pause/Fortsetzen, manueller Delta-Lauf,
+Dateifortschritt, Parsing-Bereich einschließlich Leerzustand, Historie und
+mobile Darstellung. Server- und Unit-Tests prüfen die globale Aktionsmatrix,
+Laufübergänge und Bestätigungen, persistente Bibliothekszustände sowie die
+Zuordnung von Delta-, Voll- und Reconcile-Spezifikationen.
+Der produktive HTTPS-Pfad wird nach dem Rollout separat live geprüft.
+`connector dashboard` ist der negative Read-only-Test und darf keine
+Adminsteuerung anbieten.
 
 ## GitHub Release
 
@@ -55,17 +79,69 @@ Der Workflow erzeugt bewusst keine Tags und keine GitHub Releases. Die
 SemVer-Entscheidung und die Veröffentlichung eines GitHub Releases bleiben
 Maintainer-Schritte.
 
-## Offline-Bundle
+## Offline-Bundle als `.7z`
 
-Ein manuelles Offline-Bundle kann enthalten:
+Das vollständige manuelle Airgap-Bundle liegt außerhalb des Git-Worktrees und
+verwendet einen eindeutigen Namen wie
+`seafile-ragflow-connector-airgap-2.6.0-<sha7>.7z`. Es enthält mindestens:
 
 ```text
-docker-compose.yml
-connector.env.example
-images/
-  seafile-ragflow-portainer-images.tar
-SHA256SUMS
+ANLEITUNG.txt
+INHALT.txt
+REPO_STAND.txt
+RELEASE_MANIFEST.json
+SHA256SUMS.txt
+docker-images/
+  IMAGES.txt
+  image-manifests.json
+  seafile-ragflow-connector_2.6.0_linux-amd64.docker-image.tar
+  postgres_16_linux-amd64.docker-image.tar
+  valkey_8_linux-amd64.docker-image.tar
+  redis_7_compat_linux-amd64.docker-image.tar
+install/
+  README.md
+  README.en.md
+  CHANGELOG.md
+  CHANGELOG.en.md
+  LICENSE
+  connector.env.example
+  deploy/
+  docs/
+python-dist/
+  seafile_ragflow_connector-2.6.0-py3-none-any.whl
+  seafile_ragflow_connector-2.6.0.tar.gz
+repo/
+  seafile-ragflow-connector-2.6.0.git.bundle
+  seafile-ragflow-connector-source-2.6.0.zip
 ```
 
-Die Erstellung und Signierung eines solchen Bundles ist derzeit ein manueller
-Maintainer-Schritt.
+Git-Bundle und Source-ZIP müssen exakt den veröffentlichten Release-Commit
+abbilden; die Connector-Image-Tar muss zum verifizierten `2.6.0`-Digest gehören.
+Für den produktiven Portainer-Stand werden die tatsächlich verwendeten
+PostgreSQL-16- und Valkey-8-Images digestgenau aufgenommen. Redis 7 bleibt
+zusätzlich und ausdrücklich als Kompatibilitätsfallback für die
+Repository-Defaults gekennzeichnet; alle beweglichen State-Tags werden mit
+Registry-Digest und lokaler Image-ID dokumentiert.
+Lokale `connector.env`-/`stack.env`-Dateien, Tokens, private Zertifikate,
+Caches und `output/` gehören nicht in das Archiv. Für jede interne Paketdatei
+außer `SHA256SUMS.txt` selbst wird eine Prüfsumme in `SHA256SUMS.txt`
+geschrieben; neben dem fertigen `.7z` liegt zusätzlich dessen externe
+SHA-256-Prüfsumme.
+
+Vor Übergabe werden Wheel und Source-Distribution gebaut, das Wheel in einer
+frischen Umgebung installiert, jede Image-Tar per `crane validate --tarball`
+oder `docker load` geprüft und der Connector-Container einmal mit `--help`
+gestartet. Abschließend:
+
+```powershell
+$sha7 = (git rev-parse --short=7 'v2.6.0^{commit}').Trim()
+$bundlePath = "F:\seafile-ragflow-connector-airgap-2.6.0-$sha7.7z"
+if (-not (Test-Path -LiteralPath $bundlePath -PathType Leaf)) {
+  throw "Airgap-Bundle fehlt: $bundlePath"
+}
+& 'C:\Program Files\7-Zip\7z.exe' t $bundlePath
+Get-FileHash -LiteralPath $bundlePath -Algorithm SHA256
+```
+
+Die Erstellung dieses vollständigen `.7z` und der Docker-Image-Tars bleibt ein
+bewusster Maintainer-Schritt; der GitHub-Workflow erzeugt sie nicht.

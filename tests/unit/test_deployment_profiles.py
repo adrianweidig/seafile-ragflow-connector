@@ -56,3 +56,30 @@ def test_swarm_search_port_and_state_overlays_are_explicit() -> None:
     assert "DATABASE_URL:?" in external
     assert "REDIS_URL:?" in external
     assert external.count("replicas: 0") == 2
+
+
+def test_controller_is_the_internal_dashboard_target_with_legacy_dns_alias() -> None:
+    controller_url = (
+        "OPENWEBUI_PROXY_INTERNAL_BASE_URL: "
+        "${OPENWEBUI_PROXY_INTERNAL_BASE_URL:-http://connector-controller:8080}"
+    )
+    for relative_path in (
+        "deploy/compose/openwebui.compose.yml",
+        "deploy/compose/shared-network.compose.yml",
+        "deploy/swarm/docker-stack.yml",
+    ):
+        profile = _text(relative_path)
+        assert controller_url in profile, relative_path
+        assert "- connector-dashboard" in profile, relative_path
+
+    empty_internal_url = (
+        "OPENWEBUI_PROXY_INTERNAL_BASE_URL: "
+        "${OPENWEBUI_PROXY_INTERNAL_BASE_URL:-}"
+    )
+    for relative_path in (
+        "deploy/compose/external-services.compose.yml",
+        "deploy/portainer/docker-compose.yml",
+    ):
+        profile = _text(relative_path)
+        assert empty_internal_url in profile, relative_path
+        assert "- connector-dashboard" in profile, relative_path

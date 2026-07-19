@@ -71,6 +71,7 @@
       --primary-border: rgba(15, 118, 110, 0.28);
     }
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     html { min-height: 100%; }
     body {
       margin: 0;
@@ -571,7 +572,9 @@
     #log-table { min-width: 1120px; }
     #source-table, #target-table { min-width: 920px; }
     #openwebui-table { min-width: 1640px; }
-    #workflow-table { min-width: 1380px; }
+    #workflow-table { min-width: 1880px; }
+    #workflow-history-table { min-width: 940px; }
+    #workflow-run-libraries { min-width: 1120px; }
     #cleanup-outbox-table { min-width: 1180px; }
     #log-table th:nth-child(1) { width: 17%; }
     #log-table th:nth-child(2) { width: 10%; }
@@ -664,6 +667,109 @@
       margin-top: 16px;
       min-height: 80px;
     }
+    .admin-control-layout {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: minmax(220px, 0.85fr) minmax(0, 2fr);
+    }
+    .admin-control-state {
+      align-content: start;
+      background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+      border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+      border-radius: var(--radius-sm);
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+    }
+    .admin-control-state strong {
+      color: var(--text);
+      font-size: 16px;
+    }
+    .admin-control-state p,
+    .admin-control-disabled,
+    .workflow-run-empty {
+      color: var(--muted);
+      line-height: 1.5;
+      margin: 0;
+    }
+    .admin-control-metrics {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(5, minmax(105px, 1fr));
+    }
+    .admin-control-metric {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      display: grid;
+      gap: 4px;
+      min-height: 72px;
+      padding: 10px 12px;
+    }
+    .admin-control-metric span {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .admin-control-metric strong {
+      color: var(--text);
+      font-size: 18px;
+    }
+    .admin-control-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .admin-control-actions[hidden],
+    .admin-control-disabled[hidden],
+    .workflow-run-empty[hidden] { display: none; }
+    .admin-control-disabled {
+      background: color-mix(in srgb, var(--warn) 9%, var(--surface-2));
+      border: 1px solid color-mix(in srgb, var(--warn) 36%, var(--border));
+      border-radius: var(--radius-sm);
+      margin-top: 14px;
+      padding: 12px 14px;
+    }
+    .parsing-progress {
+      display: grid;
+      gap: 6px;
+      min-width: 180px;
+    }
+    .parsing-progress progress {
+      accent-color: var(--accent);
+      max-width: 240px;
+      width: 100%;
+    }
+    .parsing-progress strong { color: var(--text); }
+    .parsing-progress span {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .workflow-phase-list {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      margin-top: 14px;
+    }
+    .workflow-phase-list[hidden] { display: none; }
+    .workflow-phase {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      display: grid;
+      gap: 5px;
+      padding: 9px 10px;
+    }
+    .workflow-phase strong { color: var(--text); }
+    .workflow-phase span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .workflow-phase progress { accent-color: var(--accent); width: 100%; }
     .status {
       align-items: center;
       border: 1px solid var(--border);
@@ -681,28 +787,28 @@
       height: 7px;
       width: 7px;
     }
-    .status.ok, .status.succeeded, .status.synced, .status.done, .status.running, .status.wartend {
+    .status.ok, .status.succeeded, .status.synced, .status.done, .status.running, .status.active, .status.wartend {
       color: var(--ok);
       border-color: color-mix(in srgb, var(--ok) 42%, var(--border));
       background: color-mix(in srgb, var(--ok) 10%, transparent);
     }
-    .status.ok::before, .status.succeeded::before, .status.synced::before, .status.done::before, .status.running::before, .status.wartend::before {
+    .status.ok::before, .status.succeeded::before, .status.synced::before, .status.done::before, .status.running::before, .status.active::before, .status.wartend::before {
       background: var(--ok);
     }
-    .status.warning, .status.warn, .status.retrying, .status.skipped, .status.übersprungen, .status.manual_required, .status.partial, .status.planned, .status.deleted, .status.dataset_deleted, .status.wartung-erforderlich, .status.maintenance-required {
+    .status.warning, .status.warn, .status.retrying, .status.paused, .status.pause_requested, .status.resume_requested, .status.deactivated, .status.disabled, .status.skipped, .status.übersprungen, .status.manual_required, .status.partial, .status.planned, .status.deleted, .status.dataset_deleted, .status.wartung-erforderlich, .status.maintenance-required {
       color: var(--warn);
       border-color: color-mix(in srgb, var(--warn) 42%, var(--border));
       background: color-mix(in srgb, var(--warn) 10%, transparent);
     }
-    .status.warning::before, .status.warn::before, .status.retrying::before, .status.skipped::before, .status.übersprungen::before, .status.manual_required::before, .status.partial::before, .status.planned::before, .status.deleted::before, .status.dataset_deleted::before, .status.wartung-erforderlich::before, .status.maintenance-required::before {
+    .status.warning::before, .status.warn::before, .status.retrying::before, .status.paused::before, .status.pause_requested::before, .status.resume_requested::before, .status.deactivated::before, .status.disabled::before, .status.skipped::before, .status.übersprungen::before, .status.manual_required::before, .status.partial::before, .status.planned::before, .status.deleted::before, .status.dataset_deleted::before, .status.wartung-erforderlich::before, .status.maintenance-required::before {
       background: var(--warn);
     }
-    .status.error, .status.failed, .status.dead, .status.fehlgeschlagen, .status.fehlerhaft {
+    .status.error, .status.failed, .status.dead, .status.stopped, .status.cancelled, .status.stop_requested, .status.fehlgeschlagen, .status.fehlerhaft {
       color: var(--bad);
       border-color: color-mix(in srgb, var(--bad) 42%, var(--border));
       background: color-mix(in srgb, var(--bad) 10%, transparent);
     }
-    .status.error::before, .status.failed::before, .status.dead::before, .status.fehlgeschlagen::before, .status.fehlerhaft::before {
+    .status.error::before, .status.failed::before, .status.dead::before, .status.stopped::before, .status.cancelled::before, .status.stop_requested::before, .status.fehlgeschlagen::before, .status.fehlerhaft::before {
       background: var(--bad);
     }
     .detail {
@@ -976,13 +1082,13 @@
       border-radius: var(--radius-sm);
       display: grid;
       gap: 10px;
-      grid-template-columns: minmax(160px, 1fr) minmax(180px, 2fr) auto;
+      grid-template-columns: minmax(210px, 1fr) minmax(180px, 2fr) auto;
       margin-top: 14px;
       padding: 12px;
     }
     .workflow-progress[hidden] { display: none; }
     .workflow-progress progress { accent-color: var(--accent); width: 100%; }
-    .workflow-progress-actions { display: flex; gap: 8px; }
+    .workflow-progress-actions { display: flex; flex-wrap: wrap; gap: 8px; }
     @media (max-width: 1180px) {
       .app-shell { grid-template-columns: 1fr; }
       .sidebar {
@@ -992,11 +1098,12 @@
       .nav {
         grid-template-columns: repeat(3, minmax(0, 1fr));
       }
-      .overview-grid, .split { grid-template-columns: 1fr; }
+      .overview-grid, .split, .admin-control-layout { grid-template-columns: 1fr; }
       .overview-grid > .status-stage,
       .overview-grid > .panel:nth-child(2),
       .overview-grid > .panel:nth-child(3) { grid-column: 1; grid-row: auto; }
       .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .admin-control-metrics { grid-template-columns: repeat(3, minmax(105px, 1fr)); }
     }
     @media (max-width: 720px) {
       .workspace, .sidebar { padding: 12px; }
@@ -1007,6 +1114,7 @@
       .nav { display: none; grid-template-columns: 1fr; }
       .sidebar.nav-open .nav { display: grid; }
       .metric-grid { grid-template-columns: 1fr; }
+      .admin-control-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .workflow-progress { grid-template-columns: 1fr; }
       .state-value { font-size: 28px; }
       button, a.action, input, select { min-height: 44px; }
@@ -1032,7 +1140,7 @@
       <button class="nav-toggle" id="nav-toggle" type="button" aria-controls="dashboard-nav" aria-expanded="false"><span aria-hidden="true">☰</span><span id="nav-toggle-label">Dashboard Bereiche</span></button>
       <nav class="nav" id="dashboard-nav" aria-label="Dashboard Bereiche" role="tablist">
         <button class="tab" id="tab-overview" data-tab="overview" role="tab" aria-controls="overview" aria-selected="true"><span class="tab-dot"></span>Übersicht</button>
-        <button class="tab" id="tab-workflow" data-tab="workflow" role="tab" aria-controls="workflow" aria-selected="false" tabindex="-1"><span class="tab-dot"></span>Prüfablauf</button>
+        <button class="tab" id="tab-workflow" data-tab="workflow" role="tab" aria-controls="workflow" aria-selected="false" tabindex="-1"><span class="tab-dot"></span>Administration</button>
         <button class="tab" id="tab-syncs" data-tab="syncs" role="tab" aria-controls="syncs" aria-selected="false" tabindex="-1"><span class="tab-dot"></span>Sync-Läufe</button>
         <button class="tab" id="tab-changes" data-tab="changes" role="tab" aria-controls="changes" aria-selected="false" tabindex="-1"><span class="tab-dot"></span>Änderungen</button>
         <button class="tab" id="tab-logs" data-tab="logs" role="tab" aria-controls="logs" aria-selected="false" tabindex="-1"><span class="tab-dot"></span>Logs</button>
@@ -1135,7 +1243,37 @@
 
       <section id="workflow" role="tabpanel" aria-labelledby="tab-workflow" hidden>
         <div class="panel">
-          <div class="panel-header"><h3 data-i18n="section.workflowControl">Prüfablauf starten</h3><small id="workflow-summary">-</small></div>
+          <div class="panel-header"><h3 data-i18n="admin.controlTitle">Connector-Steuerung</h3><small id="admin-control-updated">-</small></div>
+          <div class="panel-body" id="admin-control-card" aria-busy="true">
+            <div class="admin-control-layout">
+              <div class="admin-control-state">
+                <span data-i18n="admin.operatingState">Betriebszustand</span>
+                <div id="admin-control-state">-</div>
+                <strong id="admin-control-headline">Steuerung wird geladen</strong>
+                <p id="admin-control-description">Die aktuellen Automatik- und Warteschlangenzustände werden abgerufen.</p>
+              </div>
+              <div>
+                <div class="admin-control-metrics" aria-live="polite">
+                  <div class="admin-control-metric"><span data-i18n="admin.automation">Automatik</span><strong id="admin-automation-state">-</strong></div>
+                  <div class="admin-control-metric"><span data-i18n="admin.queue">Warteschlange</span><strong id="admin-queue-state">-</strong></div>
+                  <div class="admin-control-metric"><span data-i18n="admin.jobsActive">Aktive Jobs</span><strong id="admin-active-jobs">0</strong></div>
+                  <div class="admin-control-metric"><span data-i18n="admin.jobsPaused">Pausierte Jobs</span><strong id="admin-paused-jobs">0</strong></div>
+                  <div class="admin-control-metric"><span data-i18n="admin.jobsQueued">Wartende Jobs</span><strong id="admin-queued-jobs">0</strong></div>
+                </div>
+                <div class="admin-control-actions" id="admin-control-actions" hidden>
+                  <button class="primary" id="admin-start" type="button" data-i18n="admin.start">Starten</button>
+                  <button class="ghost" id="admin-deactivate" type="button" data-i18n="admin.deactivate">Automatik deaktivieren</button>
+                  <button class="ghost" id="admin-pause" type="button" data-i18n="admin.pause">Pausieren</button>
+                  <button class="ghost" id="admin-resume" type="button" data-i18n="admin.resume">Fortsetzen</button>
+                  <button class="danger" id="admin-stop" type="button" data-i18n="admin.stop">Stoppen</button>
+                </div>
+                <p class="admin-control-disabled" id="admin-control-disabled" role="note" data-i18n="admin.controlLoading">Die Administrationssteuerung wird geladen. Bis dahin sind keine Änderungen möglich.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3 data-i18n="section.workflowControl">Bibliotheken und manueller Lauf</h3><small id="workflow-summary">-</small></div>
           <div class="panel-body">
             <div class="workflow-controls">
               <label class="option"><input id="workflow-create-datasets" type="checkbox" checked><span data-i18n="workflow.createDatasets">RAGFlow-Dataset und Dokumente synchronisieren</span></label>
@@ -1144,15 +1282,34 @@
               <label><span data-i18n="workflow.scope">Seafile-Pfad</span><input id="workflow-scope" autocomplete="off" value="/"></label>
               <div class="workflow-actions">
                 <button class="ghost" id="workflow-load" type="button" data-i18n="workflow.refreshLibraries">Bibliotheken prüfen</button>
-                <button class="primary" id="workflow-run" type="button" data-i18n="workflow.runSelected">Auswahl starten</button>
+                <button class="primary" id="workflow-run" type="button" data-i18n="workflow.runSelected" disabled hidden>Auswahl starten</button>
               </div>
             </div>
             <div class="table-wrap"><table id="workflow-table"></table></div>
-            <div id="workflow-progress" class="workflow-progress" role="status" hidden>
-              <div><strong id="workflow-progress-status">-</strong><div id="workflow-progress-label">-</div></div>
-              <progress id="workflow-progress-bar" max="1" value="0"></progress>
-              <div class="workflow-progress-actions"><button class="ghost" id="workflow-cancel" type="button" data-i18n="workflow.cancel">Abbrechen</button><button class="ghost" id="workflow-retry" type="button" data-i18n="workflow.retry">Erneut versuchen</button></div>
+          </div>
+        </div>
+        <div class="panel" id="workflow-history-panel">
+          <div class="panel-header"><h3 data-i18n="workflow.recentAdminRuns">Letzte administrative Läufe</h3><small id="workflow-history-summary">-</small></div>
+          <div class="panel-body">
+            <div class="table-wrap"><table id="workflow-history-table"></table></div>
+          </div>
+        </div>
+        <div class="panel" id="workflow-run-panel">
+          <div class="panel-header"><h3 data-i18n="workflow.activeRun">Aktiver Lauf</h3><small id="workflow-run-summary">-</small></div>
+          <div class="panel-body">
+            <p class="workflow-run-empty" id="workflow-run-empty" data-i18n="workflow.noActiveRun">Noch kein administrativer Lauf ausgewählt.</p>
+            <div id="workflow-progress" class="workflow-progress" role="status" aria-live="polite" hidden>
+              <div><strong id="workflow-progress-status">-</strong><div id="workflow-progress-phase">-</div><div id="workflow-progress-label">-</div></div>
+              <div><progress id="workflow-progress-bar" max="100" value="0" aria-label="Gesamtfortschritt" data-i18n-aria-label="workflow.totalProgress"></progress><div id="workflow-progress-percent">0 %</div></div>
+              <div class="workflow-progress-actions">
+                <button class="ghost" id="workflow-pause" type="button" data-i18n="workflow.pause" hidden>Pausieren</button>
+                <button class="ghost" id="workflow-resume" type="button" data-i18n="workflow.resume" hidden>Fortsetzen</button>
+                <button class="danger" id="workflow-stop" type="button" data-i18n="workflow.stop" hidden>Stoppen</button>
+                <button class="ghost" id="workflow-retry" type="button" data-i18n="workflow.retry" hidden>Erneut versuchen</button>
+              </div>
             </div>
+            <div id="workflow-phase-list" class="workflow-phase-list" aria-label="Laufphasen" data-i18n-aria-label="workflow.phases" hidden></div>
+            <div class="table-wrap" id="workflow-run-libraries-wrap" hidden><table id="workflow-run-libraries"></table></div>
             <details class="technical-details">
               <summary data-i18n="section.technicalDetails">Technische Details</summary>
               <pre id="workflow-result" class="detail workflow-result"></pre>
@@ -1283,7 +1440,7 @@
         'brand.subtitle': 'Seafile zu RAGFlow',
         'nav.label': 'Dashboard Bereiche',
         'nav.overview': 'Übersicht',
-        'nav.workflow': 'Prüfablauf',
+        'nav.workflow': 'Administration',
         'nav.syncs': 'Sync-Läufe',
         'nav.changes': 'Änderungen',
         'nav.logs': 'Logs',
@@ -1370,7 +1527,7 @@
         'overview.waitingJobs': 'wartende Jobs',
         'overview.logWarnings': 'Warnungen im Log',
         'overview.logErrors': 'Fehler im Log',
-        'section.workflowControl': 'Prüfablauf starten',
+        'section.workflowControl': 'Bibliotheken und manueller Lauf',
         'section.syncHistory': 'Synchronisationshistorie',
         'section.detectedChanges': 'Erkannte Änderungen',
         'section.logEvents': 'Logereignisse',
@@ -1383,8 +1540,8 @@
         'sync.detail': 'Detail',
         'titles.overview': 'Übersicht',
         'subtitles.overview': 'Live-Zustand, Durchsatz und Auffälligkeiten',
-        'titles.workflow': 'Prüfablauf',
-        'subtitles.workflow': 'Sichtbare Seafile-Bibliotheken auswählen und Sync starten',
+        'titles.workflow': 'Administration',
+        'subtitles.workflow': 'Connector-Automatik, Bibliotheken und manuelle Läufe gezielt steuern',
         'titles.syncs': 'Sync-Läufe',
         'subtitles.syncs': 'Historie, Laufzeiten und Ergebnisdetails',
         'titles.changes': 'Änderungen',
@@ -1453,6 +1610,49 @@
         'openwebui.confirmDeletePipe': 'OpenWebUI-Pipe löschen? Die Seafile-Bibliothek bleibt bestehen.',
         'openwebui.confirmDeleteDataset': 'RAGFlow-Dataset löschen? Die Seafile-Bibliothek bleibt bestehen und der nächste Sync kann ein neues Dataset anlegen.',
         'openwebui.confirmDeleteChat': 'RAGFlow-Chat löschen? Die Seafile-Bibliothek bleibt bestehen und der nächste OpenWebUI-Sync kann einen neuen Chat anlegen.',
+        'admin.controlTitle': 'Connector-Steuerung',
+        'admin.operatingState': 'Betriebszustand',
+        'admin.automation': 'Automatik',
+        'admin.queue': 'Warteschlange',
+        'admin.jobsActive': 'Aktive Jobs',
+        'admin.jobsPaused': 'Pausierte Jobs',
+        'admin.jobsQueued': 'Wartende Jobs',
+        'admin.start': 'Starten',
+        'admin.deactivate': 'Automatik deaktivieren',
+        'admin.pause': 'Pausieren',
+        'admin.resume': 'Fortsetzen',
+        'admin.stop': 'Stoppen',
+        'admin.controlLoading': 'Die Administrationssteuerung wird geladen. Bis dahin sind keine Änderungen möglich.',
+        'admin.controlUnavailable': 'Die Administrationssteuerung ist in diesem Prozess deaktiviert. Der Zustand bleibt lesbar, mutierende Aktionen sind hier nicht verfügbar.',
+        'admin.stateRunning': 'aktiv',
+        'admin.stateDeactivated': 'Automatik deaktiviert',
+        'admin.statePaused': 'pausiert',
+        'admin.stateStopped': 'gestoppt',
+        'admin.stateUnknown': 'unbekannt',
+        'admin.automationOn': 'aktiv',
+        'admin.automationOff': 'deaktiviert',
+        'admin.queueRunning': 'freigegeben',
+        'admin.queuePaused': 'pausiert',
+        'admin.headlineRunning': 'Automatische Verarbeitung ist aktiv',
+        'admin.headlineDeactivated': 'Automatische Planung ist deaktiviert',
+        'admin.headlinePaused': 'Die Jobverarbeitung ist pausiert',
+        'admin.headlineStopped': 'Connector-Tätigkeiten sind gestoppt',
+        'admin.headlineUnavailable': 'Nur lesender Dashboard-Zugriff',
+        'admin.descriptionRunning': 'Zeitpläne dürfen neue Tätigkeiten einplanen und die Warteschlange wird verarbeitet.',
+        'admin.descriptionDeactivated': 'Zeitpläne planen keine neuen automatischen Tätigkeiten ein. Manuelle Läufe bleiben nach Freigabe möglich.',
+        'admin.descriptionPaused': 'Neue und laufende Tätigkeiten warten an sicheren Haltepunkten auf die Fortsetzung.',
+        'admin.descriptionStopped': 'Aktuelle Connector-Tätigkeiten wurden angehalten. Die Container und das Dashboard laufen weiter.',
+        'admin.descriptionUnavailable': 'Starten Sie die steuerungsfähige Controller-Oberfläche mit aktivierter Administration, um Änderungen auszuführen.',
+        'admin.stopConfirm': 'Alle Connector-Tätigkeiten stoppen? Wartende und laufende Jobs werden gestoppt. Die Connector-Container laufen weiter und das Dashboard bleibt erreichbar.',
+        'admin.libraryState': 'Adminzustand',
+        'admin.libraryActions': 'Bibliothek steuern',
+        'admin.enableLibrary': 'Aktivieren',
+        'admin.disableLibrary': 'Deaktivieren',
+        'admin.pauseLibrary': 'Pausieren',
+        'admin.resumeLibrary': 'Fortsetzen',
+        'admin.disableLibraryConfirm': 'Diese Bibliothek deaktivieren? Für sie werden keine neuen automatischen oder manuellen Jobs eingeplant. Seafile-Inhalte sowie vorhandene RAGFlow- und OpenWebUI-Artefakte bleiben unverändert.',
+        'admin.actionRunning': 'Wird ausgeführt …',
+        'admin.changed': 'Geändert',
         'workflow.createDatasets': 'RAGFlow-Dataset und Dokumente synchronisieren',
         'workflow.syncOpenWebUI': 'RAGFlow-Chat und OpenWebUI-Tool/Pipe erzeugen',
         'workflow.mode': 'Modus',
@@ -1472,8 +1672,32 @@
         'workflow.noSelection': 'Bitte mindestens eine sichtbare Bibliothek auswählen.',
         'workflow.running': 'Prüflauf läuft...',
         'workflow.cancel': 'Abbrechen',
+        'workflow.pause': 'Pausieren',
+        'workflow.resume': 'Fortsetzen',
+        'workflow.stop': 'Stoppen',
         'workflow.retry': 'Erneut versuchen',
         'workflow.progress': 'Jobs abgeschlossen',
+        'workflow.totalProgress': 'Gesamtfortschritt',
+        'workflow.phase': 'Phase',
+        'workflow.phases': 'Laufphasen',
+        'workflow.activeRun': 'Aktiver Lauf',
+        'workflow.recentAdminRuns': 'Letzte administrative Läufe',
+        'workflow.adminRuns': 'administrative Läufe',
+        'workflow.openRun': 'Öffnen/Steuern',
+        'workflow.loadingRun': 'Laufstatus wird geladen …',
+        'workflow.runId': 'Lauf-ID',
+        'workflow.noActiveRun': 'Noch kein administrativer Lauf ausgewählt.',
+        'workflow.runLibraries': 'Bibliotheken im Lauf',
+        'workflow.parseProgress': 'Parsing-Fortschritt',
+        'workflow.parseDone': 'fertig',
+        'workflow.parsePending': 'laufend',
+        'workflow.parseFailed': 'fehlgeschlagen',
+        'workflow.parseTracked': 'gesamt',
+        'workflow.noParseData': 'Noch keine Parsing-Daten',
+        'workflow.stopConfirm': 'Diesen Lauf stoppen? Noch aktive Laufjobs werden kontrolliert beendet. Die Connector-Container laufen weiter.',
+        'workflow.statusPaused': 'pausiert',
+        'workflow.statusStopped': 'gestoppt',
+        'workflow.jobs': 'Jobs',
         'workflow.notAvailable': 'Dashboard-Steuerung ist in diesem Prozess nicht verfügbar.',
         'workflow.lastResult': 'Letztes Ergebnis',
         'workflow.repo': 'Bibliothek',
@@ -1486,13 +1710,34 @@
         'cleanup.retry': 'Jetzt erneut versuchen',
         'cleanup.retrying': 'Wird eingeplant...',
         'cleanup.unavailable': 'Bereinigungsstatus ist in diesem Prozess nicht verfügbar.',
-        'api.error': 'API-Fehler'
+        'api.error': 'API-Fehler',
+        'api.adminControlUnavailable': 'Die Adminsteuerung ist in diesem Prozess nicht verfügbar.',
+        'api.controlUnavailable': 'Die Steuerung ist in diesem Prozess nicht verfügbar.',
+        'api.confirmationRequired': 'Diese Aktion benötigt die ausdrückliche STOP-Bestätigung.',
+        'api.queuePaused': 'Die Job-Queue ist pausiert.',
+        'api.libraryBlocked': 'Die Bibliothek ist deaktiviert oder pausiert.',
+        'api.workflowRunNotFound': 'Der administrative Lauf wurde nicht gefunden.',
+        'api.syncRunNotFound': 'Der Sync-Lauf wurde nicht gefunden.',
+        'api.jobQueueUnavailable': 'Die Job-Queue ist nicht verfügbar.',
+        'api.jobStoreUnavailable': 'Der Job-Speicher ist nicht verfügbar.',
+        'api.orchestratorUnavailable': 'Der Orchestrator ist nicht verfügbar.',
+        'api.libraryNotFound': 'Die Bibliothek wurde nicht gefunden.',
+        'api.invalidWorkflowTransition': 'Diese Aktion ist im aktuellen Laufstatus nicht zulässig.',
+        'api.forbidden': 'Diese Aktion ist nicht erlaubt.',
+        'api.unauthorized': 'Die Anmeldung ist erforderlich oder ungültig.',
+        'api.unsupportedMediaType': 'Der Request muss JSON verwenden.',
+        'api.badRequest': 'Der Request ist ungültig.',
+        'api.dashboardRequestFailed': 'Die Dashboard-Anfrage ist fehlgeschlagen.',
+        'api.notFound': 'Die angeforderte Ressource wurde nicht gefunden.',
+        'api.dashboardDisabled': 'Das Dashboard ist deaktiviert.',
+        'api.authzUnavailable': 'Die Autorisierungsprüfung ist nicht verfügbar.',
+        'api.proxyRequestFailed': 'Die Proxy-Anfrage ist fehlgeschlagen.'
       },
       en: {
         'brand.subtitle': 'Seafile to RAGFlow',
         'nav.label': 'Dashboard sections',
         'nav.overview': 'Overview',
-        'nav.workflow': 'Workflow',
+        'nav.workflow': 'Administration',
         'nav.syncs': 'Sync runs',
         'nav.changes': 'Changes',
         'nav.logs': 'Logs',
@@ -1579,7 +1824,7 @@
         'overview.waitingJobs': 'waiting jobs',
         'overview.logWarnings': 'log-level warnings',
         'overview.logErrors': 'log-level errors',
-        'section.workflowControl': 'Start workflow',
+        'section.workflowControl': 'Libraries and manual run',
         'section.syncHistory': 'Synchronization history',
         'section.detectedChanges': 'Detected changes',
         'section.logEvents': 'Log events',
@@ -1592,8 +1837,8 @@
         'sync.detail': 'Detail',
         'titles.overview': 'Overview',
         'subtitles.overview': 'Live state, throughput, and anomalies',
-        'titles.workflow': 'Workflow',
-        'subtitles.workflow': 'Select API-visible Seafile libraries and start sync',
+        'titles.workflow': 'Administration',
+        'subtitles.workflow': 'Control connector automation, libraries, and manual runs',
         'titles.syncs': 'Sync runs',
         'subtitles.syncs': 'History, runtimes, and result details',
         'titles.changes': 'Changes',
@@ -1662,6 +1907,49 @@
         'openwebui.confirmDeletePipe': 'Delete the OpenWebUI pipe? The Seafile library stays untouched.',
         'openwebui.confirmDeleteDataset': 'Delete the RAGFlow dataset? The Seafile library stays untouched and the next sync can create a new dataset.',
         'openwebui.confirmDeleteChat': 'Delete the RAGFlow chat? The Seafile library stays untouched and the next OpenWebUI sync can create a new chat.',
+        'admin.controlTitle': 'Connector control',
+        'admin.operatingState': 'Operating state',
+        'admin.automation': 'Automation',
+        'admin.queue': 'Queue',
+        'admin.jobsActive': 'Active jobs',
+        'admin.jobsPaused': 'Paused jobs',
+        'admin.jobsQueued': 'Queued jobs',
+        'admin.start': 'Start',
+        'admin.deactivate': 'Deactivate automation',
+        'admin.pause': 'Pause',
+        'admin.resume': 'Resume',
+        'admin.stop': 'Stop',
+        'admin.controlLoading': 'Administration control is loading. Changes are unavailable until it completes.',
+        'admin.controlUnavailable': 'Administration control is disabled in this process. State remains readable, but mutating actions are unavailable here.',
+        'admin.stateRunning': 'active',
+        'admin.stateDeactivated': 'automation deactivated',
+        'admin.statePaused': 'paused',
+        'admin.stateStopped': 'stopped',
+        'admin.stateUnknown': 'unknown',
+        'admin.automationOn': 'active',
+        'admin.automationOff': 'deactivated',
+        'admin.queueRunning': 'released',
+        'admin.queuePaused': 'paused',
+        'admin.headlineRunning': 'Automatic processing is active',
+        'admin.headlineDeactivated': 'Automatic scheduling is deactivated',
+        'admin.headlinePaused': 'Job processing is paused',
+        'admin.headlineStopped': 'Connector activities are stopped',
+        'admin.headlineUnavailable': 'Read-only dashboard access',
+        'admin.descriptionRunning': 'Schedules may enqueue new activities and the queue is being processed.',
+        'admin.descriptionDeactivated': 'Schedules do not enqueue new automatic activities. Manual runs remain available after approval.',
+        'admin.descriptionPaused': 'New and running activities wait at safe checkpoints until they are resumed.',
+        'admin.descriptionStopped': 'Current connector activities have been stopped. The containers and dashboard keep running.',
+        'admin.descriptionUnavailable': 'Use the control-capable controller dashboard with administration enabled to make changes.',
+        'admin.stopConfirm': 'Stop all connector activities? Queued and running jobs will be stopped. The connector containers keep running and the dashboard remains available.',
+        'admin.libraryState': 'Admin state',
+        'admin.libraryActions': 'Library control',
+        'admin.enableLibrary': 'Enable',
+        'admin.disableLibrary': 'Disable',
+        'admin.pauseLibrary': 'Pause',
+        'admin.resumeLibrary': 'Resume',
+        'admin.disableLibraryConfirm': 'Disable this library? No new automatic or manual jobs will be scheduled for it. Seafile content and existing RAGFlow and OpenWebUI artifacts remain unchanged.',
+        'admin.actionRunning': 'Working …',
+        'admin.changed': 'Changed',
         'workflow.createDatasets': 'Synchronize RAGFlow dataset and documents',
         'workflow.syncOpenWebUI': 'Create RAGFlow chat and OpenWebUI tool/pipe',
         'workflow.mode': 'Mode',
@@ -1681,8 +1969,32 @@
         'workflow.noSelection': 'Select at least one visible library.',
         'workflow.running': 'Workflow is running...',
         'workflow.cancel': 'Cancel',
+        'workflow.pause': 'Pause',
+        'workflow.resume': 'Resume',
+        'workflow.stop': 'Stop',
         'workflow.retry': 'Retry',
         'workflow.progress': 'jobs completed',
+        'workflow.totalProgress': 'Overall progress',
+        'workflow.phase': 'Phase',
+        'workflow.phases': 'Run phases',
+        'workflow.activeRun': 'Active run',
+        'workflow.recentAdminRuns': 'Recent administrative runs',
+        'workflow.adminRuns': 'administrative runs',
+        'workflow.openRun': 'Open/control',
+        'workflow.loadingRun': 'Loading run status …',
+        'workflow.runId': 'Run ID',
+        'workflow.noActiveRun': 'No administrative run selected yet.',
+        'workflow.runLibraries': 'Libraries in this run',
+        'workflow.parseProgress': 'Parsing progress',
+        'workflow.parseDone': 'done',
+        'workflow.parsePending': 'running',
+        'workflow.parseFailed': 'failed',
+        'workflow.parseTracked': 'total',
+        'workflow.noParseData': 'No parsing data yet',
+        'workflow.stopConfirm': 'Stop this run? Active run jobs will be stopped in a controlled way. The connector containers keep running.',
+        'workflow.statusPaused': 'paused',
+        'workflow.statusStopped': 'stopped',
+        'workflow.jobs': 'Jobs',
         'workflow.notAvailable': 'Dashboard control is not available in this process.',
         'workflow.lastResult': 'Last result',
         'workflow.repo': 'Library',
@@ -1695,7 +2007,28 @@
         'cleanup.retry': 'Retry now',
         'cleanup.retrying': 'Scheduling...',
         'cleanup.unavailable': 'Cleanup status is not available in this process.',
-        'api.error': 'API error'
+        'api.error': 'API error',
+        'api.adminControlUnavailable': 'Administrative control is not available in this process.',
+        'api.controlUnavailable': 'Control is not available in this process.',
+        'api.confirmationRequired': 'This action requires an explicit STOP confirmation.',
+        'api.queuePaused': 'The job queue is paused.',
+        'api.libraryBlocked': 'The library is disabled or paused.',
+        'api.workflowRunNotFound': 'The administrative run was not found.',
+        'api.syncRunNotFound': 'The sync run was not found.',
+        'api.jobQueueUnavailable': 'The job queue is not available.',
+        'api.jobStoreUnavailable': 'The job store is not available.',
+        'api.orchestratorUnavailable': 'The orchestrator is not available.',
+        'api.libraryNotFound': 'The library was not found.',
+        'api.invalidWorkflowTransition': 'This action is not allowed in the current run state.',
+        'api.forbidden': 'This action is not allowed.',
+        'api.unauthorized': 'Authentication is required or invalid.',
+        'api.unsupportedMediaType': 'The request must use JSON.',
+        'api.badRequest': 'The request is invalid.',
+        'api.dashboardRequestFailed': 'The dashboard request failed.',
+        'api.notFound': 'The requested resource was not found.',
+        'api.dashboardDisabled': 'The dashboard is disabled.',
+        'api.authzUnavailable': 'Authorization checks are not available.',
+        'api.proxyRequestFailed': 'The proxy request failed.'
       }
     };
     Object.assign(I18N, {
@@ -1753,11 +2086,17 @@
       overviewData: null,
       systemsData: null,
       workflowData: null,
+      workflowHistoryData: null,
+      workflowControlData: null,
+      workflowRunData: null,
       cleanupOutboxData: null,
       workflowSelected: new Set(),
       workflowRunning: false,
       workflowRunId: null,
       workflowPollTimer: null,
+      workflowControlRunning: null,
+      workflowLibraryActionRunning: null,
+      workflowRunActionRunning: null,
       cleanupRetrying: new Set(),
       jobsCleanupRunning: false,
       openwebuiActionRunning: null
@@ -1778,6 +2117,9 @@
       });
       document.querySelectorAll('[data-i18n-placeholder]').forEach((node) => {
         node.setAttribute('placeholder', t(node.dataset.i18nPlaceholder));
+      });
+      document.querySelectorAll('[data-i18n-aria-label]').forEach((node) => {
+        node.setAttribute('aria-label', t(node.dataset.i18nAriaLabel));
       });
       document.querySelector('.brand span').textContent = t('brand.subtitle');
       document.querySelector('.nav').setAttribute('aria-label', t('nav.label'));
@@ -1853,20 +2195,54 @@
         option.textContent = labels[option.value] || option.textContent;
       });
     }
+    const API_ERROR_KEYS = Object.freeze({
+      'admin control unavailable': 'api.adminControlUnavailable',
+      'control unavailable': 'api.controlUnavailable',
+      'confirmation required': 'api.confirmationRequired',
+      'queue paused': 'api.queuePaused',
+      'library blocked': 'api.libraryBlocked',
+      'workflow run not found': 'api.workflowRunNotFound',
+      'sync run not found': 'api.syncRunNotFound',
+      'job queue unavailable': 'api.jobQueueUnavailable',
+      'job store unavailable': 'api.jobStoreUnavailable',
+      'orchestrator unavailable': 'api.orchestratorUnavailable',
+      'library not found': 'api.libraryNotFound',
+      'invalid workflow transition': 'api.invalidWorkflowTransition',
+      'forbidden': 'api.forbidden',
+      'unauthorized': 'api.unauthorized',
+      'unsupported media type': 'api.unsupportedMediaType',
+      'bad request': 'api.badRequest',
+      'dashboard request failed': 'api.dashboardRequestFailed',
+      'not found': 'api.notFound',
+      'dashboard disabled': 'api.dashboardDisabled',
+      'authz unavailable': 'api.authzUnavailable',
+      'proxy request failed': 'api.proxyRequestFailed'
+    });
+    function apiErrorMessage(data) {
+      const code = String(data && data.error || '').trim().toLowerCase();
+      const translationKey = API_ERROR_KEYS[code];
+      if (translationKey) return t(translationKey);
+      if (currentLanguage === 'de' && data && data.message) return String(data.message);
+      return code || t('api.error');
+    }
     async function api(path) {
       const res = await fetch(path, { headers: { 'Accept': 'application/json' } });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || data.error || t('api.error'));
+      if (!res.ok) throw new Error(apiErrorMessage(data));
       return data;
     }
     async function apiPost(path, payload) {
       const res = await fetch(path, {
         method: 'POST',
-        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'X-Connector-Admin-Action': '1'
+        },
         body: JSON.stringify(payload)
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || data.error || t('api.error'));
+      if (!res.ok) throw new Error(apiErrorMessage(data));
       return data;
     }
     function clear(node) {
@@ -2184,7 +2560,7 @@
           transportNode.append(badge, detail);
           copy.appendChild(transportNode);
         }
-        if (check.name === 'sync_jobs' && Number(check.failed_jobs || 0) > 0) {
+        if (check.name === 'sync_jobs' && Number(check.failed_jobs || 0) > 0 && workflowControlEnabled()) {
           const actions = document.createElement('div');
           actions.className = 'health-actions';
           const button = document.createElement('button');
@@ -2219,7 +2595,10 @@
         renderSystems(state.systemsData);
       }
       if (state.activeTab === 'workflow' && state.workflowData) {
+        if (state.workflowControlData) renderWorkflowControl(state.workflowControlData);
         renderWorkflow(state.workflowData);
+        if (state.workflowHistoryData) renderWorkflowHistory(state.workflowHistoryData);
+        if (state.workflowRunData) renderWorkflowResult(state.workflowRunData);
         if (state.cleanupOutboxData) renderCleanupOutbox(state.cleanupOutboxData);
       }
     }
@@ -2237,7 +2616,7 @@
       renderOverview(state.overviewData);
     }
     async function cleanupDeadJobs() {
-      if (state.jobsCleanupRunning) return;
+      if (state.jobsCleanupRunning || !workflowControlEnabled()) return;
       state.jobsCleanupRunning = true;
       showError('');
       if (state.overviewData) renderDependencyHealth(state.overviewData.health);
@@ -2289,10 +2668,35 @@
         __cells: [fmtDate(change.occurred_at), change.change_type, status(change.status), compactText(change.object_name, { threshold: 36 }), compactText(change.target_path, { threshold: 44 })]
       })));
     }
+    async function loadWorkflowControl() {
+      const control = await api('/api/workflow/control').catch(() => ({
+        control_enabled: false,
+        automation_enabled: false,
+        queue_paused: false,
+        state: 'unavailable'
+      }));
+      state.workflowControlData = control;
+      renderWorkflowControl(control);
+      return control;
+    }
     async function loadWorkflow() {
-      const data = await api('/api/workflow/libraries');
+      const [data, control, syncRuns] = await Promise.all([
+        api('/api/workflow/libraries'),
+        loadWorkflowControl(),
+        api('/api/sync-runs?limit=50&offset=0')
+      ]);
+      const workflowHistory = {
+        ...syncRuns,
+        items: (syncRuns.items || []).filter((run) => (
+          run.details && run.details.kind === 'workflow_parent'
+        ))
+      };
       state.workflowData = data;
+      state.workflowHistoryData = workflowHistory;
+      state.workflowControlData = control;
+      renderWorkflowControl(control);
       renderWorkflow(data);
+      renderWorkflowHistory(workflowHistory);
       await loadCleanupOutbox();
       const savedRunId = localStorage.getItem('connector-dashboard-workflow-run-id');
       if (savedRunId && !state.workflowRunId) {
@@ -2300,7 +2704,175 @@
         scheduleWorkflowPoll(0);
       }
     }
+    function workflowHistoryActionCell(run) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'ghost';
+      button.dataset.workflowRunId = run.sync_id;
+      button.textContent = t('workflow.openRun');
+      button.setAttribute('aria-label', t('workflow.openRun') + ': ' + run.sync_id);
+      button.addEventListener('click', () => openWorkflowRun(run.sync_id));
+      return button;
+    }
+    function renderWorkflowHistory(data) {
+      const runs = data.items || [];
+      setText('workflow-history-summary', fmtNumber(runs.length) + ' ' + t('workflow.adminRuns'));
+      table('workflow-history-table', [
+        t('workflow.runId'),
+        t('table.start'),
+        t('workflow.mode'),
+        t('metric.libraries'),
+        t('table.status'),
+        t('table.actions')
+      ], runs.map((run) => {
+        const details = run.details || {};
+        const repoIds = Array.isArray(details.repo_ids) ? details.repo_ids : [];
+        return {
+          ...run,
+          __cells: [
+            compactText(run.sync_id, { threshold: 36 }),
+            fmtDate(run.started_at),
+            compactText(details.mode, { threshold: 20 }),
+            compactText(repoIds.join(', '), { threshold: 56 }),
+            status(run.status),
+            workflowHistoryActionCell(run)
+          ]
+        };
+      }));
+    }
+    function openWorkflowRun(runId) {
+      if (!runId) return;
+      if (state.workflowPollTimer) {
+        clearTimeout(state.workflowPollTimer);
+        state.workflowPollTimer = null;
+      }
+      state.workflowRunId = runId;
+      state.workflowRunData = null;
+      localStorage.setItem('connector-dashboard-workflow-run-id', runId);
+      setText('workflow-run-summary', runId);
+      $('workflow-progress').hidden = true;
+      $('workflow-phase-list').hidden = true;
+      $('workflow-run-libraries-wrap').hidden = true;
+      $('workflow-run-empty').hidden = false;
+      $('workflow-run-empty').textContent = t('workflow.loadingRun');
+      $('workflow-result').textContent = t('workflow.loadingRun');
+      showError('');
+      $('workflow-run-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      refreshWorkflowRun();
+    }
+    function normalizedPercent(value, completed = 0, total = 0) {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric)) return Math.max(0, Math.min(100, numeric));
+      const normalizedTotal = Number(total || 0);
+      if (normalizedTotal <= 0) return 0;
+      return Math.max(0, Math.min(100, (Number(completed || 0) / normalizedTotal) * 100));
+    }
+    function workflowControlEnabled() {
+      return Boolean(state.workflowControlData && state.workflowControlData.control_enabled);
+    }
+    function workflowManualRunAllowed() {
+      const control = state.workflowControlData || {};
+      return workflowControlEnabled()
+        && !control.queue_paused
+        && String(control.state || '').toLowerCase() !== 'stopped';
+    }
+    function workflowActionCapability(scope, action) {
+      const runCapabilities = state.workflowRunData && state.workflowRunData.capabilities;
+      const capabilities = scope === 'run' && runCapabilities
+        ? runCapabilities
+        : (state.workflowControlData && state.workflowControlData.capabilities) || {};
+      const actions = capabilities[scope + '_actions'];
+      return Array.isArray(actions) ? actions.includes(action) : null;
+    }
+    function controlStateLabel(value) {
+      const labels = {
+        running: 'admin.stateRunning',
+        active: 'admin.stateRunning',
+        deactivated: 'admin.stateDeactivated',
+        disabled: 'admin.stateDeactivated',
+        paused: 'admin.statePaused',
+        stopped: 'admin.stateStopped',
+        unavailable: 'admin.stateUnknown'
+      };
+      return t(labels[String(value || '').toLowerCase()] || 'admin.stateUnknown');
+    }
+    function controlCounts(data) {
+      const jobs = data.active_jobs && typeof data.active_jobs === 'object' ? data.active_jobs : {};
+      const queued = Number(data.queued_jobs ?? data.queued_job_count ?? jobs.queued ?? 0);
+      const retrying = Number(data.retrying_jobs ?? jobs.retrying ?? 0);
+      const running = Number(data.running_jobs ?? jobs.running ?? (typeof data.active_jobs === 'number' ? data.active_jobs : 0));
+      const paused = Number(data.paused_jobs ?? data.paused_job_count ?? jobs.paused ?? 0);
+      return { active: running + retrying, paused, queued: queued + retrying };
+    }
+    function renderWorkflowControl(data) {
+      state.workflowControlData = data || {};
+      const enabled = Boolean(data && data.control_enabled);
+      const automationEnabled = Boolean(data && data.automation_enabled);
+      const queuePaused = Boolean(data && data.queue_paused);
+      const controlState = String((data && data.state) || (queuePaused ? 'paused' : (automationEnabled ? 'running' : 'deactivated'))).toLowerCase();
+      const counts = controlCounts(data || {});
+      const busy = Boolean(state.workflowControlRunning);
+      const stateNode = $('admin-control-state');
+      clear(stateNode);
+      stateNode.append(status(controlState, controlStateLabel(controlState)));
+      setText('admin-automation-state', automationEnabled ? t('admin.automationOn') : t('admin.automationOff'));
+      setText('admin-queue-state', queuePaused ? t('admin.queuePaused') : t('admin.queueRunning'));
+      setText('admin-active-jobs', fmtNumber(counts.active));
+      setText('admin-paused-jobs', fmtNumber(counts.paused));
+      setText('admin-queued-jobs', fmtNumber(counts.queued));
+      setText('admin-control-updated', data && data.updated_at ? t('admin.changed') + ': ' + fmtDate(data.updated_at) : '-');
+      const headlineKeys = {
+        running: 'admin.headlineRunning',
+        active: 'admin.headlineRunning',
+        deactivated: 'admin.headlineDeactivated',
+        disabled: 'admin.headlineDeactivated',
+        paused: 'admin.headlinePaused',
+        stopped: 'admin.headlineStopped'
+      };
+      const descriptionKeys = {
+        running: 'admin.descriptionRunning',
+        active: 'admin.descriptionRunning',
+        deactivated: 'admin.descriptionDeactivated',
+        disabled: 'admin.descriptionDeactivated',
+        paused: 'admin.descriptionPaused',
+        stopped: 'admin.descriptionStopped'
+      };
+      setText('admin-control-headline', enabled ? t(headlineKeys[controlState] || 'admin.headlineRunning') : t('admin.headlineUnavailable'));
+      setText('admin-control-description', enabled ? t(descriptionKeys[controlState] || 'admin.descriptionRunning') : t('admin.descriptionUnavailable'));
+      $('admin-control-card').setAttribute('aria-busy', String(busy));
+      $('admin-control-actions').hidden = !enabled;
+      $('admin-control-disabled').hidden = enabled;
+      if (!enabled) $('admin-control-disabled').textContent = t('admin.controlUnavailable');
+      const allowed = (action, fallback) => {
+        const capability = workflowActionCapability('global', action);
+        return capability == null ? fallback : capability;
+      };
+      $('admin-start').disabled = busy || !allowed('start', !automationEnabled || queuePaused || controlState === 'stopped');
+      $('admin-deactivate').disabled = busy || !allowed('deactivate', automationEnabled);
+      $('admin-pause').disabled = busy || !allowed('pause', !queuePaused && controlState !== 'stopped');
+      $('admin-resume').disabled = busy || !allowed('resume', queuePaused || controlState === 'paused');
+      $('admin-stop').disabled = busy || !allowed('stop', controlState !== 'stopped' || counts.active + counts.paused + counts.queued > 0);
+      if (state.workflowData) renderWorkflow(state.workflowData);
+    }
+    async function workflowControlAction(action) {
+      if (!workflowControlEnabled() || state.workflowControlRunning) return;
+      if (action === 'stop' && !window.confirm(t('admin.stopConfirm'))) return;
+      state.workflowControlRunning = action;
+      renderWorkflowControl(state.workflowControlData || {});
+      showError('');
+      try {
+        const payload = action === 'stop' ? { confirm: 'STOP' } : {};
+        await apiPost('/api/workflow/control/' + action, payload);
+        await loadWorkflow();
+      } catch (err) {
+        showError(err.message || String(err));
+      } finally {
+        state.workflowControlRunning = null;
+        if (state.workflowControlData) renderWorkflowControl(state.workflowControlData);
+      }
+    }
     function cleanupRetryCell(item) {
+      if (!workflowControlEnabled()) return compactText('-');
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'ghost';
@@ -2371,16 +2943,126 @@
       const input = document.createElement('input');
       input.type = 'checkbox';
       input.value = library.repo_id;
-      input.disabled = !library.selectable || !state.workflowData.enabled || state.workflowRunning;
+      input.disabled = !workflowLibrarySelectable(library) || state.workflowRunning;
       input.checked = state.workflowSelected.has(library.repo_id);
       input.setAttribute('aria-label', t('workflow.selection') + ' ' + (library.name || library.repo_id));
       input.addEventListener('change', () => {
         if (input.checked) state.workflowSelected.add(library.repo_id);
         else state.workflowSelected.delete(library.repo_id);
         renderWorkflowSummary(state.workflowData);
+        $('workflow-run').disabled = state.workflowRunning || state.workflowSelected.size === 0;
       });
       wrapper.appendChild(input);
       return wrapper;
+    }
+    function libraryAdminControl(library) {
+      const control = library.admin_control || {};
+      const enabled = library.admin_enabled == null ? control.enabled !== false : Boolean(library.admin_enabled);
+      const paused = library.admin_paused == null ? Boolean(control.paused) : Boolean(library.admin_paused);
+      const explicitState = library.admin_state || control.state;
+      const adminState = String(explicitState || (paused ? 'paused' : (enabled ? 'active' : 'disabled'))).toLowerCase();
+      return { enabled, paused, state: adminState, updated_at: library.admin_updated_at || control.updated_at };
+    }
+    function workflowLibrarySelectable(library) {
+      const control = libraryAdminControl(library);
+      return Boolean(
+        workflowManualRunAllowed()
+        && state.workflowData
+        && state.workflowData.enabled
+        && library.selectable
+        && control.enabled
+        && !control.paused
+        && control.state === 'active'
+      );
+    }
+    function workflowParsingCell(parsingData) {
+      const parsing = parsingData || {};
+      const total = Number(parsing.total ?? parsing.tracked ?? 0);
+      const done = Number(parsing.done ?? parsing.completed ?? 0);
+      const pending = Number(parsing.pending ?? parsing.running ?? 0);
+      const failed = Number(parsing.failed ?? 0);
+      const percent = normalizedPercent(parsing.percent, done, total);
+      const wrapper = document.createElement('div');
+      wrapper.className = 'parsing-progress';
+      wrapper.setAttribute('role', 'group');
+      wrapper.setAttribute('aria-label', t('workflow.parseProgress'));
+      const headline = document.createElement('strong');
+      headline.textContent = total || done || pending || failed ? Math.round(percent) + ' %' : t('workflow.noParseData');
+      const progress = document.createElement('progress');
+      progress.max = 100;
+      progress.value = percent;
+      progress.setAttribute('aria-label', t('workflow.parseProgress'));
+      const details = document.createElement('span');
+      details.textContent = fmtNumber(done) + ' ' + t('workflow.parseDone') + ' · '
+        + fmtNumber(pending) + ' ' + t('workflow.parsePending') + ' · '
+        + fmtNumber(failed) + ' ' + t('workflow.parseFailed') + ' · '
+        + fmtNumber(total) + ' ' + t('workflow.parseTracked');
+      wrapper.append(headline, progress, details);
+      return wrapper;
+    }
+    function workflowAdminStateCell(library) {
+      const control = libraryAdminControl(library);
+      const label = control.state === 'active' ? t('admin.stateRunning') : controlStateLabel(control.state);
+      return status(control.state, label);
+    }
+    function workflowLibraryActionCell(library) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'row-actions';
+      if (!workflowControlEnabled()) {
+        wrapper.textContent = '-';
+        return wrapper;
+      }
+      const control = libraryAdminControl(library);
+      const capability = (action) => {
+        const allowed = workflowActionCapability('library', action);
+        return allowed == null || allowed;
+      };
+      const add = (action, labelKey, danger = false) => {
+        if (!capability(action)) return;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = danger ? 'danger' : 'ghost';
+        const actionId = library.repo_id + ':' + action;
+        const running = state.workflowLibraryActionRunning === actionId;
+        button.textContent = running ? t('admin.actionRunning') : t(labelKey);
+        button.disabled = Boolean(state.workflowLibraryActionRunning || state.workflowRunActionRunning);
+        button.setAttribute('aria-label', t(labelKey) + ': ' + (library.name || library.repo_id));
+        button.addEventListener('click', () => workflowLibraryAction(library, action));
+        wrapper.appendChild(button);
+      };
+      if (control.state === 'active') {
+        add('pause', 'admin.pauseLibrary');
+        add('disable', 'admin.disableLibrary', true);
+      } else if (control.state === 'paused') {
+        add('resume', 'admin.resumeLibrary');
+        add('disable', 'admin.disableLibrary', true);
+      } else {
+        add('enable', 'admin.enableLibrary');
+      }
+      return wrapper;
+    }
+    async function workflowLibraryAction(library, action) {
+      if (!workflowControlEnabled() || state.workflowLibraryActionRunning) return;
+      if (action === 'disable') {
+        const libraryName = library.name || library.repo_id;
+        if (!window.confirm(t('admin.disableLibraryConfirm') + '\n\n' + libraryName)) return;
+      }
+      const actionId = library.repo_id + ':' + action;
+      state.workflowLibraryActionRunning = actionId;
+      renderWorkflow(state.workflowData);
+      showError('');
+      try {
+        await apiPost(
+          '/api/workflow/libraries/' + encodeURIComponent(library.repo_id) + '/' + action,
+          {}
+        );
+        await loadWorkflow();
+      } catch (err) {
+        showError(err.message || String(err));
+      } finally {
+        state.workflowLibraryActionRunning = null;
+        if (state.workflowData) renderWorkflow(state.workflowData);
+      }
     }
     function workflowOpenWebUIState(item) {
       const data = item.openwebui || {};
@@ -2404,55 +3086,183 @@
         fmtNumber(summary.visible) + ' ' + t('workflow.visible') + ' · '
           + fmtNumber(summary.selectable) + ' ' + t('workflow.selectable') + ' · '
           + fmtNumber(selected) + ' ' + t('workflow.selected')
+          + (workflowControlEnabled() ? '' : ' · ' + t('admin.headlineUnavailable'))
       );
     }
     function renderWorkflow(data) {
       const knownRepoIds = new Set((data.libraries || []).map((item) => item.repo_id));
       Array.from(state.workflowSelected).forEach((repoId) => {
-        if (!knownRepoIds.has(repoId)) state.workflowSelected.delete(repoId);
+        const library = (data.libraries || []).find((item) => item.repo_id === repoId);
+        if (!knownRepoIds.has(repoId) || !library || !workflowLibrarySelectable(library)) state.workflowSelected.delete(repoId);
       });
       renderWorkflowSummary(data);
       table('workflow-table', [
         t('workflow.selection'),
         'Repo-ID',
         t('workflow.repo'),
+        t('admin.libraryState'),
         t('table.status'),
+        t('workflow.parseProgress'),
         t('workflow.dataset'),
         t('workflow.openwebui'),
         t('table.headCommit'),
         t('workflow.skipReason'),
-        t('table.error')
+        t('table.error'),
+        t('admin.libraryActions')
       ], (data.libraries || []).map((library) => ({
         ...library,
         __cells: [
           workflowSelectionCell(library),
           compactText(library.repo_id, { threshold: 34 }),
           compactText(library.name, { threshold: 42 }),
+          workflowAdminStateCell(library),
           status(library.status),
+          workflowParsingCell(library.parsing),
           compactText(library.ragflow_dataset_id || library.ragflow_dataset_name, { threshold: 44 }),
           compactText(workflowOpenWebUIState(library), { threshold: 52 }),
           compactText(library.head_commit_id, { threshold: 34 }),
           compactText(library.skip_reason, { threshold: 34 }),
-          compactText(library.last_error || (library.openwebui && library.openwebui.last_error), { threshold: 48 })
+          compactText(library.last_error || (library.openwebui && library.openwebui.last_error), { threshold: 48 }),
+          workflowLibraryActionCell(library)
         ]
       })));
-      $('workflow-run').disabled = state.workflowRunning || !data.enabled;
-      $('workflow-load').disabled = state.workflowRunning;
+      const controlsAvailable = Boolean(data.enabled && workflowControlEnabled());
+      const canRun = Boolean(controlsAvailable && workflowManualRunAllowed());
+      $('workflow-run').hidden = !controlsAvailable;
+      $('workflow-run').disabled = !canRun || state.workflowRunning || state.workflowSelected.size === 0 || Boolean(state.workflowLibraryActionRunning);
+      $('workflow-load').disabled = Boolean(state.workflowLibraryActionRunning);
+      ['workflow-create-datasets', 'workflow-sync-openwebui', 'workflow-mode', 'workflow-scope'].forEach((id) => {
+        $(id).disabled = !canRun || state.workflowRunning;
+      });
+    }
+    function workflowRunStatus(result) {
+      const jobs = result.jobs || [];
+      const rawStatus = String(result.status || 'unknown').toLowerCase();
+      const activeUnpaused = jobs.some((job) => !job.paused && ['queued', 'retrying', 'running'].includes(job.status));
+      if (rawStatus === 'paused' || result.paused || (!activeUnpaused && jobs.some((job) => job.paused))) return 'paused';
+      if (rawStatus === 'stopped') return 'stopped';
+      return rawStatus;
+    }
+    function workflowRunStatusLabel(value) {
+      if (value === 'paused') return t('workflow.statusPaused');
+      if (value === 'stopped') return t('workflow.statusStopped');
+      return value || t('status.unknown');
+    }
+    function workflowProgressCell(progressData) {
+      const progress = progressData || {};
+      const completed = Number(progress.completed ?? progress.done ?? 0);
+      const total = Number(progress.total ?? 0);
+      const percent = normalizedPercent(progress.percent, completed, total);
+      const wrapper = document.createElement('div');
+      wrapper.className = 'parsing-progress';
+      const headline = document.createElement('strong');
+      headline.textContent = Math.round(percent) + ' %';
+      const bar = document.createElement('progress');
+      bar.max = 100;
+      bar.value = percent;
+      bar.setAttribute('aria-label', t('workflow.totalProgress'));
+      const details = document.createElement('span');
+      details.textContent = fmtNumber(completed) + '/' + fmtNumber(total) + ' ' + t('workflow.progress');
+      wrapper.append(headline, bar, details);
+      return wrapper;
+    }
+    function workflowJobSummary(jobs, repoId) {
+      const matching = (jobs || []).filter((job) => !repoId || job.repo_id === repoId || job.library_repo_id === repoId);
+      if (!matching.length) return '-';
+      const counts = {};
+      matching.forEach((job) => {
+        const effective = job.paused ? 'paused' : (job.effective_status || job.status || 'unknown');
+        counts[effective] = (counts[effective] || 0) + 1;
+      });
+      return Object.entries(counts).map(([name, count]) => fmtNumber(count) + ' ' + workflowRunStatusLabel(name)).join(' · ');
+    }
+    function renderWorkflowPhases(phasesData) {
+      const node = $('workflow-phase-list');
+      clear(node);
+      const phases = Array.isArray(phasesData)
+        ? phasesData
+        : Object.entries(phasesData || {}).map(([id, value]) => ({ id, ...(value || {}) }));
+      node.hidden = phases.length === 0;
+      phases.forEach((phase) => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'workflow-phase';
+        const label = document.createElement('strong');
+        label.textContent = phase.label || phase.name || phase.id || '-';
+        const phaseStatus = document.createElement('span');
+        phaseStatus.append(status(phase.status || 'unknown', workflowRunStatusLabel(phase.status)));
+        const bar = document.createElement('progress');
+        bar.max = 100;
+        bar.value = normalizedPercent(phase.percent, phase.completed ?? phase.done, phase.total);
+        bar.setAttribute('aria-label', label.textContent);
+        wrapper.append(label, phaseStatus, bar);
+        node.appendChild(wrapper);
+      });
+    }
+    function renderWorkflowRunLibraries(result) {
+      const libraries = result.libraries || [];
+      const wrapper = $('workflow-run-libraries-wrap');
+      wrapper.hidden = libraries.length === 0;
+      if (!libraries.length) {
+        clear($('workflow-run-libraries'));
+        return;
+      }
+      table('workflow-run-libraries', [
+        t('workflow.repo'),
+        t('table.status'),
+        t('workflow.phase'),
+        t('workflow.totalProgress'),
+        t('workflow.parseProgress'),
+        t('workflow.jobs')
+      ], libraries.map((library) => ({
+        ...library,
+        __cells: [
+          compactText(library.name || library.repo_id, { threshold: 42 }),
+          status(library.paused ? 'paused' : library.status, workflowRunStatusLabel(library.paused ? 'paused' : library.status)),
+          compactText(library.phase || library.current_phase, { threshold: 32 }),
+          workflowProgressCell(library.progress),
+          workflowParsingCell(library.parsing),
+          compactText(workflowJobSummary(result.jobs, library.repo_id), { threshold: 48 })
+        ]
+      })));
     }
     function renderWorkflowResult(result) {
+      state.workflowRunData = result;
       $('workflow-result').textContent = t('workflow.lastResult') + '\n' + JSON.stringify(result, null, 2);
       if (!result || !result.run_id) return;
       const progress = result.progress || { completed: 0, total: (result.jobs || []).length };
-      const total = Math.max(1, Number(progress.total || 0));
-      const completed = Math.min(total, Number(progress.completed || 0));
+      const total = Number(progress.total || 0);
+      const completed = Math.min(Math.max(0, total), Number(progress.completed || 0));
+      const percent = normalizedPercent(progress.percent, completed, total);
+      const runStatus = workflowRunStatus(result);
+      const terminal = ['succeeded', 'failed', 'cancelled', 'stopped'].includes(runStatus);
+      const paused = runStatus === 'paused' || runStatus === 'pause_requested';
+      const phaseItems = Array.isArray(result.phases) ? result.phases : [];
+      const activePhase = phaseItems.find((item) => item.status === 'running');
+      const phase = result.phase || (activePhase && (activePhase.label || activePhase.id)) || '-';
+      $('workflow-run-empty').hidden = true;
       $('workflow-progress').hidden = false;
-      setText('workflow-progress-status', status(result.status).textContent || result.status);
-      setText('workflow-progress-label', completed + '/' + Number(progress.total || 0) + ' ' + t('workflow.progress'));
-      $('workflow-progress-bar').max = total;
-      $('workflow-progress-bar').value = completed;
-      const terminal = ['succeeded', 'failed', 'cancelled'].includes(result.status);
-      $('workflow-cancel').hidden = terminal;
-      $('workflow-retry').hidden = !['failed', 'cancelled'].includes(result.status);
+      setText('workflow-run-summary', result.run_id);
+      setText('workflow-progress-status', workflowRunStatusLabel(runStatus));
+      setText('workflow-progress-phase', t('workflow.phase') + ': ' + phase);
+      setText('workflow-progress-label', fmtNumber(completed) + '/' + fmtNumber(total) + ' ' + t('workflow.progress'));
+      setText('workflow-progress-percent', Math.round(percent) + ' %');
+      $('workflow-progress-bar').max = 100;
+      $('workflow-progress-bar').value = percent;
+      renderWorkflowPhases(result.phases);
+      renderWorkflowRunLibraries(result);
+      const canMutate = workflowControlEnabled();
+      const busy = Boolean(state.workflowRunActionRunning);
+      const capability = (action) => {
+        const allowed = workflowActionCapability('run', action);
+        return allowed == null || allowed;
+      };
+      $('workflow-pause').hidden = !canMutate || terminal || paused || !capability('pause');
+      $('workflow-resume').hidden = !canMutate || terminal || !paused || !capability('resume');
+      $('workflow-stop').hidden = !canMutate || terminal || !capability('stop');
+      $('workflow-retry').hidden = !canMutate || !['failed', 'cancelled', 'stopped'].includes(runStatus) || !capability('retry');
+      ['workflow-pause', 'workflow-resume', 'workflow-stop', 'workflow-retry'].forEach((id) => {
+        $(id).disabled = busy;
+      });
       state.workflowRunning = !terminal;
       if (state.workflowData) renderWorkflow(state.workflowData);
     }
@@ -2463,8 +3273,10 @@
     }
     async function refreshWorkflowRun() {
       if (!state.workflowRunId) return;
+      const requestedRunId = state.workflowRunId;
       try {
-        const result = await api('/api/workflow/runs/' + encodeURIComponent(state.workflowRunId));
+        const result = await api('/api/workflow/runs/' + encodeURIComponent(requestedRunId));
+        if (state.workflowRunId !== requestedRunId) return;
         renderWorkflowResult(result);
         if (result.status === 'succeeded') {
           localStorage.removeItem('connector-dashboard-workflow-run-id');
@@ -2472,17 +3284,22 @@
           if (state.activeTab === 'workflow') await loadWorkflow();
           return;
         }
-        if (['failed', 'cancelled'].includes(result.status)) {
+        if (['failed', 'cancelled', 'stopped'].includes(result.status)) {
           if (state.activeTab === 'workflow') await loadWorkflow();
           return;
         }
         scheduleWorkflowPoll();
       } catch (err) {
+        if (state.workflowRunId !== requestedRunId) return;
         showError(err.message || String(err));
         scheduleWorkflowPoll(4000);
       }
     }
     async function runWorkflow() {
+      if (!workflowControlEnabled()) {
+        showError(t('admin.controlUnavailable'));
+        return;
+      }
       const repoIds = Array.from(state.workflowSelected);
       if (!repoIds.length) {
         showError(t('workflow.noSelection'));
@@ -2514,13 +3331,28 @@
       }
     }
     async function workflowAction(action) {
-      if (!state.workflowRunId) return;
+      if (!state.workflowRunId || !workflowControlEnabled() || state.workflowRunActionRunning) return;
+      if (action === 'stop' && !window.confirm(t('workflow.stopConfirm'))) return;
+      state.workflowRunActionRunning = action;
+      if (state.workflowRunData) renderWorkflowResult(state.workflowRunData);
       showError('');
       try {
-        await apiPost('/api/workflow/runs/' + encodeURIComponent(state.workflowRunId) + '/' + action, {});
+        const payload = action === 'stop' ? { confirm: 'STOP' } : {};
+        const result = await apiPost(
+          '/api/workflow/runs/' + encodeURIComponent(state.workflowRunId) + '/' + action,
+          payload
+        );
+        if (result && result.run_id) {
+          state.workflowRunId = result.run_id;
+          localStorage.setItem('connector-dashboard-workflow-run-id', result.run_id);
+          renderWorkflowResult(result);
+        }
         scheduleWorkflowPoll(0);
       } catch (err) {
         showError(err.message || String(err));
+      } finally {
+        state.workflowRunActionRunning = null;
+        if (state.workflowRunData) renderWorkflowResult(state.workflowRunData);
       }
     }
     async function loadSyncs() {
@@ -2641,6 +3473,10 @@
     function openwebuiActionCell(item) {
       const wrapper = document.createElement('div');
       wrapper.className = 'row-actions';
+      if (!workflowControlEnabled()) {
+        wrapper.textContent = '-';
+        return wrapper;
+      }
       [
         ['pipe', 'openwebui.deletePipe', item.openwebui_pipe_id],
         ['dataset', 'openwebui.deleteDataset', item.ragflow_dataset_id],
@@ -2660,6 +3496,7 @@
       return wrapper;
     }
     async function runOpenWebUIDelete(item, target) {
+      if (!workflowControlEnabled()) return;
       const label = target.charAt(0).toUpperCase() + target.slice(1);
       if (!window.confirm(t('openwebui.confirmDelete' + label))) return;
       state.openwebuiActionRunning = String(item.id) + ':' + target;
@@ -2735,6 +3572,7 @@
       workspace.setAttribute('aria-busy', 'true');
       document.querySelectorAll('section:not([hidden]) .table-wrap').forEach((node) => node.setAttribute('aria-busy', 'true'));
       try {
+        if (state.activeTab !== 'workflow') await loadWorkflowControl();
         if (state.activeTab === 'overview') await loadOverview();
         if (state.activeTab === 'workflow') await loadWorkflow();
         if (state.activeTab === 'syncs') await loadSyncs();
@@ -2773,6 +3611,7 @@
       const title = state.titles[name] || [name, ''];
       setText('view-title', title[0]);
       setText('view-subtitle', title[1]);
+      rerenderActiveData();
       loadActive();
     }
     function initThemeToggle() {
@@ -2860,9 +3699,16 @@
       $('nav-toggle').focus();
     });
     $('refresh-active').addEventListener('click', loadActive);
+    $('admin-start').addEventListener('click', () => workflowControlAction('start'));
+    $('admin-deactivate').addEventListener('click', () => workflowControlAction('deactivate'));
+    $('admin-pause').addEventListener('click', () => workflowControlAction('pause'));
+    $('admin-resume').addEventListener('click', () => workflowControlAction('resume'));
+    $('admin-stop').addEventListener('click', () => workflowControlAction('stop'));
     $('workflow-load').addEventListener('click', loadWorkflow);
     $('workflow-run').addEventListener('click', runWorkflow);
-    $('workflow-cancel').addEventListener('click', () => workflowAction('cancel'));
+    $('workflow-pause').addEventListener('click', () => workflowAction('pause'));
+    $('workflow-resume').addEventListener('click', () => workflowAction('resume'));
+    $('workflow-stop').addEventListener('click', () => workflowAction('stop'));
     $('workflow-retry').addEventListener('click', () => workflowAction('retry'));
     $('cleanup-outbox-refresh').addEventListener('click', loadCleanupOutbox);
     $('sync-refresh').addEventListener('click', () => resetPageState('syncs', loadSyncs));

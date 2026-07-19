@@ -88,6 +88,7 @@ Windows-Trust-Store zu verändern.
 Für einen vollständig lokalen Smoke-Test mit HTTPS-Mocks:
 
 ```env
+APP_ENV=development
 COMPOSE_PROJECT_NAME=seafile-ragflow-connector-local
 CONNECTOR_IMAGE=seafile-ragflow-connector:local
 CONNECTOR_IMAGE_PULL_POLICY=never
@@ -97,6 +98,7 @@ SSL_CERT_FILE=/certs/top-secret-root-ca.pem
 REQUESTS_CA_BUNDLE=/certs/top-secret-root-ca.pem
 
 CONNECTOR_DASHBOARD_ENABLED=true
+CONNECTOR_DASHBOARD_CONTROL_ENABLED=true
 CONNECTOR_DASHBOARD_PUBLISHED_PORT=127.0.0.1:18080
 CONNECTOR_DASHBOARD_AUTH_USERNAME=admin
 CONNECTOR_DASHBOARD_AUTH_PASSWORD=change-me-dashboard-password
@@ -127,6 +129,7 @@ CONNECTOR_STARTUP_CHECK=live
 Für ein bestehendes gemeinsames Docker-Netz mit echten lokalen Diensten:
 
 ```env
+APP_ENV=development
 COMPOSE_PROJECT_NAME=seafile-ragflow-connector-local
 CONNECTOR_IMAGE=seafile-ragflow-connector:local
 CONNECTOR_IMAGE_PULL_POLICY=never
@@ -134,6 +137,7 @@ CONNECTOR_DOCKER_NETWORK_NAME=ki_infra_seu_test
 CONNECTOR_CERTS_HOST_DIR=../tls-lab/certs
 
 CONNECTOR_DASHBOARD_ENABLED=true
+CONNECTOR_DASHBOARD_CONTROL_ENABLED=true
 CONNECTOR_DASHBOARD_PUBLISHED_PORT=127.0.0.1:18080
 CONNECTOR_DASHBOARD_AUTH_USERNAME=admin
 CONNECTOR_DASHBOARD_AUTH_PASSWORD=change-me-dashboard-password

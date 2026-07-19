@@ -29,6 +29,10 @@ from seafile_ragflow_connector.domain.ragflow_search_settings import (
     config_from_settings,
     resolve_search_template,
 )
+from seafile_ragflow_connector.jobs.context import (
+    job_cancellation_requested,
+    job_pause_requested,
+)
 from seafile_ragflow_connector.openwebui.artifacts import (
     ARTIFACT_VERSION,
     DatasetArtifactInputs,
@@ -37,6 +41,7 @@ from seafile_ragflow_connector.openwebui.artifacts import (
     build_pipe_spec,
     build_tool_spec,
 )
+from seafile_ragflow_connector.persistence.admin_control import AdminControlStore
 from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.persistence.models.openwebui import (
     OpenWebUIDatasetMapping,
@@ -46,6 +51,14 @@ from seafile_ragflow_connector.utils.hashing import sha256_text
 from seafile_ragflow_connector.utils.redaction import redact_mapping
 
 _PENDING_REPLACEMENT_CLEANUP_KEY = "pending_replacement_cleanup"
+
+
+class OpenWebUISyncInterruptedError(RuntimeError):
+    """Cooperative stop signal for safe OpenWebUI mutation checkpoints."""
+
+
+class _OpenWebUILibraryControlledError(RuntimeError):
+    """Stop the current library when its administrator control changes."""
 
 
 @dataclass
@@ -77,12 +90,14 @@ class OpenWebUISyncService:
         ragflow_client: RAGFlowClient,
         openwebui_client: OpenWebUIClient | None = None,
         dashboard_store: DashboardEventStore | None = None,
+        admin_control_store: AdminControlStore | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
         self.ragflow_client = ragflow_client
         self.openwebui_client = openwebui_client
         self.dashboard_store = dashboard_store
+        self.admin_control_store = admin_control_store or AdminControlStore(session_factory)
         self.log = structlog.get_logger(__name__)
         self._search_template_cache: ResolvedSearchTemplate | None = None
 
@@ -99,6 +114,11 @@ class OpenWebUISyncService:
             self._write_global_state(status="disabled", mode=mode, summary=summary)
             self.log.info("openwebui.integration.disabled")
             return summary
+        if repo_ids is not None and not repo_ids:
+            self.log.info("openwebui.sync.empty_scope")
+            return summary
+
+        libraries = self._discover_libraries(repo_ids=repo_ids)
 
         openwebui_sync_runs_total.inc()
         sync_id = new_sync_id("openwebui")
@@ -135,7 +155,9 @@ class OpenWebUISyncService:
                 **summary.__dict__,
             )
             return summary
+        interrupted_status: str | None = None
         try:
+            self._raise_if_job_interrupted()
             self._ensure_template_chat(mode=mode, sync_id=sync_id)
             if repo_ids is None:
                 self._sync_deleted_library_mappings(
@@ -144,16 +166,17 @@ class OpenWebUISyncService:
                     summary=summary,
                     sync_id=sync_id,
                 )
-            for library in self._discover_libraries(repo_ids=repo_ids):
-                summary.datasets_seen += 1
-                self.log.info(
-                    "openwebui.sync.dataset.discovered",
-                    sync_id=sync_id,
-                    repo_id=library.repo_id,
-                    dataset_id=library.ragflow_dataset_id,
-                    dataset_name=library.ragflow_dataset_name,
-                )
+            for library in libraries:
                 try:
+                    self._raise_if_library_controlled(library.repo_id)
+                    summary.datasets_seen += 1
+                    self.log.info(
+                        "openwebui.sync.dataset.discovered",
+                        sync_id=sync_id,
+                        repo_id=library.repo_id,
+                        dataset_id=library.ragflow_dataset_id,
+                        dataset_name=library.ragflow_dataset_name,
+                    )
                     self._sync_library(
                         library,
                         mode=mode,
@@ -161,6 +184,10 @@ class OpenWebUISyncService:
                         summary=summary,
                         sync_id=sync_id,
                     )
+                except _OpenWebUILibraryControlledError:
+                    continue
+                except OpenWebUISyncInterruptedError:
+                    raise
                 except Exception as exc:
                     summary.failed += 1
                     self._mark_dataset_failed(library, str(exc), capabilities)
@@ -171,6 +198,9 @@ class OpenWebUISyncService:
                         dataset_id=library.ragflow_dataset_id,
                         error=str(exc),
                     )
+        except OpenWebUISyncInterruptedError:
+            interrupted_status = "paused" if job_pause_requested() else "cancelled"
+            raise
         finally:
             if summary.failed:
                 openwebui_sync_failures_total.inc()
@@ -178,7 +208,9 @@ class OpenWebUISyncService:
             openwebui_artifacts_created_total.labels("pipe").inc(summary.pipes_created)
             openwebui_artifacts_updated_total.labels("tool").inc(summary.tools_updated)
             openwebui_artifacts_updated_total.labels("pipe").inc(summary.pipes_updated)
-            if summary.failed:
+            if interrupted_status is not None:
+                status = interrupted_status
+            elif summary.failed:
                 status = "failed"
             elif summary.manual_required:
                 status = "manual_required"
@@ -202,6 +234,25 @@ class OpenWebUISyncService:
             )
         return summary
 
+    @staticmethod
+    def _raise_if_job_interrupted() -> None:
+        if job_cancellation_requested():
+            raise OpenWebUISyncInterruptedError("OpenWebUI sync interrupted")
+
+    def _raise_if_library_controlled(self, repo_id: str) -> None:
+        self._raise_if_job_interrupted()
+        control = self.admin_control_store.library(repo_id)
+        if control.runnable:
+            return
+        self.log.info(
+            "openwebui.sync.library_controlled",
+            repo_id=repo_id,
+            state=control.state,
+        )
+        raise _OpenWebUILibraryControlledError(
+            f"OpenWebUI sync skipped controlled library {repo_id} ({control.state})"
+        )
+
     def _sync_library(
         self,
         library: Library,
@@ -211,6 +262,7 @@ class OpenWebUISyncService:
         summary: OpenWebUISyncSummary,
         sync_id: str,
     ) -> None:
+        self._raise_if_library_controlled(library.repo_id)
         dataset_id = str(library.ragflow_dataset_id)
         dataset_name = str(library.ragflow_dataset_name or library.name)
         mapping = self._ensure_mapping(library, capabilities)
@@ -220,7 +272,14 @@ class OpenWebUISyncService:
         previous_pipe_id = mapping.openwebui_pipe_id
         previous_chat_id = mapping.ragflow_chat_id
         chat_name = _chat_name(self.settings.openwebui_function_namespace, dataset_name, dataset_id)
-        chat_id, chat_action = self._ensure_chat(mapping, chat_name, dataset_id, mode)
+        self._raise_if_library_controlled(library.repo_id)
+        chat_id, chat_action = self._ensure_chat(
+            mapping,
+            chat_name,
+            dataset_id,
+            mode,
+            repo_id=library.repo_id,
+        )
         if chat_id:
             if chat_action == "created":
                 summary.chats_created += 1
@@ -269,6 +328,7 @@ class OpenWebUISyncService:
         mapping_id = mapping.id
         artifact_actions: list[str] = []
         if self.settings.openwebui_create_tools:
+            self._raise_if_library_controlled(library.repo_id)
             action = self._sync_tool(
                 mapping_id,
                 tool_spec,
@@ -277,6 +337,7 @@ class OpenWebUISyncService:
                 previous_tool_hash
                 if previous_tool_id == tool_spec.artifact_id
                 else None,
+                repo_id=library.repo_id,
             )
             artifact_actions.append(action)
             _count_action(summary, "tool", action)
@@ -288,6 +349,7 @@ class OpenWebUISyncService:
                 dataset_id,
             )
         if self.settings.openwebui_create_pipes:
+            self._raise_if_library_controlled(library.repo_id)
             action = self._sync_pipe(
                 mapping_id,
                 pipe_spec,
@@ -296,6 +358,7 @@ class OpenWebUISyncService:
                 previous_pipe_hash
                 if previous_pipe_id == pipe_spec.artifact_id
                 else None,
+                repo_id=library.repo_id,
             )
             artifact_actions.append(action)
             _count_action(summary, "pipe", action)
@@ -371,6 +434,7 @@ class OpenWebUISyncService:
             previous_chat_id=previous_chat_id,
             next_chat_id=chat_id,
             pending_cleanup=pending_cleanup,
+            repo_id=library.repo_id,
         )
         with self.session_factory() as session:
             stored_mapping = session.get(OpenWebUIDatasetMapping, mapping_id)
@@ -383,7 +447,7 @@ class OpenWebUISyncService:
 
     def _discover_libraries(self, *, repo_ids: set[str] | None = None) -> list[Library]:
         allowlist = set(self.settings.openwebui_dataset_allowlist)
-        requested = set(repo_ids or ())
+        requested = None if repo_ids is None else set(repo_ids)
         with self.session_factory() as session:
             rows = session.scalars(
                 select(Library)
@@ -394,20 +458,40 @@ class OpenWebUISyncService:
             result = []
             for row in rows:
                 if (
-                    requested
+                    requested is not None
                     and row.repo_id not in requested
                     and row.ragflow_dataset_id not in requested
                 ):
                     continue
-                if (
-                    allowlist
-                    and row.repo_id not in allowlist
-                    and row.ragflow_dataset_id not in allowlist
-                ):
-                    continue
                 session.expunge(row)
                 result.append(row)
-            return result
+        controls = self.admin_control_store.libraries(
+            [library.repo_id for library in result]
+        )
+        blocked = [
+            library
+            for library in result
+            if not controls[library.repo_id].runnable
+        ]
+        if requested is not None and blocked:
+            blocked_states = ", ".join(
+                f"{library.repo_id} ({controls[library.repo_id].state})"
+                for library in blocked
+            )
+            raise ValueError(
+                "OpenWebUI sync is not allowed for controlled libraries: "
+                f"{blocked_states}"
+            )
+        return [
+            library
+            for library in result
+            if controls[library.repo_id].runnable
+            and (
+                not allowlist
+                or library.repo_id in allowlist
+                or library.ragflow_dataset_id in allowlist
+            )
+        ]
 
     def _ensure_mapping(
         self,
@@ -452,6 +536,8 @@ class OpenWebUISyncService:
         chat_name: str,
         dataset_id: str,
         mode: str,
+        *,
+        repo_id: str,
     ) -> tuple[str | None, str]:
         payload = self._chat_payload_with_search_template(
             build_chat_payload(chat_name, dataset_id=dataset_id)
@@ -461,6 +547,7 @@ class OpenWebUISyncService:
             if chat and _chat_has_dataset(chat, dataset_id):
                 chat_id = str(chat.get("id") or mapping.ragflow_chat_id)
                 if mode != "dry-run" and _chat_needs_update(chat, payload):
+                    self._raise_if_library_controlled(repo_id)
                     updated = self.ragflow_client.update_chat(chat_id, payload)
                     return str(updated.get("id") or chat_id), "updated"
                 return chat_id, "reused"
@@ -469,6 +556,7 @@ class OpenWebUISyncService:
             if _chat_has_dataset(chat, dataset_id):
                 chat_id = str(chat.get("id"))
                 if mode != "dry-run" and _chat_needs_update(chat, payload):
+                    self._raise_if_library_controlled(repo_id)
                     updated = self.ragflow_client.update_chat(chat_id, payload)
                     return str(updated.get("id") or chat_id), "updated"
                 return chat_id, "reused"
@@ -476,9 +564,11 @@ class OpenWebUISyncService:
             return f"dry-run-{sha256_text(chat_name)[:12]}", "created"
         if existing and mode == "repair":
             chat_id = str(existing[0].get("id"))
+            self._raise_if_library_controlled(repo_id)
             updated = self.ragflow_client.update_chat(chat_id, payload)
             return str(updated.get("id") or chat_id), "updated"
         try:
+            self._raise_if_library_controlled(repo_id)
             created = self.ragflow_client.create_chat(payload)
         except ApiError as exc:
             if not _is_dataset_without_parsed_files(exc):
@@ -508,6 +598,7 @@ class OpenWebUISyncService:
             chat = existing[0]
             chat_id = str(chat.get("id") or "")
             if mode != "dry-run" and chat_id and _chat_needs_update(chat, payload):
+                self._raise_if_job_interrupted()
                 self.ragflow_client.update_chat(chat_id, payload)
                 self.log.info(
                     "openwebui.sync.template_chat.updated",
@@ -518,6 +609,7 @@ class OpenWebUISyncService:
             return
         if mode == "dry-run":
             return
+        self._raise_if_job_interrupted()
         created = self.ragflow_client.create_chat(payload)
         self.log.info(
             "openwebui.sync.template_chat.created",
@@ -555,6 +647,8 @@ class OpenWebUISyncService:
         mode: str,
         capabilities: OpenWebUICapabilities,
         previous_hash: str | None,
+        *,
+        repo_id: str,
     ) -> str:
         if mode == "dry-run":
             return "planned"
@@ -572,7 +666,9 @@ class OpenWebUISyncService:
         )
         existing = self.openwebui_client.get_tool(spec.artifact_id)
         if existing is None:
+            self._raise_if_library_controlled(repo_id)
             self.openwebui_client.create_tool(spec.payload)
+            self._raise_if_library_controlled(repo_id)
             self.openwebui_client.update_tool_valves(spec.artifact_id, valves)
             self.log.info("openwebui.sync.tool.created", openwebui_tool_id=spec.artifact_id)
             return "created"
@@ -591,12 +687,15 @@ class OpenWebUISyncService:
         )
         if content_matches:
             if remote_valves != reconciled_valves:
+                self._raise_if_library_controlled(repo_id)
                 self.openwebui_client.update_tool_valves(spec.artifact_id, reconciled_valves)
             self.log.info("openwebui.sync.tool.reused", openwebui_tool_id=spec.artifact_id)
             return "reused"
+        self._raise_if_library_controlled(repo_id)
         self.openwebui_client.update_tool(spec.artifact_id, spec.payload)
         # OpenWebUI may reset valves while replacing artifact content. Reapply the
         # reconciled values afterwards so operator-owned settings survive upgrades.
+        self._raise_if_library_controlled(repo_id)
         self.openwebui_client.update_tool_valves(spec.artifact_id, reconciled_valves)
         self.log.info("openwebui.sync.tool.updated", openwebui_tool_id=spec.artifact_id)
         return "updated"
@@ -608,6 +707,8 @@ class OpenWebUISyncService:
         mode: str,
         capabilities: OpenWebUICapabilities,
         previous_hash: str | None,
+        *,
+        repo_id: str,
     ) -> str:
         if mode == "dry-run":
             return "planned"
@@ -625,8 +726,11 @@ class OpenWebUISyncService:
         )
         existing = self.openwebui_client.get_function(spec.artifact_id)
         if existing is None:
+            self._raise_if_library_controlled(repo_id)
             self.openwebui_client.create_function(spec.payload)
+            self._raise_if_library_controlled(repo_id)
             self.openwebui_client.update_function_valves(spec.artifact_id, valves)
+            self._raise_if_library_controlled(repo_id)
             self.openwebui_client.ensure_function_active(spec.artifact_id)
             self.log.info("openwebui.sync.pipe.created", openwebui_pipe_id=spec.artifact_id)
             return "created"
@@ -645,16 +749,21 @@ class OpenWebUISyncService:
         )
         if content_matches:
             if remote_valves != reconciled_valves:
+                self._raise_if_library_controlled(repo_id)
                 self.openwebui_client.update_function_valves(
                     spec.artifact_id,
                     reconciled_valves,
                 )
+            self._raise_if_library_controlled(repo_id)
             self.openwebui_client.ensure_function_active(spec.artifact_id)
             self.log.info("openwebui.sync.pipe.reused", openwebui_pipe_id=spec.artifact_id)
             return "reused"
+        self._raise_if_library_controlled(repo_id)
         self.openwebui_client.update_function(spec.artifact_id, spec.payload)
         # See _sync_tool: content replacement must not discard operator valves.
+        self._raise_if_library_controlled(repo_id)
         self.openwebui_client.update_function_valves(spec.artifact_id, reconciled_valves)
+        self._raise_if_library_controlled(repo_id)
         self.openwebui_client.ensure_function_active(spec.artifact_id)
         self.log.info("openwebui.sync.pipe.updated", openwebui_pipe_id=spec.artifact_id)
         return "updated"
@@ -819,16 +928,21 @@ class OpenWebUISyncService:
                 select(OpenWebUIDatasetMapping)
                 .join(Library, OpenWebUIDatasetMapping.repo_id == Library.repo_id)
                 .where(Library.status == "deleted")
+                .order_by(OpenWebUIDatasetMapping.repo_id.asc())
             ).all()
             mappings = []
             for row in rows:
                 session.expunge(row)
                 mappings.append(row)
-
         for mapping in mappings:
-            summary.datasets_seen += 1
             try:
+                self._raise_if_library_controlled(mapping.repo_id)
+                summary.datasets_seen += 1
                 self._cleanup_deleted_mapping(mapping, mode, capabilities, summary, sync_id)
+            except _OpenWebUILibraryControlledError:
+                continue
+            except OpenWebUISyncInterruptedError:
+                raise
             except Exception as exc:
                 summary.failed += 1
                 self._set_mapping_status(mapping.id, "failed", str(exc))
@@ -854,6 +968,8 @@ class OpenWebUISyncService:
 
         manual_errors: list[str] = []
         if mapping.openwebui_tool_id:
+            tool_id = mapping.openwebui_tool_id
+            self._raise_if_library_controlled(mapping.repo_id)
             action = self._delete_openwebui_tool(mapping, capabilities)
             if action == "deleted":
                 summary.tools_deleted += 1
@@ -861,13 +977,18 @@ class OpenWebUISyncService:
                     sync_id,
                     "openwebui_tool",
                     "deleted",
-                    mapping.openwebui_tool_id,
+                    tool_id,
                     mapping.ragflow_dataset_id,
                 )
             elif action == "manual_required":
                 manual_errors.append("OpenWebUI tool exists but is not connector-owned")
+            if action in {"deleted", "missing"}:
+                self._clear_deleted_mapping_artifact(mapping.id, "openwebui_tool_id")
+                mapping.openwebui_tool_id = None
 
         if mapping.openwebui_pipe_id:
+            pipe_id = mapping.openwebui_pipe_id
+            self._raise_if_library_controlled(mapping.repo_id)
             action = self._delete_openwebui_pipe(mapping, capabilities)
             if action == "deleted":
                 summary.pipes_deleted += 1
@@ -875,27 +996,34 @@ class OpenWebUISyncService:
                     sync_id,
                     "openwebui_pipe",
                     "deleted",
-                    mapping.openwebui_pipe_id,
+                    pipe_id,
                     mapping.ragflow_dataset_id,
                 )
             elif action == "manual_required":
                 manual_errors.append("OpenWebUI pipe exists but is not connector-owned")
+            if action in {"deleted", "missing"}:
+                self._clear_deleted_mapping_artifact(mapping.id, "openwebui_pipe_id")
+                mapping.openwebui_pipe_id = None
 
         if mapping.ragflow_chat_id:
-            self.ragflow_client.delete_chats([mapping.ragflow_chat_id])
+            chat_id = mapping.ragflow_chat_id
+            self._raise_if_library_controlled(mapping.repo_id)
+            self.ragflow_client.delete_chats([chat_id])
+            self._clear_deleted_mapping_artifact(mapping.id, "ragflow_chat_id")
+            mapping.ragflow_chat_id = None
             summary.chats_deleted += 1
             self.log.info(
                 "openwebui.sync.ragflow_chat.deleted",
                 sync_id=sync_id,
                 repo_id=mapping.repo_id,
                 dataset_id=mapping.ragflow_dataset_id,
-                ragflow_chat_id=mapping.ragflow_chat_id,
+                ragflow_chat_id=chat_id,
             )
             self._record_change(
                 sync_id,
                 "ragflow_chat",
                 "deleted",
-                mapping.ragflow_chat_id,
+                chat_id,
                 mapping.ragflow_dataset_id,
             )
 
@@ -913,6 +1041,21 @@ class OpenWebUISyncService:
                 stored_mapping.last_successful_sync_at = _utcnow()
                 session.commit()
 
+    def _clear_deleted_mapping_artifact(
+        self,
+        mapping_id: int,
+        field: Literal[
+            "openwebui_tool_id",
+            "openwebui_pipe_id",
+            "ragflow_chat_id",
+        ],
+    ) -> None:
+        with self.session_factory() as session:
+            mapping = session.get(OpenWebUIDatasetMapping, mapping_id)
+            if mapping is not None:
+                setattr(mapping, field, None)
+                session.commit()
+
     def _cleanup_replaced_artifacts(
         self,
         *,
@@ -928,6 +1071,7 @@ class OpenWebUISyncService:
         previous_chat_id: str | None,
         next_chat_id: str | None,
         pending_cleanup: dict[str, list[str]] | None = None,
+        repo_id: str,
     ) -> dict[str, list[str]]:
         candidates = _replacement_cleanup_candidates(
             pending_cleanup or {},
@@ -942,11 +1086,20 @@ class OpenWebUISyncService:
             return candidates
         remaining: dict[str, list[str]] = {"tools": [], "pipes": [], "chats": []}
         for tool_id in candidates["tools"]:
+            self._raise_if_library_controlled(repo_id)
             if not capabilities.tools_write or self.openwebui_client is None:
                 remaining["tools"].append(tool_id)
                 continue
             try:
-                deleted = self._delete_owned_tool_by_id(tool_id, capabilities)
+                deleted = self._delete_owned_tool_by_id(
+                    tool_id,
+                    capabilities,
+                    repo_id=repo_id,
+                )
+            except _OpenWebUILibraryControlledError:
+                raise
+            except OpenWebUISyncInterruptedError:
+                raise
             except (ApiError, httpx.RequestError, RuntimeError, TypeError, ValueError) as exc:
                 deleted = False
                 remaining["tools"].append(tool_id)
@@ -965,11 +1118,20 @@ class OpenWebUISyncService:
                     dataset_id,
                 )
         for pipe_id in candidates["pipes"]:
+            self._raise_if_library_controlled(repo_id)
             if not capabilities.functions_write or self.openwebui_client is None:
                 remaining["pipes"].append(pipe_id)
                 continue
             try:
-                deleted = self._delete_owned_pipe_by_id(pipe_id, capabilities)
+                deleted = self._delete_owned_pipe_by_id(
+                    pipe_id,
+                    capabilities,
+                    repo_id=repo_id,
+                )
+            except _OpenWebUILibraryControlledError:
+                raise
+            except OpenWebUISyncInterruptedError:
+                raise
             except (ApiError, httpx.RequestError, RuntimeError, TypeError, ValueError) as exc:
                 deleted = False
                 remaining["pipes"].append(pipe_id)
@@ -988,8 +1150,12 @@ class OpenWebUISyncService:
                     dataset_id,
                 )
         for chat_id in candidates["chats"]:
+            self._raise_if_library_controlled(repo_id)
             try:
+                self._raise_if_library_controlled(repo_id)
                 self.ragflow_client.delete_chats([chat_id])
+            except OpenWebUISyncInterruptedError:
+                raise
             except (ApiError, httpx.RequestError, RuntimeError, TypeError, ValueError) as exc:
                 remaining["chats"].append(chat_id)
                 self.log.warning(
@@ -1027,6 +1193,7 @@ class OpenWebUISyncService:
             return "missing"
         if not _is_connector_owned(existing):
             return "manual_required"
+        self._raise_if_library_controlled(mapping.repo_id)
         self.openwebui_client.delete_tool(tool_id)
         self.log.info("openwebui.sync.tool.deleted", openwebui_tool_id=tool_id)
         return "deleted"
@@ -1035,6 +1202,8 @@ class OpenWebUISyncService:
         self,
         tool_id: str,
         capabilities: OpenWebUICapabilities,
+        *,
+        repo_id: str,
     ) -> bool:
         if not capabilities.tools_write or self.openwebui_client is None:
             return False
@@ -1047,6 +1216,7 @@ class OpenWebUISyncService:
                 openwebui_tool_id=tool_id,
             )
             return False
+        self._raise_if_library_controlled(repo_id)
         self.openwebui_client.delete_tool(tool_id)
         self.log.info("openwebui.sync.tool.deleted", openwebui_tool_id=tool_id)
         return True
@@ -1064,6 +1234,7 @@ class OpenWebUISyncService:
             return "missing"
         if not _is_connector_owned(existing):
             return "manual_required"
+        self._raise_if_library_controlled(mapping.repo_id)
         self.openwebui_client.delete_function(pipe_id)
         self.log.info("openwebui.sync.pipe.deleted", openwebui_pipe_id=pipe_id)
         return "deleted"
@@ -1072,6 +1243,8 @@ class OpenWebUISyncService:
         self,
         pipe_id: str,
         capabilities: OpenWebUICapabilities,
+        *,
+        repo_id: str,
     ) -> bool:
         if not capabilities.functions_write or self.openwebui_client is None:
             return False
@@ -1084,6 +1257,7 @@ class OpenWebUISyncService:
                 openwebui_pipe_id=pipe_id,
             )
             return False
+        self._raise_if_library_controlled(repo_id)
         self.openwebui_client.delete_function(pipe_id)
         self.log.info("openwebui.sync.pipe.deleted", openwebui_pipe_id=pipe_id)
         return True

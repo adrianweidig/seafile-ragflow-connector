@@ -9,10 +9,10 @@ klar voneinander.
 
 | Rolle | Aufgabe | Seafile-Admin-Token | RAGFlow-Zugriff |
 | --- | --- | --- | --- |
-| `connector-controller` | Seafile Discovery, Dataset-Provisioning, Datei-Sync-Planung, ACL-Snapshot, Authz-API | ja | ja |
+| `connector-controller` | Seafile Discovery, Dataset-Provisioning, Datei-Sync-Planung, ACL-Snapshot, Authz-API und optional interaktive Dashboard-Administration | ja | ja |
 | `connector-worker` | Datei-Download, Upload zu RAGFlow, Parse-Steuerung | nein, nutzt Sync-Token | ja |
 | `connector-reconciler` | Repair und Drift-Korrektur | ja, über Core-Konfiguration | ja |
-| `connector-dashboard` | Admin-Dashboard und Diagnose, optional | indirekt über Core | nein als Benutzeroberfläche |
+| eigenständiges `connector dashboard` | lesendes Status-Dashboard und Diagnose, optional | indirekt über State/Health | nein als Benutzeroberfläche |
 | `connector-search` | nutzernahe Wissenssuche | nein | nur nach Authz-allow |
 | OpenWebUI-Pipe | Chat-/Retrieval-Nutzung in OpenWebUI | nein | nur nach Authz-allow |
 
@@ -35,6 +35,36 @@ ausgeliefert.
 Anzeigenamen wieder auf echte Seafile-Pfade abzubilden. Diese Datenbanknutzung
 ist nur Mapping-/Viewer-Infrastruktur; die fachliche Berechtigung bleibt die
 Authz-Prüfung gegen den ACL-Snapshot.
+
+## Dashboard-Admin-Grenze
+
+Nur das im `connector-controller` eingebettete Dashboard darf Connector-Arbeit
+steuern. Die Fähigkeit ist standardmäßig aus und wird erst durch
+`CONNECTOR_DASHBOARD_CONTROL_ENABLED=true` aktiviert. Die Settings-Validierung
+verlangt dann zusätzlich ein aktiviertes Dashboard sowie nicht leere Basic-
+Auth-Werte. Jede Mutation benötigt `Content-Type: application/json` und
+`X-Connector-Admin-Action: 1`; globaler Stop sowie Stop/Cancel eines Laufs außerdem
+`{"confirm":"STOP"}`. Bestehende Authz- und OpenWebUI-Proxy-Endpunkte nutzen
+weiterhin ihre eigenen Bearer-Secrets und werden nicht an den Browserheader
+gekoppelt.
+
+Ein isolierter Erststart setzt zusätzlich vor dem ersten Runtime-Start
+`CONNECTOR_AUTOMATION_INITIAL_STATE=stopped`. Dieser einmalige Wert hält
+Scheduler und Queue bis zur authentifizierten Freigabe; ein persistierter
+Operatorzustand wird nie aus der Env überschrieben.
+
+Der feste Header ist eine CSRF-/Browser-Aktionsmarkierung, kein Secret und
+keine eigene Authentifizierung. Seine Schutzwirkung setzt die JSON-Grenze, das
+fehlende permissive CORS und gültige Basic Auth voraus. Ein Reverse Proxy darf
+ihn daher nicht als vertrauenswürdige Identität interpretieren oder die Admin-
+API pauschal für Cross-Origin-Aufrufe freigeben.
+
+Basic Auth muss außerhalb einer reinen Localhost-Bindung über HTTPS
+transportiert werden. Dashboard-Steuerung bekommt weder Docker-Socket noch
+Portainer-Zugangsdaten und kann keine Container starten oder stoppen. Globale,
+bibliotheksspezifische und laufbezogene Zustände liegen in PostgreSQL und
+werden als Adminaktion mit Benutzer, Ziel, Vorher-/Nachher-Zustand und Ergebnis
+auditiert; Passwörter, Tokens und andere Secrets werden nicht gespeichert.
 
 ## Seafile ist Berechtigungsquelle
 

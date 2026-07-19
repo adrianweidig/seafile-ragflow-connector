@@ -14,23 +14,37 @@ from sqlalchemy.pool import StaticPool
 
 from seafile_ragflow_connector.app.cli import (
     _active_dataset_bindings,
+    _build_job_handlers,
     _cleanup_outbox_payload,
     _cleanup_status_filter,
     _discover_job_specs,
     _emit_job_result,
     _exit_for_invalid_configuration,
     _format_payload,
+    _guard_job_handler,
     _job_payload,
     _job_status_filter,
+    _standalone_dashboard_context,
     _sync_openwebui_controller_guarded,
     _sync_openwebui_if_enabled,
     _wait_for_parse,
+    check_config,
+    controller,
 )
+from seafile_ragflow_connector.dashboard.store import DashboardEventStore, DashboardLimits
+from seafile_ragflow_connector.jobs.context import (
+    JobDeferredError,
+    activate_job_execution,
+    activate_job_pause,
+)
+from seafile_ragflow_connector.jobs.job_store import JobStore
 from seafile_ragflow_connector.jobs.types import JobSpec, JobStatus, JobType
 from seafile_ragflow_connector.persistence.db import Base
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.library import Library
 from seafile_ragflow_connector.persistence.models.sync_state import FileDocumentVersion
+from seafile_ragflow_connector.persistence.sync_state import SyncStateStore
+from seafile_ragflow_connector.sync.orchestrator import SyncCancelledError
 
 
 class _RequiredConfiguration(BaseModel):
@@ -38,16 +52,71 @@ class _RequiredConfiguration(BaseModel):
 
 
 class _FakeOrchestrator:
+    def __init__(
+        self,
+        *,
+        automation_enabled: bool = True,
+        queue_paused: bool = False,
+        library_runnable: bool = True,
+    ) -> None:
+        self.admin_control_store = _FakeAdminControlStore(
+            automation_enabled=automation_enabled,
+            queue_paused=queue_paused,
+            library_runnable=library_runnable,
+        )
+        self.full_syncs: list[tuple[str, str]] = []
+
     def discover_job_specs(self) -> list[JobSpec]:
         return [JobSpec(JobType.SYNC_LIBRARY_FULL, repo_id="repo-1")]
+
+    def sync_library_full(self, repo_id: str, *, scope: str = "/") -> None:
+        self.full_syncs.append((repo_id, scope))
+
+
+class _FakeAdminControlStore:
+    def __init__(
+        self,
+        *,
+        automation_enabled: bool,
+        queue_paused: bool,
+        library_runnable: bool,
+    ) -> None:
+        self.automation_enabled = automation_enabled
+        self.queue_paused = queue_paused
+        self.library_runnable = library_runnable
+
+    def workflow(self):
+        state = (
+            "paused"
+            if self.automation_enabled and self.queue_paused
+            else "stopped"
+            if self.queue_paused
+            else "running"
+            if self.automation_enabled
+            else "deactivated"
+        )
+        return SimpleNamespace(
+            automation_enabled=self.automation_enabled,
+            queue_paused=self.queue_paused,
+            state=state,
+        )
+
+    def library(self, repo_id: str):
+        _ = repo_id
+        return SimpleNamespace(
+            runnable=self.library_runnable,
+            state="active" if self.library_runnable else "paused",
+        )
 
 
 class _FakeOpenWebUIService:
     def __init__(self) -> None:
         self.calls = 0
+        self.repo_ids: list[set[str] | None] = []
 
-    def sync_once(self):
+    def sync_once(self, **kwargs):
         self.calls += 1
+        self.repo_ids.append(kwargs.get("repo_ids"))
         return SimpleNamespace(datasets_seen=1, tools_created=1, pipes_created=1)
 
 
@@ -63,9 +132,13 @@ class _FailingOpenWebUIService:
 class _FakeLog:
     def __init__(self) -> None:
         self.warnings: list[tuple[str, dict[str, object]]] = []
+        self.infos: list[tuple[str, dict[str, object]]] = []
 
     def warning(self, event: str, **kwargs: object) -> None:
         self.warnings.append((event, kwargs))
+
+    def info(self, event: str, **kwargs: object) -> None:
+        self.infos.append((event, kwargs))
 
 
 class _ParseWaitOrchestrator:
@@ -103,15 +176,155 @@ class _ParseWaitRAGFlow:
         )
 
 
-def _runtime(mode: str, service: _FakeOpenWebUIService | None = None):
+def _runtime(
+    mode: str,
+    service: _FakeOpenWebUIService | None = None,
+    *,
+    automation_enabled: bool = True,
+    queue_paused: bool = False,
+    library_runnable: bool = True,
+):
     return SimpleNamespace(
         settings=SimpleNamespace(openwebui_effective_sync_mode=mode),
-        orchestrator=_FakeOrchestrator(),
+        orchestrator=_FakeOrchestrator(
+            automation_enabled=automation_enabled,
+            queue_paused=queue_paused,
+            library_runnable=library_runnable,
+        ),
         openwebui_sync_service=service,
     )
 
 
+def _test_session_factory(test_case: unittest.TestCase):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    test_case.addCleanup(engine.dispose)
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
 class CliSyncHelpersTests(unittest.TestCase):
+    def test_standalone_dashboard_initializes_configured_control_state_once(self) -> None:
+        session_factory = _test_session_factory(self)
+        store = DashboardEventStore(session_factory, DashboardLimits())
+
+        context = _standalone_dashboard_context(
+            store,
+            SimpleNamespace(connector_automation_initial_state="stopped"),  # type: ignore[arg-type]
+        )
+
+        assert context.control_store is not None
+        self.assertEqual(context.control_store.workflow().state, "stopped")
+
+        second = _standalone_dashboard_context(
+            store,
+            SimpleNamespace(connector_automation_initial_state="running"),  # type: ignore[arg-type]
+        )
+        assert second.control_store is not None
+        self.assertEqual(second.control_store.workflow().state, "stopped")
+
+    def test_check_config_exposes_automation_initial_state(self) -> None:
+        settings = SimpleNamespace(
+            app_env="test",
+            seafile_base_url="https://seafile.test",
+            ragflow_base_url="https://ragflow.test",
+            allow_unknown_text_files=False,
+            dataset_settings_source="template",
+            connector_dashboard_enabled=True,
+            connector_dashboard_control_enabled=True,
+            connector_automation_initial_state="stopped",
+            connector_dashboard_host="127.0.0.1",
+            connector_dashboard_port=8787,
+            authz_api_enabled=False,
+            authz_api_fail_closed=True,
+            authz_api_max_acl_age_seconds=3600,
+            search_acl_sync_enabled=False,
+            search_acl_sync_interval_seconds=300,
+            openwebui_integration_enabled=False,
+            openwebui_effective_sync_mode="disabled",
+            openwebui_base_url="https://openwebui.test",
+            openwebui_create_tools=False,
+            openwebui_create_pipes=False,
+            openwebui_authz_enabled=False,
+        )
+
+        with (
+            patch("seafile_ragflow_connector.app.cli._bootstrap", return_value=settings),
+            patch(
+                "seafile_ragflow_connector.app.cli.localizer_for",
+                return_value=SimpleNamespace(language="de"),
+            ),
+            patch("seafile_ragflow_connector.app.cli._emit_payload") as emit,
+        ):
+            check_config(json_output=True)
+
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["connector_automation_initial_state"], "stopped")
+        self.assertTrue(emit.call_args.kwargs["json_output"])
+
+    def test_controller_runs_stale_recovery_while_automation_is_deactivated(self) -> None:
+        calls: list[tuple[str, int]] = []
+        scheduler_enabled: list[object | None] = []
+
+        class _JobStore:
+            def requeue_stale_running_jobs(self, *, older_than_seconds: int):
+                calls.append(("stale", older_than_seconds))
+                return SimpleNamespace(retrying=1, dead=0)
+
+            def purge_completed_jobs(self, *, older_than_days: int) -> int:
+                calls.append(("purge", older_than_days))
+                return 2
+
+        class _Scheduler:
+            enabled: object | None = None
+
+            def __init__(self, tasks, **kwargs):
+                self.tasks = tasks
+                self.enabled = kwargs.get("enabled")
+                scheduler_enabled.append(self.enabled)
+
+            def run_forever(self) -> None:
+                next(task for task in self.tasks if task.name == "maintenance").run()
+                raise RuntimeError("scheduler stopped")
+
+        closed: list[bool] = []
+        runtime = SimpleNamespace(
+            orchestrator=_FakeOrchestrator(automation_enabled=False),
+            job_store=_JobStore(),
+            signal_queue=SimpleNamespace(),
+            openwebui_sync_service=None,
+            dashboard_store=None,
+            close=lambda: closed.append(True),
+        )
+        settings = SimpleNamespace(
+            connector_dashboard_enabled=False,
+            openwebui_effective_sync_mode="disabled",
+            authz_api_enabled=False,
+            discovery_interval_seconds=60,
+            delta_sync_interval_seconds=30,
+            job_lease_seconds=120,
+            job_history_retention_days=7,
+            ragflow_template_refresh_seconds=300,
+            ragflow_search_template_refresh_seconds=300,
+            search_acl_sync_enabled=False,
+            connector_automation_initial_state="stopped",
+        )
+
+        with (
+            patch("seafile_ragflow_connector.app.cli._bootstrap", return_value=settings),
+            patch("seafile_ragflow_connector.app.cli.build_runtime", return_value=runtime),
+            patch("seafile_ragflow_connector.app.cli.SimpleScheduler", _Scheduler),
+            self.assertRaisesRegex(RuntimeError, "scheduler stopped"),
+        ):
+            controller()
+
+        self.assertEqual(calls, [("stale", 120), ("purge", 7)])
+        self.assertEqual(scheduler_enabled, [None])
+        self.assertEqual(closed, [True])
+
     def test_format_payload_can_emit_stable_json(self) -> None:
         output = _format_payload({"message": "für", "count": 2}, json_output=True)
 
@@ -226,11 +439,120 @@ class CliSyncHelpersTests(unittest.TestCase):
             [spec.job_type for spec in specs],
             [JobType.SYNC_LIBRARY_FULL, JobType.SYNC_OPENWEBUI],
         )
+        self.assertTrue(all("trigger" not in spec.payload for spec in specs))
+        self.assertEqual(
+            specs[0].dedup_key(),
+            JobSpec(JobType.SYNC_LIBRARY_FULL, repo_id="repo-1").dedup_key(),
+        )
+
+    def test_discovery_stops_new_automatic_jobs_when_deactivated(self) -> None:
+        specs = _discover_job_specs(
+            _runtime("sync", automation_enabled=False)  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(specs, [])
+
+    def test_discovery_stops_automatic_jobs_while_queue_is_paused(self) -> None:
+        specs = _discover_job_specs(
+            _runtime("sync", queue_paused=True)  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(specs, [])
 
     def test_discovery_does_not_add_openwebui_sync_job_when_disabled(self) -> None:
         specs = _discover_job_specs(_runtime("disabled"))  # type: ignore[arg-type]
 
         self.assertEqual([spec.job_type for spec in specs], [JobType.SYNC_LIBRARY_FULL])
+
+    def test_combined_sync_persists_openwebui_as_workflow_child_before_mutation(
+        self,
+    ) -> None:
+        session_factory = _test_session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo"))
+            session.commit()
+        job_store = JobStore(session_factory)
+        workflow_run_id = SyncStateStore(session_factory).create_run(
+            repo_id=None,
+            mode="workflow",
+            status="queued",
+        )
+        spec = JobSpec(
+            JobType.SYNC_LIBRARY_FULL,
+            repo_id="repo-1",
+            payload={
+                "workflow_run_id": workflow_run_id,
+                "sync_openwebui": True,
+                "trigger": "manual",
+            },
+        )
+        parent_job_id = job_store.enqueue(spec)
+        job_store.subscribe_workflow(
+            workflow_run_id,
+            parent_job_id,
+            is_root=True,
+            owns_job=True,
+        )
+        signals: list[int] = []
+        service = _FakeOpenWebUIService()
+        orchestrator = _FakeOrchestrator()
+        runtime = SimpleNamespace(
+            orchestrator=orchestrator,
+            job_store=job_store,
+            signal_queue=SimpleNamespace(signal=signals.append),
+            openwebui_sync_service=service,
+            ragflow_client=SimpleNamespace(),
+        )
+        handlers = _build_job_handlers(runtime)  # type: ignore[arg-type]
+
+        with activate_job_execution(parent_job_id, workflow_run_id):
+            handlers[JobType.SYNC_LIBRARY_FULL](spec)
+
+        workflow_jobs = job_store.workflow_jobs(workflow_run_id)
+        child = next(
+            job for job in workflow_jobs if job.job_type == JobType.SYNC_OPENWEBUI.value
+        )
+        self.assertEqual(service.calls, 0)
+        self.assertEqual(child.status, JobStatus.QUEUED.value)
+        self.assertEqual(child.payload["repo_ids"], ["repo-1"])
+        self.assertEqual(signals, [child.id])
+        self.assertEqual(orchestrator.full_syncs, [("repo-1", "/")])
+
+        with activate_job_execution(int(child.id), workflow_run_id):
+            handlers[JobType.SYNC_OPENWEBUI](job_store.to_spec(child))
+
+        self.assertEqual(service.calls, 1)
+        self.assertEqual(service.repo_ids, [{"repo-1"}])
+
+    def test_combined_sync_pause_stops_before_openwebui_child_is_created(self) -> None:
+        session_factory = _test_session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo-1", name="Demo", name_slug="demo"))
+            session.commit()
+        job_store = JobStore(session_factory)
+        spec = JobSpec(
+            JobType.SYNC_LIBRARY_FULL,
+            repo_id="repo-1",
+            payload={"sync_openwebui": True, "trigger": "manual"},
+        )
+        parent_job_id = job_store.enqueue(spec)
+        runtime = SimpleNamespace(
+            orchestrator=_FakeOrchestrator(),
+            job_store=job_store,
+            signal_queue=SimpleNamespace(signal=lambda _job_id: None),
+            openwebui_sync_service=_FakeOpenWebUIService(),
+            ragflow_client=SimpleNamespace(),
+        )
+        handlers = _build_job_handlers(runtime)  # type: ignore[arg-type]
+
+        with (
+            activate_job_execution(parent_job_id, None),
+            activate_job_pause(lambda: True),
+            self.assertRaisesRegex(SyncCancelledError, "scheduling interrupted"),
+        ):
+            handlers[JobType.SYNC_LIBRARY_FULL](spec)
+
+        self.assertEqual(len(job_store.list_jobs(limit=10)), 1)
 
     def test_sync_once_runs_openwebui_summary_when_enabled(self) -> None:
         service = _FakeOpenWebUIService()
@@ -284,6 +606,52 @@ class CliSyncHelpersTests(unittest.TestCase):
 
         self.assertEqual(service.calls, 0)
         self.assertEqual(log.warnings, [])
+
+    def test_controller_guard_skips_startup_sync_when_automation_is_deactivated(self) -> None:
+        service = _FakeOpenWebUIService()
+        log = _FakeLog()
+
+        _sync_openwebui_controller_guarded(
+            _runtime(
+                "sync",
+                service,
+                automation_enabled=False,
+            ),  # type: ignore[arg-type]
+            log,
+        )
+
+        self.assertEqual(service.calls, 0)
+        self.assertEqual(log.warnings, [])
+
+    def test_controller_guard_skips_openwebui_while_queue_is_paused(self) -> None:
+        service = _FakeOpenWebUIService()
+        log = _FakeLog()
+
+        _sync_openwebui_controller_guarded(
+            _runtime("sync", service, queue_paused=True),  # type: ignore[arg-type]
+            log,
+        )
+
+        self.assertEqual(service.calls, 0)
+        self.assertEqual(log.warnings, [])
+
+    def test_job_handler_defers_controlled_library_without_calling_handler(self) -> None:
+        calls: list[JobSpec] = []
+        runtime = _runtime("sync", library_runnable=False)
+        handler = _guard_job_handler(
+            runtime,  # type: ignore[arg-type]
+            calls.append,
+        )
+        spec = JobSpec(
+            JobType.SYNC_LIBRARY_FULL,
+            repo_id="repo-1",
+            payload={"trigger": "manual"},
+        )
+
+        with self.assertRaises(JobDeferredError):
+            handler(spec)
+
+        self.assertEqual(calls, [])
 
     def test_wait_for_parse_only_checks_active_dataset_bindings(self) -> None:
         engine = create_engine(

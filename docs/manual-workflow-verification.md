@@ -131,28 +131,44 @@ Fehler; nach dem Sync sollte das Template sichtbar sein.
 
 ## Dashboard-Variante
 
-Wenn der Stack über `connector-controller` mit `CONNECTOR_DASHBOARD_ENABLED=true`
-läuft, kann der Prüfablauf vollständig im Dashboard gestartet werden:
+Wenn der Stack über `connector-controller` mit
+`CONNECTOR_DASHBOARD_ENABLED=true`,
+`CONNECTOR_DASHBOARD_CONTROL_ENABLED=true` und vollständiger Basic Auth läuft,
+kann der Prüfablauf vollständig im Dashboard gestartet werden:
 
-1. Dashboard öffnen, zum Tab **Prüfablauf** wechseln und
-   **Bibliotheken prüfen** ausführen.
+1. Dashboard öffnen und zum Bereich **Administration** wechseln. Der kompatible
+   Ausgangszustand ist global `running`; unbekannte Bibliotheken gelten als
+   aktiv. Für einen isolierten Test deshalb zuerst **Deaktivieren** wählen,
+   bestehende Arbeit auslaufen lassen oder kontrolliert pausieren/stoppen und
+   dann **Bibliotheken prüfen** ausführen.
 2. Die Tabelle zeigt nur Bibliotheken, die der aktuelle Seafile-Admin-API-Key
    sehen kann. Verschlüsselte oder virtuelle Bibliotheken sind abhängig von den
    Skip-Regeln sichtbar, aber nicht auswählbar.
-3. Die Testbibliothek auswählen.
+3. Alle Nicht-Testbibliotheken deaktivieren oder pausieren, die Testbibliothek
+   auf `active` setzen und auswählen.
 4. **RAGFlow-Dataset und Dokumente synchronisieren** aktiv lassen, wenn Dataset
    und Dokumente erzeugt oder aktualisiert werden sollen.
 5. **RAGFlow-Chat und OpenWebUI-Tool/Pipe erzeugen** aktiv lassen, wenn die
    OpenWebUI-Strecke für die ausgewählten Bibliotheken erzeugt werden soll.
 6. Optional den Seafile-Pfad auf `/manual-workflow-check` begrenzen.
-7. **Auswahl starten** ausführen und danach die Tabs **Sync-Läufe**,
+7. Delta, Voll oder Reconcile wählen, **Auswahl starten** ausführen und Phase,
+   Datei- sowie Parsing-Zähler beobachten. Danach die Tabs **Sync-Läufe**,
    **Systeme** und **OpenWebUI** prüfen.
+8. Pause/Fortsetzen und Stop/Retry nur an dieser entbehrlichen Testbibliothek
+   prüfen. Stop ist kooperativ und stoppt keinen Container. Global **Start**
+   erst wählen, wenn automatische Planung für alle verbleibenden ausführbaren
+   Bibliotheken erwünscht ist.
 
 Der reine Befehl `connector dashboard` startet weiterhin nur ein
-Status-Dashboard ohne Runtime-Controller. Die Steuerung ist dort sichtbar als
+Status-Dashboard ohne Runtime-Controller. Die Steuerung ist dort absichtlich
 nicht verfügbar.
 
-## Schritt 3: Synchronisierung nach RAGFlow auslösen
+## CLI-Alternative zu Schritt 3: Synchronisierung nach RAGFlow auslösen
+
+Für denselben Test entweder die oben beschriebene Dashboard-Variante oder diese
+CLI-Alternative verwenden, niemals beide. `connector sync-once` kann ohne eine
+passende Scope- oder Control-Auswahl mehr Bibliotheken erfassen als die
+Dashboard-Auswahl.
 
 Im Compose-Stack:
 

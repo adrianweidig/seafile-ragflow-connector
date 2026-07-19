@@ -1,3 +1,7 @@
+from seafile_ragflow_connector.persistence.models.admin_control import (
+    LibraryControlState,
+    WorkflowControlState,
+)
 from seafile_ragflow_connector.persistence.models.dashboard import (
     DashboardChangeEvent,
     DashboardLogEntry,
@@ -39,6 +43,7 @@ __all__ = [
     "File",
     "LibraryACLEffectiveUser",
     "LibraryACLSubject",
+    "LibraryControlState",
     "Library",
     "OpenWebUIDatasetMapping",
     "OpenWebUISyncState",
@@ -53,5 +58,6 @@ __all__ = [
     "SyncCursor",
     "SyncRun",
     "WorkflowCleanupSubscription",
+    "WorkflowControlState",
     "WorkflowJobSubscription",
 ]

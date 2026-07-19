@@ -216,6 +216,7 @@ class RuntimeServiceRoutingTests(unittest.TestCase):
             patch.object(runtime, "_warn_insecure_tls"),
             patch.object(runtime, "_retry"),
             patch.object(runtime, "get_session_factory", return_value=session_factory),
+            patch.object(runtime, "AdminControlStore") as control_store_class,
             patch.object(runtime, "build_dashboard_store", return_value=None),
             patch.object(runtime, "SeafileAdminClient") as admin_client_class,
             patch.object(runtime, "SeafileSyncClient") as sync_client_class,
@@ -230,6 +231,7 @@ class RuntimeServiceRoutingTests(unittest.TestCase):
         self.assertEqual(admin_client_class.call_args.args[0], "http://seafile.internal:8082")
         self.assertEqual(sync_client_class.call_args.args[0], "http://seafile.internal:8082")
         self.assertEqual(ragflow_client_class.call_args.args[0], "http://ragflow.internal:9380")
+        control_store_class.return_value.initialize_workflow.assert_not_called()
         self.assertIn(
             "https://files.example.local",
             sync_client_class.call_args.kwargs["allowed_download_origins"],

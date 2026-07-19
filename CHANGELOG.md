@@ -8,8 +8,21 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+## 2.6.0 - 2026-07-19
+
 ### Added
 
+- Das im `connector-controller` eingebettete Dashboard dient zusätzlich als
+  interaktive Administrationsoberfläche: globale Connector-Arbeit sowie
+  einzelne Seafile-Bibliotheken lassen sich persistent aktivieren,
+  deaktivieren, pausieren und fortsetzen; Delta-, Voll- und Reconcile-Läufe
+  können gezielt gestartet, pausiert, fortgesetzt, gestoppt und erneut
+  eingeplant werden.
+- Bibliotheks- und Laufansichten zeigen die aktuelle Verarbeitungsphase sowie
+  Datei- und Parsing-Fortschritt einschließlich wartender, erfolgreicher und
+  fehlgeschlagener Dokumente.
+- Adminaktionen werden mit Akteur, Ziel, Vorher-/Nachher-Zustand und Ergebnis
+  persistent auditiert, ohne Passwörter oder andere Secrets zu speichern.
 - Wissenssuche kann die bestehende OpenWebUI-LDAP-/AD-Pipeline für Anmeldung
   und Gruppensynchronisierung nutzen und verwaltet danach eine eigene
   kurzlebige, signierte Browsersitzung mit expliziter Abmeldung.
@@ -25,6 +38,17 @@ werden keine historischen Releases nachträglich erfunden.
 
 ### Changed
 
+- Schreibende Dashboard-Aktionen sind vom lesenden Statuszugriff getrennt und
+  werden nur bei aktivierter Steuerung, gesetzter Dashboard-Authentifizierung
+  sowie JSON mit `X-Connector-Admin-Action: 1` angenommen; globaler Stop sowie
+  Stop/Cancel eines Laufs benötigen die Bestätigung `{"confirm":"STOP"}`.
+  `connector dashboard` bleibt
+  eine eigenständige, absichtlich lesende Statusansicht; die Adminsteuerung steht
+  ausschließlich im laufenden Controller zur Verfügung und steuert keine
+  Container oder Portainer-Dienste.
+- `CONNECTOR_AUTOMATION_INITIAL_STATE=stopped` ermöglicht einen schedulerfreien
+  Erststart; der rückwärtskompatible Default bleibt `running`, und ein bereits
+  persistierter Operatorzustand wird nicht überschrieben.
 - Dashboard und Wissenssuche erhalten eine responsive, zustandserhaltende
   Navigation, kompaktere Standardansichten und eingeklappte technische Details.
 - Search- und OpenWebUI-Quellen zeigen konsistente Nachweise, Abdeckung und
