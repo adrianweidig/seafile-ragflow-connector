@@ -250,6 +250,37 @@ class _RenamingRAGFlowClient(_FakeRAGFlowClient):
         return {"id": document_id, "name": document_name}
 
 
+class _DuplicateNameRenamingRAGFlowClient(_RenamingRAGFlowClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rename_attempts: list[tuple[str, str, str]] = []
+        self.rename_error_status = 200
+        self.rename_error_code: int | str = 102
+        self.rename_error_message = "Duplicated document name in the same dataset."
+
+    def rename_document(
+        self,
+        dataset_id: str,
+        document_id: str,
+        document_name: str,
+    ) -> dict[str, str]:
+        self.rename_attempts.append((dataset_id, document_id, document_name))
+        if any(
+            document.get("id") != document_id and document.get("name") == document_name
+            for document in self.documents
+        ):
+            self.operations.append("rename")
+            raise ApiError(
+                "API returned an error code",
+                status_code=self.rename_error_status,
+                payload={
+                    "code": self.rename_error_code,
+                    "message": self.rename_error_message,
+                },
+            )
+        return super().rename_document(dataset_id, document_id, document_name)
+
+
 def _session_factory(test_case: unittest.TestCase):
     engine = create_engine("sqlite:///:memory:")
     test_case.addCleanup(engine.dispose)
@@ -1030,6 +1061,386 @@ class OrchestratorUploadTests(unittest.TestCase):
         self.assertEqual(ragflow_client.metadata_updates[0][2]["source_path"], "/docs/report.pdf")
         self.assertEqual(ragflow_client.metadata_updates[0][2]["document_name"], "report.pdf")
         self.assertEqual(ragflow_client.parsed_ids, [["new-doc"]])
+
+    def test_update_waits_for_new_parse_then_retries_duplicate_name_rename(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo"))
+            session.add(
+                File(
+                    repo_id="repo",
+                    path="/docs/report.pdf",
+                    normalized_path="/docs/report.pdf",
+                    source_content_sha256="old-source",
+                    ingested_content_sha256="old-ingested",
+                    ragflow_document_id="old-doc",
+                    ragflow_document_name="report.pdf",
+                    sync_status="synced",
+                    parse_status="DONE",
+                )
+            )
+            session.commit()
+
+        ragflow_client = _DuplicateNameRenamingRAGFlowClient()
+        ragflow_client.documents = [{"id": "old-doc", "name": "report.pdf", "run": "DONE"}]
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"%PDF-1.4\nnew content"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        result = orchestrator.sync_file("repo", "dataset", "/docs/report.pdf")
+
+        self.assertTrue(result.uploaded)
+        self.assertEqual(
+            ragflow_client.operations,
+            ["upload", "metadata", "rename", "parse"],
+        )
+        self.assertEqual(ragflow_client.deleted_ids, [])
+        with session_factory() as session:
+            db_file = session.query(File).one()
+            versions = session.query(FileDocumentVersion).order_by(FileDocumentVersion.id).all()
+            self.assertEqual(db_file.ragflow_document_id, "old-doc")
+            self.assertEqual(db_file.sync_status, "parsing")
+            self.assertEqual([version.state for version in versions], ["current", "parsing"])
+
+        orchestrator.check_parse_status("repo", "dataset")
+
+        self.assertEqual(ragflow_client.deleted_ids, [])
+        with session_factory() as session:
+            versions = session.query(FileDocumentVersion).order_by(FileDocumentVersion.id).all()
+            self.assertEqual([version.state for version in versions], ["current", "parsing"])
+
+        for document in ragflow_client.documents:
+            if document.get("id") == "new-doc":
+                document["run"] = "DONE"
+        orchestrator.check_parse_status("repo", "dataset")
+
+        self.assertEqual(ragflow_client.deleted_ids, [["old-doc"]])
+        self.assertEqual(
+            ragflow_client.rename_attempts,
+            [
+                ("dataset", "new-doc", "report.pdf"),
+                ("dataset", "new-doc", "report.pdf"),
+            ],
+        )
+        self.assertEqual(
+            next(
+                document["name"]
+                for document in ragflow_client.documents
+                if document.get("id") == "new-doc"
+            ),
+            "report.pdf",
+        )
+        with session_factory() as session:
+            db_file = session.query(File).one()
+            versions = session.query(FileDocumentVersion).order_by(FileDocumentVersion.id).all()
+            self.assertEqual(db_file.ragflow_document_id, "new-doc")
+            self.assertEqual(db_file.sync_status, "synced")
+            self.assertEqual([version.state for version in versions], ["superseded", "current"])
+
+    def test_update_does_not_suppress_unrelated_ragflow_rename_error(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo"))
+            session.add(
+                File(
+                    repo_id="repo",
+                    path="/docs/report.pdf",
+                    normalized_path="/docs/report.pdf",
+                    source_content_sha256="old-source",
+                    ingested_content_sha256="old-ingested",
+                    ragflow_document_id="old-doc",
+                    ragflow_document_name="report.pdf",
+                    sync_status="synced",
+                    parse_status="DONE",
+                )
+            )
+            session.commit()
+
+        ragflow_client = _DuplicateNameRenamingRAGFlowClient()
+        ragflow_client.rename_error_message = "A different rename failure."
+        ragflow_client.documents = [{"id": "old-doc", "name": "report.pdf", "run": "DONE"}]
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"%PDF-1.4\nnew content"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        with self.assertRaises(ApiError):
+            orchestrator.sync_file("repo", "dataset", "/docs/report.pdf")
+
+        self.assertEqual(ragflow_client.operations, ["upload", "metadata", "rename"])
+        self.assertEqual(ragflow_client.parsed_ids, [])
+        with session_factory() as session:
+            db_file = session.query(File).one()
+            self.assertEqual(db_file.ragflow_document_id, "old-doc")
+
+    def test_only_latest_of_two_pending_updates_can_be_promoted(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo"))
+            session.add(
+                File(
+                    repo_id="repo",
+                    path="/docs/report.pdf",
+                    normalized_path="/docs/report.pdf",
+                    source_content_sha256="old-source",
+                    ingested_content_sha256="old-ingested",
+                    ragflow_document_id="old-doc",
+                    ragflow_document_name="report.pdf",
+                    sync_status="synced",
+                    parse_status="DONE",
+                )
+            )
+            session.commit()
+
+        sync_client = _FakeSeafileSyncClient(b"%PDF-1.4\nversion two")
+        ragflow_client = _DuplicateNameRenamingRAGFlowClient()
+        ragflow_client.documents = [{"id": "old-doc", "name": "report.pdf", "run": "DONE"}]
+        ragflow_client.upload_document_id = "version-two"
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=sync_client,
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        orchestrator.sync_file("repo", "dataset", "/docs/report.pdf")
+        sync_client.content = b"%PDF-1.4\nversion three"
+        ragflow_client.upload_document_id = "version-three"
+        orchestrator.sync_file("repo", "dataset", "/docs/report.pdf")
+        for document in ragflow_client.documents:
+            if document.get("id") == "version-two":
+                document["run"] = "DONE"
+            elif document.get("id") == "version-three":
+                document["run"] = "RUNNING"
+        ragflow_client.documents = list(reversed(ragflow_client.documents))
+
+        orchestrator.check_parse_status("repo", "dataset")
+
+        with session_factory() as session:
+            db_file = session.query(File).one()
+            versions = session.query(FileDocumentVersion).order_by(FileDocumentVersion.id).all()
+            self.assertEqual(db_file.ragflow_document_id, "old-doc")
+            self.assertEqual(
+                [version.state for version in versions],
+                ["current", "superseded", "parsing"],
+            )
+        self.assertIn(["version-two"], ragflow_client.deleted_ids)
+        self.assertNotIn(["version-three"], ragflow_client.deleted_ids)
+
+        for document in ragflow_client.documents:
+            if document.get("id") == "version-three":
+                document["run"] = "DONE"
+        orchestrator.check_parse_status("repo", "dataset")
+
+        with session_factory() as session:
+            db_file = session.query(File).one()
+            versions = session.query(FileDocumentVersion).order_by(FileDocumentVersion.id).all()
+            self.assertEqual(db_file.ragflow_document_id, "version-three")
+            self.assertEqual(
+                [version.state for version in versions],
+                ["superseded", "superseded", "current"],
+            )
+        self.assertIn(["old-doc"], ragflow_client.deleted_ids)
+        self.assertNotIn(["version-three"], ragflow_client.deleted_ids)
+
+    def test_done_update_is_not_promoted_over_newer_pending_upload(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo"))
+            db_file = File(
+                repo_id="repo",
+                path="/docs/report.pdf",
+                normalized_path="/docs/report.pdf",
+                source_content_sha256="old-source",
+                ingested_content_sha256="old-ingested",
+                ragflow_document_id="old-doc",
+                ragflow_document_name="report.pdf",
+                sync_status="parsing",
+                parse_status="RUNNING",
+            )
+            session.add(db_file)
+            session.flush()
+            session.add_all(
+                [
+                    FileDocumentVersion(
+                        file_id=db_file.id,
+                        repo_id="repo",
+                        normalized_path=db_file.normalized_path,
+                        dataset_id="dataset",
+                        document_id="old-doc",
+                        document_name="report.pdf",
+                        state="current",
+                        parse_status="DONE",
+                    ),
+                    FileDocumentVersion(
+                        file_id=db_file.id,
+                        repo_id="repo",
+                        normalized_path=db_file.normalized_path,
+                        dataset_id="dataset",
+                        document_id="version-two",
+                        document_name="report.pdf",
+                        state="parsing",
+                        parse_status="RUNNING",
+                    ),
+                    FileDocumentVersion(
+                        file_id=db_file.id,
+                        repo_id="repo",
+                        normalized_path=db_file.normalized_path,
+                        dataset_id="dataset",
+                        document_name="report.pdf",
+                        state="pending_upload",
+                    ),
+                ]
+            )
+            session.commit()
+
+        ragflow_client = _FakeRAGFlowClient()
+        ragflow_client.documents = [
+            {"id": "old-doc", "name": "report.pdf", "run": "DONE"},
+            {"id": "version-two", "name": "report.pdf", "run": "DONE"},
+        ]
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        orchestrator.check_parse_status("repo", "dataset")
+
+        with session_factory() as session:
+            db_file = session.query(File).one()
+            versions = session.query(FileDocumentVersion).order_by(FileDocumentVersion.id).all()
+            self.assertEqual(db_file.ragflow_document_id, "old-doc")
+            self.assertEqual(
+                [version.state for version in versions],
+                ["current", "superseded", "pending_upload"],
+            )
+        self.assertIn(["version-two"], ragflow_client.deleted_ids)
+        self.assertEqual(orchestrator._async_work_counts("repo")["pending_parse"], 1)
+
+    def test_promotion_and_cleanup_enqueue_commit_atomically(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo"))
+            db_file = File(
+                repo_id="repo",
+                path="/docs/report.pdf",
+                normalized_path="/docs/report.pdf",
+                source_content_sha256="old-source",
+                ingested_content_sha256="old-ingested",
+                ragflow_document_id="old-doc",
+                ragflow_document_name="report.pdf",
+                sync_status="parsing",
+                parse_status="RUNNING",
+            )
+            session.add(db_file)
+            session.flush()
+            session.add_all(
+                [
+                    FileDocumentVersion(
+                        file_id=db_file.id,
+                        repo_id="repo",
+                        normalized_path=db_file.normalized_path,
+                        dataset_id="dataset",
+                        document_id="old-doc",
+                        document_name="report.pdf",
+                        state="current",
+                        parse_status="DONE",
+                    ),
+                    FileDocumentVersion(
+                        file_id=db_file.id,
+                        repo_id="repo",
+                        normalized_path=db_file.normalized_path,
+                        dataset_id="dataset",
+                        document_id="new-doc",
+                        document_name="report.pdf",
+                        source_content_sha256="new-source",
+                        ingested_content_sha256="new-ingested",
+                        state="parsing",
+                        parse_status="RUNNING",
+                    ),
+                ]
+            )
+            session.commit()
+
+        ragflow_client = _FakeRAGFlowClient()
+        ragflow_client.documents = [
+            {"id": "old-doc", "name": "report.pdf", "run": "DONE"},
+            {"id": "new-doc", "name": "report.pdf", "run": "DONE"},
+        ]
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        def interrupt_before_commit(message: str) -> None:
+            if message == "parse-status update interrupted before commit":
+                raise SyncCancelledError(message)
+
+        orchestrator._raise_if_job_interrupted = (  # type: ignore[method-assign]
+            interrupt_before_commit
+        )
+
+        with self.assertRaisesRegex(
+            SyncCancelledError, "parse-status update interrupted before commit"
+        ):
+            orchestrator.check_parse_status("repo", "dataset")
+
+        with session_factory() as session:
+            db_file = session.query(File).one()
+            versions = session.query(FileDocumentVersion).order_by(FileDocumentVersion.id).all()
+            self.assertEqual(db_file.ragflow_document_id, "old-doc")
+            self.assertEqual(
+                [version.state for version in versions],
+                ["current", "parsing"],
+            )
+            self.assertEqual(session.query(CleanupOutbox).count(), 0)
+
+        def interrupt_after_commit(message: str) -> None:
+            if message == "document cleanup interrupted":
+                raise SyncCancelledError(message)
+
+        orchestrator._raise_if_job_interrupted = (  # type: ignore[method-assign]
+            interrupt_after_commit
+        )
+
+        with self.assertRaisesRegex(SyncCancelledError, "document cleanup interrupted"):
+            orchestrator.check_parse_status("repo", "dataset")
+
+        with session_factory() as session:
+            db_file = session.query(File).one()
+            versions = session.query(FileDocumentVersion).order_by(FileDocumentVersion.id).all()
+            cleanup = session.query(CleanupOutbox).one()
+            self.assertEqual(db_file.ragflow_document_id, "new-doc")
+            self.assertEqual(
+                [version.state for version in versions],
+                ["superseded", "current"],
+            )
+            self.assertEqual(cleanup.target_id, "old-doc")
+            self.assertEqual(cleanup.status, "pending")
 
     def test_sync_file_checkpoints_cover_each_remote_pipeline_boundary(self) -> None:
         session_factory = _session_factory(self)
