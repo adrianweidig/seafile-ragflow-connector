@@ -1146,7 +1146,7 @@ class SyncOrchestrator:
                     and old_version.state == "current"
                     and old_version.parse_status != "FAIL"
                 )
-            pending_version = session.scalar(
+            pending_version_stmt = (
                 select(FileDocumentVersion)
                 .where(FileDocumentVersion.file_id == db_file.id)
                 .where(FileDocumentVersion.dataset_id == dataset_id)
@@ -1165,6 +1165,11 @@ class SyncOrchestrator:
                 )
                 .order_by(FileDocumentVersion.id.desc())
             )
+            if old_version_id is not None:
+                pending_version_stmt = pending_version_stmt.where(
+                    FileDocumentVersion.id > old_version_id
+                )
+            pending_version = session.scalar(pending_version_stmt)
             if pending_version is not None:
                 pending_version_id = int(pending_version.id)
                 resume_document_id = pending_version.document_id
@@ -1650,9 +1655,21 @@ class SyncOrchestrator:
                     )
                 for version in versions:
                     self._raise_if_job_interrupted("parse-status update interrupted")
-                    if version.state != "current" and int(
-                        version.id
-                    ) != latest_version_id_by_file.get(version.file_id):
+                    tracked_file = session.get(File, version.file_id)
+                    if tracked_file is None:
+                        continue
+                    is_latest_version = int(version.id) == latest_version_id_by_file.get(
+                        version.file_id
+                    )
+                    is_bound_document = bool(
+                        version.document_id
+                        and tracked_file.ragflow_document_id == version.document_id
+                    )
+                    if (
+                        version.state != "current"
+                        and not is_latest_version
+                        and not is_bound_document
+                    ):
                         version.state = "superseded"
                         version.error_message = None
                         if version.document_id is not None:
@@ -1687,9 +1704,6 @@ class SyncOrchestrator:
                         continue
                     version.poll_count += 1
                     version.parse_status = parse_status
-                    tracked_file = session.get(File, version.file_id)
-                    if tracked_file is None:
-                        continue
                     if parse_status == "FAIL":
                         version.retry_count += 1
                         version.error_message = str(document.get("progress_msg") or "")[:4000]
@@ -1705,7 +1719,7 @@ class SyncOrchestrator:
                     elif parse_status == "DONE":
                         version.retry_count = 0
                         version.error_message = None
-                        if version.state != "current":
+                        if version.state != "current" and is_latest_version:
                             previous_versions = session.scalars(
                                 select(FileDocumentVersion)
                                 .where(FileDocumentVersion.file_id == version.file_id)
@@ -1748,7 +1762,11 @@ class SyncOrchestrator:
                             tracked_file.parse_status = "DONE"
                             tracked_file.retry_count = 0
                             tracked_file.error_message = None
-                        elif int(version.id) == latest_version_id_by_file.get(version.file_id):
+                        elif is_bound_document or (
+                            version.state == "current" and is_latest_version
+                        ):
+                            if is_bound_document:
+                                version.state = "current"
                             tracked_file.sync_status = "synced"
                             tracked_file.parse_status = "DONE"
                             tracked_file.retry_count = 0
@@ -2339,21 +2357,19 @@ class SyncOrchestrator:
             .with_for_update()
         )
         if existing is not None:
+            existing.repo_id = repo_id
+            existing.run_id = run_id or existing.run_id
+            existing.file_id = file_id
+            existing.document_version_id = document_version_id
+            existing.dataset_id = dataset_id
+            existing.payload = dict(payload or {})
+            existing.fence_token = fence_token
             if existing.status in {"completed", "superseded", "cancelled"}:
-                existing.repo_id = repo_id
-                existing.run_id = run_id
-                existing.file_id = file_id
-                existing.document_version_id = document_version_id
-                existing.dataset_id = dataset_id
-                existing.payload = dict(payload or {})
                 existing.status = "pending"
                 existing.attempts = 0
                 existing.run_after = datetime.now(UTC)
-                existing.fence_token = fence_token
                 existing.error_message = None
                 existing.completed_at = None
-            elif run_id and not existing.run_id:
-                existing.run_id = run_id
             session.flush()
             return int(existing.id)
         row = CleanupOutbox(
@@ -2490,6 +2506,13 @@ class SyncOrchestrator:
                 if target_type == "ragflow_document":
                     if not dataset_id:
                         raise ValueError("document cleanup requires dataset_id")
+                    if friendly_rename is not None and not self._ragflow_document_id_exists(
+                        dataset_id,
+                        friendly_rename[1],
+                    ):
+                        raise RuntimeError(
+                            "replacement RAGFlow document is missing before cleanup"
+                        )
                     self.ragflow_client.delete_documents(dataset_id, [target_id])
                     if friendly_rename is not None:
                         (
@@ -2510,6 +2533,13 @@ class SyncOrchestrator:
                             repo_id=repo_id,
                             path=rename_path,
                         )
+                        if not self._ragflow_document_id_exists(
+                            rename_dataset_id,
+                            rename_document_id,
+                        ):
+                            raise RuntimeError(
+                                "replacement RAGFlow document is missing after cleanup"
+                            )
                 elif target_type == "ragflow_dataset":
                     self.ragflow_client.delete_datasets([target_id])
                 else:
@@ -3181,6 +3211,12 @@ class SyncOrchestrator:
             keywords=_document_search_keyword(document_name),
         )
         return any(_document_id(document) == document_id for document in documents)
+
+    def _ragflow_document_id_exists(self, dataset_id: str, document_id: str) -> bool:
+        return any(
+            _document_id(document) == document_id
+            for document in self.ragflow_client.iter_documents(dataset_id)
+        )
 
     def _recover_managed_upload(
         self,
