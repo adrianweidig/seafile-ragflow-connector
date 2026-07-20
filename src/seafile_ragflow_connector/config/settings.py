@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     seafile_admin_token: str
     seafile_sync_user_token: str
     seafile_sync_user_email: str | None = None
+    seafile_sync_user_auto_share_enabled: bool = False
     seafile_skip_encrypted_libraries: bool = True
     seafile_skip_virtual_repos: bool = True
     seafile_verify_ssl: bool = True
@@ -317,6 +318,14 @@ class Settings(BaseSettings):
         stripped = value.strip()
         return stripped or None
 
+    @field_validator("seafile_sync_user_email", mode="before")
+    @classmethod
+    def strip_seafile_sync_user_email(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
     @field_validator(
         "connector_ca_bundle",
         "ssl_cert_file",
@@ -540,6 +549,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def build_service_urls(self) -> Settings:
+        if self.seafile_sync_user_auto_share_enabled and not self.seafile_sync_user_email:
+            raise ValueError(
+                "SEAFILE_SYNC_USER_EMAIL must be set when "
+                "SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED is true"
+            )
         interactive_values = (
             self.ragflow_interactive_api_key,
             self.ragflow_interactive_owner_id,

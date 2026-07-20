@@ -92,12 +92,28 @@ class _FakeOrchestrator:
             library_runnable=library_runnable,
         )
         self.full_syncs: list[tuple[str, str]] = []
+        self.dataset_ensures: list[str] = []
+        self.file_syncs: list[tuple[str, str, str, bool]] = []
 
     def discover_job_specs(self) -> list[JobSpec]:
         return [JobSpec(JobType.SYNC_LIBRARY_FULL, repo_id="repo-1")]
 
     def sync_library_full(self, repo_id: str, *, scope: str = "/") -> None:
         self.full_syncs.append((repo_id, scope))
+
+    def ensure_dataset_for_repo(self, repo_id: str) -> str:
+        self.dataset_ensures.append(repo_id)
+        return "dataset-1"
+
+    def sync_file(
+        self,
+        repo_id: str,
+        dataset_id: str,
+        path: str,
+        *,
+        force: bool = False,
+    ) -> None:
+        self.file_syncs.append((repo_id, dataset_id, path, force))
 
 
 class _FakeAdminControlStore:
@@ -240,6 +256,8 @@ class CliSyncHelpersTests(unittest.TestCase):
             redis_url="redis://local",
             ragflow_template_dataset_name="connector_template",
             ragflow_interactive_api_key="interactive-token",
+            seafile_sync_user_auto_share_enabled=False,
+            seafile_sync_user_email=None,
         )
         calls: list[str] = []
         interactive = SimpleNamespace(
@@ -286,6 +304,8 @@ class CliSyncHelpersTests(unittest.TestCase):
             redis_url="redis://local",
             ragflow_template_dataset_name="connector_template",
             ragflow_interactive_api_key="interactive-token",
+            seafile_sync_user_auto_share_enabled=False,
+            seafile_sync_user_email=None,
         )
 
         def reject_owner() -> None:
@@ -320,6 +340,48 @@ class CliSyncHelpersTests(unittest.TestCase):
             check_live(json_output=True)
 
         self.assertEqual(closed, [True])
+
+    def test_check_live_verifies_configured_seafile_sync_identity(self) -> None:
+        settings = SimpleNamespace(
+            database_url="sqlite://",
+            redis_url="redis://local",
+            ragflow_template_dataset_name="connector_template",
+            ragflow_interactive_api_key=None,
+            seafile_sync_user_auto_share_enabled=True,
+            seafile_sync_user_email="sync@auth.local",
+        )
+        identity_calls: list[str] = []
+        runtime = SimpleNamespace(
+            admin_client=SimpleNamespace(list_libraries=lambda per_page: ["library"]),
+            sync_client=SimpleNamespace(
+                require_account_identity=lambda email: identity_calls.append(email) or email
+            ),
+            ragflow_client=SimpleNamespace(list_datasets=lambda name: [{"id": "dataset"}]),
+            interactive_ragflow_client=None,
+            close=lambda: None,
+        )
+
+        with (
+            patch("seafile_ragflow_connector.app.cli._bootstrap", return_value=settings),
+            patch("seafile_ragflow_connector.app.cli.check_database"),
+            patch("seafile_ragflow_connector.app.cli.check_redis"),
+            patch(
+                "seafile_ragflow_connector.app.cli.database_revisions",
+                return_value=("head", "head"),
+            ),
+            patch("seafile_ragflow_connector.app.cli.build_runtime", return_value=runtime),
+            patch(
+                "seafile_ragflow_connector.app.cli._retry_until",
+                side_effect=lambda action, _label: action(),
+            ),
+            patch("seafile_ragflow_connector.app.cli._emit_payload") as emit,
+        ):
+            check_live(json_output=True)
+
+        payload = emit.call_args.args[0]
+        self.assertEqual(identity_calls, ["sync@auth.local"])
+        self.assertTrue(payload["seafile_sync_user_auto_share_enabled"])
+        self.assertTrue(payload["seafile_sync_user_identity_verified"])
 
     def test_search_answer_chat_uses_interactive_client_and_model(self) -> None:
         primary = _FakeInteractiveRAGFlowClient()
@@ -691,6 +753,31 @@ class CliSyncHelpersTests(unittest.TestCase):
             handlers[JobType.SYNC_LIBRARY_FULL](spec)
 
         self.assertEqual(len(job_store.list_jobs(limit=10)), 1)
+
+    def test_upload_file_handler_uses_public_sync_file_entrypoint(self) -> None:
+        orchestrator = _FakeOrchestrator()
+        runtime = SimpleNamespace(
+            orchestrator=orchestrator,
+            job_store=SimpleNamespace(),
+            signal_queue=SimpleNamespace(),
+            openwebui_sync_service=None,
+            ragflow_client=SimpleNamespace(),
+        )
+        handlers = _build_job_handlers(runtime)  # type: ignore[arg-type]
+
+        handlers[JobType.UPLOAD_FILE](
+            JobSpec(
+                JobType.UPLOAD_FILE,
+                repo_id="repo-1",
+                file_path="/report.pdf",
+            )
+        )
+
+        self.assertEqual(orchestrator.dataset_ensures, ["repo-1"])
+        self.assertEqual(
+            orchestrator.file_syncs,
+            [("repo-1", "dataset-1", "/report.pdf", True)],
+        )
 
     def test_sync_once_runs_openwebui_summary_when_enabled(self) -> None:
         service = _FakeOpenWebUIService()

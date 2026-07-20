@@ -19,6 +19,11 @@ retroactively.
   libraries and the same identity is used by Connector Search and OpenWebUI.
 - The administration dashboard exposes the effective dataset permission mode,
   interactive owner, and chat model without disclosing the associated API key.
+- An optional auto-share mode, disabled by default, grants only direct read
+  access to the verified technical sync user for existing and future eligible
+  private Seafile libraries. The first automatic cycle checks the existing
+  inventory retroactively; existing permissions are neither changed nor
+  automatically removed.
 
 ### Fixed
 

@@ -124,6 +124,20 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(settings.search_acl_sync_enabled)
         self.assertFalse(settings.search_acl_include_subfolder_permissions)
         self.assertFalse(settings.search_acl_include_share_links)
+        self.assertFalse(settings.seafile_sync_user_auto_share_enabled)
+
+    def test_seafile_sync_user_auto_share_requires_canonical_email(self) -> None:
+        values = self.base_values()
+        values["database_url"] = "postgresql+psycopg://custom/db"
+        values["seafile_sync_user_auto_share_enabled"] = True
+
+        with self.assertRaisesRegex(ValueError, "SEAFILE_SYNC_USER_EMAIL"):
+            Settings(**values)
+
+        values["seafile_sync_user_email"] = "  sync@auth.local  "
+        settings = Settings(**values)
+        self.assertTrue(settings.seafile_sync_user_auto_share_enabled)
+        self.assertEqual(settings.seafile_sync_user_email, "sync@auth.local")
 
     def test_automation_initial_state_accepts_only_running_or_stopped(self) -> None:
         values = self.base_values()

@@ -136,6 +136,8 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
             "ENTERPRISE_OPENWEBUI_BASE_URL": "https://openwebui.internal",
             "ENTERPRISE_CONNECTOR_PUBLIC_BASE_URL": "https://connector.internal",
             "CONNECTOR_DASHBOARD_CONTROL_ENABLED": "true",
+            "SEAFILE_SYNC_USER_EMAIL": "sync@auth.local",
+            "SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED": "true",
             "RAGFLOW_INTERACTIVE_OWNER_ID": "interactive-owner-id",
             "RAGFLOW_INTERACTIVE_CHAT_MODEL_ID": "interactive-chat-model-id",
             "RAGFLOW_GENERATED_DATASET_PERMISSION": "team",
@@ -175,6 +177,8 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
     assert "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" in generated_env
     assert "SEAFILE_VERIFY_SSL=true" in generated_env
     assert "SEAFILE_PUBLIC_BASE_URL=https://files.internal" in generated_env
+    assert "SEAFILE_SYNC_USER_EMAIL=sync@auth.local" in generated_env
+    assert "SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED=true" in generated_env
     assert "SEAFILE_FILE_URL_TEMPLATE=\n" in generated_env
     assert "RAGFLOW_CA_BUNDLE=/certs/company-root-ca.pem" in generated_env
     assert "AUTHZ_API_SHARED_SECRET=authz-secret" in generated_env

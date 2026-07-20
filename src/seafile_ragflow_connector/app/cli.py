@@ -142,6 +142,17 @@ def check_live(
             lambda: runtime.admin_client.list_libraries(per_page=1),
             "Seafile",
         )
+        sync_user_identity_verified = False
+        if settings.seafile_sync_user_auto_share_enabled:
+            assert settings.seafile_sync_user_email is not None
+            sync_user_email = settings.seafile_sync_user_email
+            _retry_until(
+                lambda: runtime.sync_client.require_account_identity(
+                    sync_user_email
+                ),
+                "Seafile sync identity",
+            )
+            sync_user_identity_verified = True
         templates = _retry_until(
             lambda: runtime.ragflow_client.list_datasets(
                 name=settings.ragflow_template_dataset_name,
@@ -168,6 +179,10 @@ def check_live(
                 "database_revision_match": current_revision == expected_revision,
                 "redis": "ok",
                 "seafile_admin_libraries_visible": len(libraries),
+                "seafile_sync_user_auto_share_enabled": (
+                    settings.seafile_sync_user_auto_share_enabled
+                ),
+                "seafile_sync_user_identity_verified": sync_user_identity_verified,
                 "ragflow_template_found": bool(templates),
                 "template_name": settings.ragflow_template_dataset_name,
                 "ragflow_interactive_configured": interactive_configured,

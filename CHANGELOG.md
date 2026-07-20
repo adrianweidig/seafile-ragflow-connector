@@ -22,6 +22,11 @@ werden keine historischen Releases nachträglich erfunden.
 - Das Admin-Dashboard zeigt den effektiven Dataset-Berechtigungsmodus sowie
   den konfigurierten interaktiven Besitzer und das Chat-Modell, ohne den
   zugehörigen API-Key offenzulegen.
+- Eine optionale, standardmäßig deaktivierte Auto-Freigabe ergänzt für
+  bestehende und künftige geeignete private Seafile-Bibliotheken ausschließlich
+  einen direkten Lesezugriff des zuvor verifizierten technischen Sync-Benutzers.
+  Der erste automatische Zyklus prüft den Bestand rückwirkend; bestehende
+  Berechtigungen werden weder geändert noch automatisch entfernt.
 
 ### Fixed
 

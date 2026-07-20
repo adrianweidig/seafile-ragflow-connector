@@ -288,7 +288,11 @@ class RuntimeServiceRoutingTests(unittest.TestCase):
         self.assertIs(built.interactive_ragflow_client, interactive_client)
 
     def test_build_runtime_uses_internal_urls_for_service_clients(self) -> None:
-        settings = _settings(ragflow_generated_dataset_permission="team")
+        settings = _settings(
+            ragflow_generated_dataset_permission="team",
+            seafile_sync_user_auto_share_enabled=True,
+            seafile_sync_user_email="sync@auth.local",
+        )
         session_factory = MagicMock()
 
         with (
@@ -314,6 +318,13 @@ class RuntimeServiceRoutingTests(unittest.TestCase):
         self.assertEqual(
             orchestrator_class.call_args.kwargs["generated_dataset_permission"],
             "team",
+        )
+        self.assertTrue(
+            orchestrator_class.call_args.kwargs["sync_user_auto_share_enabled"]
+        )
+        self.assertEqual(
+            orchestrator_class.call_args.kwargs["sync_user_email"],
+            "sync@auth.local",
         )
         control_store_class.return_value.initialize_workflow.assert_not_called()
         self.assertIn(

@@ -554,6 +554,11 @@ SEAFILE_SYNC_USER_TOKEN="${SEAFILE_SYNC_USER_TOKEN:-}"
 prompt_secret SEAFILE_SYNC_USER_TOKEN "Seafile Sync-User-Token" true false
 SEAFILE_SYNC_USER_EMAIL="${SEAFILE_SYNC_USER_EMAIL:-}"
 prompt_value SEAFILE_SYNC_USER_EMAIL "Seafile Sync-User-E-Mail, optional" "" false
+SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED="${SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED:-false}"
+prompt_yes_no SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED "Fehlenden Zugriff des verifizierten Sync-Users für alle bestehenden und künftigen aktiven geeigneten Bibliotheken als Nur-Lese-Root-Freigabe ergänzen?" false
+if is_true "$SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED" && [ -z "$SEAFILE_SYNC_USER_EMAIL" ]; then
+  die "SEAFILE_SYNC_USER_EMAIL ist bei aktivierter automatischer Sync-User-Freigabe erforderlich"
+fi
 
 RAGFLOW_API_KEY="${RAGFLOW_API_KEY:-}"
 prompt_secret RAGFLOW_API_KEY "RAGFlow API-Key" true false
@@ -798,6 +803,7 @@ write_env_line SEAFILE_PUBLIC_BASE_URL "$ENTERPRISE_SEAFILE_PUBLIC_BASE_URL"
 write_env_line SEAFILE_ADMIN_TOKEN "$SEAFILE_ADMIN_TOKEN"
 write_env_line SEAFILE_SYNC_USER_TOKEN "$SEAFILE_SYNC_USER_TOKEN"
 write_env_line SEAFILE_SYNC_USER_EMAIL "$SEAFILE_SYNC_USER_EMAIL"
+write_env_line SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED "$SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED"
 write_env_line SEAFILE_VERIFY_SSL true
 write_env_line SEAFILE_CA_BUNDLE "$CA_BUNDLE_VALUE"
 write_env_line SEAFILE_REWRITE_DOWNLOAD_URLS "$SEAFILE_REWRITE_DOWNLOAD_URLS"

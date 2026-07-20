@@ -192,7 +192,8 @@ installierten System-CAs.
 | Variable | Pflicht | Zweck |
 | --- | --- | --- |
 | `SEAFILE_INTERNAL_URL`, `RAGFLOW_INTERNAL_URL` | optional | abweichende interne URL für Container-zu-Container-Traffic. |
-| `SEAFILE_SYNC_USER_EMAIL` | optional | Dokumentativer Sync-User-Hinweis; Token ist maßgeblich. |
+| `SEAFILE_SYNC_USER_EMAIL` | Pflicht bei Auto-Freigabe | Kanonische Seafile-E-Mail der technischen Sync-Identität. Sie muss mit `/api2/account/info/` des Sync-Tokens übereinstimmen. |
+| `SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED` | optional | Default `false`. Der erste automatische Zyklus prüft alle bestehenden geeigneten und ausführbaren Bibliotheken, spätere Zyklen auch neu entdeckte. Nur nach einem exakten Root-403 wird eine direkte Nur-Lese-Freigabe (`path=/`, `permission=r`) für die verifizierte Sync-Identität ergänzt. Bestehende `r`-/`rw`-Freigaben werden nicht verändert; es gibt keine automatische Rücknahme. |
 | `SEAFILE_SKIP_ENCRYPTED_LIBRARIES`, `SEAFILE_SKIP_VIRTUAL_REPOS` | optional | Discovery-Filter für Seafile-Libraries. |
 | `SEAFILE_PUBLIC_BASE_URL` | optional | browserseitige Seafile-Basis-URL für OpenWebUI-Original-Links; fällt auf `SEAFILE_BASE_URL` zurück. |
 | `SEAFILE_FILE_URL_TEMPLATE` | optional | Override für abweichende Seafile-Webrouten; sonst wird der Original-Link automatisch aus Basis-URL, Repo-ID und Pfad erzeugt. |

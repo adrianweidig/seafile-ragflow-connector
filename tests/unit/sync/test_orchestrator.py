@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 try:
     from sqlalchemy import create_engine
@@ -32,6 +33,7 @@ try:
         SyncOrchestrator,
         _is_ragflow_duplicate_document_name_error,
     )
+    from seafile_ragflow_connector.sync.reconcile import ReconcilePlan
     from seafile_ragflow_connector.utils.hashing import sha256_bytes
 except ModuleNotFoundError as exc:
     if exc.name != "sqlalchemy":
@@ -104,6 +106,69 @@ class _FakeSeafileAdminClient:
     def iter_libraries(self):
         self.iter_calls += 1
         return iter(self.libraries)
+
+
+class _AutoShareSeafileSyncClient(_FakeSeafileSyncClient):
+    def __init__(
+        self,
+        *,
+        access_granted: bool = False,
+        denied_status: int = 403,
+        identity_error: Exception | None = None,
+    ) -> None:
+        super().__init__(b"content")
+        self.access_granted = access_granted
+        self.denied_status = denied_status
+        self.identity_error = identity_error
+        self.identity_calls: list[str] = []
+        self.root_probe_calls = 0
+
+    def require_account_identity(self, expected_email: str) -> str:
+        self.identity_calls.append(expected_email)
+        if self.identity_error is not None:
+            raise self.identity_error
+        return "sync@auth.local"
+
+    def list_dir(self, repo_id: str, path: str):
+        if path == "/":
+            self.root_probe_calls += 1
+            if not self.access_granted:
+                raise ApiError("root access denied", status_code=self.denied_status)
+        return super().list_dir(repo_id, path)
+
+
+class _AutoShareSeafileAdminClient(_FakeSeafileAdminClient):
+    def __init__(
+        self,
+        libraries: list[dict[str, object]],
+        sync_client: _AutoShareSeafileSyncClient,
+    ) -> None:
+        super().__init__(libraries)
+        self.sync_client = sync_client
+        self.share_calls: list[tuple[str, str]] = []
+
+    def ensure_read_only_user_share(self, repo_id: str, user_email: str) -> bool:
+        self.share_calls.append((repo_id, user_email))
+        self.sync_client.access_granted = True
+        return True
+
+
+class _AutoShareSnapshotSeafileSyncClient(_AutoShareSeafileSyncClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.commit_probe_calls = 0
+
+    def list_dir_at_commit(
+        self,
+        repo_id: str,
+        commit_id: str,
+        path: str = "/",
+    ) -> list[dict[str, object]]:
+        _ = (repo_id, commit_id, path)
+        self.commit_probe_calls += 1
+        if not self.access_granted:
+            raise ApiError("commit access denied", status_code=403)
+        return []
 
 
 class _FakeRAGFlowClient:
@@ -520,6 +585,241 @@ class OrchestratorUploadTests(unittest.TestCase):
             self.assertEqual(session.get(Library, "paused").status, "active")
             self.assertEqual(session.get(Library, "disabled").status, "active")
             self.assertEqual(session.get(Library, "encrypted").status, "skipped:encrypted")
+
+    def test_automatic_discovery_auto_shares_only_after_exact_403_and_reprobes(self) -> None:
+        session_factory = _session_factory(self)
+        sync_client = _AutoShareSeafileSyncClient()
+        admin_client = _AutoShareSeafileAdminClient(
+            [{"id": "repo", "name": "Demo"}],
+            sync_client,
+        )
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=admin_client,  # type: ignore[arg-type]
+            sync_client=sync_client,  # type: ignore[arg-type]
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+            sync_user_auto_share_enabled=True,
+            sync_user_email="sync@auth.local",
+        )
+
+        specs = orchestrator.discover_job_specs()
+
+        self.assertEqual([spec.repo_id for spec in specs], ["repo"])
+        self.assertEqual(sync_client.identity_calls, ["sync@auth.local"])
+        self.assertEqual(sync_client.root_probe_calls, 2)
+        self.assertEqual(admin_client.share_calls, [("repo", "sync@auth.local")])
+
+    def test_manual_inventory_is_read_only_but_manual_sync_runs_access_preflight(self) -> None:
+        session_factory = _session_factory(self)
+        sync_client = _AutoShareSeafileSyncClient()
+        admin_client = _AutoShareSeafileAdminClient(
+            [{"id": "repo", "name": "Demo"}],
+            sync_client,
+        )
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=admin_client,  # type: ignore[arg-type]
+            sync_client=sync_client,  # type: ignore[arg-type]
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+            sync_user_auto_share_enabled=True,
+            sync_user_email="sync@auth.local",
+        )
+
+        visible = orchestrator.discover_libraries(full_visibility=True)
+
+        self.assertEqual([library.repo_id for library in visible], ["repo"])
+        self.assertEqual(sync_client.identity_calls, [])
+        self.assertEqual(sync_client.root_probe_calls, 0)
+        self.assertEqual(admin_client.share_calls, [])
+
+        with (
+            patch.object(
+                orchestrator,
+                "_mutation_scope",
+                side_effect=RuntimeError("stopped after access preflight"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "stopped after access preflight"),
+        ):
+            orchestrator.sync_library_full("repo")
+
+        self.assertEqual(sync_client.identity_calls, ["sync@auth.local"])
+        self.assertEqual(sync_client.root_probe_calls, 2)
+        self.assertEqual(admin_client.share_calls, [("repo", "sync@auth.local")])
+
+    def test_reconcile_plan_is_read_only_but_execute_runs_access_preflight(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset",
+                    head_commit_id="commit-1",
+                )
+            )
+            session.commit()
+        sync_client = _AutoShareSnapshotSeafileSyncClient()
+        admin_client = _AutoShareSeafileAdminClient([], sync_client)
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=admin_client,  # type: ignore[arg-type]
+            sync_client=sync_client,  # type: ignore[arg-type]
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+            sync_user_auto_share_enabled=True,
+            sync_user_email="sync@auth.local",
+        )
+
+        with self.assertRaisesRegex(ApiError, "commit access denied"):
+            orchestrator.reconcile_library("repo", execute=False)
+
+        self.assertEqual(sync_client.identity_calls, [])
+        self.assertEqual(sync_client.root_probe_calls, 0)
+        self.assertEqual(sync_client.commit_probe_calls, 1)
+        self.assertEqual(admin_client.share_calls, [])
+
+        with patch.object(
+            orchestrator.reconciler,
+            "plan_library_reconcile",
+            side_effect=lambda repo_id, dataset_id, **kwargs: ReconcilePlan(
+                repo_id=repo_id,
+                dataset_id=dataset_id,
+                scope=str(kwargs["scope"]),
+                commit_id=str(kwargs["commit_id"]),
+                snapshot_id=int(kwargs["snapshot_id"]),
+            ),
+        ):
+            executed = orchestrator.reconcile_library("repo", execute=True)
+
+        self.assertEqual(executed.repo_id, "repo")
+        self.assertEqual(sync_client.identity_calls, ["sync@auth.local"])
+        self.assertEqual(sync_client.root_probe_calls, 2)
+        self.assertEqual(sync_client.commit_probe_calls, 2)
+        self.assertEqual(admin_client.share_calls, [("repo", "sync@auth.local")])
+
+    def test_direct_upload_file_entrypoint_runs_access_preflight_before_download(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo"))
+            session.commit()
+        sync_client = _AutoShareSeafileSyncClient()
+        sync_client.content = b"%PDF-1.4\ncontent"
+        admin_client = _AutoShareSeafileAdminClient([], sync_client)
+        ragflow_client = _FakeRAGFlowClient()
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=admin_client,  # type: ignore[arg-type]
+            sync_client=sync_client,  # type: ignore[arg-type]
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+            sync_user_auto_share_enabled=True,
+            sync_user_email="sync@auth.local",
+        )
+
+        result = orchestrator.sync_file("repo", "dataset", "/report.pdf", force=True)
+
+        self.assertTrue(result.uploaded)
+        self.assertEqual(sync_client.identity_calls, ["sync@auth.local"])
+        self.assertEqual(sync_client.root_probe_calls, 2)
+        self.assertEqual(admin_client.share_calls, [("repo", "sync@auth.local")])
+        self.assertIn("upload", ragflow_client.operations)
+
+    def test_auto_share_does_not_treat_non_403_as_permission_gap(self) -> None:
+        session_factory = _session_factory(self)
+        sync_client = _AutoShareSeafileSyncClient(denied_status=404)
+        admin_client = _AutoShareSeafileAdminClient(
+            [{"id": "repo", "name": "Demo"}],
+            sync_client,
+        )
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=admin_client,  # type: ignore[arg-type]
+            sync_client=sync_client,  # type: ignore[arg-type]
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+            sync_user_auto_share_enabled=True,
+            sync_user_email="sync@auth.local",
+        )
+
+        self.assertEqual(orchestrator.discover_job_specs(), [])
+        self.assertEqual(admin_client.share_calls, [])
+        with session_factory() as session:
+            library = session.get(Library, "repo")
+            assert library is not None
+            self.assertEqual(library.status, "error")
+            self.assertIn("root access denied", library.last_error or "")
+
+    def test_auto_share_fails_closed_on_sync_identity_mismatch(self) -> None:
+        session_factory = _session_factory(self)
+        sync_client = _AutoShareSeafileSyncClient(
+            identity_error=RuntimeError("sync identity mismatch")
+        )
+        admin_client = _AutoShareSeafileAdminClient(
+            [{"id": "repo", "name": "Demo"}],
+            sync_client,
+        )
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=admin_client,  # type: ignore[arg-type]
+            sync_client=sync_client,  # type: ignore[arg-type]
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+            sync_user_auto_share_enabled=True,
+            sync_user_email="sync@auth.local",
+        )
+
+        self.assertEqual(orchestrator.discover_job_specs(), [])
+        self.assertEqual(sync_client.root_probe_calls, 0)
+        self.assertEqual(admin_client.share_calls, [])
+
+    def test_auto_share_never_touches_encrypted_or_virtual_libraries(self) -> None:
+        session_factory = _session_factory(self)
+        sync_client = _AutoShareSeafileSyncClient()
+        admin_client = _AutoShareSeafileAdminClient(
+            [
+                {"id": "encrypted", "name": "Encrypted", "encrypted": True},
+                {"id": "virtual", "name": "Virtual", "virtual": True},
+            ],
+            sync_client,
+        )
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=admin_client,  # type: ignore[arg-type]
+            sync_client=sync_client,  # type: ignore[arg-type]
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+            skip_encrypted_libraries=False,
+            skip_virtual_repos=False,
+            sync_user_auto_share_enabled=True,
+            sync_user_email="sync@auth.local",
+        )
+
+        specs = orchestrator.discover_job_specs()
+
+        self.assertEqual(
+            {spec.repo_id for spec in specs},
+            {"encrypted", "virtual"},
+        )
+        self.assertEqual(sync_client.identity_calls, [])
+        self.assertEqual(sync_client.root_probe_calls, 0)
+        self.assertEqual(admin_client.share_calls, [])
 
     def test_controlled_library_rejects_direct_mutating_work_before_run_creation(self) -> None:
         session_factory = _session_factory(self)

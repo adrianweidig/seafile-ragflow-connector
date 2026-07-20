@@ -47,11 +47,20 @@ einzelnen Deployment-Pfaden fehlen.
    setzen.
 8. `SEAFILE_BASE_URL` und `RAGFLOW_BASE_URL` auf die aus dem
    Connector-Container erreichbaren URLs setzen.
-9. Für einen isolierten allerersten Start zusätzlich Dashboard-Control mit
+9. Wenn private Bibliotheken automatisch für die technische Sync-Identität
+   lesbar werden sollen, `SEAFILE_SYNC_USER_EMAIL` auf deren kanonische
+   Seafile-E-Mail und
+   `SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED=true` setzen. Der sichere Default
+   bleibt `false`; der Connector entfernt diese Freigaben später nicht. Vor
+   dem Einschalten nicht gewünschte Bibliotheken deaktivieren oder pausieren:
+   Der erste automatische Zyklus prüft auch alle bereits bestehenden,
+   geeigneten und ausführbaren Bibliotheken und kann mehrere Freigaben
+   anlegen.
+10. Für einen isolierten allerersten Start zusätzlich Dashboard-Control mit
    echten Basic-Auth-Werten aktivieren und
    `CONNECTOR_AUTOMATION_INITIAL_STATE=stopped` setzen. Der allgemeine
    rückwärtskompatible Default bleibt `running`.
-10. Stack starten und die Logs von `connector-controller`, `connector-worker` und
+11. Stack starten und die Logs von `connector-controller`, `connector-worker` und
    `connector-reconciler` prüfen.
 
 Der Stack stellt Seafile und RAGFlow nicht bereit. Beide Systeme bleiben extern

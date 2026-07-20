@@ -122,6 +122,8 @@ class SyncOrchestrator:
         generated_dataset_permission: Literal["me", "team"] = "me",
         skip_encrypted_libraries: bool = True,
         skip_virtual_repos: bool = True,
+        sync_user_auto_share_enabled: bool = False,
+        sync_user_email: str | None = None,
         delete_ragflow_docs_on_seafile_delete: bool = True,
         delete_dataset_when_library_deleted: bool = True,
         refresh_dataset_settings: bool = True,
@@ -135,6 +137,12 @@ class SyncOrchestrator:
         self.file_policy = file_policy
         self.skip_encrypted_libraries = skip_encrypted_libraries
         self.skip_virtual_repos = skip_virtual_repos
+        self.sync_user_auto_share_enabled = sync_user_auto_share_enabled
+        self.sync_user_email = sync_user_email.strip() if sync_user_email else None
+        if self.sync_user_auto_share_enabled and not self.sync_user_email:
+            raise ValueError(
+                "sync_user_email is required when sync-user auto-share is enabled"
+            )
         self.delete_ragflow_docs_on_seafile_delete = delete_ragflow_docs_on_seafile_delete
         self.delete_dataset_when_library_deleted = delete_dataset_when_library_deleted
         self.refresh_dataset_settings = refresh_dataset_settings
@@ -211,6 +219,17 @@ class SyncOrchestrator:
                 continue
             control = controls[library.repo_id]
             if control.runnable:
+                if trigger == "automatic":
+                    try:
+                        self._ensure_sync_user_access(library.repo_id)
+                    except Exception as exc:
+                        self._mark_library_error(library.repo_id, exc)
+                        self.log.warning(
+                            "library.sync_user_access_failed",
+                            repo_id=library.repo_id,
+                            error_class=type(exc).__name__,
+                        )
+                        continue
                 self._ensure_parse_status_job(
                     library.repo_id,
                     dataset_id,
@@ -375,6 +394,7 @@ class SyncOrchestrator:
 
     def sync_library_full(self, repo_id: str, *, scope: str = "/") -> SyncSummary:
         self.assert_library_runnable(repo_id)
+        self._ensure_sync_user_access(repo_id)
         normalized_scope = normalize_seafile_path(scope)
         sync_id = new_sync_id(repo_id)
         with self._mutation_scope(repo_id, owner_id=f"sync:{sync_id}") as lease:
@@ -703,6 +723,7 @@ class SyncOrchestrator:
 
     def sync_library_delta(self, repo_id: str, *, scope: str = "/") -> SyncSummary:
         self.assert_library_runnable(repo_id)
+        self._ensure_sync_user_access(repo_id)
         normalized_scope = normalize_seafile_path(scope)
         with self._mutation_scope(
             repo_id,
@@ -956,6 +977,7 @@ class SyncOrchestrator:
     ) -> ReconcilePlan:
         if execute:
             self.assert_library_runnable(repo_id)
+            self._ensure_sync_user_access(repo_id)
         with self._mutation_scope(
             repo_id,
             owner_id=f"reconcile:{new_sync_id(repo_id)}",
@@ -1040,6 +1062,7 @@ class SyncOrchestrator:
     ) -> FileSyncResult:
         if lease is None:
             self.assert_library_runnable(repo_id)
+            self._ensure_sync_user_access(repo_id)
             with self._mutation_scope(
                 repo_id,
                 owner_id=f"file:{new_sync_id(repo_id)}",
@@ -1841,6 +1864,34 @@ class SyncOrchestrator:
             raise ValueError(
                 f"library {repo_id!r} is {control.state} and cannot be mutated"
             )
+
+    def _ensure_sync_user_access(self, repo_id: str) -> None:
+        if not self.sync_user_auto_share_enabled:
+            return
+        with self.session_factory() as session:
+            library = self._get_library(session, repo_id)
+            if library.encrypted or library.virtual:
+                return
+
+        assert self.sync_user_email is not None
+        canonical_email = self.sync_client.require_account_identity(self.sync_user_email)
+        try:
+            self.sync_client.list_dir(repo_id, "/")
+            return
+        except ApiError as exc:
+            if exc.status_code != 403:
+                raise
+
+        created = self.admin_client.ensure_read_only_user_share(
+            repo_id,
+            canonical_email,
+        )
+        self.sync_client.list_dir(repo_id, "/")
+        self.log.info(
+            "library.sync_user_access_ready",
+            repo_id=repo_id,
+            share_created=created,
+        )
 
     @contextmanager
     def _mutation_scope(

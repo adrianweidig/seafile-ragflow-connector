@@ -252,6 +252,17 @@ auch Owner-ID und Chat-Modell-ID gesetzt sein; zusätzlich muss die Berechtigung
 neuer Bibliotheks-Datasets `team` sein. Ohne interaktiven Key bleibt das
 bisherige Ein-Identitäts-Verhalten erhalten.
 
+Private Seafile-Bibliotheken müssen für den technischen Sync-Benutzer lesbar
+sein. Optional kann der Connector diese direkte Nur-Lese-Freigabe selbst
+ergänzen: `SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED=true` verlangt
+`SEAFILE_SYNC_USER_EMAIL`. Nach der Aktivierung prüft bereits der erste
+automatische Zyklus alle bestehenden geeigneten und ausführbaren Bibliotheken;
+spätere Zyklen erfassen zusätzlich neu hinzugekommene Bibliotheken. Dies kann
+beim ersten Lauf mehrere Freigaben erzeugen. Vor jeder Freigabe wird die Token-
+Identität über Seafile verifiziert; nur ein Root-Zugriffsfehler mit HTTP 403
+löst die Freigabe aus. Deaktivierte, pausierte, verschlüsselte und virtuelle
+Bibliotheken werden dabei nicht automatisch freigegeben.
+
 Start:
 
 ```bash
