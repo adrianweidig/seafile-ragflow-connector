@@ -13,7 +13,7 @@ retroactively.
 ### Fixed
 
 - Repeated RAGFlow source markers no longer duplicate signed preview URLs.
-  Only the first marker per source remains linked while later markers stay
+  Only one marker per source remains linked while the other markers stay
   short, preventing OpenWebUI responses from being truncated by repeated long
   URLs.
 

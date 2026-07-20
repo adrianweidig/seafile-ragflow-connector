@@ -13,7 +13,7 @@ werden keine historischen Releases nachträglich erfunden.
 ### Fixed
 
 - Wiederholte RAGFlow-Quellenmarker vervielfachen signierte Vorschau-URLs
-  nicht mehr. Pro Quelle bleibt nur der erste Marker verlinkt, weitere Marker
+  nicht mehr. Pro Quelle bleibt nur ein Marker verlinkt, weitere Marker
   bleiben kurz; dadurch werden OpenWebUI-Antworten nicht durch wiederholte
   Lang-URLs abgeschnitten.
 
