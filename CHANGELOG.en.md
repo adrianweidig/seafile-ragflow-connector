@@ -27,6 +27,10 @@ retroactively.
 
 ### Fixed
 
+- From the moment a library deletion is confirmed, its Search profile remains
+  disabled even if RAGFlow cleanup temporarily fails. Once deletion succeeds,
+  only that library's ACL snapshot is removed; other profiles and permissions
+  remain unchanged.
 - The enterprise Compose wizard now preserves and validates the dataset
   permission and every interactive RAGFlow identity setting, and writes secret
   environment files with owner-only permissions.

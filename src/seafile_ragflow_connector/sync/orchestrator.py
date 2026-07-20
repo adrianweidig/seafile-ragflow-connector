@@ -34,6 +34,11 @@ from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 from seafile_ragflow_connector.persistence.admin_control import AdminControlStore
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.library import Library
+from seafile_ragflow_connector.persistence.models.search import (
+    LibraryACLEffectiveUser,
+    LibraryACLSubject,
+    SearchProfile,
+)
 from seafile_ragflow_connector.persistence.models.sync_state import (
     CleanupOutbox,
     FileDocumentVersion,
@@ -2639,6 +2644,10 @@ class SyncOrchestrator:
                                 library.status = "delete_failed"
                                 library.deletion_state = "delete_failed"
                                 library.last_error = row.error_message
+                                self._disable_library_search_profile(
+                                    session,
+                                    row.repo_id,
+                                )
                         session.commit()
                 self.job_store.refresh_workflow_parents_for_cleanup(int(row_id))
                 self.log.warning(
@@ -2747,6 +2756,7 @@ class SyncOrchestrator:
                 library.status = "confirmed_for_deletion"
                 library.deletion_state = "confirmed"
                 library.last_error = None
+                self._disable_library_search_profile(session, row.repo_id)
             session.commit()
         self.job_store.refresh_workflow_parents_for_cleanup(outbox_id)
         return repo_id
@@ -2779,6 +2789,11 @@ class SyncOrchestrator:
                 name_slug=slugify(library.name),
             )
             session.add(db_library)
+        reappeared_after_confirmation = db_library.deletion_state in {
+            "confirmed",
+            "delete_failed",
+            "deleted",
+        }
         db_library.name = library.name
         db_library.name_slug = slugify(library.name)
         db_library.owner_email = library.owner_email
@@ -2805,6 +2820,14 @@ class SyncOrchestrator:
         db_library.deletion_state = "active"
         db_library.status = "active"
         db_library.last_error = None
+        if reappeared_after_confirmation:
+            profile = session.scalar(
+                select(SearchProfile).where(SearchProfile.repo_id == library.repo_id)
+            )
+            if profile is not None:
+                profile.enabled = False
+                profile.status = "pending"
+                profile.last_error = None
         return db_library
 
     @staticmethod
@@ -2891,6 +2914,7 @@ class SyncOrchestrator:
                     else:
                         row.deletion_state = "confirmed"
                         row.status = "confirmed_for_deletion"
+                    self._disable_library_search_profile(session, row.repo_id)
                     continue
                 if row.deletion_state in {"confirmed", "delete_failed"}:
                     continue
@@ -2952,6 +2976,14 @@ class SyncOrchestrator:
                     dataset_id=dataset_id or None,
                 )
                 if dataset_id and self.delete_dataset_when_library_deleted:
+                    with self.session_factory() as session:
+                        db_library = session.get(Library, repo_id)
+                        if db_library is not None:
+                            db_library.deletion_state = "confirmed"
+                            db_library.status = "confirmed_for_deletion"
+                            db_library.last_error = None
+                            self._disable_library_search_profile(session, repo_id)
+                            session.commit()
                     with self._mutation_scope(
                         repo_id,
                         owner_id=f"library-cleanup:{new_sync_id(repo_id)}",
@@ -2975,7 +3007,9 @@ class SyncOrchestrator:
                     db_library = session.get(Library, repo_id)
                     if db_library:
                         db_library.status = "delete_failed"
+                        db_library.deletion_state = "delete_failed"
                         db_library.last_error = str(exc)[:4000]
+                        self._disable_library_search_profile(session, repo_id)
                         session.commit()
                 self.log.warning(
                     "library.delete_cleanup_failed",
@@ -3000,6 +3034,7 @@ class SyncOrchestrator:
             dataset_id = library.ragflow_dataset_id
             library.deletion_state = "confirmed"
             library.status = "confirmed_for_deletion"
+            self._disable_library_search_profile(session, repo_id)
             session.commit()
         if dataset_id and self.delete_dataset_when_library_deleted:
             with self._mutation_scope(
@@ -3055,6 +3090,15 @@ class SyncOrchestrator:
         library.deletion_state = "deleted"
         library.last_error = None
         library.last_synced_commit_id = None
+        self._disable_library_search_profile(session, repo_id)
+        session.execute(
+            delete(LibraryACLSubject).where(LibraryACLSubject.repo_id == repo_id)
+        )
+        session.execute(
+            delete(LibraryACLEffectiveUser).where(
+                LibraryACLEffectiveUser.repo_id == repo_id
+            )
+        )
         for db_file in session.scalars(select(File).where(File.repo_id == repo_id)):
             session.delete(db_file)
         snapshot_ids = list(
@@ -3070,6 +3114,16 @@ class SyncOrchestrator:
                 )
             )
             session.execute(delete(SourceSnapshot).where(SourceSnapshot.id.in_(snapshot_ids)))
+
+    @staticmethod
+    def _disable_library_search_profile(session: Session, repo_id: str) -> None:
+        search_profile = session.scalar(
+            select(SearchProfile).where(SearchProfile.repo_id == repo_id)
+        )
+        if search_profile is not None:
+            search_profile.enabled = False
+            search_profile.status = "disabled"
+            search_profile.last_error = None
 
     def _upsert_file_row(
         self,

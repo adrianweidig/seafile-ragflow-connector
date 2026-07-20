@@ -19,6 +19,11 @@ try:
     from seafile_ragflow_connector.persistence.models.file import File
     from seafile_ragflow_connector.persistence.models.job import SyncJob
     from seafile_ragflow_connector.persistence.models.library import Library
+    from seafile_ragflow_connector.persistence.models.search import (
+        LibraryACLEffectiveUser,
+        LibraryACLSubject,
+        SearchProfile,
+    )
     from seafile_ragflow_connector.persistence.models.sync_state import (
         CleanupOutbox,
         FileDocumentVersion,
@@ -3091,6 +3096,237 @@ class OrchestratorUploadTests(unittest.TestCase):
             )
         self.assertTrue(orchestrator.confirm_missing_library_deletion("repo-0"))
         self.assertEqual(ragflow_client.deleted_dataset_ids, [["dataset-0"]])
+
+    def test_confirmed_library_deletion_disables_only_its_search_acl(self) -> None:
+        session_factory = _session_factory(self)
+        now = datetime.now(UTC)
+        with session_factory() as session:
+            for repo_id, pending in (
+                ("deleted-repo", True),
+                ("kept-repo", False),
+            ):
+                session.add_all(
+                    [
+                        Library(
+                            repo_id=repo_id,
+                            name=repo_id,
+                            name_slug=repo_id,
+                            status=("awaiting_confirmation" if pending else "active"),
+                            deletion_state=(
+                                "awaiting_confirmation" if pending else "active"
+                            ),
+                            ragflow_dataset_id=f"{repo_id}-dataset",
+                        ),
+                        SearchProfile(
+                            repo_id=repo_id,
+                            ragflow_dataset_id=f"{repo_id}-dataset",
+                            display_name=repo_id,
+                            enabled=True,
+                            status="ready",
+                        ),
+                        LibraryACLSubject(
+                            repo_id=repo_id,
+                            subject_type="owner",
+                            subject_id=f"{repo_id}@example.local",
+                            permission="admin",
+                            source="seafile_owner",
+                            last_seen_at=now,
+                        ),
+                        LibraryACLEffectiveUser(
+                            repo_id=repo_id,
+                            user_email=f"{repo_id}@example.local",
+                            permission="admin",
+                            sources=["owner"],
+                            last_seen_at=now,
+                        ),
+                    ]
+                )
+            session.commit()
+
+        ragflow_client = _FakeRAGFlowClient()
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient([]),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        self.assertTrue(
+            orchestrator.confirm_missing_library_deletion("deleted-repo")
+        )
+
+        self.assertEqual(
+            ragflow_client.deleted_dataset_ids,
+            [["deleted-repo-dataset"]],
+        )
+        with session_factory() as session:
+            deleted_profile = session.query(SearchProfile).filter_by(
+                repo_id="deleted-repo"
+            ).one()
+            kept_profile = session.query(SearchProfile).filter_by(
+                repo_id="kept-repo"
+            ).one()
+            assert deleted_profile is not None and kept_profile is not None
+            self.assertFalse(deleted_profile.enabled)
+            self.assertEqual(deleted_profile.status, "disabled")
+            self.assertTrue(kept_profile.enabled)
+            self.assertEqual(kept_profile.status, "ready")
+            for model in (LibraryACLSubject, LibraryACLEffectiveUser):
+                self.assertEqual(
+                    session.query(model).filter(model.repo_id == "deleted-repo").count(),
+                    0,
+                )
+                self.assertEqual(
+                    session.query(model).filter(model.repo_id == "kept-repo").count(),
+                    1,
+                )
+
+    def test_failed_dataset_deletion_keeps_confirmed_search_profile_disabled(self) -> None:
+        session_factory = _session_factory(self)
+        now = datetime.now(UTC)
+        with session_factory() as session:
+            for repo_id, pending in (
+                ("failed-repo", True),
+                ("kept-repo", False),
+            ):
+                session.add_all(
+                    [
+                        Library(
+                            repo_id=repo_id,
+                            name=repo_id,
+                            name_slug=repo_id,
+                            status=("awaiting_confirmation" if pending else "active"),
+                            deletion_state=(
+                                "awaiting_confirmation" if pending else "active"
+                            ),
+                            ragflow_dataset_id=f"{repo_id}-dataset",
+                        ),
+                        SearchProfile(
+                            repo_id=repo_id,
+                            ragflow_dataset_id=f"{repo_id}-dataset",
+                            display_name=repo_id,
+                            enabled=True,
+                            status="ready",
+                        ),
+                        LibraryACLEffectiveUser(
+                            repo_id=repo_id,
+                            user_email=f"{repo_id}@example.local",
+                            permission="admin",
+                            sources=["owner"],
+                            last_seen_at=now,
+                        ),
+                    ]
+                )
+            session.commit()
+
+        ragflow_client = _FakeRAGFlowClient()
+
+        def fail_after_fail_closed_check(dataset_ids: list[str]) -> None:
+            self.assertEqual(dataset_ids, ["failed-repo-dataset"])
+            with session_factory() as session:
+                profile = session.query(SearchProfile).filter_by(
+                    repo_id="failed-repo"
+                ).one()
+                self.assertFalse(profile.enabled)
+                self.assertEqual(profile.status, "disabled")
+            raise RuntimeError("simulated dataset delete failure")
+
+        ragflow_client.delete_datasets = fail_after_fail_closed_check  # type: ignore[method-assign]
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient([]),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        self.assertTrue(orchestrator.confirm_missing_library_deletion("failed-repo"))
+
+        with session_factory() as session:
+            failed_library = session.get(Library, "failed-repo")
+            failed_profile = session.query(SearchProfile).filter_by(
+                repo_id="failed-repo"
+            ).one()
+            kept_profile = session.query(SearchProfile).filter_by(
+                repo_id="kept-repo"
+            ).one()
+            assert failed_library is not None
+            self.assertEqual(failed_library.deletion_state, "delete_failed")
+            self.assertEqual(failed_library.status, "delete_failed")
+            self.assertFalse(failed_profile.enabled)
+            self.assertEqual(failed_profile.status, "disabled")
+            self.assertTrue(kept_profile.enabled)
+            self.assertEqual(kept_profile.status, "ready")
+            self.assertEqual(
+                session.query(LibraryACLEffectiveUser)
+                .filter_by(repo_id="failed-repo")
+                .count(),
+                1,
+            )
+            cleanup = session.query(CleanupOutbox).filter_by(
+                repo_id="failed-repo"
+            ).one()
+            self.assertEqual(cleanup.status, "retrying")
+
+    def test_reappeared_confirmed_library_waits_for_fresh_acl_before_search(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    Library(
+                        repo_id="repo",
+                        name="Demo",
+                        name_slug="demo",
+                        status="delete_failed",
+                        deletion_state="delete_failed",
+                        ragflow_dataset_id="dataset",
+                    ),
+                    SearchProfile(
+                        repo_id="repo",
+                        ragflow_dataset_id="dataset",
+                        display_name="Demo",
+                        enabled=False,
+                        status="disabled",
+                    ),
+                    CleanupOutbox(
+                        repo_id="repo",
+                        target_type="ragflow_dataset",
+                        target_id="dataset",
+                        dataset_id="dataset",
+                        action="delete",
+                        status="dead",
+                        attempts=5,
+                    ),
+                ]
+            )
+            session.commit()
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient([{"id": "repo", "name": "Demo"}]),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        self.assertEqual([item.repo_id for item in orchestrator.discover_libraries()], ["repo"])
+
+        with session_factory() as session:
+            library = session.get(Library, "repo")
+            profile = session.query(SearchProfile).filter_by(repo_id="repo").one()
+            cleanup = session.query(CleanupOutbox).filter_by(repo_id="repo").one()
+            assert library is not None
+            self.assertEqual(library.deletion_state, "active")
+            self.assertEqual(library.status, "active")
+            self.assertFalse(profile.enabled)
+            self.assertEqual(profile.status, "pending")
+            self.assertEqual(cleanup.status, "superseded")
 
     def test_discovery_keeps_confirmed_and_dead_dataset_cleanup_states_sticky(self) -> None:
         session_factory = _session_factory(self)

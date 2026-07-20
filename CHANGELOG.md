@@ -30,6 +30,11 @@ werden keine historischen Releases nachträglich erfunden.
 
 ### Fixed
 
+- Ab der Bestätigung einer Bibliothekslöschung bleibt das zugehörige Search-
+  Profil auch bei einem vorübergehend fehlgeschlagenen RAGFlow-Cleanup
+  deaktiviert. Nach erfolgreicher Löschung wird ausschließlich der ACL-
+  Snapshot dieser Bibliothek entfernt; andere Profile und Berechtigungen
+  bleiben unverändert.
 - Der Enterprise-Compose-Assistent übernimmt und validiert die Dataset-
   Berechtigung sowie alle Werte der interaktiven RAGFlow-Identität vollständig
   und schreibt Secret-Env-Dateien ausschließlich mit Besitzerrechten.
