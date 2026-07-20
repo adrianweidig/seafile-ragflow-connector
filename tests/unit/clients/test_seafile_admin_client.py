@@ -57,6 +57,47 @@ class _FakeHttpClient:
         return None
 
 
+class _ShareHttpClient:
+    def __init__(
+        self,
+        shares: list[dict[str, str]] | None = None,
+        *,
+        persist_on_post: bool = True,
+        post_status: int = 200,
+    ) -> None:
+        self.shares = list(shares or [])
+        self.persist_on_post = persist_on_post
+        self.post_status = post_status
+        self.posts: list[dict[str, str]] = []
+
+    def get(self, path: str, *, params: dict[str, str | int] | None = None) -> httpx.Response:
+        request = httpx.Request("GET", f"http://seafile.local{path}")
+        assert params == {"repo_id": "repo-1", "share_type": "user"}
+        return httpx.Response(200, json={"shares": self.shares}, request=request)
+
+    def post(self, path: str, *, data: dict[str, str]) -> httpx.Response:
+        request = httpx.Request("POST", f"http://seafile.local{path}")
+        self.posts.append(dict(data))
+        if self.persist_on_post:
+            self.shares.append(
+                {
+                    "repo_id": data["repo_id"],
+                    "share_type": data["share_type"],
+                    "path": data["path"],
+                    "user_email": data["share_to"],
+                    "permission": data["permission"],
+                }
+            )
+        return httpx.Response(
+            self.post_status,
+            json={"failed": [{"reason": "response is not authoritative"}]},
+            request=request,
+        )
+
+    def close(self) -> None:
+        return None
+
+
 class SeafileAdminClientTests(unittest.TestCase):
     def test_accepts_admin_libraries_repos_shape(self) -> None:
         client = SeafileAdminClient("http://seafile.local", "token")
@@ -92,6 +133,90 @@ class SeafileAdminClientTests(unittest.TestCase):
             ],
         )
         self.assertEqual(fake.user_sources, ["db", "ldapimport"])
+
+    def test_existing_read_or_write_share_is_never_changed(self) -> None:
+        for permission in ("r", "rw"):
+            with self.subTest(permission=permission):
+                fake = _ShareHttpClient(
+                    [
+                        {
+                            "share_type": "user",
+                            "path": "/",
+                            "user_email": "sync@auth.local",
+                            "permission": permission,
+                        }
+                    ]
+                )
+                client = SeafileAdminClient("http://seafile.local", "token")
+                client._client = fake  # type: ignore[assignment]
+
+                created = client.ensure_read_only_user_share(
+                    "repo-1",
+                    "sync@auth.local",
+                )
+
+                self.assertFalse(created)
+                self.assertEqual(fake.posts, [])
+                self.assertEqual(fake.shares[0]["permission"], permission)
+
+    def test_creates_exact_read_only_root_share_and_verifies_with_get(self) -> None:
+        fake = _ShareHttpClient()
+        client = SeafileAdminClient("http://seafile.local", "token")
+        client._client = fake  # type: ignore[assignment]
+
+        created = client.ensure_read_only_user_share(
+            "repo-1",
+            "sync@auth.local",
+        )
+
+        self.assertTrue(created)
+        self.assertEqual(
+            fake.posts,
+            [
+                {
+                    "repo_id": "repo-1",
+                    "share_type": "user",
+                    "path": "/",
+                    "share_to": "sync@auth.local",
+                    "permission": "r",
+                }
+            ],
+        )
+
+    def test_post_success_without_verified_share_fails_closed(self) -> None:
+        fake = _ShareHttpClient(persist_on_post=False)
+        client = SeafileAdminClient("http://seafile.local", "token")
+        client._client = fake  # type: ignore[assignment]
+
+        with self.assertRaisesRegex(RuntimeError, "did not persist"):
+            client.ensure_read_only_user_share("repo-1", "sync@auth.local")
+
+    def test_concurrent_share_after_failed_post_is_accepted_after_get(self) -> None:
+        fake = _ShareHttpClient(post_status=409)
+        client = SeafileAdminClient("http://seafile.local", "token")
+        client._client = fake  # type: ignore[assignment]
+
+        self.assertTrue(
+            client.ensure_read_only_user_share("repo-1", "sync@auth.local")
+        )
+
+    def test_existing_unsupported_root_permission_is_not_mutated(self) -> None:
+        fake = _ShareHttpClient(
+            [
+                {
+                    "share_type": "user",
+                    "path": "/",
+                    "user_email": "sync@auth.local",
+                    "permission": "admin",
+                }
+            ]
+        )
+        client = SeafileAdminClient("http://seafile.local", "token")
+        client._client = fake  # type: ignore[assignment]
+
+        with self.assertRaisesRegex(RuntimeError, "unsupported permission"):
+            client.ensure_read_only_user_share("repo-1", "sync@auth.local")
+        self.assertEqual(fake.posts, [])
 
 
 if __name__ == "__main__":

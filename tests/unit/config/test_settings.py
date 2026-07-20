@@ -124,6 +124,20 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(settings.search_acl_sync_enabled)
         self.assertFalse(settings.search_acl_include_subfolder_permissions)
         self.assertFalse(settings.search_acl_include_share_links)
+        self.assertFalse(settings.seafile_sync_user_auto_share_enabled)
+
+    def test_seafile_sync_user_auto_share_requires_canonical_email(self) -> None:
+        values = self.base_values()
+        values["database_url"] = "postgresql+psycopg://custom/db"
+        values["seafile_sync_user_auto_share_enabled"] = True
+
+        with self.assertRaisesRegex(ValueError, "SEAFILE_SYNC_USER_EMAIL"):
+            Settings(**values)
+
+        values["seafile_sync_user_email"] = "  sync@auth.local  "
+        settings = Settings(**values)
+        self.assertTrue(settings.seafile_sync_user_auto_share_enabled)
+        self.assertEqual(settings.seafile_sync_user_email, "sync@auth.local")
 
     def test_automation_initial_state_accepts_only_running_or_stopped(self) -> None:
         values = self.base_values()
@@ -339,6 +353,10 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.openwebui_base_url, "http://localhost:3000")
         self.assertEqual(settings.openwebui_function_namespace, "ragflow")
         self.assertTrue(settings.ragflow_template_auto_create)
+        self.assertEqual(settings.ragflow_generated_dataset_permission, "me")
+        self.assertIsNone(settings.ragflow_interactive_api_key)
+        self.assertIsNone(settings.ragflow_interactive_owner_id)
+        self.assertIsNone(settings.ragflow_interactive_chat_model_id)
         self.assertEqual(settings.ragflow_template_chat_name, "connector_template_chat")
         self.assertFalse(settings.openwebui_pipe_answer_synthesis_enabled)
         self.assertIsNone(settings.openwebui_pipe_answer_llm_base_url)
@@ -346,6 +364,75 @@ class SettingsTests(unittest.TestCase):
         self.assertIsNone(settings.openwebui_pipe_answer_llm_api_key)
         self.assertTrue(settings.delete_dataset_when_library_deleted)
         self.assertFalse(settings.archive_dataset_when_library_deleted)
+
+    def test_generated_dataset_permission_accepts_only_supported_values(self) -> None:
+        values = self.base_values()
+        values["database_url"] = "postgresql+psycopg://custom/db"
+        values["ragflow_generated_dataset_permission"] = "team"
+
+        settings = Settings(**values)
+
+        self.assertEqual(settings.ragflow_generated_dataset_permission, "team")
+
+        values["ragflow_generated_dataset_permission"] = "public"
+        with self.assertRaises(ValueError):
+            Settings(**values)
+
+    def test_interactive_ragflow_identity_requires_complete_team_configuration(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "ragflow_generated_dataset_permission": "team",
+                "ragflow_interactive_api_key": "interactive-token",
+                "ragflow_interactive_owner_id": "  owner-1  ",
+                "ragflow_interactive_chat_model_id": "  model@provider\t",
+            }
+        )
+
+        settings = Settings(**values)
+
+        self.assertEqual(settings.ragflow_interactive_api_key, "interactive-token")
+        self.assertEqual(settings.ragflow_interactive_owner_id, "owner-1")
+        self.assertEqual(
+            settings.ragflow_interactive_chat_model_id,
+            "model@provider",
+        )
+
+        for missing_field in (
+            "ragflow_interactive_api_key",
+            "ragflow_interactive_owner_id",
+            "ragflow_interactive_chat_model_id",
+        ):
+            incomplete = dict(values)
+            incomplete[missing_field] = " "
+            with self.subTest(missing_field=missing_field), self.assertRaisesRegex(
+                ValueError,
+                "must be set together",
+            ):
+                Settings(**incomplete)
+
+        private_datasets = dict(values)
+        private_datasets["ragflow_generated_dataset_permission"] = "me"
+        with self.assertRaisesRegex(ValueError, "must be team"):
+            Settings(**private_datasets)
+
+    def test_blank_interactive_ragflow_identity_values_normalize_to_none(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "ragflow_interactive_api_key": " ",
+                "ragflow_interactive_owner_id": "\t",
+                "ragflow_interactive_chat_model_id": "",
+            }
+        )
+
+        settings = Settings(**values)
+
+        self.assertIsNone(settings.ragflow_interactive_api_key)
+        self.assertIsNone(settings.ragflow_interactive_owner_id)
+        self.assertIsNone(settings.ragflow_interactive_chat_model_id)
 
     def test_seafile_public_base_url_defaults_original_link_template(self) -> None:
         values = self.base_values()

@@ -142,12 +142,35 @@ def check_live(
             lambda: runtime.admin_client.list_libraries(per_page=1),
             "Seafile",
         )
+        sync_user_identity_verified = False
+        if settings.seafile_sync_user_auto_share_enabled:
+            assert settings.seafile_sync_user_email is not None
+            sync_user_email = settings.seafile_sync_user_email
+            _retry_until(
+                lambda: runtime.sync_client.require_account_identity(
+                    sync_user_email
+                ),
+                "Seafile sync identity",
+            )
+            sync_user_identity_verified = True
         templates = _retry_until(
             lambda: runtime.ragflow_client.list_datasets(
                 name=settings.ragflow_template_dataset_name,
             ),
             "RAGFlow",
         )
+        interactive_configured = bool(settings.ragflow_interactive_api_key)
+        interactive_owner_verified = False
+        interactive_chats_visible = 0
+        interactive_searches_visible = 0
+        if interactive_configured:
+            interactive_client = runtime.interactive_ragflow_client
+            if interactive_client is None:
+                raise RuntimeError("RAGFlow interactive client is not available")
+            interactive_client.verify_artifact_owner()
+            interactive_chats_visible = len(interactive_client.list_chats())
+            interactive_searches_visible = len(interactive_client.list_searches())
+            interactive_owner_verified = True
         _emit_payload(
             {
                 "database": "ok",
@@ -156,8 +179,16 @@ def check_live(
                 "database_revision_match": current_revision == expected_revision,
                 "redis": "ok",
                 "seafile_admin_libraries_visible": len(libraries),
+                "seafile_sync_user_auto_share_enabled": (
+                    settings.seafile_sync_user_auto_share_enabled
+                ),
+                "seafile_sync_user_identity_verified": sync_user_identity_verified,
                 "ragflow_template_found": bool(templates),
                 "template_name": settings.ragflow_template_dataset_name,
+                "ragflow_interactive_configured": interactive_configured,
+                "ragflow_interactive_owner_verified": interactive_owner_verified,
+                "ragflow_interactive_chats_visible": interactive_chats_visible,
+                "ragflow_interactive_searches_visible": interactive_searches_visible,
             },
             json_output=json_output,
         )
@@ -244,6 +275,7 @@ def cleanup_orphans(
         cleanup_service = TargetCleanupService(
             session_factory=runtime.orchestrator.session_factory,
             ragflow_client=runtime.ragflow_client,
+            ragflow_chat_client=runtime.interactive_ragflow_client,
             openwebui_client=openwebui_client,
             openwebui_namespace=settings.openwebui_function_namespace,
         )
@@ -458,8 +490,19 @@ def controller() -> None:
             )
             return
         resolved = ensure_search_template(
-            runtime.ragflow_client,
+            _interactive_ragflow_client(runtime),
             config_from_settings(settings),
+            native_dataset_ids=(
+                sorted(
+                    {
+                        dataset_id
+                        for _repo_id, dataset_id in _active_dataset_bindings(runtime)
+                    }
+                )
+                if settings.ragflow_interactive_api_key
+                else None
+            ),
+            chat_model_id=settings.ragflow_interactive_chat_model_id,
         )
         log.info(
             "ragflow.search_template.ready",
@@ -1451,10 +1494,13 @@ def _ensure_search_answer_chat(
         )
         return
     payload = build_search_answer_chat_payload(settings.ragflow_search_answer_chat_name)
+    if settings.ragflow_interactive_chat_model_id:
+        payload["llm_id"] = settings.ragflow_interactive_chat_model_id
+    ragflow = _interactive_ragflow_client(runtime)
     if checkpoint is not None and not checkpoint():
         return
     try:
-        existing = runtime.ragflow_client.list_chats(name=settings.ragflow_search_answer_chat_name)
+        existing = ragflow.list_chats(name=settings.ragflow_search_answer_chat_name)
     except Exception as exc:  # pragma: no cover - deployment-specific startup guard
         log.warning(
             "ragflow.search_answer_chat.lookup_failed",
@@ -1476,17 +1522,33 @@ def _ensure_search_answer_chat(
         )
         return
     if matching:
+        chat_id = _mapping_id(matching[0])
+        if chat_id and _chat_payload_needs_update(matching[0], payload):
+            if checkpoint is not None and not checkpoint():
+                return
+            try:
+                updated = ragflow.update_chat(chat_id, payload)
+            except Exception as exc:  # pragma: no cover - deployment-specific startup guard
+                log.warning(
+                    "ragflow.search_answer_chat.update_failed",
+                    chat_name=settings.ragflow_search_answer_chat_name,
+                    chat_id=chat_id,
+                    error=str(exc),
+                    error_class=type(exc).__name__,
+                )
+                return
+            chat_id = _mapping_id(updated) or chat_id
         log.info(
             "ragflow.search_answer_chat.ready",
             chat_name=settings.ragflow_search_answer_chat_name,
-            chat_id=_mapping_id(matching[0]),
+            chat_id=chat_id,
             created=False,
         )
         return
     if checkpoint is not None and not checkpoint():
         return
     try:
-        created = runtime.ragflow_client.create_chat(payload)
+        created = ragflow.create_chat(payload)
     except Exception as exc:  # pragma: no cover - deployment-specific startup guard
         log.warning(
             "ragflow.search_answer_chat.create_failed",
@@ -1508,6 +1570,17 @@ def _mapping_id(value: dict[str, Any]) -> str | None:
     if raw in (None, ""):
         return None
     return str(raw)
+
+
+def _interactive_ragflow_client(runtime: Runtime) -> Any:
+    return getattr(runtime, "interactive_ragflow_client", None) or runtime.ragflow_client
+
+
+def _chat_payload_needs_update(
+    existing: dict[str, Any],
+    payload: dict[str, Any],
+) -> bool:
+    return any(existing.get(key) != value for key, value in payload.items())
 
 
 def _discover_job_specs(runtime: Runtime) -> list[JobSpec]:

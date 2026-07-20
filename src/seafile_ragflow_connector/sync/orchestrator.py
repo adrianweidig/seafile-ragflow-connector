@@ -5,7 +5,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import structlog
@@ -34,6 +34,11 @@ from seafile_ragflow_connector.jobs.types import JobSpec, JobType
 from seafile_ragflow_connector.persistence.admin_control import AdminControlStore
 from seafile_ragflow_connector.persistence.models.file import File
 from seafile_ragflow_connector.persistence.models.library import Library
+from seafile_ragflow_connector.persistence.models.search import (
+    LibraryACLEffectiveUser,
+    LibraryACLSubject,
+    SearchProfile,
+)
 from seafile_ragflow_connector.persistence.models.sync_state import (
     CleanupOutbox,
     FileDocumentVersion,
@@ -119,8 +124,11 @@ class SyncOrchestrator:
         template_dataset_name: str,
         template_auto_create: bool = True,
         template_required: bool = True,
+        generated_dataset_permission: Literal["me", "team"] = "me",
         skip_encrypted_libraries: bool = True,
         skip_virtual_repos: bool = True,
+        sync_user_auto_share_enabled: bool = False,
+        sync_user_email: str | None = None,
         delete_ragflow_docs_on_seafile_delete: bool = True,
         delete_dataset_when_library_deleted: bool = True,
         refresh_dataset_settings: bool = True,
@@ -134,6 +142,12 @@ class SyncOrchestrator:
         self.file_policy = file_policy
         self.skip_encrypted_libraries = skip_encrypted_libraries
         self.skip_virtual_repos = skip_virtual_repos
+        self.sync_user_auto_share_enabled = sync_user_auto_share_enabled
+        self.sync_user_email = sync_user_email.strip() if sync_user_email else None
+        if self.sync_user_auto_share_enabled and not self.sync_user_email:
+            raise ValueError(
+                "sync_user_email is required when sync-user auto-share is enabled"
+            )
         self.delete_ragflow_docs_on_seafile_delete = delete_ragflow_docs_on_seafile_delete
         self.delete_dataset_when_library_deleted = delete_dataset_when_library_deleted
         self.refresh_dataset_settings = refresh_dataset_settings
@@ -144,6 +158,7 @@ class SyncOrchestrator:
             template_dataset_name=template_dataset_name,
             template_auto_create=template_auto_create,
             template_required=template_required,
+            generated_dataset_permission=generated_dataset_permission,
         )
         self.dataset_settings_service = DatasetSettingsService(ragflow_client)
         self.job_store = JobStore(session_factory)
@@ -209,6 +224,17 @@ class SyncOrchestrator:
                 continue
             control = controls[library.repo_id]
             if control.runnable:
+                if trigger == "automatic":
+                    try:
+                        self._ensure_sync_user_access(library.repo_id)
+                    except Exception as exc:
+                        self._mark_library_error(library.repo_id, exc)
+                        self.log.warning(
+                            "library.sync_user_access_failed",
+                            repo_id=library.repo_id,
+                            error_class=type(exc).__name__,
+                        )
+                        continue
                 self._ensure_parse_status_job(
                     library.repo_id,
                     dataset_id,
@@ -373,6 +399,7 @@ class SyncOrchestrator:
 
     def sync_library_full(self, repo_id: str, *, scope: str = "/") -> SyncSummary:
         self.assert_library_runnable(repo_id)
+        self._ensure_sync_user_access(repo_id)
         normalized_scope = normalize_seafile_path(scope)
         sync_id = new_sync_id(repo_id)
         with self._mutation_scope(repo_id, owner_id=f"sync:{sync_id}") as lease:
@@ -701,6 +728,7 @@ class SyncOrchestrator:
 
     def sync_library_delta(self, repo_id: str, *, scope: str = "/") -> SyncSummary:
         self.assert_library_runnable(repo_id)
+        self._ensure_sync_user_access(repo_id)
         normalized_scope = normalize_seafile_path(scope)
         with self._mutation_scope(
             repo_id,
@@ -954,6 +982,7 @@ class SyncOrchestrator:
     ) -> ReconcilePlan:
         if execute:
             self.assert_library_runnable(repo_id)
+            self._ensure_sync_user_access(repo_id)
         with self._mutation_scope(
             repo_id,
             owner_id=f"reconcile:{new_sync_id(repo_id)}",
@@ -1038,6 +1067,7 @@ class SyncOrchestrator:
     ) -> FileSyncResult:
         if lease is None:
             self.assert_library_runnable(repo_id)
+            self._ensure_sync_user_access(repo_id)
             with self._mutation_scope(
                 repo_id,
                 owner_id=f"file:{new_sync_id(repo_id)}",
@@ -1380,6 +1410,7 @@ class SyncOrchestrator:
             dataset_id,
             document_id,
             artifact.document_name,
+            defer_duplicate_name_collision=old_document_id is not None,
             sync_id=sync_id,
             repo_id=repo_id,
             path=path,
@@ -1838,6 +1869,34 @@ class SyncOrchestrator:
             raise ValueError(
                 f"library {repo_id!r} is {control.state} and cannot be mutated"
             )
+
+    def _ensure_sync_user_access(self, repo_id: str) -> None:
+        if not self.sync_user_auto_share_enabled:
+            return
+        with self.session_factory() as session:
+            library = self._get_library(session, repo_id)
+            if library.encrypted or library.virtual:
+                return
+
+        assert self.sync_user_email is not None
+        canonical_email = self.sync_client.require_account_identity(self.sync_user_email)
+        try:
+            self.sync_client.list_dir(repo_id, "/")
+            return
+        except ApiError as exc:
+            if exc.status_code != 403:
+                raise
+
+        created = self.admin_client.ensure_read_only_user_share(
+            repo_id,
+            canonical_email,
+        )
+        self.sync_client.list_dir(repo_id, "/")
+        self.log.info(
+            "library.sync_user_access_ready",
+            repo_id=repo_id,
+            share_created=created,
+        )
 
     @contextmanager
     def _mutation_scope(
@@ -2547,6 +2606,7 @@ class SyncOrchestrator:
                             rename_dataset_id,
                             rename_document_id,
                             rename_document_name,
+                            ignore_generic_bad_request=False,
                             sync_id=rename_sync_id,
                             repo_id=repo_id,
                             path=rename_path,
@@ -2584,6 +2644,10 @@ class SyncOrchestrator:
                                 library.status = "delete_failed"
                                 library.deletion_state = "delete_failed"
                                 library.last_error = row.error_message
+                                self._disable_library_search_profile(
+                                    session,
+                                    row.repo_id,
+                                )
                         session.commit()
                 self.job_store.refresh_workflow_parents_for_cleanup(int(row_id))
                 self.log.warning(
@@ -2692,6 +2756,7 @@ class SyncOrchestrator:
                 library.status = "confirmed_for_deletion"
                 library.deletion_state = "confirmed"
                 library.last_error = None
+                self._disable_library_search_profile(session, row.repo_id)
             session.commit()
         self.job_store.refresh_workflow_parents_for_cleanup(outbox_id)
         return repo_id
@@ -2724,6 +2789,11 @@ class SyncOrchestrator:
                 name_slug=slugify(library.name),
             )
             session.add(db_library)
+        reappeared_after_confirmation = db_library.deletion_state in {
+            "confirmed",
+            "delete_failed",
+            "deleted",
+        }
         db_library.name = library.name
         db_library.name_slug = slugify(library.name)
         db_library.owner_email = library.owner_email
@@ -2750,6 +2820,14 @@ class SyncOrchestrator:
         db_library.deletion_state = "active"
         db_library.status = "active"
         db_library.last_error = None
+        if reappeared_after_confirmation:
+            profile = session.scalar(
+                select(SearchProfile).where(SearchProfile.repo_id == library.repo_id)
+            )
+            if profile is not None:
+                profile.enabled = False
+                profile.status = "pending"
+                profile.last_error = None
         return db_library
 
     @staticmethod
@@ -2836,6 +2914,7 @@ class SyncOrchestrator:
                     else:
                         row.deletion_state = "confirmed"
                         row.status = "confirmed_for_deletion"
+                    self._disable_library_search_profile(session, row.repo_id)
                     continue
                 if row.deletion_state in {"confirmed", "delete_failed"}:
                     continue
@@ -2897,6 +2976,14 @@ class SyncOrchestrator:
                     dataset_id=dataset_id or None,
                 )
                 if dataset_id and self.delete_dataset_when_library_deleted:
+                    with self.session_factory() as session:
+                        db_library = session.get(Library, repo_id)
+                        if db_library is not None:
+                            db_library.deletion_state = "confirmed"
+                            db_library.status = "confirmed_for_deletion"
+                            db_library.last_error = None
+                            self._disable_library_search_profile(session, repo_id)
+                            session.commit()
                     with self._mutation_scope(
                         repo_id,
                         owner_id=f"library-cleanup:{new_sync_id(repo_id)}",
@@ -2920,7 +3007,9 @@ class SyncOrchestrator:
                     db_library = session.get(Library, repo_id)
                     if db_library:
                         db_library.status = "delete_failed"
+                        db_library.deletion_state = "delete_failed"
                         db_library.last_error = str(exc)[:4000]
+                        self._disable_library_search_profile(session, repo_id)
                         session.commit()
                 self.log.warning(
                     "library.delete_cleanup_failed",
@@ -2945,6 +3034,7 @@ class SyncOrchestrator:
             dataset_id = library.ragflow_dataset_id
             library.deletion_state = "confirmed"
             library.status = "confirmed_for_deletion"
+            self._disable_library_search_profile(session, repo_id)
             session.commit()
         if dataset_id and self.delete_dataset_when_library_deleted:
             with self._mutation_scope(
@@ -3000,6 +3090,15 @@ class SyncOrchestrator:
         library.deletion_state = "deleted"
         library.last_error = None
         library.last_synced_commit_id = None
+        self._disable_library_search_profile(session, repo_id)
+        session.execute(
+            delete(LibraryACLSubject).where(LibraryACLSubject.repo_id == repo_id)
+        )
+        session.execute(
+            delete(LibraryACLEffectiveUser).where(
+                LibraryACLEffectiveUser.repo_id == repo_id
+            )
+        )
         for db_file in session.scalars(select(File).where(File.repo_id == repo_id)):
             session.delete(db_file)
         snapshot_ids = list(
@@ -3015,6 +3114,16 @@ class SyncOrchestrator:
                 )
             )
             session.execute(delete(SourceSnapshot).where(SourceSnapshot.id.in_(snapshot_ids)))
+
+    @staticmethod
+    def _disable_library_search_profile(session: Session, repo_id: str) -> None:
+        search_profile = session.scalar(
+            select(SearchProfile).where(SearchProfile.repo_id == repo_id)
+        )
+        if search_profile is not None:
+            search_profile.enabled = False
+            search_profile.status = "disabled"
+            search_profile.last_error = None
 
     def _upsert_file_row(
         self,
@@ -3317,6 +3426,8 @@ class SyncOrchestrator:
         document_id: str,
         document_name: str,
         *,
+        defer_duplicate_name_collision: bool = False,
+        ignore_generic_bad_request: bool = True,
         sync_id: str | None,
         repo_id: str,
         path: str,
@@ -3327,8 +3438,12 @@ class SyncOrchestrator:
         try:
             rename_document(dataset_id, document_id, document_name)
         except ApiError as exc:
-            if exc.status_code not in {400, 404, 405, 501} and not (
-                _is_ragflow_duplicate_document_name_error(exc)
+            ignored_status_codes = {404, 405, 501}
+            if ignore_generic_bad_request:
+                ignored_status_codes.add(400)
+            if exc.status_code not in ignored_status_codes and not (
+                defer_duplicate_name_collision
+                and _is_ragflow_duplicate_document_name_error(exc)
             ):
                 raise
             self.log.warning(
@@ -3345,12 +3460,11 @@ class SyncOrchestrator:
 def _is_ragflow_duplicate_document_name_error(exc: ApiError) -> bool:
     if exc.status_code != 200 or not isinstance(exc.payload, Mapping):
         return False
-    code = exc.payload.get("code")
-    message = str(exc.payload.get("message") or exc.payload.get("msg") or "")
-    normalized_message = message.strip().casefold().removesuffix(".")
+    message = exc.payload.get("message")
     return (
-        code in {102, "102"}
-        and normalized_message == "duplicated document name in the same dataset"
+        exc.payload.get("code") == 102
+        and isinstance(message, str)
+        and message.strip() == "Duplicated document name in the same dataset."
     )
 
 

@@ -8,6 +8,51 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+## 2.6.2 - 2026-07-20
+
+### Added
+
+- Automatisch erzeugte Bibliotheks-Datasets können gezielt als RAGFlow-
+  Team-Datasets bereitgestellt werden, während das interne Template privat
+  bleibt.
+- Eine optionale interaktive RAGFlow-Identität besitzt die automatisch
+  verwalteten Chats und die native Search-App. Deren Dataset-Bindungen werden
+  aus allen aktiven Connector-Bibliotheken aktualisiert und von Connector
+  Search sowie OpenWebUI mit derselben Identität verwendet.
+- Das Admin-Dashboard zeigt den effektiven Dataset-Berechtigungsmodus sowie
+  den konfigurierten interaktiven Besitzer und das Chat-Modell, ohne den
+  zugehörigen API-Key offenzulegen.
+- Eine optionale, standardmäßig deaktivierte Auto-Freigabe ergänzt für
+  bestehende und künftige geeignete private Seafile-Bibliotheken ausschließlich
+  einen direkten Lesezugriff des zuvor verifizierten technischen Sync-Benutzers.
+  Der erste automatische Zyklus prüft den Bestand rückwirkend; bestehende
+  Berechtigungen werden weder geändert noch automatisch entfernt.
+
+### Fixed
+
+- Ab der Bestätigung einer Bibliothekslöschung bleibt das zugehörige Search-
+  Profil auch bei einem vorübergehend fehlgeschlagenen RAGFlow-Cleanup
+  deaktiviert. Nach erfolgreicher Löschung wird ausschließlich der ACL-
+  Snapshot dieser Bibliothek entfernt; andere Profile und Berechtigungen
+  bleiben unverändert.
+- Der Enterprise-Compose-Assistent übernimmt und validiert die Dataset-
+  Berechtigung sowie alle Werte der interaktiven RAGFlow-Identität vollständig
+  und schreibt Secret-Env-Dateien ausschließlich mit Besitzerrechten.
+- Bereits vorhandene, exakt zugeordnete Connector-Datasets werden beim Wechsel
+  der Zielidentität idempotent auf die konfigurierte Team-Berechtigung
+  angeglichen, ohne Parser- oder Template-Einstellungen zu überschreiben.
+- Die interaktive RAGFlow-Identität wird vor jeder Mutation über den aktuellen
+  API-Key-Besitzer verifiziert. Nicht verifizierbare Search-Neuanlagen werden
+  gezielt zurückgerollt, statt bei Folgeläufen weitere Search-Apps anzulegen.
+- Altchat- und Orphan-Bereinigungen prüfen deterministische Connector-
+  Provenienz. Nicht funktionsgeprüfte Owner-Migrationen und mehrstufige
+  Dataset-Wechsel bleiben nachvollziehbar ausstehend, ohne manuell angelegte
+  Administrator-Chats zu löschen.
+- Die erwartete RAGFlow-Duplikatkollision beim vorbereitenden Blue/Green-
+  Dokument-Rename wird nur für die exakt bekannte Antwort und ausschließlich
+  vor dem Parsing toleriert; generische Fehler des abschließenden Rename gehen
+  in einen kontrollierten Wiederholungsversuch.
+
 ## 2.6.1 - 2026-07-19
 
 ### Fixed

@@ -18,7 +18,7 @@
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml"><img alt="Docker image" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml/badge.svg?branch=master"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml/badge.svg?branch=master"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="pyproject.toml"><img alt="Version 2.6.1" src="https://img.shields.io/badge/version-2.6.1-informational.svg"></a>
+  <a href="pyproject.toml"><img alt="Version 2.6.2" src="https://img.shields.io/badge/version-2.6.2-informational.svg"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/issues"><img alt="GitHub issues" src="https://img.shields.io/github/issues/adrianweidig/seafile-ragflow-connector"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/pulls"><img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/adrianweidig/seafile-ragflow-connector"></a>
 </p>
@@ -171,6 +171,18 @@ ergänzt. Details stehen im [Sprach- und Unicode-Modell](docs/i18n.md).
 - Ein erreichbarer RAGFlow-Server mit API-Key.
 - Ein RAGFlow-Template-Dataset wird bei Bedarf automatisch angelegt,
   standardmäßig `connector_template`.
+- Erzeugte Bibliotheks-Datasets bleiben mit
+  `RAGFLOW_GENERATED_DATASET_PERMISSION=me` standardmäßig privat. `team` erlaubt
+  allen Mitgliedern des RAGFlow-Tenants des Connectors die Sichtbarkeit in
+  RAGFlow, ersetzt aber keine Seafile-ACL; das interne Template-Dataset
+  (standardmäßig `connector_template`) bleibt immer privat.
+- Optional kann ein einzelner kontrollierter RAGFlow-Admin-Zieluser über
+  `RAGFLOW_INTERACTIVE_API_KEY`, `RAGFLOW_INTERACTIVE_OWNER_ID` und
+  `RAGFLOW_INTERACTIVE_CHAT_MODEL_ID` die automatisch verwalteten Chats und
+  Search-App-Spiegel besitzen. Der reguläre `RAGFLOW_API_KEY` bleibt Eigentümer
+  und Sync-Identität der kanonischen Datasets. Dieser Modus erfordert
+  `RAGFLOW_GENERATED_DATASET_PERMISSION=team`; Details und Migrationsgrenzen
+  stehen unter [RAGFlow-Template](docs/ragflow-template.md).
 - Optional: eine erreichbare OpenWebUI-Instanz mit Admin-API-Key.
 - Für lokale Entwicklung: Python `>=3.12` und `uv`.
 
@@ -233,6 +245,23 @@ gebündeltem State:
 | `SEARCH_AUTHZ_SHARED_SECRET` | derselbe Wert wie `AUTHZ_API_SHARED_SECRET` |
 | `SEARCH_RAGFLOW_BASE_URL`, `SEARCH_RAGFLOW_API_KEY` | RAGFlow-Ziel aus Sicht des Search-Containers |
 | `POSTGRES_PASSWORD` | Passwort für die gebündelte Stack-Datenbank |
+
+Die drei `RAGFLOW_INTERACTIVE_*`-Werte sind optional und gehören deshalb nicht
+zur Minimalpflicht. Sobald `RAGFLOW_INTERACTIVE_API_KEY` gesetzt ist, müssen
+auch Owner-ID und Chat-Modell-ID gesetzt sein; zusätzlich muss die Berechtigung
+neuer Bibliotheks-Datasets `team` sein. Ohne interaktiven Key bleibt das
+bisherige Ein-Identitäts-Verhalten erhalten.
+
+Private Seafile-Bibliotheken müssen für den technischen Sync-Benutzer lesbar
+sein. Optional kann der Connector diese direkte Nur-Lese-Freigabe selbst
+ergänzen: `SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED=true` verlangt
+`SEAFILE_SYNC_USER_EMAIL`. Nach der Aktivierung prüft bereits der erste
+automatische Zyklus alle bestehenden geeigneten und ausführbaren Bibliotheken;
+spätere Zyklen erfassen zusätzlich neu hinzugekommene Bibliotheken. Dies kann
+beim ersten Lauf mehrere Freigaben erzeugen. Vor jeder Freigabe wird die Token-
+Identität über Seafile verifiziert; nur ein Root-Zugriffsfehler mit HTTP 403
+löst die Freigabe aus. Deaktivierte, pausierte, verschlüsselte und virtuelle
+Bibliotheken werden dabei nicht automatisch freigegeben.
 
 Start:
 
@@ -342,11 +371,11 @@ der Name auf das bereits vorhandene gemeinsame Docker-Netz zeigen.
 
 Der Online-Start kann das veröffentlichte GHCR-Image nutzen. Für
 produktionsnahe Rollouts sollte nach Veröffentlichung ein fester Release-Tag
-wie `2.6.1` gepinnt werden; `latest` ist eine Komfortoption für Smoke-Tests und
+wie `2.6.2` gepinnt werden; `latest` ist eine Komfortoption für Smoke-Tests und
 frische Testumgebungen.
 
 ```bash
-docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:2.6.1
+docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:2.6.2
 ```
 
 Für Offline-Umgebungen können die benötigten Images vorab exportiert und auf dem
@@ -354,7 +383,7 @@ Zielhost importiert werden:
 
 ```bash
 docker save \
-  ghcr.io/adrianweidig/seafile-ragflow-connector:2.6.1 \
+  ghcr.io/adrianweidig/seafile-ragflow-connector:2.6.2 \
   postgres:16 \
   redis:7 \
   -o images/seafile-ragflow-portainer-images.tar
@@ -366,7 +395,7 @@ Wenn interne Registry- oder lokale Image-Namen genutzt werden, trage sie in
 `connector.env` ein:
 
 ```env
-CONNECTOR_IMAGE=seafile-ragflow-connector:2.6.1
+CONNECTOR_IMAGE=seafile-ragflow-connector:2.6.2
 POSTGRES_IMAGE=postgres:16
 REDIS_IMAGE=redis:7
 ```

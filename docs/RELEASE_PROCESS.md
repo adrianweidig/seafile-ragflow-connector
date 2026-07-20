@@ -1,6 +1,6 @@
 # Release-Prozess
 
-Dieses Repository enthält aktuell Paketmetadaten mit Version `2.6.1`, einen
+Dieses Repository enthält aktuell Paketmetadaten mit Version `2.6.2`, einen
 Docker-Publish-Workflow für GHCR und einen einfachen SemVer-Release-Pfad. Dieser
 Prozess beschreibt einen vorsichtigen Maintainer-Ablauf für zukünftige Releases.
 
@@ -23,7 +23,7 @@ python scripts/verify.py --with-compose
    `src/seafile_ragflow_connector/__init__.py` und `uv.lock` konsistent setzen.
 2. `CHANGELOG.md` und `CHANGELOG.en.md` aus `Unreleased` in denselben datierten
    Release-Abschnitt überführen. Für diesen Stand ist das
-   `2.6.1 - 2026-07-19`.
+   `2.6.2 - 2026-07-20`.
 3. Versionsbadge, README-Image-Beispiele, `connector.env.example`, Portainer-
    Env-Beispiel und Release-Dokumentation abgleichen.
 4. README, `docs/`, Deployment-Artefakte und Admin-Erststart-Checklisten auf
@@ -37,7 +37,7 @@ python scripts/verify.py --with-compose
 
 6. Keine Secrets, lokalen Env-Dateien oder privaten Zertifikate committen.
 
-Für 2.6.1 gehört zur Release-Abnahme außerdem ein Browser-Smoke gegen das im
+Für 2.6.2 gehört zur Release-Abnahme außerdem ein Browser-Smoke gegen das im
 `connector-controller` eingebettete Dashboard: Basic Auth, globales
 Pause/Fortsetzen, Bibliotheks-Pause/Fortsetzen, manueller Delta-Lauf,
 Dateifortschritt, Parsing-Bereich einschließlich Leerzustand, Historie und
@@ -83,7 +83,7 @@ Maintainer-Schritte.
 
 Das vollständige manuelle Airgap-Bundle liegt außerhalb des Git-Worktrees und
 verwendet einen eindeutigen Namen wie
-`seafile-ragflow-connector-airgap-2.6.1-<sha7>.7z`. Es enthält mindestens:
+`seafile-ragflow-connector-airgap-2.6.2-<sha7>.7z`. Es enthält mindestens:
 
 ```text
 ANLEITUNG.txt
@@ -94,7 +94,7 @@ SHA256SUMS.txt
 docker-images/
   IMAGES.txt
   image-manifests.json
-  seafile-ragflow-connector_2.6.1_linux-amd64.docker-image.tar
+  seafile-ragflow-connector_2.6.2_linux-amd64.docker-image.tar
   postgres_16_linux-amd64.docker-image.tar
   valkey_8_linux-amd64.docker-image.tar
   redis_7_compat_linux-amd64.docker-image.tar
@@ -108,15 +108,15 @@ install/
   deploy/
   docs/
 python-dist/
-  seafile_ragflow_connector-2.6.1-py3-none-any.whl
-  seafile_ragflow_connector-2.6.1.tar.gz
+  seafile_ragflow_connector-2.6.2-py3-none-any.whl
+  seafile_ragflow_connector-2.6.2.tar.gz
 repo/
-  seafile-ragflow-connector-2.6.1.git.bundle
-  seafile-ragflow-connector-source-2.6.1.zip
+  seafile-ragflow-connector-2.6.2.git.bundle
+  seafile-ragflow-connector-source-2.6.2.zip
 ```
 
 Git-Bundle und Source-ZIP müssen exakt den veröffentlichten Release-Commit
-abbilden; die Connector-Image-Tar muss zum verifizierten `2.6.1`-Digest gehören.
+abbilden; die Connector-Image-Tar muss zum verifizierten `2.6.2`-Digest gehören.
 Für den produktiven Portainer-Stand werden die tatsächlich verwendeten
 PostgreSQL-16- und Valkey-8-Images digestgenau aufgenommen. Redis 7 bleibt
 zusätzlich und ausdrücklich als Kompatibilitätsfallback für die
@@ -134,8 +134,8 @@ oder `docker load` geprüft und der Connector-Container einmal mit `--help`
 gestartet. Abschließend:
 
 ```powershell
-$sha7 = (git rev-parse --short=7 'v2.6.1^{commit}').Trim()
-$bundlePath = "F:\seafile-ragflow-connector-airgap-2.6.1-$sha7.7z"
+$sha7 = (git rev-parse --short=7 'v2.6.2^{commit}').Trim()
+$bundlePath = "F:\seafile-ragflow-connector-airgap-2.6.2-$sha7.7z"
 if (-not (Test-Path -LiteralPath $bundlePath -PathType Leaf)) {
   throw "Airgap-Bundle fehlt: $bundlePath"
 }

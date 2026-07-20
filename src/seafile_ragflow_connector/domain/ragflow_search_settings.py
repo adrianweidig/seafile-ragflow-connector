@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -205,38 +206,219 @@ def resolve_search_template(
 def ensure_search_template(
     client: Any,
     config: RagflowSearchTemplateConfig,
+    *,
+    native_dataset_ids: Sequence[str] | None = None,
+    chat_model_id: str | None = None,
 ) -> ResolvedSearchTemplate:
     resolved = resolve_search_template(client, config)
-    if (
-        not config.enabled
-        or not config.auto_create
-        or resolved.source == "search_app"
-        or "search_app" not in config.source_order
-    ):
+    if not config.enabled or "search_app" not in config.source_order:
         return resolved
-    payload = {
-        "name": config.name,
-        "description": (
-            "Connector-verwaltetes Search-Template für nutzernahe RAGFlow-Suchen. "
-            "Datasets werden zur Laufzeit ausschließlich aus der ACL-gefilterten "
-            "Auswahl gesetzt."
-        ),
-        "search_config": resolved.settings.to_search_config(),
-    }
+
+    managed_scope_requested = native_dataset_ids is not None or chat_model_id is not None
+    if resolved.source == "search_app":
+        if not resolved.template_id:
+            return _search_template_update_failure(
+                config,
+                resolved,
+                RuntimeError("RAGFlow search template id is not verifiable"),
+            )
+        if not managed_scope_requested and not config.required:
+            return resolved
+        try:
+            existing = client.get_search(resolved.template_id)
+        except (ApiError, AttributeError, httpx.RequestError) as exc:
+            return _search_template_update_failure(config, resolved, exc)
+        if not isinstance(existing, dict):
+            return _search_template_update_failure(
+                config,
+                resolved,
+                RuntimeError("RAGFlow search owner or detail could not be verified"),
+            )
+        if not managed_scope_requested:
+            return replace(resolved, settings=settings_from_search_app(existing))
+        payload = _managed_search_template_payload(
+            config,
+            resolved,
+            native_dataset_ids=native_dataset_ids,
+            chat_model_id=chat_model_id,
+        )
+        if not _search_template_needs_update(existing, payload):
+            return resolved
+        try:
+            _verify_artifact_owner_for_mutation(client)
+            updated = client.update_search(resolved.template_id, payload)
+        except (ApiError, AttributeError, httpx.RequestError) as exc:
+            return _search_template_update_failure(config, resolved, exc)
+        return ResolvedSearchTemplate(
+            source="search_app",
+            name=config.name,
+            template_id=_optional_id(updated) or resolved.template_id,
+            settings=resolved.settings,
+            warnings=resolved.warnings,
+        )
+
+    if not config.auto_create:
+        return resolved
+    payload = _managed_search_template_payload(
+        config,
+        resolved,
+        native_dataset_ids=native_dataset_ids,
+        chat_model_id=chat_model_id,
+    )
     try:
+        _verify_artifact_owner_for_mutation(client)
+        _claim_search_template_create(client, config.name)
         created = client.create_search(payload)
     except (ApiError, AttributeError, httpx.RequestError) as exc:
         if config.required:
             msg = f"RAGFlow search template could not be created: {config.name}"
             raise RuntimeError(msg) from exc
-        warnings = (*resolved.warnings, "search_app_auto_create_unsupported")
+        warnings = (*resolved.warnings, "search_app_auto_create_blocked")
+        return replace(resolved, warnings=warnings)
+    search_id = _optional_id(created)
+    try:
+        if not search_id:
+            raise RuntimeError("RAGFlow search create response did not contain an id")
+        created_detail = client.get_search(search_id)
+        if not isinstance(created_detail, dict):
+            raise RuntimeError("RAGFlow search owner or detail could not be verified")
+    except (ApiError, AttributeError, httpx.RequestError, RuntimeError) as exc:
+        rollback_warning: str
+        rollback_error: Exception | None = None
+        if search_id:
+            try:
+                client.delete_search(search_id)
+            except (ApiError, AttributeError, httpx.RequestError, RuntimeError) as delete_exc:
+                rollback_warning = "search_app_auto_create_rollback_failed"
+                rollback_error = delete_exc
+            else:
+                rollback_warning = "search_app_auto_create_rolled_back"
+        else:
+            rollback_warning = "search_app_auto_create_rollback_unavailable"
+        if config.required:
+            if rollback_error is not None:
+                msg = (
+                    "RAGFlow search template could not be verified and rollback failed: "
+                    f"{config.name}"
+                )
+                raise RuntimeError(msg) from rollback_error
+            msg = f"RAGFlow search template could not be verified: {config.name}"
+            raise RuntimeError(msg) from exc
+        warnings = (
+            *resolved.warnings,
+            "search_app_auto_create_unverified",
+            rollback_warning,
+        )
         return replace(resolved, warnings=warnings)
     return ResolvedSearchTemplate(
         source="search_app",
         name=config.name,
-        template_id=_optional_id(created),
-        settings=settings_from_search_app(created),
+        template_id=search_id,
+        settings=resolved.settings,
         warnings=resolved.warnings,
+    )
+
+
+def _verify_artifact_owner_for_mutation(client: Any) -> None:
+    if not getattr(client, "artifact_owner_id", None):
+        return
+    verifier = getattr(client, "verify_artifact_owner", None)
+    if not callable(verifier):
+        raise ApiError(
+            "RAGFlow interactive owner preflight is unavailable",
+            status_code=200,
+            payload={"owner_preflight_available": False},
+        )
+    verifier()
+
+
+def _claim_search_template_create(client: Any, template_name: str) -> None:
+    attribute_name = "_connector_search_create_attempts"
+    attempts = getattr(client, attribute_name, None)
+    if attempts is None:
+        attempts = set()
+        try:
+            setattr(client, attribute_name, attempts)
+        except (AttributeError, TypeError) as exc:
+            raise ApiError(
+                "RAGFlow search create guard is unavailable",
+                status_code=200,
+                payload={"search_create_guard_available": False},
+            ) from exc
+    if not isinstance(attempts, set):
+        raise ApiError(
+            "RAGFlow search create guard is invalid",
+            status_code=200,
+            payload={"search_create_guard_valid": False},
+        )
+    if template_name in attempts:
+        raise ApiError(
+            "RAGFlow search template creation was already attempted",
+            status_code=200,
+            payload={"search_template": template_name, "duplicate_create_blocked": True},
+        )
+    attempts.add(template_name)
+
+
+def _managed_search_template_payload(
+    config: RagflowSearchTemplateConfig,
+    resolved: ResolvedSearchTemplate,
+    *,
+    native_dataset_ids: Sequence[str] | None,
+    chat_model_id: str | None,
+) -> dict[str, Any]:
+    search_config = resolved.settings.to_search_config()
+    if native_dataset_ids is not None:
+        search_config["kb_ids"] = sorted(
+            {
+                dataset_id
+                for value in native_dataset_ids
+                if (dataset_id := str(value).strip())
+            }
+        )
+    normalized_model_id = str(chat_model_id or "").strip()
+    if normalized_model_id:
+        search_config["chat_id"] = normalized_model_id
+    return {
+        "name": config.name,
+        "description": (
+            "Connector-verwaltetes Search-Template für nutzernahe RAGFlow-Suchen. "
+            "Die nativen Dataset-Bindungen werden aus den aktiven "
+            "Connector-Bibliotheken aktualisiert."
+        ),
+        "search_config": search_config,
+    }
+
+
+def _search_template_needs_update(
+    existing: dict[str, Any],
+    payload: dict[str, Any],
+) -> bool:
+    if str(existing.get("name") or "") != str(payload["name"]):
+        return True
+    if str(existing.get("description") or "") != str(payload["description"]):
+        return True
+    existing_search_config = existing.get("search_config")
+    if not isinstance(existing_search_config, dict):
+        return True
+    desired_search_config = payload["search_config"]
+    return any(
+        existing_search_config.get(key) != value
+        for key, value in desired_search_config.items()
+    )
+
+
+def _search_template_update_failure(
+    config: RagflowSearchTemplateConfig,
+    resolved: ResolvedSearchTemplate,
+    exc: Exception,
+) -> ResolvedSearchTemplate:
+    if config.required:
+        msg = f"RAGFlow search template could not be updated: {config.name}"
+        raise RuntimeError(msg) from exc
+    return replace(
+        resolved,
+        warnings=(*resolved.warnings, "search_app_update_unsupported"),
     )
 
 
@@ -494,7 +676,7 @@ def _bounded_int(value: int, *, minimum: int, maximum: int) -> int:
 
 
 def _optional_id(value: dict[str, Any]) -> str | None:
-    item = value.get("id")
+    item = value.get("id") or value.get("search_id")
     if item in (None, ""):
         return None
     return str(item)
