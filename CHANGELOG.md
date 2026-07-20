@@ -8,6 +8,15 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
+## 2.6.3 - 2026-07-20
+
+### Fixed
+
+- Wiederholte RAGFlow-Quellenmarker vervielfachen signierte Vorschau-URLs
+  nicht mehr. Pro Quelle bleibt nur ein Marker verlinkt, weitere Marker
+  bleiben kurz; dadurch werden OpenWebUI-Antworten nicht durch wiederholte
+  Lang-URLs abgeschnitten.
+
 ## 2.6.2 - 2026-07-20
 
 ### Added
