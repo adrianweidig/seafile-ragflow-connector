@@ -94,9 +94,11 @@ class _FakeRedisClient:
 class _Closeable:
     def __init__(self) -> None:
         self.closed = False
+        self.close_calls = 0
 
     def close(self) -> None:
         self.closed = True
+        self.close_calls += 1
 
 
 class RuntimeDatabaseChecksTests(unittest.TestCase):
@@ -205,10 +207,88 @@ class RuntimeCloseTests(unittest.TestCase):
         self.assertTrue(ragflow_client.closed)
         self.assertTrue(signal_queue.closed)
 
+    def test_close_closes_distinct_interactive_client_and_alias_only_once(self) -> None:
+        for distinct_interactive in (False, True):
+            with self.subTest(distinct_interactive=distinct_interactive):
+                primary = _Closeable()
+                interactive = _Closeable() if distinct_interactive else primary
+                app_runtime = runtime.Runtime(
+                    settings=object(),  # type: ignore[arg-type]
+                    admin_client=_Closeable(),  # type: ignore[arg-type]
+                    sync_client=_Closeable(),  # type: ignore[arg-type]
+                    ragflow_client=primary,  # type: ignore[arg-type]
+                    orchestrator=object(),  # type: ignore[arg-type]
+                    job_store=object(),  # type: ignore[arg-type]
+                    signal_queue=_Closeable(),  # type: ignore[arg-type]
+                    interactive_ragflow_client=interactive,  # type: ignore[arg-type]
+                )
+
+                app_runtime.close()
+
+                self.assertEqual(primary.close_calls, 1)
+                self.assertEqual(interactive.close_calls, 1)
+
 
 class RuntimeServiceRoutingTests(unittest.TestCase):
+    def test_build_runtime_routes_interactive_artifacts_to_distinct_client(self) -> None:
+        settings = _settings(
+            ragflow_generated_dataset_permission="team",
+            ragflow_interactive_api_key="interactive-token",
+            ragflow_interactive_owner_id="owner-1",
+            ragflow_interactive_chat_model_id="model@provider",
+        )
+        session_factory = MagicMock()
+        primary_client = MagicMock()
+        interactive_client = MagicMock()
+
+        with (
+            patch.object(runtime, "resolve_service_transports"),
+            patch.object(runtime, "_warn_insecure_tls"),
+            patch.object(runtime, "_retry"),
+            patch.object(runtime, "get_session_factory", return_value=session_factory),
+            patch.object(runtime, "AdminControlStore"),
+            patch.object(runtime, "build_dashboard_store", return_value=None),
+            patch.object(runtime, "SeafileAdminClient"),
+            patch.object(runtime, "SeafileSyncClient"),
+            patch.object(
+                runtime,
+                "RAGFlowClient",
+                side_effect=[primary_client, interactive_client],
+            ) as ragflow_client_class,
+            patch.object(runtime, "SyncOrchestrator") as orchestrator_class,
+            patch.object(runtime, "JobStore"),
+            patch.object(runtime, "JobSignalQueue"),
+            patch.object(runtime, "OpenWebUISyncService") as sync_service_class,
+        ):
+            built = runtime.build_runtime(settings, initialize_database=False)
+
+        self.assertEqual(ragflow_client_class.call_count, 2)
+        self.assertEqual(ragflow_client_class.call_args_list[0].args[1], "ragflow-token")
+        self.assertEqual(
+            ragflow_client_class.call_args_list[1].args[1],
+            "interactive-token",
+        )
+        self.assertEqual(
+            ragflow_client_class.call_args_list[1].kwargs["artifact_owner_id"],
+            "owner-1",
+        )
+        self.assertIs(
+            orchestrator_class.call_args.kwargs["ragflow_client"],
+            primary_client,
+        )
+        self.assertIs(
+            sync_service_class.call_args.kwargs["ragflow_client"],
+            primary_client,
+        )
+        self.assertIs(
+            sync_service_class.call_args.kwargs["interactive_ragflow_client"],
+            interactive_client,
+        )
+        self.assertIs(built.ragflow_client, primary_client)
+        self.assertIs(built.interactive_ragflow_client, interactive_client)
+
     def test_build_runtime_uses_internal_urls_for_service_clients(self) -> None:
-        settings = _settings()
+        settings = _settings(ragflow_generated_dataset_permission="team")
         session_factory = MagicMock()
 
         with (
@@ -221,7 +301,7 @@ class RuntimeServiceRoutingTests(unittest.TestCase):
             patch.object(runtime, "SeafileAdminClient") as admin_client_class,
             patch.object(runtime, "SeafileSyncClient") as sync_client_class,
             patch.object(runtime, "RAGFlowClient") as ragflow_client_class,
-            patch.object(runtime, "SyncOrchestrator"),
+            patch.object(runtime, "SyncOrchestrator") as orchestrator_class,
             patch.object(runtime, "JobStore") as job_store_class,
             patch.object(runtime, "JobSignalQueue"),
             patch.object(runtime, "OpenWebUISyncService"),
@@ -231,6 +311,10 @@ class RuntimeServiceRoutingTests(unittest.TestCase):
         self.assertEqual(admin_client_class.call_args.args[0], "http://seafile.internal:8082")
         self.assertEqual(sync_client_class.call_args.args[0], "http://seafile.internal:8082")
         self.assertEqual(ragflow_client_class.call_args.args[0], "http://ragflow.internal:9380")
+        self.assertEqual(
+            orchestrator_class.call_args.kwargs["generated_dataset_permission"],
+            "team",
+        )
         control_store_class.return_value.initialize_workflow.assert_not_called()
         self.assertIn(
             "https://files.example.local",

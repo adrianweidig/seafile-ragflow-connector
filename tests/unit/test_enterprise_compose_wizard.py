@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -19,6 +20,11 @@ def _env_value(env_text: str, key: str) -> str:
     raise AssertionError(f"{key} missing from generated env")
 
 
+def _assert_owner_only(path: Path) -> None:
+    if os.name != "nt":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 def _find_portable_bash() -> str:
     bash = shutil.which("bash")
     if not bash:
@@ -26,6 +32,18 @@ def _find_portable_bash() -> str:
     if os.name == "nt" and "system32" in str(Path(bash)).lower():
         pytest.skip("Windows WSL bash cannot execute repository-local Windows paths")
     return bash
+
+
+def _clean_process_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for name in (
+        "RAGFLOW_INTERACTIVE_API_KEY",
+        "RAGFLOW_INTERACTIVE_OWNER_ID",
+        "RAGFLOW_INTERACTIVE_CHAT_MODEL_ID",
+        "RAGFLOW_GENERATED_DATASET_PERMISSION",
+    ):
+        env.pop(name, None)
+    return env
 
 
 def _make_root_ca(tmp_path: Path) -> Path:
@@ -87,17 +105,20 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
     ca_file = _make_root_ca(tmp_path)
     output_env = tmp_path / "connector.env"
     output_dir = tmp_path / "generated"
+    output_env.write_text("RAGFLOW_API_KEY=previous-secret\n", encoding="utf-8")
+    output_env.chmod(0o644)
     secret_values = {
         "SEAFILE_ADMIN_TOKEN": "seafile-admin-secret",
         "SEAFILE_SYNC_USER_TOKEN": "seafile-sync-secret",
         "RAGFLOW_API_KEY": "ragflow-secret",
+        "RAGFLOW_INTERACTIVE_API_KEY": "ragflow-interactive-secret",
         "AUTHZ_API_SHARED_SECRET": "authz-secret",
         "OPENWEBUI_ADMIN_API_KEY": "openwebui-secret",
         "POSTGRES_PASSWORD": "postgres-secret",
         "CONNECTOR_DASHBOARD_AUTH_PASSWORD": "dashboard-secret",
         "OPENWEBUI_PROXY_SHARED_SECRET": "proxy-secret",
     }
-    env = os.environ.copy()
+    env = _clean_process_env()
     env.pop("SSL_CERT_FILE", None)
     env.pop("REQUESTS_CA_BUNDLE", None)
     env.update(
@@ -115,6 +136,9 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
             "ENTERPRISE_OPENWEBUI_BASE_URL": "https://openwebui.internal",
             "ENTERPRISE_CONNECTOR_PUBLIC_BASE_URL": "https://connector.internal",
             "CONNECTOR_DASHBOARD_CONTROL_ENABLED": "true",
+            "RAGFLOW_INTERACTIVE_OWNER_ID": "interactive-owner-id",
+            "RAGFLOW_INTERACTIVE_CHAT_MODEL_ID": "interactive-chat-model-id",
+            "RAGFLOW_GENERATED_DATASET_PERMISSION": "team",
             **secret_values,
         }
     )
@@ -139,6 +163,11 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
     )
 
     generated_env = output_env.read_text(encoding="utf-8")
+    _assert_owner_only(output_env)
+    backups = list(tmp_path.glob("connector.env.bak.*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == "RAGFLOW_API_KEY=previous-secret\n"
+    _assert_owner_only(backups[0])
     ca_env_path = _env_value(generated_env, "CONNECTOR_ENTERPRISE_CA_HOST_FILE")
     assert ca_env_path
     assert ca_env_path.replace("\\", "/").endswith("/root-ca.pem")
@@ -151,7 +180,11 @@ def test_enterprise_compose_wizard_generates_env_and_helper_scripts(
     assert "AUTHZ_API_SHARED_SECRET=authz-secret" in generated_env
     assert "SEARCH_AUTHZ_SHARED_SECRET=authz-secret" in generated_env
     assert "SEARCH_RAGFLOW_BASE_URL=https://ragflow.internal" in generated_env
-    assert "SEARCH_RAGFLOW_API_KEY=ragflow-secret" in generated_env
+    assert "RAGFLOW_INTERACTIVE_API_KEY=ragflow-interactive-secret" in generated_env
+    assert "RAGFLOW_INTERACTIVE_OWNER_ID=interactive-owner-id" in generated_env
+    assert "RAGFLOW_INTERACTIVE_CHAT_MODEL_ID=interactive-chat-model-id" in generated_env
+    assert "RAGFLOW_GENERATED_DATASET_PERMISSION=team" in generated_env
+    assert "SEARCH_RAGFLOW_API_KEY=ragflow-interactive-secret" in generated_env
     assert "SEARCH_SERVICE_ENABLED=true" in generated_env
     assert "OPENWEBUI_SOURCE_PREVIEW_MODE=connector_viewer" in generated_env
     assert "OPENWEBUI_PROXY_PUBLIC_BASE_URL=https://connector.internal" in generated_env
@@ -188,7 +221,7 @@ def test_enterprise_compose_wizard_generates_installable_defaults_without_ca_or_
 
     output_env = tmp_path / "connector.env"
     output_dir = tmp_path / "generated"
-    env = os.environ.copy()
+    env = _clean_process_env()
     env.pop("CONNECTOR_DASHBOARD_CONTROL_ENABLED", None)
     env.pop("CONNECTOR_AUTOMATION_INITIAL_STATE", None)
     env.update(
@@ -235,6 +268,11 @@ def test_enterprise_compose_wizard_generates_installable_defaults_without_ca_or_
     assert "CONNECTOR_CA_BUNDLE=\n" in generated_env
     assert "SEAFILE_CA_BUNDLE=\n" in generated_env
     assert "RAGFLOW_CA_BUNDLE=\n" in generated_env
+    assert "RAGFLOW_INTERACTIVE_API_KEY=\n" in generated_env
+    assert "RAGFLOW_INTERACTIVE_OWNER_ID=\n" in generated_env
+    assert "RAGFLOW_INTERACTIVE_CHAT_MODEL_ID=\n" in generated_env
+    assert "RAGFLOW_GENERATED_DATASET_PERMISSION=me" in generated_env
+    assert "SEARCH_RAGFLOW_API_KEY=ragflow-secret" in generated_env
     assert "OPENWEBUI_ADMIN_API_KEY=\n" in generated_env
     assert "OPENWEBUI_SYNC_MODE=disabled" in generated_env
     assert "SEAFILE_PUBLIC_BASE_URL=https://seafile.internal" in generated_env
@@ -250,6 +288,84 @@ def test_enterprise_compose_wizard_generates_installable_defaults_without_ca_or_
     assert "deploy/compose/enterprise-ca.compose.yml" not in compose_files
 
 
+@pytest.mark.parametrize(
+    ("interactive_values", "expected_error"),
+    [
+        (
+            {
+                "RAGFLOW_INTERACTIVE_API_KEY": "ragflow-interactive-secret",
+                "RAGFLOW_GENERATED_DATASET_PERMISSION": "team",
+            },
+            "RAGFLOW_INTERACTIVE_OWNER_ID ist erforderlich",
+        ),
+        (
+            {
+                "RAGFLOW_INTERACTIVE_API_KEY": "ragflow-interactive-secret",
+                "RAGFLOW_INTERACTIVE_OWNER_ID": "interactive-owner-id",
+                "RAGFLOW_GENERATED_DATASET_PERMISSION": "team",
+            },
+            "RAGFLOW_INTERACTIVE_CHAT_MODEL_ID ist erforderlich",
+        ),
+        (
+            {
+                "RAGFLOW_INTERACTIVE_API_KEY": "ragflow-interactive-secret",
+                "RAGFLOW_INTERACTIVE_OWNER_ID": "interactive-owner-id",
+                "RAGFLOW_INTERACTIVE_CHAT_MODEL_ID": "interactive-chat-model-id",
+                "RAGFLOW_GENERATED_DATASET_PERMISSION": "me",
+            },
+            "RAGFLOW_GENERATED_DATASET_PERMISSION muss bei gesetztem "
+            "RAGFLOW_INTERACTIVE_API_KEY team sein",
+        ),
+    ],
+)
+def test_enterprise_compose_wizard_rejects_incomplete_interactive_owner_config(
+    tmp_path: Path,
+    interactive_values: dict[str, str],
+    expected_error: str,
+) -> None:
+    bash = _find_portable_bash()
+    env = _clean_process_env()
+    env.update(
+        {
+            "ENTERPRISE_NONINTERACTIVE": "true",
+            "ENTERPRISE_ASSUME_YES": "true",
+            "ENTERPRISE_RUN_CONFIG_CHECK": "false",
+            "ENTERPRISE_PORTAINER_BUNDLE": "false",
+            "ENTERPRISE_MODE": "external",
+            "ENTERPRISE_WITH_SEARCH": "false",
+            "ENTERPRISE_WITH_OPENWEBUI": "false",
+            "ENTERPRISE_SEAFILE_BASE_URL": "https://seafile.internal",
+            "ENTERPRISE_RAGFLOW_BASE_URL": "https://ragflow.internal",
+            "SEAFILE_ADMIN_TOKEN": "seafile-admin-secret",
+            "SEAFILE_SYNC_USER_TOKEN": "seafile-sync-secret",
+            "RAGFLOW_API_KEY": "ragflow-secret",
+            **interactive_values,
+        }
+    )
+
+    result = subprocess.run(
+        [
+            bash,
+            str(SCRIPT),
+            "--non-interactive",
+            "--assume-yes",
+            "--no-config-check",
+            "--output-env",
+            str(tmp_path / "connector.env"),
+            "--output-dir",
+            str(tmp_path / "generated"),
+        ],
+        cwd=ROOT_DIR,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+
+
 def test_enterprise_compose_wizard_supports_external_state_and_core_only(
     tmp_path: Path,
 ) -> None:
@@ -257,7 +373,7 @@ def test_enterprise_compose_wizard_supports_external_state_and_core_only(
 
     output_env = tmp_path / "connector.env"
     output_dir = tmp_path / "generated"
-    env = os.environ.copy()
+    env = _clean_process_env()
     env.update(
         {
             "ENTERPRISE_NONINTERACTIVE": "true",
@@ -320,7 +436,7 @@ def test_enterprise_compose_wizard_keeps_proxy_ca_empty_for_internal_http(
     ca_file = _make_root_ca(tmp_path)
     output_env = tmp_path / "shared.env"
     output_dir = tmp_path / "shared-generated"
-    env = os.environ.copy()
+    env = _clean_process_env()
     env.update(
         {
             "ENTERPRISE_NONINTERACTIVE": "true",
@@ -406,13 +522,14 @@ def test_enterprise_compose_wizard_generates_portainer_bundle_when_docker_is_ava
         "SEAFILE_ADMIN_TOKEN": "seafile-admin-secret",
         "SEAFILE_SYNC_USER_TOKEN": "seafile-sync-secret",
         "RAGFLOW_API_KEY": "ragflow-secret",
+        "RAGFLOW_INTERACTIVE_API_KEY": "ragflow-interactive-secret",
         "AUTHZ_API_SHARED_SECRET": "authz-secret",
         "OPENWEBUI_ADMIN_API_KEY": "openwebui-secret",
         "POSTGRES_PASSWORD": "postgres-secret",
         "CONNECTOR_DASHBOARD_AUTH_PASSWORD": "dashboard-secret",
         "OPENWEBUI_PROXY_SHARED_SECRET": "proxy-secret",
     }
-    env = os.environ.copy()
+    env = _clean_process_env()
     env.update(
         {
             "ENTERPRISE_NONINTERACTIVE": "true",
@@ -425,6 +542,9 @@ def test_enterprise_compose_wizard_generates_portainer_bundle_when_docker_is_ava
             "ENTERPRISE_RAGFLOW_BASE_URL": "https://ragflow.internal",
             "ENTERPRISE_OPENWEBUI_BASE_URL": "https://openwebui.internal",
             "ENTERPRISE_CONNECTOR_PUBLIC_BASE_URL": "https://connector.internal",
+            "RAGFLOW_INTERACTIVE_OWNER_ID": "interactive-owner-id",
+            "RAGFLOW_INTERACTIVE_CHAT_MODEL_ID": "interactive-chat-model-id",
+            "RAGFLOW_GENERATED_DATASET_PERMISSION": "team",
             **secret_values,
         }
     )
@@ -450,6 +570,8 @@ def test_enterprise_compose_wizard_generates_portainer_bundle_when_docker_is_ava
 
     portainer_env = output_dir / "portainer.env"
     portainer_compose = output_dir / "portainer-compose.yml"
+    _assert_owner_only(output_env)
+    _assert_owner_only(portainer_env)
     assert portainer_env.read_text(encoding="utf-8") == output_env.read_text(encoding="utf-8")
     rendered_compose = portainer_compose.read_text(encoding="utf-8")
     assert "connector-controller:" in rendered_compose
@@ -480,7 +602,7 @@ def test_enterprise_compose_wizard_renders_external_state_core_only_bundle(
 
     output_env = tmp_path / "connector.env"
     output_dir = tmp_path / "generated"
-    env = os.environ.copy()
+    env = _clean_process_env()
     env.update(
         {
             "ENTERPRISE_NONINTERACTIVE": "true",

@@ -104,9 +104,13 @@ class Settings(BaseSettings):
     ragflow_base_url: str
     ragflow_internal_url: str | None = None
     ragflow_api_key: str
+    ragflow_interactive_api_key: str | None = None
+    ragflow_interactive_owner_id: str | None = None
+    ragflow_interactive_chat_model_id: str | None = None
     ragflow_template_dataset_name: str = "connector_template"
     ragflow_template_auto_create: bool = True
     ragflow_template_required: bool = True
+    ragflow_generated_dataset_permission: Literal["me", "team"] = "me"
     ragflow_template_chat_name: str = "connector_template_chat"
     ragflow_search_template_enabled: bool = True
     ragflow_search_template_name: str = "search_template"
@@ -338,6 +342,7 @@ class Settings(BaseSettings):
         return value
 
     @field_validator(
+        "ragflow_interactive_api_key",
         "search_ragflow_candidate_top_k",
         "search_ragflow_top_n",
         "search_ragflow_similarity_threshold",
@@ -356,6 +361,18 @@ class Settings(BaseSettings):
     def blank_search_override_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator(
+        "ragflow_interactive_owner_id",
+        "ragflow_interactive_chat_model_id",
+        mode="before",
+    )
+    @classmethod
+    def strip_interactive_ragflow_identifiers(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
         return value
 
     @field_validator("connector_language")
@@ -523,6 +540,25 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def build_service_urls(self) -> Settings:
+        interactive_values = (
+            self.ragflow_interactive_api_key,
+            self.ragflow_interactive_owner_id,
+            self.ragflow_interactive_chat_model_id,
+        )
+        if any(interactive_values) and not all(interactive_values):
+            msg = (
+                "RAGFLOW_INTERACTIVE_API_KEY, RAGFLOW_INTERACTIVE_OWNER_ID and "
+                "RAGFLOW_INTERACTIVE_CHAT_MODEL_ID must be set together"
+            )
+            raise ValueError(msg)
+        if (
+            self.ragflow_interactive_api_key
+            and self.ragflow_generated_dataset_permission != "team"
+        ):
+            raise ValueError(
+                "RAGFLOW_GENERATED_DATASET_PERMISSION must be team when "
+                "RAGFLOW_INTERACTIVE_API_KEY is configured"
+            )
         if bool(self.connector_dashboard_auth_username) != bool(
             self.connector_dashboard_auth_password
         ):

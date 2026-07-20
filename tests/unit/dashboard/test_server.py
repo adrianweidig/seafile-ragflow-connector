@@ -4,6 +4,7 @@ import base64
 import json
 import unittest
 from dataclasses import dataclass
+from hashlib import sha256
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -118,6 +119,43 @@ def _add_search_profile_with_acl(store: DashboardEventStore, *, user_email: str)
     "pydantic or sqlalchemy is not installed in this Python environment",
 )
 class DashboardServerTests(unittest.TestCase):
+    def test_interactive_ragflow_config_is_safe_and_client_selection_is_split(self) -> None:
+        settings = _settings(0)
+        settings.ragflow_generated_dataset_permission = "team"
+        settings.ragflow_interactive_api_key = "interactive-token"
+        settings.ragflow_interactive_owner_id = "owner-1"
+        settings.ragflow_interactive_chat_model_id = "model@provider"
+
+        safe = dashboard_server._safe_config(settings)  # type: ignore[attr-defined]
+
+        self.assertEqual(safe["ragflow_generated_dataset_permission"], "team")
+        self.assertTrue(safe["ragflow_interactive_api_key_configured"])
+        self.assertEqual(safe["ragflow_interactive_owner_id"], "owner-1")
+        self.assertEqual(
+            safe["ragflow_interactive_chat_model_id"],
+            "model@provider",
+        )
+        self.assertNotIn("ragflow_interactive_api_key", safe)
+
+        original_client = dashboard_server.RAGFlowClient
+        dashboard_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
+        _FakeRAGFlowClient.init_calls = []
+        try:
+            dashboard_server._ragflow_client(  # type: ignore[attr-defined]
+                settings,
+                interactive=True,
+            ).close()
+            dashboard_server._ragflow_client(settings).close()  # type: ignore[attr-defined]
+        finally:
+            dashboard_server.RAGFlowClient = original_client  # type: ignore[assignment]
+
+        interactive_args, interactive_kwargs = _FakeRAGFlowClient.init_calls[0]
+        primary_args, primary_kwargs = _FakeRAGFlowClient.init_calls[1]
+        self.assertEqual(interactive_args[1], "interactive-token")
+        self.assertEqual(interactive_kwargs["artifact_owner_id"], "owner-1")
+        self.assertEqual(primary_args[1], "ragflow-token")
+        self.assertIsNone(primary_kwargs["artifact_owner_id"])
+
     def test_liveness_and_prometheus_metrics_do_not_require_dashboard_auth(self) -> None:
         store = _store(self)
         settings = _settings(0)
@@ -1491,6 +1529,14 @@ class DashboardServerTests(unittest.TestCase):
         original_client = dashboard_server.RAGFlowClient
         dashboard_server.RAGFlowClient = _FakeRAGFlowClient  # type: ignore[assignment]
         _FakeRAGFlowClient.deleted_chats = []
+        short_id = sha256(b"dataset-1").hexdigest()[:8]
+        _FakeRAGFlowClient.chats = {
+            "chat-1": {
+                "id": "chat-1",
+                "name": f"RAG_dataset_{short_id}",
+                "dataset_ids": ["dataset-1"],
+            }
+        }
         try:
             handle = start_dashboard_server(
                 DashboardContext(
@@ -1527,6 +1573,20 @@ class DashboardServerTests(unittest.TestCase):
             self.assertIsNone(stored.ragflow_chat_id)
             self.assertIsNone(stored.pipe_definition_hash)
             self.assertEqual(stored.sync_status, "pending")
+
+    def test_openwebui_delete_chat_ownership_rejects_dataset_mismatch(self) -> None:
+        short_id = sha256(b"other-dataset").hexdigest()[:8]
+        artifact = {
+            "id": "chat-1",
+            "name": f"RAG_dataset_{short_id}",
+            "dataset_ids": ["other-dataset"],
+        }
+        self.assertFalse(
+            dashboard_server._is_owned_ragflow_chat_artifact(  # type: ignore[attr-defined]
+                artifact,
+                dataset_id="dataset-1",
+            )
+        )
 
     def test_openwebui_delete_dataset_endpoint_clears_dataset_binding_not_library(self) -> None:
         store = _store(self)
@@ -2483,9 +2543,11 @@ class _FakeRAGFlowClient:
     answer_content = "RAGFlow liefert eine echte Antwort."
     deleted_chats: list[list[str]] = []
     deleted_datasets: list[list[str]] = []
+    chats: dict[str, dict[str, object]] = {}
+    init_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
-        pass
+        self.__class__.init_calls.append((args, kwargs))
 
     def chat_completion(self, **kwargs: object) -> dict[str, object]:
         self.__class__.last_model = str(kwargs.get("model"))
@@ -2507,6 +2569,9 @@ class _FakeRAGFlowClient:
     def retrieve_chunks(self, **kwargs: object) -> dict[str, object]:
         self.__class__.retrieve_calls += 1
         return self.__class__.retrieval_result
+
+    def get_chat(self, chat_id: str) -> dict[str, object] | None:
+        return self.__class__.chats.get(chat_id)
 
     def delete_chats(self, chat_ids: list[str]) -> bool:
         self.__class__.deleted_chats.append(list(chat_ids))

@@ -28,6 +28,43 @@ Tuning sind optionale Erweiterungen.
 Secrets müssen über Portainer-Environment-Management, Docker Secrets oder eine
 lokale nicht committete Env-Datei bereitgestellt werden.
 
+## RAGFlow-Identitäten und Eigentümerschaft
+
+Der verpflichtende `RAGFLOW_API_KEY` ist die technische Sync-Identität. Sie
+besitzt das interne Template und die kanonischen, aus Seafile erzeugten
+Datasets. Standardmäßig besitzt dieselbe Identität auch alle vom Connector
+erzeugten RAGFlow-Chats und die Search-App; das ist der rückwärtskompatible
+Ein-Identitäts-Betrieb.
+
+Für genau einen kontrollierten Admin-Zieluser kann die interaktive
+Eigentümerschaft getrennt werden:
+
+```env
+RAGFLOW_INTERACTIVE_API_KEY=
+RAGFLOW_INTERACTIVE_OWNER_ID=
+RAGFLOW_INTERACTIVE_CHAT_MODEL_ID=
+RAGFLOW_GENERATED_DATASET_PERMISSION=team
+```
+
+Wenn `RAGFLOW_INTERACTIVE_API_KEY` gesetzt ist, sind Owner-ID und eine für
+diesen User verfügbare Chat-Modell-ID Pflicht. Der User muss Mitglied desselben
+RAGFlow-Tenants wie die Sync-Identität sein. Der Connector erzeugt seine
+interaktiven Chats und ausführbaren Search-App-Spiegel unter diesem User,
+während `RAGFLOW_API_KEY` die Datasets weiterhin synchronisiert. `team` ist
+dabei zwingend, damit der interaktive Besitzer die kanonischen Datasets
+referenzieren kann. Der Connector gleicht `permission` für bereits vorhandene,
+exakt erwartete Bibliotheks-Datasets beim Provisioning idempotent auf diesen
+Wert ab, ohne Parser- oder sonstige Dataset-Einstellungen zu überschreiben.
+Das interne Template bleibt `me`. Diese tenantweite Freigabe ist keine
+Seafile-ACL.
+
+Dieser Modus ist keine allgemeine Freigabe nativer RAGFlow-Chats an alle
+Tenant-Mitglieder. Normale Nutzer verwenden die ACL-geprüfte Connector-Suche
+oder OpenWebUI. Wenn Search-Antworten unter der interaktiven Identität laufen,
+muss `SEARCH_RAGFLOW_API_KEY` denselben Wert wie
+`RAGFLOW_INTERACTIVE_API_KEY` erhalten. API-Keys bleiben ausschließlich in der
+Runtime-Umgebung; sie gehören weder in Git noch in generierte Artefakte.
+
 ## Sprache und Locale
 
 Deutsch ist die Standardsprache für menschenlesbare CLI-, Dashboard-,

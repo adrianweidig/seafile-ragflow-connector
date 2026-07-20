@@ -30,6 +30,7 @@ try:
         ParsePendingError,
         SyncCancelledError,
         SyncOrchestrator,
+        _is_ragflow_duplicate_document_name_error,
     )
     from seafile_ragflow_connector.utils.hashing import sha256_bytes
 except ModuleNotFoundError as exc:
@@ -124,6 +125,8 @@ class _FakeRAGFlowClient:
         self.upload_document_id = "new-doc"
         self.dataset_id = "dataset"
         self.generated_dataset_exists = True
+        self.generated_dataset_name = "Dataset"
+        self.generated_dataset_permission = "me"
         self.template_exists = True
         self.datasets_by_id: dict[str, dict[str, object]] = {}
 
@@ -161,7 +164,14 @@ class _FakeRAGFlowClient:
                 return [{"id": "template", "name": "connector_template"}]
             return []
         if self.generated_dataset_exists:
-            return [{"id": self.dataset_id, "name": name or "Dataset"}]
+            self.generated_dataset_name = name or self.generated_dataset_name
+            return [
+                {
+                    "id": self.dataset_id,
+                    "name": self.generated_dataset_name,
+                    "permission": self.generated_dataset_permission,
+                }
+            ]
         return []
 
     def get_dataset(self, dataset_id: str) -> dict[str, object]:
@@ -175,6 +185,10 @@ class _FakeRAGFlowClient:
             self.template_exists = True
             return {"id": "template-created", **payload}
         self.generated_dataset_exists = True
+        self.generated_dataset_name = str(payload.get("name") or self.generated_dataset_name)
+        self.generated_dataset_permission = str(
+            payload.get("permission") or self.generated_dataset_permission
+        )
         return {"id": self.dataset_id, **payload}
 
     def update_dataset(
@@ -183,7 +197,17 @@ class _FakeRAGFlowClient:
         payload: dict[str, object],
     ) -> dict[str, object]:
         self.updated_datasets.append((dataset_id, payload))
-        return {"id": dataset_id, "name": "connector_template", **payload}
+        if dataset_id == "template":
+            return {"id": dataset_id, "name": "connector_template", **payload}
+        self.generated_dataset_permission = str(
+            payload.get("permission") or self.generated_dataset_permission
+        )
+        return {
+            "id": dataset_id,
+            "name": self.generated_dataset_name,
+            "permission": self.generated_dataset_permission,
+            **payload,
+        }
 
     def delete_documents(self, dataset_id: str, document_ids: list[str]) -> None:
         self.operations.append("delete")
@@ -1144,6 +1168,9 @@ class OrchestratorUploadTests(unittest.TestCase):
             session.commit()
 
         ragflow_client = _DuplicateNameRenamingRAGFlowClient()
+        ragflow_client.rename_error_message = (
+            "  Duplicated document name in the same dataset.\n"
+        )
         ragflow_client.documents = [{"id": "old-doc", "name": "report.pdf", "run": "DONE"}]
         orchestrator = SyncOrchestrator(
             session_factory,
@@ -1163,6 +1190,14 @@ class OrchestratorUploadTests(unittest.TestCase):
             ["upload", "metadata", "rename", "parse"],
         )
         self.assertEqual(ragflow_client.deleted_ids, [])
+        replacement = next(
+            document
+            for document in ragflow_client.documents
+            if document.get("id") == "new-doc"
+        )
+        self.assertEqual(replacement["name"], ragflow_client.uploaded_name)
+        self.assertTrue(str(replacement["name"]).startswith("report.__connector_"))
+        self.assertEqual(ragflow_client.parsed_ids, [["new-doc"]])
         with session_factory() as session:
             db_file = session.query(File).one()
             versions = session.query(FileDocumentVersion).order_by(FileDocumentVersion.id).all()
@@ -1245,6 +1280,62 @@ class OrchestratorUploadTests(unittest.TestCase):
         with session_factory() as session:
             db_file = session.query(File).one()
             self.assertEqual(db_file.ragflow_document_id, "old-doc")
+
+    def test_duplicate_name_error_requires_exact_status_code_and_message(self) -> None:
+        exact_payload = {
+            "code": 102,
+            "message": "Duplicated document name in the same dataset.",
+        }
+        self.assertTrue(
+            _is_ragflow_duplicate_document_name_error(
+                ApiError("duplicate", status_code=200, payload=exact_payload)
+            )
+        )
+
+        variants = (
+            ApiError("duplicate", status_code=201, payload=exact_payload),
+            ApiError(
+                "duplicate",
+                status_code=200,
+                payload={**exact_payload, "code": "102"},
+            ),
+            ApiError(
+                "duplicate",
+                status_code=200,
+                payload={**exact_payload, "message": exact_payload["message"].lower()},
+            ),
+            ApiError(
+                "duplicate",
+                status_code=200,
+                payload={"code": 102, "msg": exact_payload["message"]},
+            ),
+        )
+        for error in variants:
+            with self.subTest(status=error.status_code, payload=error.payload):
+                self.assertFalse(_is_ragflow_duplicate_document_name_error(error))
+
+    def test_initial_upload_does_not_defer_exact_duplicate_name_error(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo"))
+            session.commit()
+
+        ragflow_client = _DuplicateNameRenamingRAGFlowClient()
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"%PDF-1.4\ncontent"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        with self.assertRaises(ApiError):
+            orchestrator.sync_file("repo", "dataset", "/docs/report.pdf")
+
+        self.assertEqual(ragflow_client.operations, ["upload", "metadata", "rename"])
+        self.assertEqual(ragflow_client.parsed_ids, [])
 
     def test_only_latest_of_two_pending_updates_can_be_promoted(self) -> None:
         session_factory = _session_factory(self)
@@ -1740,6 +1831,79 @@ class OrchestratorUploadTests(unittest.TestCase):
         with session_factory() as session:
             cleanup = session.query(CleanupOutbox).one()
             self.assertEqual(cleanup.status, "completed")
+            self.assertEqual(session.query(File).one().ragflow_document_id, "new-doc")
+
+    def test_cleanup_generic_rename_400_retries_instead_of_completing(self) -> None:
+        class _BadRequestRenameRAGFlowClient(_RenamingRAGFlowClient):
+            def rename_document(
+                self,
+                dataset_id: str,
+                document_id: str,
+                document_name: str,
+            ) -> dict[str, str]:
+                self.operations.append("rename")
+                raise ApiError(
+                    "generic rename rejection",
+                    status_code=400,
+                    payload={"code": 100, "message": "Invalid rename request."},
+                )
+
+        session_factory, _old_version_id = _replacement_cleanup_fixture(self)
+        ragflow_client = _BadRequestRenameRAGFlowClient()
+        ragflow_client.documents = [
+            {"id": "old-doc", "name": "report.pdf", "run": "DONE"},
+            {"id": "new-doc", "name": "managed-report.pdf", "run": "DONE"},
+        ]
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        orchestrator.process_cleanup_outbox(repo_id="repo")
+
+        self.assertEqual(ragflow_client.deleted_ids, [["old-doc"]])
+        self.assertEqual(ragflow_client.operations, ["delete", "rename"])
+        self.assertTrue(
+            any(document.get("id") == "new-doc" for document in ragflow_client.documents)
+        )
+        with session_factory() as session:
+            cleanup = session.query(CleanupOutbox).one()
+            self.assertEqual(cleanup.status, "retrying")
+            self.assertEqual(cleanup.attempts, 1)
+            self.assertIn("generic rename rejection", cleanup.error_message or "")
+            self.assertEqual(session.query(File).one().ragflow_document_id, "new-doc")
+
+    def test_cleanup_does_not_defer_duplicate_name_collision(self) -> None:
+        session_factory, _old_version_id = _replacement_cleanup_fixture(self)
+        ragflow_client = _DuplicateNameRenamingRAGFlowClient()
+        ragflow_client.documents = [
+            {"id": "old-doc", "name": "old-version.pdf", "run": "DONE"},
+            {"id": "new-doc", "name": "report.__connector_new.pdf", "run": "DONE"},
+            {"id": "unowned-doc", "name": "report.pdf", "run": "DONE"},
+        ]
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"content"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            refresh_dataset_settings=False,
+        )
+
+        orchestrator.process_cleanup_outbox(repo_id="repo")
+
+        self.assertEqual(ragflow_client.deleted_ids, [["old-doc"]])
+        self.assertEqual(ragflow_client.operations, ["delete", "rename"])
+        with session_factory() as session:
+            cleanup = session.query(CleanupOutbox).one()
+            self.assertEqual(cleanup.status, "retrying")
+            self.assertIn("API returned an error code", cleanup.error_message or "")
             self.assertEqual(session.query(File).one().ragflow_document_id, "new-doc")
 
     def test_cleanup_rename_404_does_not_complete_outbox(self) -> None:
@@ -2364,6 +2528,7 @@ class OrchestratorUploadTests(unittest.TestCase):
         template_payload = ragflow_client.created_datasets[0]
         generated_payload = ragflow_client.created_datasets[1]
         self.assertEqual(template_payload["name"], "connector_template")
+        self.assertEqual(template_payload["permission"], "me")
         self.assertEqual(template_payload["chunk_method"], "naive")
         parser_config = template_payload["parser_config"]
         self.assertEqual(parser_config["layout_recognize"], "DeepDOC")
@@ -2371,14 +2536,56 @@ class OrchestratorUploadTests(unittest.TestCase):
         self.assertEqual(parser_config["auto_keywords"], 0)
         self.assertEqual(parser_config["pages"], [[1, 1000000]])
         self.assertTrue(str(generated_payload["name"]).startswith("RAG_demo_"))
+        self.assertEqual(generated_payload["permission"], "me")
 
-    def test_existing_generated_dataset_still_ensures_template_dataset(self) -> None:
+    def test_generated_dataset_can_use_team_permission_while_template_stays_private(self) -> None:
         session_factory = _session_factory(self)
         with session_factory() as session:
             session.add(Library(repo_id="repo", name="Demo", name_slug="demo", status="active"))
             session.commit()
 
         ragflow_client = _FakeRAGFlowClient()
+        ragflow_client.template_exists = False
+        ragflow_client.generated_dataset_exists = False
+        ragflow_client.dataset_id = "dataset-created"
+        orchestrator = SyncOrchestrator(
+            session_factory,
+            admin_client=_FakeSeafileAdminClient(),  # type: ignore[arg-type]
+            sync_client=_FakeSeafileSyncClient(b"%PDF-1.4\ncontent"),
+            ragflow_client=ragflow_client,  # type: ignore[arg-type]
+            file_policy=FilePolicy(),
+            template_dataset_name="connector_template",
+            generated_dataset_permission="team",
+            refresh_dataset_settings=False,
+        )
+
+        dataset_id = orchestrator.ensure_dataset_for_repo("repo")
+
+        self.assertEqual(dataset_id, "dataset-created")
+        template_payload, generated_payload = ragflow_client.created_datasets
+        self.assertEqual(template_payload["permission"], "me")
+        self.assertEqual(generated_payload["permission"], "team")
+
+    def test_existing_generated_dataset_still_ensures_template_dataset(self) -> None:
+        class _ExistingTeamDatasetRAGFlowClient(_FakeRAGFlowClient):
+            def list_datasets(
+                self,
+                *,
+                name: str | None = None,
+                parse_status: str | None = None,
+            ):
+                datasets = super().list_datasets(name=name, parse_status=parse_status)
+                if name != "connector_template":
+                    for dataset in datasets:
+                        dataset["permission"] = "team"
+                return datasets
+
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(Library(repo_id="repo", name="Demo", name_slug="demo", status="active"))
+            session.commit()
+
+        ragflow_client = _ExistingTeamDatasetRAGFlowClient()
         ragflow_client.template_exists = False
         orchestrator = SyncOrchestrator(
             session_factory,
@@ -2387,6 +2594,7 @@ class OrchestratorUploadTests(unittest.TestCase):
             ragflow_client=ragflow_client,  # type: ignore[arg-type]
             file_policy=FilePolicy(),
             template_dataset_name="connector_template",
+            generated_dataset_permission="team",
             refresh_dataset_settings=False,
         )
 
@@ -2394,6 +2602,8 @@ class OrchestratorUploadTests(unittest.TestCase):
 
         self.assertEqual(dataset_id, "dataset")
         self.assertEqual(ragflow_client.created_datasets[0]["name"], "connector_template")
+        self.assertEqual(ragflow_client.created_datasets[0]["permission"], "me")
+        self.assertEqual(ragflow_client.updated_datasets, [])
 
     def test_controlled_missing_libraries_keep_target_state_and_supersede_cleanup(self) -> None:
         session_factory = _session_factory(self)

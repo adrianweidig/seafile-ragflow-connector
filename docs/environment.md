@@ -23,7 +23,7 @@ Für Seafile -> RAGFlow gelten zusätzlich diese fachlichen Pflichtwerte:
 | `SEAFILE_ADMIN_TOKEN` | ja | immer | Admin-API-Token für Library-Discovery. |
 | `SEAFILE_SYNC_USER_TOKEN` | ja | immer | API-Token für Dateilisten und Downloads. |
 | `RAGFLOW_BASE_URL` | ja | immer | Aus dem Connector-Container erreichbare RAGFlow-API. |
-| `RAGFLOW_API_KEY` | ja | immer | API-Key des RAGFlow-Zielusers. |
+| `RAGFLOW_API_KEY` | ja | immer | API-Key der technischen Sync-Identität; sie besitzt die kanonischen Datasets. |
 | `AUTHZ_API_SHARED_SECRET` | ja | Standard und Core-only | Technisches Secret der internen Authz-API; der Wizard erzeugt es. |
 | `POSTGRES_PASSWORD` | ja | `bundled-state` | Passwort der Stack-Datenbank. |
 | `DATABASE_URL` | ja | `external-state` | Vollständige URL zur vorhandenen PostgreSQL-Datenbank. |
@@ -32,8 +32,10 @@ Für Seafile -> RAGFlow gelten zusätzlich diese fachlichen Pflichtwerte:
 Das Standardprofil mit Search benötigt außerdem `SEARCH_AUTHZ_SHARED_SECRET`
 mit demselben Wert wie `AUTHZ_API_SHARED_SECRET` sowie
 `SEARCH_RAGFLOW_BASE_URL` und `SEARCH_RAGFLOW_API_KEY`. Der Enterprise-Wizard
-leitet diese Werte aus der Core-Konfiguration ab. Core-only definiert keinen
-Search-Container und verlangt diese Search-Werte nicht.
+leitet diese Werte aus der Core-Konfiguration ab. Bei konfigurierter
+interaktiver RAGFlow-Identität verwendet er dafür deren API-Key, andernfalls
+`RAGFLOW_API_KEY`. Core-only definiert keinen Search-Container und verlangt
+diese Search-Werte nicht.
 
 ## Allgemeine optionale Werte
 
@@ -88,7 +90,7 @@ Er benötigt keinen Seafile-Admin- oder Sync-Token.
 | `SEARCH_AUTHZ_BASE_URL` | ja | Interne URL zum Connector-Core, z. B. `http://connector-controller:8080`. |
 | `SEARCH_AUTHZ_SHARED_SECRET` | ja | Muss zum Authz-Secret im Core passen. |
 | `SEARCH_RAGFLOW_BASE_URL` | ja | RAGFlow-URL aus Sicht des Search-Containers. |
-| `SEARCH_RAGFLOW_API_KEY` | ja | RAGFlow-API-Key für erlaubte Abfragen. |
+| `SEARCH_RAGFLOW_API_KEY` | ja | RAGFlow-API-Key für erlaubte Abfragen. Für native beziehungsweise Connector-Chat-Antworten unter der kontrollierten interaktiven Identität muss der Wert mit `RAGFLOW_INTERACTIVE_API_KEY` übereinstimmen; andernfalls wird `RAGFLOW_API_KEY` verwendet. |
 | `SEARCH_RAGFLOW_VERIFY_SSL`, `SEARCH_RAGFLOW_CA_BUNDLE` | optional | TLS-Prüfung und optionales CA-Bundle für Search -> RAGFlow. |
 | `SEARCH_ANSWER_GENERATION_MODE` | optional | `ragflow_chat`, `retrieval_summary` oder `disabled`; Default `ragflow_chat`. |
 | `RAGFLOW_SEARCH_ANSWER_CHAT_NAME` | optional | Name des RAGFlow-Chats für Antwortgenerierung; Default `connector_search_answer`. |
@@ -197,6 +199,10 @@ installierten System-CAs.
 | `SEAFILE_REWRITE_DOWNLOAD_URLS`, `SEAFILE_DOWNLOAD_REWRITE_FROM`, `SEAFILE_DOWNLOAD_REWRITE_TO` | optional | Rewrite von Seafile-Download-URLs, z. B. von `127.0.0.1` auf Docker-DNS. Das Rewrite-Ziel wird als vertrauenswürdige Download-Origin behandelt. |
 | `SEAFILE_DOWNLOAD_ALLOWED_ORIGINS` | optional | Kommaseparierte zusätzliche Origins (`https://host[:port]`), an die der Sync-Authorization-Header gesendet werden darf. Standardmäßig sind nur die Seafile-Basis-Origin und ein explizites Rewrite-Ziel erlaubt. |
 | `RAGFLOW_TEMPLATE_DATASET_NAME` | optional | Default ist `connector_template`. |
+| `RAGFLOW_GENERATED_DATASET_PERMISSION` | optional | `me` (sicherer Default) oder `team`; setzt die RAGFlow-Berechtigung beim Erzeugen neuer Bibliotheks-Datasets. `team` macht sie für alle Mitglieder des RAGFlow-Tenants des Connectors sichtbar und ist keine Seafile-ACL. Das interne Template-Dataset (standardmäßig `connector_template`) bleibt immer privat (`me`); bestehende Datasets werden nicht nachträglich geändert. |
+| `RAGFLOW_INTERACTIVE_API_KEY` | optional, Secret | API-Key eines einzelnen kontrollierten Admin-Zielusers, der automatisch verwaltete Chats und ausführbare Search-App-Spiegel besitzen soll. Leer nutzt rückwärtskompatibel `RAGFLOW_API_KEY` für alle Artefakte. Wenn gesetzt, sind die beiden folgenden IDs und `RAGFLOW_GENERATED_DATASET_PERMISSION=team` Pflicht. |
+| `RAGFLOW_INTERACTIVE_OWNER_ID` | Pflicht bei interaktivem Key | RAGFlow-User-ID, die zum interaktiven API-Key gehört. Der User muss Mitglied im Tenant der Sync-Identität sein. |
+| `RAGFLOW_INTERACTIVE_CHAT_MODEL_ID` | Pflicht bei interaktivem Key | RAGFlow-Chat-Modell-ID, die dem interaktiven User zur Verfügung steht. Sie wird als `chat_id` des verwalteten Search-App-Spiegels gesetzt. |
 | `RAGFLOW_TEMPLATE_AUTO_CREATE` | optional | Default `true`; fehlende Dataset-Templates werden beim Provisioning automatisch angelegt. |
 | `RAGFLOW_TEMPLATE_REQUIRED` | optional | Default `true`; Healthcheck warnt nur noch, wenn Auto-Create deaktiviert ist und das Template fehlt. |
 | `RAGFLOW_TEMPLATE_CHAT_NAME` | optional | Default `connector_template_chat`; Template-Chat für die OpenWebUI/RAGFlow-Chat-Defaults. |

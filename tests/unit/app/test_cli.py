@@ -19,6 +19,7 @@ from seafile_ragflow_connector.app.cli import (
     _cleanup_status_filter,
     _discover_job_specs,
     _emit_job_result,
+    _ensure_search_answer_chat,
     _exit_for_invalid_configuration,
     _format_payload,
     _guard_job_handler,
@@ -29,8 +30,10 @@ from seafile_ragflow_connector.app.cli import (
     _sync_openwebui_if_enabled,
     _wait_for_parse,
     check_config,
+    check_live,
     controller,
 )
+from seafile_ragflow_connector.clients.http import ApiError
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore, DashboardLimits
 from seafile_ragflow_connector.jobs.context import (
     JobDeferredError,
@@ -49,6 +52,30 @@ from seafile_ragflow_connector.sync.orchestrator import SyncCancelledError
 
 class _RequiredConfiguration(BaseModel):
     required_value: str
+
+
+class _FakeInteractiveRAGFlowClient:
+    def __init__(self) -> None:
+        self.chats: list[dict[str, object]] = []
+        self.created: list[dict[str, object]] = []
+        self.updated: list[tuple[str, dict[str, object]]] = []
+
+    def list_chats(self, *, name: str | None = None):
+        if name:
+            return [chat for chat in self.chats if chat.get("name") == name]
+        return list(self.chats)
+
+    def create_chat(self, payload: dict[str, object]):
+        self.created.append(payload)
+        created = {"id": "chat-1", **payload}
+        self.chats.append(created)
+        return created
+
+    def update_chat(self, chat_id: str, payload: dict[str, object]):
+        self.updated.append((chat_id, payload))
+        updated = {"id": chat_id, **payload}
+        self.chats = [updated if chat.get("id") == chat_id else chat for chat in self.chats]
+        return updated
 
 
 class _FakeOrchestrator:
@@ -207,6 +234,117 @@ def _test_session_factory(test_case: unittest.TestCase):
 
 
 class CliSyncHelpersTests(unittest.TestCase):
+    def test_check_live_verifies_interactive_owner_and_filtered_reads(self) -> None:
+        settings = SimpleNamespace(
+            database_url="sqlite://",
+            redis_url="redis://local",
+            ragflow_template_dataset_name="connector_template",
+            ragflow_interactive_api_key="interactive-token",
+        )
+        calls: list[str] = []
+        interactive = SimpleNamespace(
+            verify_artifact_owner=lambda: calls.append("verify"),
+            list_chats=lambda: calls.append("chats") or [{"id": "chat-1"}],
+            list_searches=lambda: calls.append("searches") or [{"id": "search-1"}],
+        )
+        closed: list[bool] = []
+        runtime = SimpleNamespace(
+            admin_client=SimpleNamespace(list_libraries=lambda per_page: ["library"]),
+            ragflow_client=SimpleNamespace(list_datasets=lambda name: [{"id": "dataset"}]),
+            interactive_ragflow_client=interactive,
+            close=lambda: closed.append(True),
+        )
+
+        with (
+            patch("seafile_ragflow_connector.app.cli._bootstrap", return_value=settings),
+            patch("seafile_ragflow_connector.app.cli.check_database"),
+            patch("seafile_ragflow_connector.app.cli.check_redis"),
+            patch(
+                "seafile_ragflow_connector.app.cli.database_revisions",
+                return_value=("head", "head"),
+            ),
+            patch("seafile_ragflow_connector.app.cli.build_runtime", return_value=runtime),
+            patch(
+                "seafile_ragflow_connector.app.cli._retry_until",
+                side_effect=lambda action, _label: action(),
+            ),
+            patch("seafile_ragflow_connector.app.cli._emit_payload") as emit,
+        ):
+            check_live(json_output=True)
+
+        payload = emit.call_args.args[0]
+        self.assertEqual(calls, ["verify", "chats", "searches"])
+        self.assertTrue(payload["ragflow_interactive_owner_verified"])
+        self.assertEqual(payload["ragflow_interactive_chats_visible"], 1)
+        self.assertEqual(payload["ragflow_interactive_searches_visible"], 1)
+        self.assertNotIn("ragflow_interactive_api_key", payload)
+        self.assertEqual(closed, [True])
+
+    def test_check_live_fails_closed_on_interactive_owner_mismatch(self) -> None:
+        settings = SimpleNamespace(
+            database_url="sqlite://",
+            redis_url="redis://local",
+            ragflow_template_dataset_name="connector_template",
+            ragflow_interactive_api_key="interactive-token",
+        )
+
+        def reject_owner() -> None:
+            raise ApiError("owner mismatch", status_code=200)
+
+        closed: list[bool] = []
+        runtime = SimpleNamespace(
+            admin_client=SimpleNamespace(list_libraries=lambda per_page: ["library"]),
+            ragflow_client=SimpleNamespace(list_datasets=lambda name: [{"id": "dataset"}]),
+            interactive_ragflow_client=SimpleNamespace(
+                verify_artifact_owner=reject_owner,
+                list_chats=lambda: [],
+                list_searches=lambda: [],
+            ),
+            close=lambda: closed.append(True),
+        )
+        with (
+            patch("seafile_ragflow_connector.app.cli._bootstrap", return_value=settings),
+            patch("seafile_ragflow_connector.app.cli.check_database"),
+            patch("seafile_ragflow_connector.app.cli.check_redis"),
+            patch(
+                "seafile_ragflow_connector.app.cli.database_revisions",
+                return_value=("head", "head"),
+            ),
+            patch("seafile_ragflow_connector.app.cli.build_runtime", return_value=runtime),
+            patch(
+                "seafile_ragflow_connector.app.cli._retry_until",
+                side_effect=lambda action, _label: action(),
+            ),
+            self.assertRaisesRegex(ApiError, "owner mismatch"),
+        ):
+            check_live(json_output=True)
+
+        self.assertEqual(closed, [True])
+
+    def test_search_answer_chat_uses_interactive_client_and_model(self) -> None:
+        primary = _FakeInteractiveRAGFlowClient()
+        interactive = _FakeInteractiveRAGFlowClient()
+        runtime = SimpleNamespace(
+            settings=SimpleNamespace(
+                search_answer_generation_mode="ragflow_chat",
+                ragflow_search_answer_chat_auto_create=True,
+                ragflow_search_answer_chat_name="connector_search_answer",
+                ragflow_interactive_chat_model_id="model@provider",
+            ),
+            ragflow_client=primary,
+            interactive_ragflow_client=interactive,
+        )
+        log = SimpleNamespace(
+            info=lambda *args, **kwargs: None,
+            warning=lambda *args, **kwargs: None,
+        )
+
+        _ensure_search_answer_chat(runtime, log)  # type: ignore[arg-type]
+
+        self.assertEqual(primary.created, [])
+        self.assertEqual(len(interactive.created), 1)
+        self.assertEqual(interactive.created[0]["llm_id"], "model@provider")
+
     def test_standalone_dashboard_initializes_configured_control_state_once(self) -> None:
         session_factory = _test_session_factory(self)
         store = DashboardEventStore(session_factory, DashboardLimits())

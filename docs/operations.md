@@ -405,7 +405,7 @@ benötigt:
 ```text
 install/connector.env.example
 install/deploy/portainer/
-docker-images/seafile-ragflow-connector_2.6.1_linux-amd64.docker-image.tar
+docker-images/seafile-ragflow-connector_2.6.2_linux-amd64.docker-image.tar
 docker-images/postgres_16_linux-amd64.docker-image.tar
 docker-images/valkey_8_linux-amd64.docker-image.tar
 docker-images/redis_7_compat_linux-amd64.docker-image.tar
@@ -600,6 +600,27 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
   Automationen nicht mit einem falsch-grünen Ergebnis weiterlaufen.
 - Template nicht gefunden: `RAGFLOW_TEMPLATE_AUTO_CREATE=true` nutzen oder
   `RAGFLOW_TEMPLATE_DATASET_NAME`, `RAGFLOW_API_KEY` und RAGFlow-User prüfen.
+- Erzeugtes Dataset ist in der nativen RAGFlow-Oberfläche nicht sichtbar:
+  Mitgliedschaft im RAGFlow-Tenant des Connectors prüfen. Für
+  Bibliotheks-Datasets kann `RAGFLOW_GENERATED_DATASET_PERMISSION=team` gesetzt
+  werden. Das ist tenantweite RAGFlow-Sichtbarkeit, keine Seafile-ACL. Bereits
+  vorhandene, exakt erwartete Connector-Datasets werden beim Provisioning nur
+  hinsichtlich `permission` angeglichen; das interne Template-Dataset
+  (standardmäßig `connector_template`) bleibt privat.
+- Dataset ist sichtbar, aber ein fremd besessener RAGFlow-Chat oder eine Search
+  App lässt sich nicht ausführen: `team` überträgt keine Artefakt-
+  Eigentümerschaft. Für genau einen kontrollierten Admin-Zieluser
+  `RAGFLOW_INTERACTIVE_API_KEY`, `RAGFLOW_INTERACTIVE_OWNER_ID`,
+  `RAGFLOW_INTERACTIVE_CHAT_MODEL_ID` und
+  `RAGFLOW_GENERATED_DATASET_PERMISSION=team` gemeinsam konfigurieren. Wenn der
+  Search-Service Antworten unter diesem User erzeugt, muss
+  `SEARCH_RAGFLOW_API_KEY` denselben interaktiven Key verwenden.
+- Migration auf die interaktive Identität: Zuerst Tenant-Mitgliedschaft,
+  Modellzugriff, neue Chats, `search_template` mit den aktiven Dataset-IDs und
+  eine echte Abfrage als Zieluser prüfen. Erst danach alte, von der Sync-
+  Identität besessene Chat-/Search-App-Kopien kontrolliert löschen. Die
+  kanonischen Bibliotheks-Datasets und `connector_template` bleiben im Besitz
+  von `RAGFLOW_API_KEY` und dürfen dabei nicht entfernt werden.
 - `unable to get local issuer certificate`: Root- und Intermediate-CA als PEM
   in ein Host-Verzeichnis legen, dieses per `CONNECTOR_CERTS_HOST_DIR` nach
   `/certs` mounten und `CONNECTOR_CA_BUNDLE=/certs/<datei>.pem` setzen. Wenn
@@ -617,8 +638,8 @@ Erwartung: PostgreSQL und Redis starten, und der Stack lässt sich sauber stoppe
 - Spezialendungen werden übersprungen: `DENY_EXTENSIONS`,
   `ALLOW_UNKNOWN_TEXT_FILES`, `TEXT_EXTENSIONS` und Klassifikationslogs prüfen.
 - Dataset-Einstellungen geändert: Der Connector überschreibt bestehende
-  Einstellungen nicht; neue Upload-/Parse-Operationen nutzen die aktuellen
-  RAGFlow-Einstellungen.
+  Einstellungen mit Ausnahme der verwalteten `permission` nicht; neue Upload-/
+  Parse-Operationen nutzen die aktuellen RAGFlow-Einstellungen.
 - Dashboard bleibt leer: prüfen, ob der Controller läuft und bereits
   Sync-Läufe, Jobs oder Logs erzeugt wurden. Frische Umgebungen zeigen leere
   Zustände statt Fehler.

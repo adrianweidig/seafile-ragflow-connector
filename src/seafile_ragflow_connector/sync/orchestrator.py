@@ -5,7 +5,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import structlog
@@ -119,6 +119,7 @@ class SyncOrchestrator:
         template_dataset_name: str,
         template_auto_create: bool = True,
         template_required: bool = True,
+        generated_dataset_permission: Literal["me", "team"] = "me",
         skip_encrypted_libraries: bool = True,
         skip_virtual_repos: bool = True,
         delete_ragflow_docs_on_seafile_delete: bool = True,
@@ -144,6 +145,7 @@ class SyncOrchestrator:
             template_dataset_name=template_dataset_name,
             template_auto_create=template_auto_create,
             template_required=template_required,
+            generated_dataset_permission=generated_dataset_permission,
         )
         self.dataset_settings_service = DatasetSettingsService(ragflow_client)
         self.job_store = JobStore(session_factory)
@@ -1380,6 +1382,7 @@ class SyncOrchestrator:
             dataset_id,
             document_id,
             artifact.document_name,
+            defer_duplicate_name_collision=old_document_id is not None,
             sync_id=sync_id,
             repo_id=repo_id,
             path=path,
@@ -2547,6 +2550,7 @@ class SyncOrchestrator:
                             rename_dataset_id,
                             rename_document_id,
                             rename_document_name,
+                            ignore_generic_bad_request=False,
                             sync_id=rename_sync_id,
                             repo_id=repo_id,
                             path=rename_path,
@@ -3317,6 +3321,8 @@ class SyncOrchestrator:
         document_id: str,
         document_name: str,
         *,
+        defer_duplicate_name_collision: bool = False,
+        ignore_generic_bad_request: bool = True,
         sync_id: str | None,
         repo_id: str,
         path: str,
@@ -3327,8 +3333,12 @@ class SyncOrchestrator:
         try:
             rename_document(dataset_id, document_id, document_name)
         except ApiError as exc:
-            if exc.status_code not in {400, 404, 405, 501} and not (
-                _is_ragflow_duplicate_document_name_error(exc)
+            ignored_status_codes = {404, 405, 501}
+            if ignore_generic_bad_request:
+                ignored_status_codes.add(400)
+            if exc.status_code not in ignored_status_codes and not (
+                defer_duplicate_name_collision
+                and _is_ragflow_duplicate_document_name_error(exc)
             ):
                 raise
             self.log.warning(
@@ -3345,12 +3355,11 @@ class SyncOrchestrator:
 def _is_ragflow_duplicate_document_name_error(exc: ApiError) -> bool:
     if exc.status_code != 200 or not isinstance(exc.payload, Mapping):
         return False
-    code = exc.payload.get("code")
-    message = str(exc.payload.get("message") or exc.payload.get("msg") or "")
-    normalized_message = message.strip().casefold().removesuffix(".")
+    message = exc.payload.get("message")
     return (
-        code in {102, "102"}
-        and normalized_message == "duplicated document name in the same dataset"
+        exc.payload.get("code") == 102
+        and isinstance(message, str)
+        and message.strip() == "Duplicated document name in the same dataset."
     )
 
 

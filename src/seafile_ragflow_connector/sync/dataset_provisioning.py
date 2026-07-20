@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 
@@ -67,6 +67,7 @@ class DatasetProvisioner:
         template_dataset_name: str = "connector_template",
         template_auto_create: bool = True,
         template_required: bool = True,
+        generated_dataset_permission: Literal["me", "team"] = "me",
         dataset_prefix: str = "RAG_",
         dataset_name_max_length: int = 128,
     ) -> None:
@@ -74,6 +75,7 @@ class DatasetProvisioner:
         self.template_dataset_name = template_dataset_name
         self.template_auto_create = template_auto_create
         self.template_required = template_required
+        self.generated_dataset_permission = generated_dataset_permission
         self.dataset_prefix = dataset_prefix
         self.dataset_name_max_length = dataset_name_max_length
         self.log = structlog.get_logger(__name__)
@@ -85,11 +87,18 @@ class DatasetProvisioner:
             prefix=self.dataset_prefix,
             max_length=self.dataset_name_max_length,
         )
-        existing = self.ragflow_client.list_datasets(name=dataset_name)
+        existing = [
+            dataset
+            for dataset in self.ragflow_client.list_datasets(name=dataset_name)
+            if dataset.get("name") == dataset_name
+        ]
+        if len(existing) > 1:
+            msg = f"RAGFlow generated dataset is not unique: {dataset_name}"
+            raise DatasetProvisioningError(msg)
         if existing:
             if self.template_auto_create or self.template_required:
                 self.ensure_template_dataset()
-            dataset = existing[0]
+            dataset = self._ensure_generated_dataset_permission(existing[0], dataset_name)
             return self.result_from_existing_dataset(library, dataset)
 
         template = self.ensure_template_dataset()
@@ -99,6 +108,7 @@ class DatasetProvisioner:
                 dataset_name,
                 append_description=build_seafile_description(library),
             )
+            payload["permission"] = self.generated_dataset_permission
         except TemplateError as exc:
             raise DatasetProvisioningError(str(exc)) from exc
 
@@ -129,6 +139,39 @@ class DatasetProvisioner:
             settings_hash=settings_hash,
             settings_payload=dataset,
         )
+
+    def _ensure_generated_dataset_permission(
+        self,
+        dataset: dict[str, Any],
+        expected_name: str,
+    ) -> dict[str, Any]:
+        dataset_id = str(dataset.get("id") or "").strip()
+        dataset_name = str(dataset.get("name") or "").strip()
+        if not dataset_id or dataset_name != expected_name:
+            msg = f"RAGFlow generated dataset identity is invalid: {expected_name}"
+            raise DatasetProvisioningError(msg)
+        if dataset.get("permission") == self.generated_dataset_permission:
+            return dataset
+
+        payload = {"permission": self.generated_dataset_permission}
+        updated = self.ragflow_client.update_dataset(dataset_id, payload)
+        if (
+            str(updated.get("id") or "").strip() != dataset_id
+            or str(updated.get("name") or "").strip() != expected_name
+            or updated.get("permission") != self.generated_dataset_permission
+        ):
+            msg = (
+                "RAGFlow generated dataset permission update returned an unexpected "
+                f"response: {expected_name}"
+            )
+            raise DatasetProvisioningError(msg)
+        self.log.info(
+            "ragflow.generated_dataset.permission_updated",
+            dataset_name=expected_name,
+            dataset_id=dataset_id,
+            permission=self.generated_dataset_permission,
+        )
+        return {**dataset, **updated}
 
     def ensure_template_dataset(self) -> dict[str, Any]:
         datasets = self.ragflow_client.list_datasets(name=self.template_dataset_name)

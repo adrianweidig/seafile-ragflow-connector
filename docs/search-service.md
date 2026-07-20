@@ -127,6 +127,15 @@ SEARCH_ANSWER_LLM_MAX_TOKENS=900
 SEARCH_ANSWER_LLM_TEMPERATURE=0.2
 ```
 
+Ohne getrennte interaktive RAGFlow-Identität verwendet
+`SEARCH_RAGFLOW_API_KEY` denselben Key wie `RAGFLOW_API_KEY`. Wenn die
+automatisch verwalteten Chats und Search-App-Spiegel einem kontrollierten
+Admin-Zieluser über `RAGFLOW_INTERACTIVE_API_KEY` gehören, muss der
+Search-Service für native beziehungsweise Connector-Chat-Antworten denselben
+interaktiven Key verwenden. Das ändert nicht die Berechtigungsgrenze: Die
+Dataset-Auswahl wird weiterhin vor jedem RAGFlow-Aufruf über die Seafile-ACL
+gefiltert.
+
 RAGFlow wird pro erlaubtem Dataset abgefragt. Ergebnisse werden
 zusammengeführt, dedupliziert und nutzerfreundlich ausgegeben. RAGFlow bekommt
 keine Information über verbotene Datasets, weil diese vor dem Aufruf entfernt
