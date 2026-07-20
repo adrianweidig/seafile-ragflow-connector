@@ -280,10 +280,57 @@ class OpenWebUISourceTests(unittest.TestCase):
             sources,
         )
 
-        self.assertEqual(answer.count("[S1](https://connector.example/preview)"), 3)
+        self.assertEqual(answer.count("[S1](https://connector.example/preview)"), 1)
+        self.assertEqual(answer.count("[S1]"), 3)
         self.assertNotIn("[ID:0]", answer)
         self.assertNotIn("{{source:0}}", answer)
         self.assertNotIn("##0$$", answer)
+
+    def test_annotate_answer_citations_links_each_long_preview_url_only_once(self) -> None:
+        long_preview_url = "https://connector.example/preview?token=" + ("x" * 600)
+        sources = [
+            {
+                "source_id": "S1",
+                "preview_url": long_preview_url,
+                "source_metadata": {
+                    "provider_citation_id": 0,
+                    "citation_id": 0,
+                },
+            }
+        ]
+
+        answer = annotate_answer_citations(
+            " ".join(["Aussage [ID:0]."] * 20),
+            sources,
+        )
+
+        self.assertEqual(answer.count(long_preview_url), 1)
+        self.assertEqual(answer.count("[S1]"), 20)
+        self.assertLess(len(answer), len(long_preview_url) + 500)
+
+    def test_annotate_answer_citations_links_each_source_once(self) -> None:
+        sources = [
+            {
+                "source_id": "S1",
+                "preview_url": "https://connector.example/preview/one",
+                "source_metadata": {"provider_citation_id": 0, "citation_id": 0},
+            },
+            {
+                "source_id": "S2",
+                "preview_url": "https://connector.example/preview/two",
+                "source_metadata": {"provider_citation_id": 1, "citation_id": 1},
+            },
+        ]
+
+        answer = annotate_answer_citations(
+            "Erste Aussage [ID:0], zweite [ID:1], erneut [ID:0] und [ID:1].",
+            sources,
+        )
+
+        self.assertEqual(answer.count("[S1](https://connector.example/preview/one)"), 1)
+        self.assertEqual(answer.count("[S2](https://connector.example/preview/two)"), 1)
+        self.assertEqual(answer.count("[S1]"), 2)
+        self.assertEqual(answer.count("[S2]"), 2)
 
     def test_audit_rank_sources_preserves_existing_source_labels(self) -> None:
         ranked = audit_rank_sources(
