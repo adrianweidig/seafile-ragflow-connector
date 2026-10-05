@@ -3,6 +3,7 @@
 # Use with one of the normal stack files, for example:
 #   docker compose --env-file connector.env \
 #     -f deploy/compose/openwebui.compose.yml \
+#     -f deploy/compose/bundled-state.compose.yml \
 #     -f deploy/compose/docker-compose.tls-example.yml config
 #
 # The file mounted at CONNECTOR_TLS_CA_HOST_FILE must contain the internal

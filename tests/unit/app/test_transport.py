@@ -63,6 +63,45 @@ class TransportResolutionTests(unittest.TestCase):
         self.assertFalse(settings.connector_transport_status["seafile"]["fallback_used"])
         self.assertIn("https://seafile.local", calls)
 
+    def test_internal_urls_are_probed_and_preserve_base_urls(self) -> None:
+        calls: list[str] = []
+
+        def probe(
+            base_url: str,
+            path: str,
+            headers: dict[str, str],
+            params: dict[str, str | int | float | bool | None],
+            verify: bool | str,
+            timeout_seconds: float,
+        ) -> TransportProbeResult:
+            _ = (path, headers, params, verify, timeout_seconds)
+            calls.append(base_url)
+            return TransportProbeResult(ok=base_url.startswith("https://"), status_code=200)
+
+        settings = _settings(
+            seafile_base_url="https://files.example.local",
+            seafile_internal_url="http://seafile.internal:8082",
+            seafile_public_base_url="https://files.public.example.local",
+            ragflow_base_url="https://ragflow.example.local",
+            ragflow_internal_url="http://ragflow.internal:9380",
+            openwebui_integration_enabled=False,
+        )
+
+        resolve_service_transports(settings, probe=probe)
+
+        self.assertEqual(settings.seafile_base_url, "https://files.example.local")
+        self.assertEqual(settings.seafile_public_base_url, "https://files.public.example.local")
+        self.assertEqual(settings.seafile_internal_url, "https://seafile.internal:8082")
+        self.assertEqual(settings.ragflow_base_url, "https://ragflow.example.local")
+        self.assertEqual(settings.ragflow_internal_url, "https://ragflow.internal:9380")
+        self.assertNotIn("https://files.example.local", calls)
+        self.assertNotIn("https://ragflow.example.local", calls)
+        seafile_status = settings.connector_transport_status["seafile"]
+        self.assertEqual(seafile_status["configured_url"], "http://seafile.internal:8082")
+        self.assertEqual(seafile_status["selected_url"], "https://seafile.internal:8082")
+        self.assertEqual(seafile_status["scheme"], "https")
+        self.assertFalse(seafile_status["fallback_used"])
+
     def test_falls_back_to_http_only_after_https_probe_fails(self) -> None:
         calls: list[str] = []
 

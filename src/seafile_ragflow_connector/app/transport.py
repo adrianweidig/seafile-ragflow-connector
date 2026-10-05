@@ -68,9 +68,10 @@ def resolve_service_transports(
 
     selected_probe = probe or _probe_transport
     selections: dict[str, TransportSelection] = {}
+    seafile_url = settings.seafile_internal_url or settings.seafile_base_url
     seafile = _select_transport(
         service="seafile",
-        configured_url=settings.seafile_base_url,
+        configured_url=seafile_url,
         path="/api/v2.1/admin/libraries/",
         headers={"Authorization": f"Token {settings.seafile_admin_token}"},
         params={"page": 1, "per_page": 1},
@@ -78,12 +79,16 @@ def resolve_service_transports(
         probe=selected_probe,
         timeout_seconds=timeout_seconds,
     )
-    settings.seafile_base_url = seafile.selected_url
+    if settings.seafile_internal_url:
+        settings.seafile_internal_url = seafile.selected_url
+    else:
+        settings.seafile_base_url = seafile.selected_url
     selections["seafile"] = seafile
 
+    ragflow_url = settings.ragflow_internal_url or settings.ragflow_base_url
     ragflow = _select_transport(
         service="ragflow",
-        configured_url=settings.ragflow_base_url,
+        configured_url=ragflow_url,
         path="/api/v1/datasets",
         headers={"Authorization": f"Bearer {settings.ragflow_api_key}"},
         params={"page": 1, "page_size": 1},
@@ -91,7 +96,10 @@ def resolve_service_transports(
         probe=selected_probe,
         timeout_seconds=timeout_seconds,
     )
-    settings.ragflow_base_url = ragflow.selected_url
+    if settings.ragflow_internal_url:
+        settings.ragflow_internal_url = ragflow.selected_url
+    else:
+        settings.ragflow_base_url = ragflow.selected_url
     selections["ragflow"] = ragflow
 
     if settings.openwebui_effective_sync_mode != "disabled":

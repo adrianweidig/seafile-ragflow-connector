@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_ENV="${ENTERPRISE_OUTPUT_ENV:-$ROOT_DIR/connector.env}"
@@ -20,6 +21,8 @@ Nicht interaktiv, z. B. für Automatisierung:
   ENTERPRISE_NONINTERACTIVE=true \
   ENTERPRISE_ASSUME_YES=true \
   ENTERPRISE_MODE=external \
+  ENTERPRISE_STATE_MODE=bundled \
+  ENTERPRISE_WITH_SEARCH=true \
   ENTERPRISE_WITH_OPENWEBUI=true \
   ENTERPRISE_CA_HOST_FILE=/etc/pki/company-root-ca.pem \
   ENTERPRISE_SEAFILE_BASE_URL=https://seafile.intern \
@@ -33,6 +36,10 @@ Secrets werden dabei aus bereits exportierten Prozessvariablen gelesen:
   SEAFILE_ADMIN_TOKEN
   SEAFILE_SYNC_USER_TOKEN
   RAGFLOW_API_KEY
+  RAGFLOW_INTERACTIVE_API_KEY       # optionaler Key des Admin-Zielusers
+  AUTHZ_API_SHARED_SECRET
+  POSTGRES_PASSWORD                 # nur bei ENTERPRISE_STATE_MODE=bundled
+  DATABASE_URL und REDIS_URL        # nur bei ENTERPRISE_STATE_MODE=external
   OPENWEBUI_ADMIN_API_KEY
 
 ENTERPRISE_CA_HOST_FILE ist optional. Wenn der Pfad unbekannt ist, startet der
@@ -333,8 +340,12 @@ assert_portainer_compose_has_no_secrets() {
     SEAFILE_ADMIN_TOKEN \
     SEAFILE_SYNC_USER_TOKEN \
     RAGFLOW_API_KEY \
+    RAGFLOW_INTERACTIVE_API_KEY \
+    AUTHZ_API_SHARED_SECRET \
     OPENWEBUI_ADMIN_API_KEY_VALUE \
     POSTGRES_PASSWORD \
+    DATABASE_URL \
+    REDIS_URL \
     DASHBOARD_PASSWORD \
     OPENWEBUI_PROXY_SHARED_SECRET_VALUE
   do
@@ -351,6 +362,7 @@ write_portainer_bundle() {
   if [ "$OUTPUT_ENV" != "$PORTAINER_ENV_FILE" ]; then
     cp "$OUTPUT_ENV" "$PORTAINER_ENV_FILE"
   fi
+  chmod 600 "$PORTAINER_ENV_FILE"
 
   command -v docker >/dev/null 2>&1 \
     || die "Docker ist erforderlich, um die Portainer-Compose-Datei zu rendern"
@@ -408,6 +420,7 @@ backup_existing() {
   local backup="${file}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
   if is_true "$ASSUME_YES"; then
     mv "$file" "$backup"
+    chmod 600 "$backup"
     note "Vorhandene Datei gesichert: $backup"
     return
   fi
@@ -418,6 +431,7 @@ backup_existing() {
   read -r -p "$file existiert. Mit Backup überschreiben? [j/N]: " answer
   is_true "$answer" || die "Abgebrochen, Datei bleibt unverändert."
   mv "$file" "$backup"
+  chmod 600 "$backup"
   note "Vorhandene Datei gesichert: $backup"
 }
 
@@ -444,6 +458,23 @@ esac
 
 ENTERPRISE_WITH_OPENWEBUI="${ENTERPRISE_WITH_OPENWEBUI:-}"
 prompt_yes_no ENTERPRISE_WITH_OPENWEBUI "OpenWebUI-Pipes und auditierbare Quellen direkt synchronisieren?" true
+
+ENTERPRISE_WITH_SEARCH="${ENTERPRISE_WITH_SEARCH:-}"
+prompt_yes_no ENTERPRISE_WITH_SEARCH "Nutzernahe Search-Webseite als Standardmodul starten?" true
+
+enterprise_state_mode="${ENTERPRISE_STATE_MODE:-}"
+if [ -z "$enterprise_state_mode" ] && ! is_true "$NON_INTERACTIVE"; then
+  note "Connector-State:"
+  note "  1) bundled  - PostgreSQL und Redis laufen im Connector-Stack"
+  note "  2) external - vorhandene PostgreSQL-/Redis-Dienste über URLs nutzen"
+  read -r -p "Wo soll der Connector-State laufen? [bundled]: " enterprise_state_mode
+fi
+enterprise_state_mode="${enterprise_state_mode:-bundled}"
+case "$enterprise_state_mode" in
+  1|bundled) enterprise_state_mode="bundled" ;;
+  2|external) enterprise_state_mode="external" ;;
+  *) die "ENTERPRISE_STATE_MODE muss bundled oder external sein" ;;
+esac
 
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-}"
 prompt_value COMPOSE_PROJECT_NAME "Compose-Projektname" "seafile-ragflow-connector-enterprise" true
@@ -523,12 +554,59 @@ SEAFILE_SYNC_USER_TOKEN="${SEAFILE_SYNC_USER_TOKEN:-}"
 prompt_secret SEAFILE_SYNC_USER_TOKEN "Seafile Sync-User-Token" true false
 SEAFILE_SYNC_USER_EMAIL="${SEAFILE_SYNC_USER_EMAIL:-}"
 prompt_value SEAFILE_SYNC_USER_EMAIL "Seafile Sync-User-E-Mail, optional" "" false
+SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED="${SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED:-false}"
+prompt_yes_no SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED "Fehlenden Zugriff des verifizierten Sync-Users für alle bestehenden und künftigen aktiven geeigneten Bibliotheken als Nur-Lese-Root-Freigabe ergänzen?" false
+if is_true "$SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED" && [ -z "$SEAFILE_SYNC_USER_EMAIL" ]; then
+  die "SEAFILE_SYNC_USER_EMAIL ist bei aktivierter automatischer Sync-User-Freigabe erforderlich"
+fi
 
 RAGFLOW_API_KEY="${RAGFLOW_API_KEY:-}"
 prompt_secret RAGFLOW_API_KEY "RAGFlow API-Key" true false
+RAGFLOW_INTERACTIVE_API_KEY="${RAGFLOW_INTERACTIVE_API_KEY:-}"
+prompt_secret RAGFLOW_INTERACTIVE_API_KEY "Optionaler RAGFlow API-Key des interaktiven Admin-Zielusers" false false
+RAGFLOW_INTERACTIVE_OWNER_ID="${RAGFLOW_INTERACTIVE_OWNER_ID:-}"
+RAGFLOW_INTERACTIVE_CHAT_MODEL_ID="${RAGFLOW_INTERACTIVE_CHAT_MODEL_ID:-}"
+if [ -n "$RAGFLOW_INTERACTIVE_API_KEY" ]; then
+  prompt_value RAGFLOW_INTERACTIVE_OWNER_ID "RAGFlow User-ID des interaktiven Admin-Zielusers" "" true
+  prompt_value RAGFLOW_INTERACTIVE_CHAT_MODEL_ID "RAGFlow Chat-Modell-ID des interaktiven Admin-Zielusers" "" true
+elif [ -n "$RAGFLOW_INTERACTIVE_OWNER_ID" ] || [ -n "$RAGFLOW_INTERACTIVE_CHAT_MODEL_ID" ]; then
+  die "RAGFLOW_INTERACTIVE_OWNER_ID und RAGFLOW_INTERACTIVE_CHAT_MODEL_ID dürfen nur zusammen mit RAGFLOW_INTERACTIVE_API_KEY gesetzt werden"
+fi
+
+ragflow_dataset_permission_default="me"
+if [ -n "$RAGFLOW_INTERACTIVE_API_KEY" ]; then
+  ragflow_dataset_permission_default="team"
+fi
+RAGFLOW_GENERATED_DATASET_PERMISSION="${RAGFLOW_GENERATED_DATASET_PERMISSION:-}"
+prompt_value RAGFLOW_GENERATED_DATASET_PERMISSION "Berechtigung neuer RAGFlow-Bibliotheks-Datasets (me oder team)" "$ragflow_dataset_permission_default" true
+case "$RAGFLOW_GENERATED_DATASET_PERMISSION" in
+  me|team) ;;
+  *) die "RAGFLOW_GENERATED_DATASET_PERMISSION muss me oder team sein" ;;
+esac
+if [ -n "$RAGFLOW_INTERACTIVE_API_KEY" ] && [ "$RAGFLOW_GENERATED_DATASET_PERMISSION" != "team" ]; then
+  die "RAGFLOW_GENERATED_DATASET_PERMISSION muss bei gesetztem RAGFLOW_INTERACTIVE_API_KEY team sein"
+fi
+
+AUTHZ_API_SHARED_SECRET="${AUTHZ_API_SHARED_SECRET:-}"
+prompt_secret AUTHZ_API_SHARED_SECRET "Shared Secret für Authz-API und Search" true true
 
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
-prompt_secret POSTGRES_PASSWORD "Postgres-Passwort für den Connector-State" true true
+DATABASE_URL="${DATABASE_URL:-}"
+REDIS_URL="${REDIS_URL:-}"
+if [ "$enterprise_state_mode" = "bundled" ]; then
+  prompt_secret POSTGRES_PASSWORD "Postgres-Passwort für den Connector-State" true true
+  DATABASE_URL=""
+  REDIS_URL=""
+else
+  POSTGRES_PASSWORD=""
+  prompt_secret DATABASE_URL "Externe PostgreSQL-DATABASE_URL" true false
+  prompt_secret REDIS_URL "Externe REDIS_URL" true false
+fi
+
+SEARCH_SERVICE_PUBLISHED_PORT="${SEARCH_SERVICE_PUBLISHED_PORT:-}"
+if is_true "$ENTERPRISE_WITH_SEARCH"; then
+  prompt_value SEARCH_SERVICE_PUBLISHED_PORT "Search-Port-Bindung" "127.0.0.1:18090" true
+fi
 
 DASHBOARD_USER="${CONNECTOR_DASHBOARD_AUTH_USERNAME:-admin}"
 prompt_value DASHBOARD_USER "Dashboard-Benutzername" "$DASHBOARD_USER" true
@@ -536,6 +614,19 @@ DASHBOARD_PASSWORD="${CONNECTOR_DASHBOARD_AUTH_PASSWORD:-}"
 prompt_secret DASHBOARD_PASSWORD "Dashboard-Passwort" true true
 CONNECTOR_DASHBOARD_PUBLISHED_PORT="${CONNECTOR_DASHBOARD_PUBLISHED_PORT:-}"
 prompt_value CONNECTOR_DASHBOARD_PUBLISHED_PORT "Dashboard-Port-Bindung" "127.0.0.1:18080" true
+CONNECTOR_DASHBOARD_CONTROL_ENABLED="${CONNECTOR_DASHBOARD_CONTROL_ENABLED:-false}"
+prompt_yes_no CONNECTOR_DASHBOARD_CONTROL_ENABLED "Interaktive Dashboard-Administration aktivieren?" false
+if [[ -z "${CONNECTOR_AUTOMATION_INITIAL_STATE:-}" ]]; then
+  if is_true "$CONNECTOR_DASHBOARD_CONTROL_ENABLED"; then
+    CONNECTOR_AUTOMATION_INITIAL_STATE=stopped
+  else
+    CONNECTOR_AUTOMATION_INITIAL_STATE=running
+  fi
+fi
+case "$CONNECTOR_AUTOMATION_INITIAL_STATE" in
+  running|stopped) ;;
+  *) die "CONNECTOR_AUTOMATION_INITIAL_STATE muss running oder stopped sein." ;;
+esac
 
 SEAFILE_FILE_URL_TEMPLATE="${SEAFILE_FILE_URL_TEMPLATE:-}"
 seafile_original_link_base="${ENTERPRISE_SEAFILE_PUBLIC_BASE_URL:-$ENTERPRISE_SEAFILE_BASE_URL}"
@@ -639,6 +730,14 @@ elif is_true "$ENTERPRISE_WITH_OPENWEBUI"; then
 else
   compose_files+=("deploy/compose/shared-network.compose.yml")
 fi
+if [ "$enterprise_state_mode" = "external" ]; then
+  compose_files+=("deploy/compose/external-state.compose.yml")
+else
+  compose_files+=("deploy/compose/bundled-state.compose.yml")
+fi
+if is_true "$ENTERPRISE_WITH_SEARCH"; then
+  compose_files+=("deploy/compose/search.compose.yml")
+fi
 if [ -n "$CA_BUNDLE_VALUE" ]; then
   compose_files+=("deploy/compose/enterprise-ca.compose.yml")
 fi
@@ -665,6 +764,7 @@ mkdir -p "$(dirname "$OUTPUT_ENV")" "$OUTPUT_DIR"
   printf '# Generated by scripts/configure-enterprise-compose.sh on %s UTC\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '# Contains runtime secrets. Do not commit this file.\n\n'
 } >"$OUTPUT_ENV"
+chmod 600 "$OUTPUT_ENV"
 
 write_env_line COMPOSE_PROJECT_NAME "$COMPOSE_PROJECT_NAME"
 write_env_line TZ "${TZ:-Europe/Berlin}"
@@ -687,17 +787,23 @@ write_env_line SSL_CERT_FILE "${SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.cr
 write_env_line REQUESTS_CA_BUNDLE "${REQUESTS_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}"
 
 write_env_line CONNECTOR_DASHBOARD_ENABLED true
+write_env_line CONNECTOR_DASHBOARD_CONTROL_ENABLED "$CONNECTOR_DASHBOARD_CONTROL_ENABLED"
+write_env_line CONNECTOR_AUTOMATION_INITIAL_STATE "$CONNECTOR_AUTOMATION_INITIAL_STATE"
 write_env_line CONNECTOR_DASHBOARD_HOST 0.0.0.0
 write_env_line CONNECTOR_DASHBOARD_PORT 8080
 write_env_line CONNECTOR_DASHBOARD_PUBLISHED_PORT "$CONNECTOR_DASHBOARD_PUBLISHED_PORT"
 write_env_line CONNECTOR_DASHBOARD_AUTH_USERNAME "$DASHBOARD_USER"
 write_env_line CONNECTOR_DASHBOARD_AUTH_PASSWORD "$DASHBOARD_PASSWORD"
 
+write_env_line AUTHZ_API_ENABLED true
+write_env_line AUTHZ_API_SHARED_SECRET "$AUTHZ_API_SHARED_SECRET"
+
 write_env_line SEAFILE_BASE_URL "$ENTERPRISE_SEAFILE_BASE_URL"
 write_env_line SEAFILE_PUBLIC_BASE_URL "$ENTERPRISE_SEAFILE_PUBLIC_BASE_URL"
 write_env_line SEAFILE_ADMIN_TOKEN "$SEAFILE_ADMIN_TOKEN"
 write_env_line SEAFILE_SYNC_USER_TOKEN "$SEAFILE_SYNC_USER_TOKEN"
 write_env_line SEAFILE_SYNC_USER_EMAIL "$SEAFILE_SYNC_USER_EMAIL"
+write_env_line SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED "$SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED"
 write_env_line SEAFILE_VERIFY_SSL true
 write_env_line SEAFILE_CA_BUNDLE "$CA_BUNDLE_VALUE"
 write_env_line SEAFILE_REWRITE_DOWNLOAD_URLS "$SEAFILE_REWRITE_DOWNLOAD_URLS"
@@ -707,11 +813,28 @@ write_env_line SEAFILE_FILE_URL_TEMPLATE "$SEAFILE_FILE_URL_TEMPLATE"
 
 write_env_line RAGFLOW_BASE_URL "$ENTERPRISE_RAGFLOW_BASE_URL"
 write_env_line RAGFLOW_API_KEY "$RAGFLOW_API_KEY"
+write_env_line RAGFLOW_INTERACTIVE_API_KEY "$RAGFLOW_INTERACTIVE_API_KEY"
+write_env_line RAGFLOW_INTERACTIVE_OWNER_ID "$RAGFLOW_INTERACTIVE_OWNER_ID"
+write_env_line RAGFLOW_INTERACTIVE_CHAT_MODEL_ID "$RAGFLOW_INTERACTIVE_CHAT_MODEL_ID"
 write_env_line RAGFLOW_TEMPLATE_DATASET_NAME "${RAGFLOW_TEMPLATE_DATASET_NAME:-connector_template}"
+write_env_line RAGFLOW_GENERATED_DATASET_PERMISSION "$RAGFLOW_GENERATED_DATASET_PERMISSION"
 write_env_line RAGFLOW_TEMPLATE_REQUIRED "${RAGFLOW_TEMPLATE_REQUIRED:-true}"
 write_env_line RAGFLOW_VERIFY_SSL true
 write_env_line RAGFLOW_CA_BUNDLE "$CA_BUNDLE_VALUE"
 write_env_line RAGFLOW_PUBLIC_BASE_URL "$ENTERPRISE_RAGFLOW_PUBLIC_BASE_URL"
+
+if is_true "$ENTERPRISE_WITH_SEARCH"; then
+  write_env_line SEARCH_SERVICE_ENABLED true
+  write_env_line SEARCH_SERVICE_PUBLISHED_PORT "$SEARCH_SERVICE_PUBLISHED_PORT"
+  write_env_line SEARCH_AUTHZ_BASE_URL "http://connector-controller:8080"
+  write_env_line SEARCH_AUTHZ_SHARED_SECRET "$AUTHZ_API_SHARED_SECRET"
+  write_env_line SEARCH_RAGFLOW_BASE_URL "$ENTERPRISE_RAGFLOW_BASE_URL"
+  write_env_line SEARCH_RAGFLOW_API_KEY "${RAGFLOW_INTERACTIVE_API_KEY:-$RAGFLOW_API_KEY}"
+  write_env_line SEARCH_RAGFLOW_VERIFY_SSL true
+  write_env_line SEARCH_RAGFLOW_CA_BUNDLE "$CA_BUNDLE_VALUE"
+else
+  write_env_line SEARCH_SERVICE_ENABLED false
+fi
 
 if is_true "$ENTERPRISE_WITH_OPENWEBUI"; then
   write_env_line OPENWEBUI_INTEGRATION_ENABLED true
@@ -740,7 +863,9 @@ fi
 write_env_line POSTGRES_DB "${POSTGRES_DB:-seafile_ragflow_sync}"
 write_env_line POSTGRES_USER "${POSTGRES_USER:-sync}"
 write_env_line POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+write_env_line DATABASE_URL "$DATABASE_URL"
 write_env_line REDIS_DB "${REDIS_DB:-0}"
+write_env_line REDIS_URL "$REDIS_URL"
 write_env_line CONNECTOR_AUTO_INIT_DB true
 write_env_line CONNECTOR_STARTUP_CHECK "$CONNECTOR_STARTUP_CHECK_VALUE"
 write_env_line CONNECTOR_BOOTSTRAP_CHECK_LIVE "$CONNECTOR_BOOTSTRAP_CHECK_LIVE_VALUE"

@@ -55,6 +55,36 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.database_url, "postgresql+psycopg://custom/db")
         self.assertEqual(settings.redis_url, "redis://custom-redis:6379/4")
 
+    def test_internal_service_urls_are_normalized_and_validated(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "seafile_internal_url": "  https://seafile.internal:8082/  ",
+                "ragflow_internal_url": "https://ragflow.internal:9380/",
+            }
+        )
+
+        settings = Settings(**values)
+
+        self.assertEqual(settings.seafile_internal_url, "https://seafile.internal:8082")
+        self.assertEqual(settings.ragflow_internal_url, "https://ragflow.internal:9380")
+
+        values["seafile_internal_url"] = "  "
+        values["ragflow_internal_url"] = ""
+        values["seafile_public_base_url"] = ""
+        values["ragflow_public_base_url"] = ""
+        settings = Settings(**values)
+        self.assertIsNone(settings.seafile_internal_url)
+        self.assertIsNone(settings.ragflow_internal_url)
+
+        for field in ("seafile_internal_url", "ragflow_internal_url"):
+            for value in ("ftp://service.internal", "service.internal:8080"):
+                invalid = dict(values)
+                invalid[field] = value
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    Settings(**invalid)
+
     def test_search_settings_build_database_url_from_postgres_parts(self) -> None:
         settings = SearchServiceSettings(
             search_authz_base_url="http://connector-controller:8080",
@@ -78,6 +108,8 @@ class SettingsTests(unittest.TestCase):
         settings = Settings(**values)
 
         self.assertFalse(settings.connector_dashboard_enabled)
+        self.assertFalse(settings.connector_dashboard_control_enabled)
+        self.assertEqual(settings.connector_automation_initial_state, "running")
         self.assertEqual(settings.connector_dashboard_host, "0.0.0.0")
         self.assertEqual(settings.connector_dashboard_port, 8080)
         self.assertEqual(settings.connector_dashboard_max_log_entries, 5000)
@@ -92,6 +124,34 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(settings.search_acl_sync_enabled)
         self.assertFalse(settings.search_acl_include_subfolder_permissions)
         self.assertFalse(settings.search_acl_include_share_links)
+        self.assertFalse(settings.seafile_sync_user_auto_share_enabled)
+
+    def test_seafile_sync_user_auto_share_requires_canonical_email(self) -> None:
+        values = self.base_values()
+        values["database_url"] = "postgresql+psycopg://custom/db"
+        values["seafile_sync_user_auto_share_enabled"] = True
+
+        with self.assertRaisesRegex(ValueError, "SEAFILE_SYNC_USER_EMAIL"):
+            Settings(**values)
+
+        values["seafile_sync_user_email"] = "  sync@auth.local  "
+        settings = Settings(**values)
+        self.assertTrue(settings.seafile_sync_user_auto_share_enabled)
+        self.assertEqual(settings.seafile_sync_user_email, "sync@auth.local")
+
+    def test_automation_initial_state_accepts_only_running_or_stopped(self) -> None:
+        values = self.base_values()
+        values["database_url"] = "postgresql+psycopg://custom/db"
+
+        values["connector_automation_initial_state"] = "stopped"
+        self.assertEqual(
+            Settings(**values).connector_automation_initial_state,
+            "stopped",
+        )
+
+        values["connector_automation_initial_state"] = "paused"
+        with self.assertRaises(ValueError):
+            Settings(**values)
 
     def test_automation_intervals_default_to_30_minutes(self) -> None:
         values = self.base_values()
@@ -123,6 +183,70 @@ class SettingsTests(unittest.TestCase):
 
             with self.subTest(field=field), self.assertRaises(ValueError):
                 Settings(**values)
+
+    def test_job_retry_settings_accept_positive_bounded_values(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "job_max_attempts": 7,
+                "job_retry_base_seconds": 15,
+                "job_retry_max_seconds": 120,
+                "job_lease_seconds": 300,
+                "job_heartbeat_seconds": 100,
+            }
+        )
+
+        settings = Settings(**values)
+
+        self.assertEqual(settings.job_max_attempts, 7)
+        self.assertEqual(settings.job_retry_base_seconds, 15)
+        self.assertEqual(settings.job_retry_max_seconds, 120)
+        self.assertEqual(settings.job_lease_seconds, 300)
+        self.assertEqual(settings.job_heartbeat_seconds, 100)
+
+    def test_job_retry_settings_must_be_positive_and_ordered(self) -> None:
+        for field in (
+            "job_max_attempts",
+            "job_retry_base_seconds",
+            "job_retry_max_seconds",
+            "job_lease_seconds",
+            "job_heartbeat_seconds",
+        ):
+            values = self.base_values()
+            values.update(
+                {
+                    "database_url": "postgresql+psycopg://custom/db",
+                    field: 0,
+                }
+            )
+
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                Settings(**values)
+
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "job_retry_base_seconds": 61,
+                "job_retry_max_seconds": 60,
+            }
+        )
+
+        with self.assertRaises(ValueError):
+            Settings(**values)
+
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "job_lease_seconds": 179,
+                "job_heartbeat_seconds": 60,
+            }
+        )
+
+        with self.assertRaises(ValueError):
+            Settings(**values)
 
     def test_connector_language_accepts_supported_locales_and_drops_unknown_values(self) -> None:
         values = self.base_values()
@@ -173,6 +297,51 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.connector_dashboard_auth_username, "admin")
         self.assertEqual(settings.connector_dashboard_auth_password, "secret")
 
+    def test_dashboard_control_requires_dashboard_and_basic_auth(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "connector_dashboard_control_enabled": True,
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "CONNECTOR_DASHBOARD_ENABLED"):
+            Settings(**values)
+
+        values["connector_dashboard_enabled"] = True
+        with self.assertRaisesRegex(
+            ValueError,
+            "CONNECTOR_DASHBOARD_AUTH_USERNAME",
+        ):
+            Settings(**values)
+
+        values["connector_dashboard_auth_username"] = "admin"
+        values["connector_dashboard_auth_password"] = "secret"
+        settings = Settings(**values)
+
+        self.assertTrue(settings.connector_dashboard_control_enabled)
+
+    def test_dashboard_control_rejects_example_password_in_production(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "app_env": "production",
+                "database_url": "postgresql+psycopg://custom/db",
+                "connector_dashboard_enabled": True,
+                "connector_dashboard_control_enabled": True,
+                "connector_dashboard_auth_username": "admin",
+                "connector_dashboard_auth_password": "change-me-dashboard-password",
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "known placeholder"):
+            Settings(**values)
+
+        values["app_env"] = "development"
+        settings = Settings(**values)
+        self.assertTrue(settings.connector_dashboard_control_enabled)
+
     def test_openwebui_defaults_to_disabled_without_required_secrets(self) -> None:
         values = self.base_values()
         values["database_url"] = "postgresql+psycopg://custom/db"
@@ -184,6 +353,10 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.openwebui_base_url, "http://localhost:3000")
         self.assertEqual(settings.openwebui_function_namespace, "ragflow")
         self.assertTrue(settings.ragflow_template_auto_create)
+        self.assertEqual(settings.ragflow_generated_dataset_permission, "me")
+        self.assertIsNone(settings.ragflow_interactive_api_key)
+        self.assertIsNone(settings.ragflow_interactive_owner_id)
+        self.assertIsNone(settings.ragflow_interactive_chat_model_id)
         self.assertEqual(settings.ragflow_template_chat_name, "connector_template_chat")
         self.assertFalse(settings.openwebui_pipe_answer_synthesis_enabled)
         self.assertIsNone(settings.openwebui_pipe_answer_llm_base_url)
@@ -191,6 +364,75 @@ class SettingsTests(unittest.TestCase):
         self.assertIsNone(settings.openwebui_pipe_answer_llm_api_key)
         self.assertTrue(settings.delete_dataset_when_library_deleted)
         self.assertFalse(settings.archive_dataset_when_library_deleted)
+
+    def test_generated_dataset_permission_accepts_only_supported_values(self) -> None:
+        values = self.base_values()
+        values["database_url"] = "postgresql+psycopg://custom/db"
+        values["ragflow_generated_dataset_permission"] = "team"
+
+        settings = Settings(**values)
+
+        self.assertEqual(settings.ragflow_generated_dataset_permission, "team")
+
+        values["ragflow_generated_dataset_permission"] = "public"
+        with self.assertRaises(ValueError):
+            Settings(**values)
+
+    def test_interactive_ragflow_identity_requires_complete_team_configuration(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "ragflow_generated_dataset_permission": "team",
+                "ragflow_interactive_api_key": "interactive-token",
+                "ragflow_interactive_owner_id": "  owner-1  ",
+                "ragflow_interactive_chat_model_id": "  model@provider\t",
+            }
+        )
+
+        settings = Settings(**values)
+
+        self.assertEqual(settings.ragflow_interactive_api_key, "interactive-token")
+        self.assertEqual(settings.ragflow_interactive_owner_id, "owner-1")
+        self.assertEqual(
+            settings.ragflow_interactive_chat_model_id,
+            "model@provider",
+        )
+
+        for missing_field in (
+            "ragflow_interactive_api_key",
+            "ragflow_interactive_owner_id",
+            "ragflow_interactive_chat_model_id",
+        ):
+            incomplete = dict(values)
+            incomplete[missing_field] = " "
+            with self.subTest(missing_field=missing_field), self.assertRaisesRegex(
+                ValueError,
+                "must be set together",
+            ):
+                Settings(**incomplete)
+
+        private_datasets = dict(values)
+        private_datasets["ragflow_generated_dataset_permission"] = "me"
+        with self.assertRaisesRegex(ValueError, "must be team"):
+            Settings(**private_datasets)
+
+    def test_blank_interactive_ragflow_identity_values_normalize_to_none(self) -> None:
+        values = self.base_values()
+        values.update(
+            {
+                "database_url": "postgresql+psycopg://custom/db",
+                "ragflow_interactive_api_key": " ",
+                "ragflow_interactive_owner_id": "\t",
+                "ragflow_interactive_chat_model_id": "",
+            }
+        )
+
+        settings = Settings(**values)
+
+        self.assertIsNone(settings.ragflow_interactive_api_key)
+        self.assertIsNone(settings.ragflow_interactive_owner_id)
+        self.assertIsNone(settings.ragflow_interactive_chat_model_id)
 
     def test_seafile_public_base_url_defaults_original_link_template(self) -> None:
         values = self.base_values()
@@ -337,6 +579,7 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(settings.search_service_port, 8090)
         self.assertEqual(settings.search_auth_mode, "trusted_header")
+        self.assertEqual(settings.search_trusted_proxy_cidrs, ())
         self.assertEqual(settings.search_default_top_k, 8)
         self.assertEqual(settings.search_max_top_k, 20)
         self.assertTrue(settings.ragflow_search_template_enabled)
@@ -357,6 +600,15 @@ class SettingsTests(unittest.TestCase):
         )
         self.assertIsNone(settings.search_ragflow_candidate_top_k)
         self.assertIsNone(settings.search_ragflow_similarity_threshold)
+
+        with self.assertRaises(ValueError):
+            SearchServiceSettings(
+                search_authz_base_url="http://connector-controller:8080",
+                search_authz_shared_secret="authz-secret",
+                search_ragflow_base_url="http://ragflow:9380",
+                search_ragflow_api_key="ragflow-key",
+                search_trusted_proxy_cidrs_csv="not-a-network",
+            )
 
         blank_overrides = SearchServiceSettings(
             search_authz_base_url="http://connector-controller:8080",
@@ -400,6 +652,36 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.search_answer_llm_timeout_seconds, 30)
         self.assertEqual(settings.search_answer_llm_max_tokens, 512)
         self.assertEqual(settings.search_answer_llm_temperature, 0.1)
+
+    def test_search_service_validates_openwebui_ldap_session_settings(self) -> None:
+        base = {
+            "search_authz_base_url": "http://connector-controller:8080",
+            "search_authz_shared_secret": "authz-secret",
+            "search_ragflow_base_url": "http://ragflow:9380",
+            "search_ragflow_api_key": "ragflow-key",
+            "search_auth_mode": "openwebui_ldap",
+        }
+
+        with self.assertRaisesRegex(ValueError, "SEARCH_SESSION_SECRET"):
+            SearchServiceSettings(**base)
+
+        settings = SearchServiceSettings(
+            **base,
+            search_session_secret="unit-test-search-session-secret",
+            search_openwebui_ldap_base_url="http://openwebui:8080/",
+            search_session_ttl_seconds=3600,
+        )
+
+        self.assertEqual(settings.search_openwebui_ldap_base_url, "http://openwebui:8080")
+        self.assertEqual(settings.search_session_ttl_seconds, 3600)
+        self.assertTrue(settings.search_session_cookie_secure)
+
+        with self.assertRaisesRegex(ValueError, "COOKIE_NAME"):
+            SearchServiceSettings(
+                **base,
+                search_session_secret="unit-test-search-session-secret",
+                search_session_cookie_name="invalid cookie name",
+            )
 
     def test_search_service_rejects_invalid_answer_llm_settings(self) -> None:
         base = {

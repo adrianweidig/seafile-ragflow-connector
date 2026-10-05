@@ -8,7 +8,138 @@ werden keine historischen Releases nachträglich erfunden.
 
 ## Unreleased
 
-Keine Einträge.
+## 2.6.3 - 2026-07-20
+
+### Fixed
+
+- Wiederholte RAGFlow-Quellenmarker vervielfachen signierte Vorschau-URLs
+  nicht mehr. Pro Quelle bleibt nur ein Marker verlinkt, weitere Marker
+  bleiben kurz; dadurch werden OpenWebUI-Antworten nicht durch wiederholte
+  Lang-URLs abgeschnitten.
+
+## 2.6.2 - 2026-07-20
+
+### Added
+
+- Automatisch erzeugte Bibliotheks-Datasets können gezielt als RAGFlow-
+  Team-Datasets bereitgestellt werden, während das interne Template privat
+  bleibt.
+- Eine optionale interaktive RAGFlow-Identität besitzt die automatisch
+  verwalteten Chats und die native Search-App. Deren Dataset-Bindungen werden
+  aus allen aktiven Connector-Bibliotheken aktualisiert und von Connector
+  Search sowie OpenWebUI mit derselben Identität verwendet.
+- Das Admin-Dashboard zeigt den effektiven Dataset-Berechtigungsmodus sowie
+  den konfigurierten interaktiven Besitzer und das Chat-Modell, ohne den
+  zugehörigen API-Key offenzulegen.
+- Eine optionale, standardmäßig deaktivierte Auto-Freigabe ergänzt für
+  bestehende und künftige geeignete private Seafile-Bibliotheken ausschließlich
+  einen direkten Lesezugriff des zuvor verifizierten technischen Sync-Benutzers.
+  Der erste automatische Zyklus prüft den Bestand rückwirkend; bestehende
+  Berechtigungen werden weder geändert noch automatisch entfernt.
+
+### Fixed
+
+- Ab der Bestätigung einer Bibliothekslöschung bleibt das zugehörige Search-
+  Profil auch bei einem vorübergehend fehlgeschlagenen RAGFlow-Cleanup
+  deaktiviert. Nach erfolgreicher Löschung wird ausschließlich der ACL-
+  Snapshot dieser Bibliothek entfernt; andere Profile und Berechtigungen
+  bleiben unverändert.
+- Der Enterprise-Compose-Assistent übernimmt und validiert die Dataset-
+  Berechtigung sowie alle Werte der interaktiven RAGFlow-Identität vollständig
+  und schreibt Secret-Env-Dateien ausschließlich mit Besitzerrechten.
+- Bereits vorhandene, exakt zugeordnete Connector-Datasets werden beim Wechsel
+  der Zielidentität idempotent auf die konfigurierte Team-Berechtigung
+  angeglichen, ohne Parser- oder Template-Einstellungen zu überschreiben.
+- Die interaktive RAGFlow-Identität wird vor jeder Mutation über den aktuellen
+  API-Key-Besitzer verifiziert. Nicht verifizierbare Search-Neuanlagen werden
+  gezielt zurückgerollt, statt bei Folgeläufen weitere Search-Apps anzulegen.
+- Altchat- und Orphan-Bereinigungen prüfen deterministische Connector-
+  Provenienz. Nicht funktionsgeprüfte Owner-Migrationen und mehrstufige
+  Dataset-Wechsel bleiben nachvollziehbar ausstehend, ohne manuell angelegte
+  Administrator-Chats zu löschen.
+- Die erwartete RAGFlow-Duplikatkollision beim vorbereitenden Blue/Green-
+  Dokument-Rename wird nur für die exakt bekannte Antwort und ausschließlich
+  vor dem Parsing toleriert; generische Fehler des abschließenden Rename gehen
+  in einen kontrollierten Wiederholungsversuch.
+
+## 2.6.1 - 2026-07-19
+
+### Fixed
+
+- Aktualisierte Seafile-Dateien werden in RAGFlow weiterhin unter einem
+  eindeutigen Übergangsnamen geparst, wenn die noch aktive Altversion den
+  endgültigen Dokumentnamen belegt. Nach erfolgreichem Parsing wird die
+  Altversion über die persistente Cleanup-Outbox entfernt und der lesbare Name
+  wiederhergestellt.
+- Bei mehreren schnellen Änderungen derselben Datei kann ausschließlich die
+  neueste Dokumentversion aktiv werden; auch noch nicht hochgeladene Versionen
+  blockieren die veraltete Promotion.
+- Dokument-Promotion und Löschauftrag für die Altversion werden atomar
+  gespeichert, damit Pause, Abbruch oder Prozessausfall kein verwaistes
+  RAGFlow-Dokument ohne Cleanup-Auftrag hinterlassen.
+
+## 2.6.0 - 2026-07-19
+
+### Added
+
+- Das im `connector-controller` eingebettete Dashboard dient zusätzlich als
+  interaktive Administrationsoberfläche: globale Connector-Arbeit sowie
+  einzelne Seafile-Bibliotheken lassen sich persistent aktivieren,
+  deaktivieren, pausieren und fortsetzen; Delta-, Voll- und Reconcile-Läufe
+  können gezielt gestartet, pausiert, fortgesetzt, gestoppt und erneut
+  eingeplant werden.
+- Bibliotheks- und Laufansichten zeigen die aktuelle Verarbeitungsphase sowie
+  Datei- und Parsing-Fortschritt einschließlich wartender, erfolgreicher und
+  fehlgeschlagener Dokumente.
+- Adminaktionen werden mit Akteur, Ziel, Vorher-/Nachher-Zustand und Ergebnis
+  persistent auditiert, ohne Passwörter oder andere Secrets zu speichern.
+- Wissenssuche kann die bestehende OpenWebUI-LDAP-/AD-Pipeline für Anmeldung
+  und Gruppensynchronisierung nutzen und verwaltet danach eine eigene
+  kurzlebige, signierte Browsersitzung mit expliziter Abmeldung.
+- Commit-gepinnter Delta-Sync mit bestätigten Snapshots/Cursorn,
+  Repo-Leases/Fence-Tokens, Dokumentversionen, Cleanup-Outbox und eigenständigem
+  Reconcile-Plan.
+- Persistente Dashboard-Prüfläufe mit Fortschritt, Abbruch und Retry sowie neue
+  `library`-, `jobs`- und `doctor`-CLI-Kommandos.
+- Sichtbare fehlgeschlagene Zielbereinigungen im Dashboard sowie
+  `cleanup list`/`cleanup retry` für persistente operative Wiederholungen.
+- Explizite Compose-/Portainer-/Swarm-Profile für gebündelten oder externen
+  State und Core-only beziehungsweise Search.
+
+### Changed
+
+- Schreibende Dashboard-Aktionen sind vom lesenden Statuszugriff getrennt und
+  werden nur bei aktivierter Steuerung, gesetzter Dashboard-Authentifizierung
+  sowie JSON mit `X-Connector-Admin-Action: 1` angenommen; globaler Stop sowie
+  Stop/Cancel eines Laufs benötigen die Bestätigung `{"confirm":"STOP"}`.
+  `connector dashboard` bleibt
+  eine eigenständige, absichtlich lesende Statusansicht; die Adminsteuerung steht
+  ausschließlich im laufenden Controller zur Verfügung und steuert keine
+  Container oder Portainer-Dienste.
+- `CONNECTOR_AUTOMATION_INITIAL_STATE=stopped` ermöglicht einen schedulerfreien
+  Erststart; der rückwärtskompatible Default bleibt `running`, und ein bereits
+  persistierter Operatorzustand wird nicht überschrieben.
+- Dashboard und Wissenssuche erhalten eine responsive, zustandserhaltende
+  Navigation, kompaktere Standardansichten und eingeklappte technische Details.
+- Search- und OpenWebUI-Quellen zeigen konsistente Nachweise, Abdeckung und
+  Fundstellen; laufende Suchanfragen können abgebrochen oder erneut gestartet
+  werden.
+- Opake, nutzer- und ACL-gebundene Result-Snapshots halten die Search-Pagination
+  über Folgeseiten stabil, ohne RAGFlow erneut ab Seite eins abzufragen.
+- Dashboard-Logs werden asynchron und gebündelt persistiert, damit der
+  Anwendungspfad bei hoher Lograte nicht auf Datenbank-Commits wartet;
+  vorübergehende Schreibfehler werden begrenzt wiederholt und endgültige
+  Verluste als Drop-Metrik gezählt.
+
+### Fixed
+
+- Deployment-Profile verwenden für Core und Search dasselbe Authz-Secret und
+  veröffentlichen Search in den unterstützten Standardprofilen konsistent.
+- Bibliotheks-Löschungen benötigen mehrere Beobachtungen und bei auffälligem
+  Massendelta eine Bestätigung, bevor Zielartefakte entfernt werden.
+- Wartende CLI-Syncs liefern bei Timeout, Abbruch oder endgültigem Jobfehler
+  einen fehlerhaften Exitcode; ungültige Konfigurationen erscheinen kompakt
+  statt als interner Python-Traceback.
 
 ## 2.5.6 - 2026-07-04
 

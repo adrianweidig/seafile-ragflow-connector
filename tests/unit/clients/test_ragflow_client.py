@@ -34,17 +34,148 @@ class _OtherApiErrorHttpClient:
         return None
 
 
+class _MalformedListHttpClient:
+    def __init__(self, data: object) -> None:
+        self.data = data
+        self.calls: list[tuple[str, dict[str, str]]] = []
+
+    def get(
+        self,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        self.calls.append((path, dict(params or {})))
+        request = httpx.Request("GET", f"http://ragflow.local{path}")
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": self.data},
+            request=request,
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class _ArtifactDetailHttpClient:
+    def __init__(self, data: object) -> None:
+        self.data = data
+
+    def get(self, path: str) -> httpx.Response:
+        request = httpx.Request("GET", f"http://ragflow.local{path}")
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": self.data},
+            request=request,
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class _ArtifactAccessDeniedHttpClient:
+    def get(self, path: str) -> httpx.Response:
+        request = httpx.Request("GET", f"http://ragflow.local{path}")
+        is_search = "/searches/" in path
+        return httpx.Response(
+            200,
+            json={
+                "code": 103 if is_search else 109,
+                "message": "Has no permission." if is_search else "No authorization.",
+            },
+            request=request,
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class _ArtifactChatMutationHttpClient:
+    def __init__(
+        self,
+        owner_id: str | None,
+        *,
+        identity_owner_id: str | None = "owner-1",
+    ) -> None:
+        self.owner_id = owner_id
+        self.identity_owner_id = identity_owner_id
+        self.identity_calls = 0
+        self.mutation_calls = 0
+
+    def get(self, path: str) -> httpx.Response:
+        if path != "/api/v1/users/me":
+            raise AssertionError(path)
+        self.identity_calls += 1
+        request = httpx.Request("GET", f"http://ragflow.local{path}")
+        data = (
+            {"id": self.identity_owner_id}
+            if self.identity_owner_id is not None
+            else {}
+        )
+        return httpx.Response(200, json={"code": 0, "data": data}, request=request)
+
+    def _response(self, method: str, path: str, payload: dict[str, object]) -> httpx.Response:
+        request = httpx.Request(method, f"http://ragflow.local{path}")
+        data: dict[str, object] = {"id": "chat-1", **payload}
+        if self.owner_id is not None:
+            data["tenant_id"] = self.owner_id
+        return httpx.Response(200, json={"code": 0, "data": data}, request=request)
+
+    def post(self, path: str, *, json: dict[str, object]) -> httpx.Response:
+        self.mutation_calls += 1
+        return self._response("POST", path, json)
+
+    def patch(self, path: str, *, json: dict[str, object]) -> httpx.Response:
+        self.mutation_calls += 1
+        return self._response("PATCH", path, json)
+
+    def close(self) -> None:
+        return None
+
+
+class _ArtifactSearchDeleteHttpClient:
+    def __init__(self, *, identity_owner_id: str) -> None:
+        self.identity_owner_id = identity_owner_id
+        self.identity_calls = 0
+        self.deleted_paths: list[str] = []
+
+    def get(self, path: str) -> httpx.Response:
+        if path != "/api/v1/users/me":
+            raise AssertionError(path)
+        self.identity_calls += 1
+        request = httpx.Request("GET", f"http://ragflow.local{path}")
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"id": self.identity_owner_id}},
+            request=request,
+        )
+
+    def delete(self, path: str) -> httpx.Response:
+        self.deleted_paths.append(path)
+        request = httpx.Request("DELETE", f"http://ragflow.local{path}")
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"deleted": True}},
+            request=request,
+        )
+
+    def close(self) -> None:
+        return None
+
+
 class _DeleteDocumentsHttpClient:
-    def __init__(self) -> None:
+    def __init__(self, *, single_missing_status_code: int = 200) -> None:
         self.deleted: list[list[str]] = []
+        self.single_missing_status_code = single_missing_status_code
 
     def request(self, method: str, path: str, *, json: dict[str, list[str]]) -> httpx.Response:
         request = httpx.Request(method, f"http://ragflow.local{path}")
         ids = json["ids"]
         self.deleted.append(ids)
         if "missing" in ids:
+            status_code = self.single_missing_status_code if len(ids) == 1 else 200
             return httpx.Response(
-                200,
+                status_code,
                 json={
                     "code": 102,
                     "message": (
@@ -55,6 +186,92 @@ class _DeleteDocumentsHttpClient:
                 request=request,
             )
         return httpx.Response(200, json={"code": 0, "data": {"deleted": ids}}, request=request)
+
+    def close(self) -> None:
+        return None
+
+
+class _UploadDocumentHttpClient:
+    def __init__(self, data: object) -> None:
+        self.data = data
+
+    def post(self, path: str, *, files: dict[str, object]) -> httpx.Response:
+        _ = files
+        request = httpx.Request("POST", f"http://ragflow.local{path}")
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": self.data},
+            request=request,
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class _RenameDocumentHttpClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, str]]] = []
+
+    def put(self, path: str, *, json: dict[str, str]) -> httpx.Response:
+        self.calls.append((path, dict(json)))
+        request = httpx.Request("PUT", f"http://ragflow.local{path}")
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"id": "doc-1", **json}},
+            request=request,
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class _DeleteResponseHttpClient:
+    def __init__(self, status_code: int, payload: dict[str, object]) -> None:
+        self.status_code = status_code
+        self.payload = payload
+        self.calls = 0
+
+    def request(self, method: str, path: str, *, json: dict[str, object]) -> httpx.Response:
+        _ = json
+        self.calls += 1
+        request = httpx.Request(method, f"http://ragflow.local{path}")
+        return httpx.Response(self.status_code, json=self.payload, request=request)
+
+    def close(self) -> None:
+        return None
+
+
+class _PaginatedDocumentsHttpClient:
+    def __init__(
+        self,
+        count: int,
+        *,
+        ignore_page: bool = False,
+        page_cycle: int | None = None,
+    ) -> None:
+        self.documents = [{"id": f"doc-{index}"} for index in range(count)]
+        self.ignore_page = ignore_page
+        self.page_cycle = page_cycle
+        self.params: list[dict[str, str]] = []
+
+    def get(self, path: str, *, params: dict[str, str]) -> httpx.Response:
+        self.params.append(dict(params))
+        requested_page = int(params["page"])
+        page = 1 if self.ignore_page else requested_page
+        if self.page_cycle:
+            page = ((requested_page - 1) % self.page_cycle) + 1
+        page_size = int(params["page_size"])
+        start = (page - 1) * page_size
+        documents = self.documents[start : start + page_size]
+        request = httpx.Request("GET", f"http://ragflow.local{path}")
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {"total": len(self.documents), "docs": documents},
+            },
+            request=request,
+        )
 
     def close(self) -> None:
         return None
@@ -275,6 +492,204 @@ class _KeywordCompatibilityErrorHttpClient:
 
 
 class RAGFlowClientTests(unittest.TestCase):
+    def test_interactive_owner_preflight_blocks_mutation_and_caches_success(self) -> None:
+        mismatched_http = _ArtifactChatMutationHttpClient(
+            "owner-2",
+            identity_owner_id="owner-2",
+        )
+        mismatched = RAGFlowClient(
+            "http://ragflow.local",
+            "token",
+            artifact_owner_id="owner-1",
+        )
+        mismatched._client = mismatched_http  # type: ignore[assignment]
+
+        with self.assertRaisesRegex(ApiError, "identity does not match"):
+            mismatched.create_chat({"name": "demo"})
+
+        self.assertEqual(mismatched_http.identity_calls, 1)
+        self.assertEqual(mismatched_http.mutation_calls, 0)
+
+        verified_http = _ArtifactChatMutationHttpClient("owner-1")
+        verified = RAGFlowClient(
+            "http://ragflow.local",
+            "token",
+            artifact_owner_id="owner-1",
+        )
+        verified._client = verified_http  # type: ignore[assignment]
+
+        verified.create_chat({"name": "demo"})
+        verified.update_chat("chat-1", {"name": "updated"})
+
+        self.assertEqual(verified_http.identity_calls, 1)
+        self.assertEqual(verified_http.mutation_calls, 2)
+
+    def test_interactive_owner_preflight_rejects_missing_identity(self) -> None:
+        http_client = _ArtifactChatMutationHttpClient(
+            "owner-1",
+            identity_owner_id=None,
+        )
+        client = RAGFlowClient(
+            "http://ragflow.local",
+            "token",
+            artifact_owner_id="owner-1",
+        )
+        client._client = http_client  # type: ignore[assignment]
+
+        with self.assertRaisesRegex(ApiError, "identity does not match"):
+            client.create_chat({"name": "demo"})
+
+        self.assertEqual(http_client.mutation_calls, 0)
+
+    def test_delete_search_uses_verified_owner_and_exact_search_id(self) -> None:
+        http_client = _ArtifactSearchDeleteHttpClient(identity_owner_id="owner-1")
+        client = RAGFlowClient(
+            "http://ragflow.local",
+            "token",
+            artifact_owner_id="owner-1",
+        )
+        client._client = http_client  # type: ignore[assignment]
+
+        client.delete_search("search-created")
+
+        self.assertEqual(http_client.identity_calls, 1)
+        self.assertEqual(http_client.deleted_paths, ["/api/v1/searches/search-created"])
+
+        mismatched_http = _ArtifactSearchDeleteHttpClient(identity_owner_id="owner-2")
+        mismatched = RAGFlowClient(
+            "http://ragflow.local",
+            "token",
+            artifact_owner_id="owner-1",
+        )
+        mismatched._client = mismatched_http  # type: ignore[assignment]
+
+        with self.assertRaisesRegex(ApiError, "identity does not match"):
+            mismatched.delete_search("search-created")
+
+        self.assertEqual(mismatched_http.deleted_paths, [])
+
+    def test_interactive_owner_filter_rejects_foreign_and_ownerless_artifacts(self) -> None:
+        artifacts = [
+            {"id": "tenant-owned", "tenant_id": "owner-1"},
+            {"id": "creator-owned", "created_by": "owner-1"},
+            {
+                "id": "both-owned",
+                "tenant_id": "owner-1",
+                "created_by": "owner-1",
+            },
+            {"id": "foreign", "tenant_id": "owner-2"},
+            {
+                "id": "mixed",
+                "tenant_id": "owner-1",
+                "created_by": "owner-2",
+            },
+            {"id": "ownerless"},
+        ]
+        for operation_name in ("list_chats", "list_searches"):
+            with self.subTest(operation=operation_name):
+                http_client = _MalformedListHttpClient(artifacts)
+                client = RAGFlowClient(
+                    "http://ragflow.local",
+                    "token",
+                    artifact_owner_id=" owner-1 ",
+                )
+                client._client = http_client  # type: ignore[assignment]
+
+                visible = getattr(client, operation_name)()
+
+                self.assertEqual(
+                    [item["id"] for item in visible],
+                    ["tenant-owned", "creator-owned", "both-owned"],
+                )
+                self.assertEqual(client.artifact_owner_id, "owner-1")
+                self.assertEqual(http_client.calls[0][1]["owner_ids"], "owner-1")
+
+    def test_interactive_owner_filter_applies_to_chat_and_search_details(self) -> None:
+        for operation_name in ("get_chat", "get_search"):
+            with self.subTest(operation=operation_name, owner="matching"):
+                client = RAGFlowClient(
+                    "http://ragflow.local",
+                    "token",
+                    artifact_owner_id="owner-1",
+                )
+                client._client = _ArtifactDetailHttpClient(  # type: ignore[assignment]
+                    {"id": "artifact-1", "tenant_id": "owner-1"}
+                )
+                self.assertIsNotNone(getattr(client, operation_name)("artifact-1"))
+
+            for detail in (
+                {"id": "artifact-1"},
+                {"id": "artifact-1", "tenant_id": "owner-2"},
+            ):
+                with self.subTest(operation=operation_name, detail=detail):
+                    client = RAGFlowClient(
+                        "http://ragflow.local",
+                        "token",
+                        artifact_owner_id="owner-1",
+                    )
+                    client._client = _ArtifactDetailHttpClient(detail)  # type: ignore[assignment]
+                    self.assertIsNone(getattr(client, operation_name)("artifact-1"))
+
+            with self.subTest(operation=operation_name, owner="denied"):
+                client = RAGFlowClient(
+                    "http://ragflow.local",
+                    "token",
+                    artifact_owner_id="owner-1",
+                )
+                client._client = _ArtifactAccessDeniedHttpClient()  # type: ignore[assignment]
+                self.assertIsNone(getattr(client, operation_name)("artifact-1"))
+
+    def test_interactive_owner_is_verified_after_chat_mutations(self) -> None:
+        for operation_name in ("create_chat", "update_chat"):
+            with self.subTest(operation=operation_name, owner="matching"):
+                client = RAGFlowClient(
+                    "http://ragflow.local",
+                    "token",
+                    artifact_owner_id="owner-1",
+                )
+                client._client = _ArtifactChatMutationHttpClient(  # type: ignore[assignment]
+                    "owner-1"
+                )
+                if operation_name == "create_chat":
+                    result = client.create_chat({"name": "demo"})
+                else:
+                    result = client.update_chat("chat-1", {"name": "demo"})
+                self.assertEqual(result["tenant_id"], "owner-1")
+
+            for returned_owner in (None, "owner-2"):
+                with self.subTest(operation=operation_name, owner=returned_owner):
+                    client = RAGFlowClient(
+                        "http://ragflow.local",
+                        "token",
+                        artifact_owner_id="owner-1",
+                    )
+                    client._client = _ArtifactChatMutationHttpClient(  # type: ignore[assignment]
+                        returned_owner
+                    )
+                    with self.assertRaisesRegex(ApiError, "owner does not match"):
+                        if operation_name == "create_chat":
+                            client.create_chat({"name": "demo"})
+                        else:
+                            client.update_chat("chat-1", {"name": "demo"})
+
+    def test_rename_document_restores_friendly_remote_name(self) -> None:
+        http_client = _RenameDocumentHttpClient()
+        client = RAGFlowClient("http://ragflow.local", "token")
+        client._client = http_client  # type: ignore[assignment]
+
+        renamed = client.rename_document("dataset", "doc-1", "report.pdf")
+
+        self.assertEqual(renamed["name"], "report.pdf")
+        self.assertEqual(
+            http_client.calls,
+            [
+                (
+                    "/api/v1/datasets/dataset/documents/doc-1",
+                    {"name": "report.pdf"},
+                )
+            ],
+        )
+
     def test_missing_named_dataset_is_empty_list(self) -> None:
         client = RAGFlowClient("http://ragflow.local", "token")
         client._client = _MissingDatasetHttpClient()  # type: ignore[assignment]
@@ -288,6 +703,21 @@ class RAGFlowClientTests(unittest.TestCase):
         with self.assertRaises(ApiError):
             client.list_datasets(name="missing")
 
+    def test_list_endpoints_reject_non_mapping_items_and_unknown_containers(self) -> None:
+        cases = (
+            ("datasets", {"status": "ok"}, lambda client: client.list_datasets()),
+            ("documents", ["doc-1"], lambda client: client.list_documents("dataset-1")),
+            ("chats", "chat-1", lambda client: client.list_chats()),
+            ("searches", {"status": "ok"}, lambda client: client.list_searches()),
+        )
+        for endpoint, data, operation in cases:
+            with self.subTest(endpoint=endpoint):
+                client = RAGFlowClient("http://ragflow.local", "token")
+                client._client = _MalformedListHttpClient(data)  # type: ignore[assignment]
+
+                with self.assertRaisesRegex(ApiError, f"RAGFlow {endpoint} endpoint"):
+                    operation(client)
+
     def test_delete_documents_ignores_missing_ids_but_retries_valid_ids(self) -> None:
         http_client = _DeleteDocumentsHttpClient()
         client = RAGFlowClient("http://ragflow.local", "token")
@@ -296,6 +726,137 @@ class RAGFlowClientTests(unittest.TestCase):
         client.delete_documents("ds", ["valid", "missing"])
 
         self.assertEqual(http_client.deleted, [["valid", "missing"], ["valid"], ["missing"]])
+
+    def test_upload_document_validates_document_identifier(self) -> None:
+        valid_cases = (
+            ({"id": "doc-1"}, {"id": "doc-1"}),
+            ([{"document_id": "doc-2"}], {"document_id": "doc-2"}),
+        )
+        for response, expected in valid_cases:
+            with self.subTest(response=response):
+                client = RAGFlowClient("http://ragflow.local", "token")
+                client._client = _UploadDocumentHttpClient(response)  # type: ignore[assignment]
+
+                document = client.upload_document(
+                    "dataset",
+                    document_name="report.pdf",
+                    content=b"content",
+                    mime_type="application/pdf",
+                )
+
+                self.assertEqual(document, expected)
+
+        for response in ({}, {"id": ""}, [], [{}], [{"document_id": None}], "doc-1"):
+            with self.subTest(response=response):
+                client = RAGFlowClient("http://ragflow.local", "token")
+                client._client = _UploadDocumentHttpClient(response)  # type: ignore[assignment]
+
+                with self.assertRaisesRegex(ApiError, "did not contain a document id"):
+                    client.upload_document(
+                        "dataset",
+                        document_name="report.pdf",
+                        content=b"content",
+                        mime_type="application/pdf",
+                    )
+
+    def test_missing_delete_suppression_requires_successful_http_envelope(self) -> None:
+        cases = (
+            (
+                "documents",
+                {"code": 102, "message": "Document not found: missing"},
+                lambda client: client.delete_documents("dataset", ["missing"]),
+            ),
+            (
+                "datasets",
+                {"code": 102, "message": "Dataset not found"},
+                lambda client: client.delete_datasets(["dataset"]),
+            ),
+            (
+                "chats",
+                {"code": 102, "message": "Chat not found"},
+                lambda client: client.delete_chats(["chat"]),
+            ),
+        )
+        for endpoint, payload, operation in cases:
+            with self.subTest(endpoint=endpoint, status_code=200):
+                http_client = _DeleteResponseHttpClient(200, payload)
+                client = RAGFlowClient("http://ragflow.local", "token")
+                client._client = http_client  # type: ignore[assignment]
+
+                self.assertEqual(operation(client), payload)
+
+            for status_code in (201, 404, 429, 500):
+                with self.subTest(endpoint=endpoint, status_code=status_code):
+                    http_client = _DeleteResponseHttpClient(status_code, payload)
+                    client = RAGFlowClient("http://ragflow.local", "token")
+                    client._client = http_client  # type: ignore[assignment]
+
+                    with self.assertRaises(ApiError) as raised:
+                        operation(client)
+
+                    self.assertEqual(raised.exception.status_code, status_code)
+                    self.assertEqual(http_client.calls, 1)
+
+            for invalid_payload in (
+                {"code": 101, "message": payload["message"]},
+                {"code": 102, "message": "different error"},
+            ):
+                with self.subTest(endpoint=endpoint, payload=invalid_payload):
+                    http_client = _DeleteResponseHttpClient(200, invalid_payload)
+                    client = RAGFlowClient("http://ragflow.local", "token")
+                    client._client = http_client  # type: ignore[assignment]
+
+                    with self.assertRaises(ApiError):
+                        operation(client)
+
+        http_client = _DeleteDocumentsHttpClient(single_missing_status_code=500)
+        client = RAGFlowClient("http://ragflow.local", "token")
+        client._client = http_client  # type: ignore[assignment]
+
+        with self.assertRaises(ApiError) as raised:
+            client.delete_documents("dataset", ["valid", "missing"])
+
+        self.assertEqual(raised.exception.status_code, 500)
+        self.assertEqual(http_client.deleted, [["valid", "missing"], ["valid"], ["missing"]])
+
+    def test_iter_documents_fetches_all_pages_with_bounded_page_size(self) -> None:
+        http_client = _PaginatedDocumentsHttpClient(205)
+        client = RAGFlowClient("http://ragflow.local", "token")
+        client._client = http_client  # type: ignore[assignment]
+
+        documents = list(
+            client.iter_documents(
+                "dataset",
+                run="RUNNING",
+                keywords="report",
+                page_size=1024,
+            )
+        )
+
+        self.assertEqual(len(documents), 205)
+        self.assertEqual(documents[0]["id"], "doc-0")
+        self.assertEqual(documents[-1]["id"], "doc-204")
+        self.assertEqual([params["page"] for params in http_client.params], ["1", "2", "3"])
+        self.assertTrue(all(params["page_size"] == "100" for params in http_client.params))
+        self.assertTrue(all(params["run"] == "RUNNING" for params in http_client.params))
+        self.assertTrue(all(params["keywords"] == "report" for params in http_client.params))
+
+    def test_iter_documents_rejects_server_that_ignores_page(self) -> None:
+        client = RAGFlowClient("http://ragflow.local", "token")
+        client._client = _PaginatedDocumentsHttpClient(100, ignore_page=True)  # type: ignore[assignment]
+
+        with self.assertRaisesRegex(ApiError, "pagination did not advance"):
+            list(client.iter_documents("dataset"))
+
+    def test_iter_documents_rejects_cyclic_full_pages(self) -> None:
+        client = RAGFlowClient("http://ragflow.local", "token")
+        http_client = _PaginatedDocumentsHttpClient(200, page_cycle=2)
+        client._client = http_client  # type: ignore[assignment]
+
+        with self.assertRaisesRegex(ApiError, "pagination did not advance"):
+            list(client.iter_documents("dataset"))
+
+        self.assertEqual([params["page"] for params in http_client.params], ["1", "2", "3"])
 
     def test_chat_and_retrieval_endpoints_use_current_http_api(self) -> None:
         http_client = _ChatHttpClient()

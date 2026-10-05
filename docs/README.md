@@ -4,10 +4,12 @@
 
 Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
 
-- `architecture.md` erklärt Komponenten, Datenflüsse, Delete-/Repair-Regeln und
-  die optionale OpenWebUI-Integration.
+- `architecture.md` erklärt Komponenten, Datenflüsse, die persistente
+  Admin-Control-Plane, Delete-/Repair-Regeln und die optionale OpenWebUI-
+  Integration.
 - `security-model.md` beschreibt die getrennten Rollen von Connector-Core,
-  Search-Service und OpenWebUI-Pipe sowie das Fail-Closed-Modell.
+  Controller-/Standalone-Dashboard, Search-Service und OpenWebUI-Pipe sowie das
+  Fail-Closed-Modell.
 - `access-control.md` beschreibt ACL-Snapshot, SearchProfiles und die interne
   Authz-API.
 - `search-service.md` dokumentiert die nutzernahe Wissenssuche als separaten
@@ -15,7 +17,7 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
 - `openwebui-acl.md` erklärt die zentrale Autorisierung für OpenWebUI-Pipes
   vor RAGFlow-Abfragen.
 - `configuration.md` beschreibt Environment-Variablen, Delete-Policy,
-  Dashboard und OpenWebUI-Modi.
+  Dashboard-Administration, Zustände, Sicherheitsgrenzen und OpenWebUI-Modi.
 - `environment.md` trennt minimale Pflichtvariablen von optionalen und
   modusabhängigen Variablen.
 - `admin-first-start-checklist.md` führt Administratoren durch Vorprüfung,
@@ -30,7 +32,7 @@ Dieser Ordner enthält die fachliche und betriebliche Dokumentation.
   Docker-Swarm-Betrieb, GHCR-/Offline-Hinweise, Recovery, Troubleshooting und
   lokale WSL-/Docker-Prüfungen.
 - `testing.md` beschreibt den wiederholbaren lokalen und CI-nahen Testablauf
-  für Codex und Entwickler.
+  einschließlich Admin-Control- und Dashboard-Browser-Regression.
 - `ragflow-template.md` beschreibt, wie das RAGFlow-Template beim Erzeugen neuer
   Datasets genutzt wird.
 - `tls-topology.md`, `tls-certificates.md`, `docker-compose-tls.md` und

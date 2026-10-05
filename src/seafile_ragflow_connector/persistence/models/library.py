@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Text, func
+from datetime import datetime
+
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from seafile_ragflow_connector.persistence.db import Base
@@ -24,6 +26,13 @@ class Library(Base):
     template_hash: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
     last_error: Mapped[str | None] = mapped_column(Text)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    missing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_missing_observation_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    missing_observations: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    deletion_state: Mapped[str] = mapped_column(Text, nullable=False, default="active")
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True),

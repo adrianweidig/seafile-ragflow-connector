@@ -4,10 +4,18 @@ Die zentrale Schnittstelle ist `connector.env.example`. Für den Minimalbetrieb
 gilt: nur Pflichtwerte setzen, optionale Blöcke leer lassen. Leere optionale
 Werte bedeuten, dass der Code die internen Defaults nutzt.
 
-## Minimalpflicht
+## Betriebsprofile und Minimalpflicht
 
-Für Seafile -> RAGFlow mit Postgres und Redis aus dem Docker-Stack sind nur
-diese Werte fachlich Pflicht:
+Der unterstützte manuelle Compose-Aufruf kombiniert immer eine Basisdatei mit
+genau einem State-Profil. Das Standardprofil ergänzt außerdem
+`search.compose.yml`; Core-only lässt dieses Overlay vollständig weg.
+
+| Profil | Compose-Baustein | Pflichtwerte für State |
+| --- | --- | --- |
+| Gebündelter State | `bundled-state.compose.yml` | `POSTGRES_PASSWORD`; PostgreSQL und Redis laufen im Stack. |
+| Externer State | `external-state.compose.yml` | `DATABASE_URL` und `REDIS_URL`; lokale State-Container werden nicht gestartet. |
+
+Für Seafile -> RAGFlow gelten zusätzlich diese fachlichen Pflichtwerte:
 
 | Variable | Pflicht | Wann | Hinweis |
 | --- | --- | --- | --- |
@@ -15,12 +23,19 @@ diese Werte fachlich Pflicht:
 | `SEAFILE_ADMIN_TOKEN` | ja | immer | Admin-API-Token für Library-Discovery. |
 | `SEAFILE_SYNC_USER_TOKEN` | ja | immer | API-Token für Dateilisten und Downloads. |
 | `RAGFLOW_BASE_URL` | ja | immer | Aus dem Connector-Container erreichbare RAGFlow-API. |
-| `RAGFLOW_API_KEY` | ja | immer | API-Key des RAGFlow-Zielusers. |
-| `POSTGRES_PASSWORD` | ja | wenn keine `DATABASE_URL` gesetzt ist | Passwort der Stack-Datenbank. |
-| `DATABASE_URL` | alternativ | wenn externe DB genutzt wird | Ersetzt `POSTGRES_*` für die Anwendung. |
+| `RAGFLOW_API_KEY` | ja | immer | API-Key der technischen Sync-Identität; sie besitzt die kanonischen Datasets. |
+| `AUTHZ_API_SHARED_SECRET` | ja | Standard und Core-only | Technisches Secret der internen Authz-API; der Wizard erzeugt es. |
+| `POSTGRES_PASSWORD` | ja | `bundled-state` | Passwort der Stack-Datenbank. |
+| `DATABASE_URL` | ja | `external-state` | Vollständige URL zur vorhandenen PostgreSQL-Datenbank. |
+| `REDIS_URL` | ja | `external-state` | Vollständige URL zum vorhandenen Redis-/Valkey-Dienst. |
 
-`REDIS_URL` ist nur Pflicht, wenn kein Stack-Redis genutzt werden soll. In den
-Compose-Dateien wird Redis standardmäßig als `connector-redis` bereitgestellt.
+Das Standardprofil mit Search benötigt außerdem `SEARCH_AUTHZ_SHARED_SECRET`
+mit demselben Wert wie `AUTHZ_API_SHARED_SECRET` sowie
+`SEARCH_RAGFLOW_BASE_URL` und `SEARCH_RAGFLOW_API_KEY`. Der Enterprise-Wizard
+leitet diese Werte aus der Core-Konfiguration ab. Bei konfigurierter
+interaktiver RAGFlow-Identität verwendet er dafür deren API-Key, andernfalls
+`RAGFLOW_API_KEY`. Core-only definiert keinen Search-Container und verlangt
+diese Search-Werte nicht.
 
 ## Allgemeine optionale Werte
 
@@ -59,17 +74,23 @@ Er benötigt keinen Seafile-Admin- oder Sync-Token.
 
 | Variable | Pflicht | Zweck |
 | --- | --- | --- |
-| `SEARCH_SERVICE_ENABLED` | optional | Aktiviert den Search-Server; Default `true`. |
+| `SEARCH_SERVICE_ENABLED` | optional | Laufzeitwert des Search-Prozesses. Deployment erfolgt über das Search-Overlay; einen definierten Container nicht mit `false` deaktivieren. |
 | `SEARCH_SERVICE_HOST`, `SEARCH_SERVICE_PORT` | optional | Bind-Adresse und Container-Port. |
-| `SEARCH_SERVICE_PUBLISHED_PORT` | optional | Host-Portbindung in Compose/Portainer, z. B. `127.0.0.1:18090`. |
-| `SEARCH_AUTH_MODE` | optional | Aktuell `trusted_header`. |
+| `SEARCH_SERVICE_PUBLISHED_PORT` | optional | Host-Portbindung in Compose/Portainer, z. B. `127.0.0.1:18090`; in Swarm eine reine Portnummer wie `18090`. |
+| `SEARCH_AUTH_MODE` | optional | `trusted_header` oder `openwebui_ldap`; Standard ist `trusted_header`. |
 | `SEARCH_TRUSTED_USERNAME_HEADER` | optional | Header für den Login-/Usernamen. |
 | `SEARCH_TRUSTED_EMAIL_HEADER` | optional | Header für die Nutzer-E-Mail; primärer ACL-Match-Key. |
 | `SEARCH_TRUSTED_DISPLAY_NAME_HEADER` | optional | Header für den Anzeigenamen in der GUI. |
+| `SEARCH_OPENWEBUI_LDAP_BASE_URL` | bei `openwebui_ldap` | Interne OpenWebUI-URL, deren LDAP-Endpunkt für die Anmeldung genutzt wird. |
+| `SEARCH_OPENWEBUI_LDAP_VERIFY_SSL`, `SEARCH_OPENWEBUI_LDAP_CA_BUNDLE` | optional | TLS-Prüfung und optionales CA-Bundle für Search -> OpenWebUI. |
+| `SEARCH_OPENWEBUI_LDAP_TIMEOUT_SECONDS` | optional | Timeout der LDAP-Anmeldung über OpenWebUI; Standard `20`. |
+| `SEARCH_SESSION_SECRET` | bei `openwebui_ldap` | HMAC-Secret für die lokale Search-Sitzung; im Produktionsmodus explizit setzen. |
+| `SEARCH_SESSION_TTL_SECONDS` | optional | Gültigkeit der Search-Sitzung; Standard `28800` Sekunden. |
+| `SEARCH_SESSION_COOKIE_NAME`, `SEARCH_SESSION_COOKIE_SECURE` | optional | Name und Secure-Attribut des Search-Sitzungscookies. |
 | `SEARCH_AUTHZ_BASE_URL` | ja | Interne URL zum Connector-Core, z. B. `http://connector-controller:8080`. |
 | `SEARCH_AUTHZ_SHARED_SECRET` | ja | Muss zum Authz-Secret im Core passen. |
 | `SEARCH_RAGFLOW_BASE_URL` | ja | RAGFlow-URL aus Sicht des Search-Containers. |
-| `SEARCH_RAGFLOW_API_KEY` | ja | RAGFlow-API-Key für erlaubte Abfragen. |
+| `SEARCH_RAGFLOW_API_KEY` | ja | RAGFlow-API-Key für erlaubte Abfragen. Für native beziehungsweise Connector-Chat-Antworten unter der kontrollierten interaktiven Identität muss der Wert mit `RAGFLOW_INTERACTIVE_API_KEY` übereinstimmen; andernfalls wird `RAGFLOW_API_KEY` verwendet. |
 | `SEARCH_RAGFLOW_VERIFY_SSL`, `SEARCH_RAGFLOW_CA_BUNDLE` | optional | TLS-Prüfung und optionales CA-Bundle für Search -> RAGFlow. |
 | `SEARCH_ANSWER_GENERATION_MODE` | optional | `ragflow_chat`, `retrieval_summary` oder `disabled`; Default `ragflow_chat`. |
 | `RAGFLOW_SEARCH_ANSWER_CHAT_NAME` | optional | Name des RAGFlow-Chats für Antwortgenerierung; Default `connector_search_answer`. |
@@ -97,6 +118,8 @@ Er benötigt keinen Seafile-Admin- oder Sync-Token.
 | `SEARCH_TEXT_FRAGMENT_LINKS_ENABLED` | optional | Erzeugt best-effort Browser-Textfragment-Links, wenn kein Seitenanker vorhanden ist; Default `true`. |
 | `SEARCH_DOCUMENT_VIEWER_ENABLED` | optional | Aktiviert den authz-geprüften Dokumentproxy für den nativen Browserviewer; Default `true`. |
 | `SEARCH_DOCUMENT_VIEWER_MAX_MB` | optional | Größenlimit für ausgelieferte Viewer-Dokumente; Default `100`. |
+| `SEARCH_DOCUMENT_VIEWER_TIMEOUT_SECONDS`, `SEARCH_DOCUMENT_VIEWER_MAX_CONCURRENCY` | optional | Deadline und parallele Downloadgrenze des Dokumentviewers; Defaults `30` Sekunden und `4`. |
+| `SEARCH_PDF_RENDER_MAX_CONCURRENCY`, `SEARCH_PDF_RENDER_MAX_MB` | optional | Begrenzung paralleler PDF-Renderings und maximaler gerenderter PNG-Größe; Defaults `2` und `25` MiB. |
 | `SEARCH_RESULT_SNIPPET_CONTEXT_CHARS` | optional | Maximale Snippet-Länge in Search-Antworten und Preview-Tokens; Default `420`. |
 | `SEARCH_ANSWER_MAX_SOURCES` | optional | Maximale Anzahl Quellenchips im Antwortmodus; Default `8`. |
 | `SEARCH_SOURCE_PREVIEW_SECRET` | optional | Separates Signatur-Secret für Search-Preview-Tokens; fällt auf `SEARCH_AUTHZ_SHARED_SECRET` zurück. |
@@ -169,12 +192,18 @@ installierten System-CAs.
 | Variable | Pflicht | Zweck |
 | --- | --- | --- |
 | `SEAFILE_INTERNAL_URL`, `RAGFLOW_INTERNAL_URL` | optional | abweichende interne URL für Container-zu-Container-Traffic. |
-| `SEAFILE_SYNC_USER_EMAIL` | optional | Dokumentativer Sync-User-Hinweis; Token ist maßgeblich. |
+| `SEAFILE_SYNC_USER_EMAIL` | Pflicht bei Auto-Freigabe | Kanonische Seafile-E-Mail der technischen Sync-Identität. Sie muss mit `/api2/account/info/` des Sync-Tokens übereinstimmen. |
+| `SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED` | optional | Default `false`. Der erste automatische Zyklus prüft alle bestehenden geeigneten und ausführbaren Bibliotheken, spätere Zyklen auch neu entdeckte. Nur nach einem exakten Root-403 wird eine direkte Nur-Lese-Freigabe (`path=/`, `permission=r`) für die verifizierte Sync-Identität ergänzt. Bestehende `r`-/`rw`-Freigaben werden nicht verändert; es gibt keine automatische Rücknahme. |
 | `SEAFILE_SKIP_ENCRYPTED_LIBRARIES`, `SEAFILE_SKIP_VIRTUAL_REPOS` | optional | Discovery-Filter für Seafile-Libraries. |
 | `SEAFILE_PUBLIC_BASE_URL` | optional | browserseitige Seafile-Basis-URL für OpenWebUI-Original-Links; fällt auf `SEAFILE_BASE_URL` zurück. |
 | `SEAFILE_FILE_URL_TEMPLATE` | optional | Override für abweichende Seafile-Webrouten; sonst wird der Original-Link automatisch aus Basis-URL, Repo-ID und Pfad erzeugt. |
-| `SEAFILE_REWRITE_DOWNLOAD_URLS`, `SEAFILE_DOWNLOAD_REWRITE_FROM`, `SEAFILE_DOWNLOAD_REWRITE_TO` | optional | Rewrite von Seafile-Download-URLs, z. B. von `127.0.0.1` auf Docker-DNS. |
+| `SEAFILE_REWRITE_DOWNLOAD_URLS`, `SEAFILE_DOWNLOAD_REWRITE_FROM`, `SEAFILE_DOWNLOAD_REWRITE_TO` | optional | Rewrite von Seafile-Download-URLs, z. B. von `127.0.0.1` auf Docker-DNS. Das Rewrite-Ziel wird als vertrauenswürdige Download-Origin behandelt. |
+| `SEAFILE_DOWNLOAD_ALLOWED_ORIGINS` | optional | Kommaseparierte zusätzliche Origins (`https://host[:port]`), an die der Sync-Authorization-Header gesendet werden darf. Standardmäßig sind nur die Seafile-Basis-Origin und ein explizites Rewrite-Ziel erlaubt. |
 | `RAGFLOW_TEMPLATE_DATASET_NAME` | optional | Default ist `connector_template`. |
+| `RAGFLOW_GENERATED_DATASET_PERMISSION` | optional | `me` (sicherer Default) oder `team`; setzt die RAGFlow-Berechtigung beim Erzeugen neuer Bibliotheks-Datasets. `team` macht sie für alle Mitglieder des RAGFlow-Tenants des Connectors sichtbar und ist keine Seafile-ACL. Das interne Template-Dataset (standardmäßig `connector_template`) bleibt immer privat (`me`); bestehende Datasets werden nicht nachträglich geändert. |
+| `RAGFLOW_INTERACTIVE_API_KEY` | optional, Secret | API-Key eines einzelnen kontrollierten Admin-Zielusers, der automatisch verwaltete Chats und ausführbare Search-App-Spiegel besitzen soll. Leer nutzt rückwärtskompatibel `RAGFLOW_API_KEY` für alle Artefakte. Wenn gesetzt, sind die beiden folgenden IDs und `RAGFLOW_GENERATED_DATASET_PERMISSION=team` Pflicht. |
+| `RAGFLOW_INTERACTIVE_OWNER_ID` | Pflicht bei interaktivem Key | RAGFlow-User-ID, die zum interaktiven API-Key gehört. Der User muss Mitglied im Tenant der Sync-Identität sein. |
+| `RAGFLOW_INTERACTIVE_CHAT_MODEL_ID` | Pflicht bei interaktivem Key | RAGFlow-Chat-Modell-ID, die dem interaktiven User zur Verfügung steht. Sie wird als `chat_id` des verwalteten Search-App-Spiegels gesetzt. |
 | `RAGFLOW_TEMPLATE_AUTO_CREATE` | optional | Default `true`; fehlende Dataset-Templates werden beim Provisioning automatisch angelegt. |
 | `RAGFLOW_TEMPLATE_REQUIRED` | optional | Default `true`; Healthcheck warnt nur noch, wenn Auto-Create deaktiviert ist und das Template fehlt. |
 | `RAGFLOW_TEMPLATE_CHAT_NAME` | optional | Default `connector_template_chat`; Template-Chat für die OpenWebUI/RAGFlow-Chat-Defaults. |
@@ -188,14 +217,26 @@ installierten System-CAs.
 | `RAGFLOW_TEMPLATE_REFRESH_SECONDS` | optional | Intervall für Aktualisierung der Dataset-Einstellungen. Default `1800` Sekunden, also 30 Minuten. Werte unter 60 Sekunden werden abgelehnt. |
 | `RAGFLOW_PUBLIC_BASE_URL`, `RAGFLOW_DOCUMENT_URL_TEMPLATE` | optional | öffentliche RAGFlow-Links in Quellen. |
 | `CONNECTOR_DASHBOARD_ENABLED` | optional | Dashboard starten; für OpenWebUI-Proxy nötig. |
+| `CONNECTOR_DASHBOARD_CONTROL_ENABLED` | optional | Default `false`; aktiviert die schreibende Adminsteuerung ausschließlich im Controller. `true` erfordert `CONNECTOR_DASHBOARD_ENABLED=true` sowie nicht leere Basic-Auth-Werte. |
+| `CONNECTOR_AUTOMATION_INITIAL_STATE` | optional | `running` (rückwärtskompatibler Default) oder `stopped`; gilt nur beim erstmaligen Erzeugen des globalen Steuerzustands. Für einen schedulerfreien Erststart vor dem ersten Stack-Start `stopped` setzen. Persistierter Zustand gewinnt danach. |
 | `CONNECTOR_DASHBOARD_HOST`, `CONNECTOR_DASHBOARD_PORT` | optional | Bind-Adresse und Port im Container. |
 | `CONNECTOR_DASHBOARD_PUBLISHED_PORT` | optional | Host-Portbindung in Compose. |
 | `CONNECTOR_DASHBOARD_MAX_LOG_ENTRIES`, `CONNECTOR_DASHBOARD_MAX_EVENT_ENTRIES`, `CONNECTOR_DASHBOARD_MAX_SYNC_RUNS`, `CONNECTOR_DASHBOARD_LOG_PAGE_SIZE`, `CONNECTOR_DASHBOARD_MAX_FIELD_LENGTH` | optional | Speicher- und Anzeigegrenzen des Dashboards. |
-| `CONNECTOR_DASHBOARD_AUTH_USERNAME`, `CONNECTOR_DASHBOARD_AUTH_PASSWORD` | optional | HTTP Basic Auth für Dashboard-UI, Status-API und Workflow-Steuerung; beide Werte zusammen setzen. |
+| `CONNECTOR_DASHBOARD_AUTH_USERNAME`, `CONNECTOR_DASHBOARD_AUTH_PASSWORD` | optional | HTTP Basic Auth für Dashboard-UI und Status-API; beide Werte zusammen setzen. Für `CONNECTOR_DASHBOARD_CONTROL_ENABLED=true` sind beide nicht leer zwingend; in Produktion werden bekannte Beispielpasswörter abgewiesen. |
 | `CONNECTOR_DOCKER_NETWORK_EXTERNAL`, `CONNECTOR_DOCKER_NETWORK_NAME` | optional | eigenes Netz per Default; bei vorhandenem externem Netz den realen Netzwerknamen setzen. |
 | `CONNECTOR_SWARM_NETWORK_NAME` | optional | Overlay-Netzname für Swarm. |
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_HOST`, `POSTGRES_PORT` | optional | Defaults reichen im Stack. |
 | `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB` | optional | Defaults reichen im Stack. |
+
+`CONNECTOR_DASHBOARD_CONTROL_ENABLED` erweitert nur das in den Controller
+eingebettete Dashboard. Der eigenständige Prozess `connector dashboard` bleibt
+lesend. Adminmutationen benötigen zusätzlich gültige Basic Auth,
+`Content-Type: application/json` und `X-Connector-Admin-Action: 1`; globaler
+Stop sowie Stop/Cancel eines Laufs verlangen `{"confirm":"STOP"}`. Diese
+Browsergrenze wird nicht auf interne
+Authz- oder OpenWebUI-Proxy-POSTs übertragen. Für einen Zugriff außerhalb des
+lokalen Hosts gehört die Oberfläche hinter HTTPS und eine administrative
+Netzwerk- oder Reverse-Proxy-Grenze.
 
 ## Tuning und Policy
 
@@ -208,9 +249,17 @@ Diese Variablen sind nicht für den ersten Start erforderlich:
 | Scheduling | `DISCOVERY_INTERVAL_SECONDS`, `DELTA_SYNC_INTERVAL_SECONDS`, `RECONCILE_INTERVAL_SECONDS`, `FULL_SYNC_ON_MISSING_COMMIT` |
 | Delete-/Repair-Policy | `DELETE_RAGFLOW_DOCS_ON_SEAFILE_DELETE`, `DELETE_DATASET_WHEN_LIBRARY_DELETED`, `ARCHIVE_DATASET_WHEN_LIBRARY_DELETED` |
 | Durchsatz | `MAX_CONCURRENT_LIBRARIES`, `UPLOAD_WORKERS`, `PARSE_WORKERS`, `RAGFLOW_UPLOAD_BATCH_SIZE`, `RAGFLOW_PARSE_BATCH_SIZE`, `RAGFLOW_MAX_INFLIGHT_DOCUMENTS` |
-| Retry | `JOB_MAX_ATTEMPTS`, `JOB_RETRY_BASE_SECONDS`, `JOB_RETRY_MAX_SECONDS` |
+| Retry/Retention | `JOB_MAX_ATTEMPTS`, `JOB_RETRY_BASE_SECONDS`, `JOB_RETRY_MAX_SECONDS`, `JOB_LEASE_SECONDS`, `JOB_HEARTBEAT_SECONDS`, `JOB_HISTORY_RETENTION_DAYS` |
 | Runtime | `CACHE_DIR`, `TEMP_DIR`, `ALLOW_OUTBOUND_INTERNET`, `DISABLE_TELEMETRY` |
 | Startup | `CONNECTOR_AUTO_INIT_DB`, `CONNECTOR_STARTUP_CHECK`, `CONNECTOR_STARTUP_MAX_WAIT_SECONDS`, `CONNECTOR_STARTUP_SLEEP_SECONDS`, `CONNECTOR_BOOTSTRAP_CHECK_LIVE`, `CONNECTOR_FALLBACK_CACHE_DIR`, `CONNECTOR_FALLBACK_TEMP_DIR` |
+
+Ein Worker aktualisiert mit `JOB_HEARTBEAT_SECONDS` seine Job-Lease. Bleibt dieses
+Heartbeat länger als `JOB_LEASE_SECONDS` aus, übernimmt die Stale-Recovery den
+Job erneut oder markiert ihn nach dem letzten erlaubten Versuch als `dead`.
+`JOB_HEARTBEAT_SECONDS` darf höchstens ein Drittel von `JOB_LEASE_SECONDS`
+betragen. Bereits gestartete externe Operationen lassen sich bei Lease-Verlust
+nicht abbrechen; Upload-, Delete- und Repair-Pfade müssen deshalb weiterhin
+idempotent bleiben und durch Reconciliation reparierbar sein.
 
 Die Controller-Automationen `DISCOVERY_INTERVAL_SECONDS` und
 `DELTA_SYNC_INTERVAL_SECONDS` sowie der Reconciler
@@ -219,6 +268,22 @@ Die Controller-Automationen `DISCOVERY_INTERVAL_SECONDS` und
 Reconciler geloggt. Manuelle Läufe sind unabhängig davon über
 `connector sync-once`, `connector check-live`, `connector authz-sync-once` und
 `connector openwebui-sync-once` möglich.
+
+Delta-Läufe vergleichen bestätigte, commit-gepinnte Snapshots und schieben den
+Cursor erst nach erfolgreicher Verarbeitung vor. Bei fehlender oder
+unvollständiger Basis erfolgt ein kontrollierter Vollsync. Reconcile erstellt
+einen getrennten Drift-Plan und führt die Reparaturen als deduplizierte Jobs
+aus.
+
+Einige ältere Tuning- und Policy-Variablen bleiben zur Kompatibilität ladbar,
+steuern aber noch keinen eigenständigen Laufzeitpfad. Dazu gehören insbesondere
+`UPLOAD_WORKERS`, `PARSE_WORKERS`, die drei `RAGFLOW_*BATCH/INFLIGHT`-Werte,
+`REPARSE_ON_DATASET_SETTINGS_CHANGE` und
+`ARCHIVE_DATASET_WHEN_LIBRARY_DELETED`. `MAX_CONCURRENT_LIBRARIES` beschreibt
+die gewünschte Deployment-Parallelität; effektiv wird diese durch die Zahl der
+Worker-Replikate bestimmt. `connector doctor --effective --json` zeigt für jede
+Option den Status `active`, `deployment`, `informational`, `compatibility` oder
+`reserved`, ohne Secrets offenzulegen.
 
 Für produktive Starts ist die kleinste robuste Konfiguration meistens besser:
 erst Minimalpflicht setzen, `connector check-config` ausführen, dann gezielt

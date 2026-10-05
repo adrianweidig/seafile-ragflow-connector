@@ -7,7 +7,7 @@ setzen und dieselbe Datei mit Docker Compose oder Portainer verwenden. Die
 vollständige Pflicht-/Optional-Liste steht in
 [`environment.md`](environment.md).
 
-Minimalpflicht für Seafile -> RAGFlow mit Stack-Postgres:
+Minimalpflicht für Seafile -> RAGFlow mit gebündeltem State:
 
 ```env
 SEAFILE_BASE_URL=
@@ -15,13 +15,85 @@ SEAFILE_ADMIN_TOKEN=
 SEAFILE_SYNC_USER_TOKEN=
 RAGFLOW_BASE_URL=
 RAGFLOW_API_KEY=
+AUTHZ_API_SHARED_SECRET=
 POSTGRES_PASSWORD=
 ```
 
-Alternativ ersetzt `DATABASE_URL` die `POSTGRES_*`-Anwendungswerte. OpenWebUI,
-Dashboard, TLS-CA-Bundles, URL-Rewrites und Tuning sind optionale Erweiterungen.
+Das unterstützte External-State-Profil ersetzt den gebündelten State durch
+`DATABASE_URL` **und** `REDIS_URL`; die lokalen PostgreSQL-/Redis-Dienste werden
+dann nicht gestartet. Das Standardprofil ergänzt Search und benötigt die in
+[`environment.md`](environment.md) aufgeführten Search-Werte; Core-only lässt
+das Search-Overlay weg. OpenWebUI, Dashboard, TLS-CA-Bundles, URL-Rewrites und
+Tuning sind optionale Erweiterungen.
 Secrets müssen über Portainer-Environment-Management, Docker Secrets oder eine
 lokale nicht committete Env-Datei bereitgestellt werden.
+
+## Technischer Seafile-Zugriff auf Bibliotheken
+
+Standardmäßig verändert der Connector keine Seafile-Freigaben. Der technische
+Benutzer hinter `SEAFILE_SYNC_USER_TOKEN` muss private Bibliotheken daher
+bereits lesen dürfen. Für eine kontrollierte automatische Ergänzung kann der
+Betreiber explizit konfigurieren:
+
+```env
+SEAFILE_SYNC_USER_EMAIL=ragflow-sync@example.local
+SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED=true
+```
+
+Bei aktiviertem Schalter prüft der Connector die kanonische Token-Identität
+über `/api2/account/info/`. Ein Share wird ausschließlich angelegt, wenn der
+Root-Probe der konkreten, unverschlüsselten und nicht virtuellen Bibliothek mit
+HTTP 403 antwortet. Der Admin-Client erstellt dann einen direkten User-Share
+für `/` mit `permission=r`, liest die Freigabe erneut und wiederholt den
+Root-Probe. Abweichende Identität, andere HTTP-Fehler oder eine fehlende
+Nachprüfung brechen fail-closed ab. Bestehende `r`- und `rw`-Freigaben bleiben
+unverändert; der Connector stuft keine Berechtigung herab und entfernt solche
+Freigaben nicht automatisch.
+
+Die Aktivierung gilt nicht nur für künftig neu entdeckte Bibliotheken. Bereits
+der erste automatische Discovery-Zyklus prüft alle bestehenden, geeigneten und
+ausführbaren Bibliotheken und kann für jede mit fehlendem Root-Zugriff eine
+Freigabe anlegen. Deaktivierte oder pausierte Bibliotheken werden erst nach
+ihrer erneuten Aktivierung geprüft. Vor dem Einschalten sollten Betreiber den
+Bibliotheksbestand im Dashboard kontrollieren und nicht gewünschte
+Bibliotheken deaktivieren oder pausieren.
+
+## RAGFlow-Identitäten und Eigentümerschaft
+
+Der verpflichtende `RAGFLOW_API_KEY` ist die technische Sync-Identität. Sie
+besitzt das interne Template und die kanonischen, aus Seafile erzeugten
+Datasets. Standardmäßig besitzt dieselbe Identität auch alle vom Connector
+erzeugten RAGFlow-Chats und die Search-App; das ist der rückwärtskompatible
+Ein-Identitäts-Betrieb.
+
+Für genau einen kontrollierten Admin-Zieluser kann die interaktive
+Eigentümerschaft getrennt werden:
+
+```env
+RAGFLOW_INTERACTIVE_API_KEY=
+RAGFLOW_INTERACTIVE_OWNER_ID=
+RAGFLOW_INTERACTIVE_CHAT_MODEL_ID=
+RAGFLOW_GENERATED_DATASET_PERMISSION=team
+```
+
+Wenn `RAGFLOW_INTERACTIVE_API_KEY` gesetzt ist, sind Owner-ID und eine für
+diesen User verfügbare Chat-Modell-ID Pflicht. Der User muss Mitglied desselben
+RAGFlow-Tenants wie die Sync-Identität sein. Der Connector erzeugt seine
+interaktiven Chats und ausführbaren Search-App-Spiegel unter diesem User,
+während `RAGFLOW_API_KEY` die Datasets weiterhin synchronisiert. `team` ist
+dabei zwingend, damit der interaktive Besitzer die kanonischen Datasets
+referenzieren kann. Der Connector gleicht `permission` für bereits vorhandene,
+exakt erwartete Bibliotheks-Datasets beim Provisioning idempotent auf diesen
+Wert ab, ohne Parser- oder sonstige Dataset-Einstellungen zu überschreiben.
+Das interne Template bleibt `me`. Diese tenantweite Freigabe ist keine
+Seafile-ACL.
+
+Dieser Modus ist keine allgemeine Freigabe nativer RAGFlow-Chats an alle
+Tenant-Mitglieder. Normale Nutzer verwenden die ACL-geprüfte Connector-Suche
+oder OpenWebUI. Wenn Search-Antworten unter der interaktiven Identität laufen,
+muss `SEARCH_RAGFLOW_API_KEY` denselben Wert wie
+`RAGFLOW_INTERACTIVE_API_KEY` erhalten. API-Keys bleiben ausschließlich in der
+Runtime-Umgebung; sie gehören weder in Git noch in generierte Artefakte.
 
 ## Sprache und Locale
 
@@ -121,6 +193,11 @@ existiert; der Connector schreibt den Wert als Valve in Tool und Pipe.
 - `REPARSE_ON_DATASET_SETTINGS_CHANGE=false`: bestehende Dokumente nach einer
   Admin-Änderung nicht stillschweigend vollständig neu verarbeiten.
 
+Die Variablen `REPARSE_ON_DATASET_SETTINGS_CHANGE` und
+`RAGFLOW_VALIDATE_CREATED_DATASET` bleiben als Kompatibilitätsvertrag ladbar;
+ein automatisches Reparse ist noch nicht aktiv und neu erstellte oder gebundene
+Datasets werden im aktuellen Provisioning-Pfad immer erneut gelesen.
+
 ## Delete-Policy
 
 Seafile ist immer die Quelle der Wahrheit. Der Connector löscht oder verändert
@@ -142,26 +219,92 @@ ARCHIVE_DATASET_WHEN_LIBRARY_DELETED=false
   aus Seafile erneut hochgeladen.
 - Externe Löschungen in OpenWebUI werden durch den OpenWebUI-Sync repariert:
   fehlende eigene Tools und Pipes werden neu erzeugt, statt Seafile zu ändern.
+- `ARCHIVE_DATASET_WHEN_LIBRARY_DELETED` ist derzeit reserviert. Unterstützt
+  sind Behalten oder Löschen; `connector doctor --effective` weist auf den
+  nicht aktiven Archivpfad hin.
 
-## Dashboard
+## Konfigurationsdiagnose
 
-Das Dashboard ist eine Weboberfläche für Status, Sync-Historie, Änderungen,
-Logs, Quellen/Ziele, technische Diagnose und kontrollierte Prüfläufe. Da das
-Projekt vorher keine Weboberfläche hatte, ist sie standardmäßig deaktiviert. Im
-laufenden `connector-controller` kann der Tab **Prüfablauf** die mit dem
-Seafile-API-Key sichtbaren Bibliotheken anzeigen und ausgewählte Bibliotheken
-für RAGFlow-Dataset-/Dokument-Sync sowie optional OpenWebUI-Chat-/Tool-/Pipe-
-Sync starten. Der Standalone-Befehl `connector dashboard` bleibt ein
-Status-Dashboard ohne Runtime-Controller und zeigt diese Steuerung als nicht
-verfügbar. Das UI wird vollständig aus dem Connector ausgeliefert und lädt
-keine CDN- oder Internet-Assets nach. Der Theme-Wechsel zwischen Dark und Light
-wird lokal im Browser gespeichert. Der Auto-Refresh ist im Dashboard zwischen
-aus, 5 Sekunden, 10 Sekunden und 1 Minute wählbar und wird ebenfalls lokal im
-Browser gespeichert. Die Sprachwahl ist sichtbar im Dashboard, nutzt Deutsch
-als Fallback und kann für englische Bedienung auf `English` gestellt werden.
+`connector check-config` bleibt der kurze Parser-/Validierungscheck. Für die
+vollständige, redigierte Konfigurationswahrheit steht zusätzlich bereit:
+
+```bash
+connector doctor --effective --json
+connector doctor --live --json
+```
+
+`--effective` listet kanonische Env-Namen, effektive Werte und den
+Implementierungsstatus jeder Option; Secret- und Connection-Werte werden
+redigiert. `--live` prüft zusätzlich Datenbank, Migrationsstand und Redis, ohne
+Seafile oder RAGFlow zu verändern. Die externen APIs bleiben Aufgabe von
+`connector check-live`.
+
+## Dashboard und Adminsteuerung
+
+Das Dashboard zeigt Status, Sync-Historie, Änderungen, Logs, Quellen/Ziele und
+technische Diagnose. Im laufenden `connector-controller` kommt der interaktive
+Bereich **Administration** hinzu. Dort können Administratoren Connector-Arbeit
+global und pro Seafile-Bibliothek steuern, Bibliotheken einzeln auswählen und
+Delta-, Voll- oder Reconcile-Läufe starten. Das UI wird vollständig aus dem
+Connector ausgeliefert und lädt keine CDN- oder Internet-Assets nach.
+
+Der eigenständige Befehl `connector dashboard` bekommt weder Orchestrator noch
+Job-Queue und bleibt deshalb eine lesende Statusansicht. Er ist kein Ersatz für
+die Controller-Route. Die Schaltflächen steuern ausschließlich Connector-
+Scheduler, Queue, Worker und Reconciler; sie starten oder stoppen keine Docker-
+Container und verwenden keine Portainer-Zugangsdaten.
+
+### Persistentes Zustandsmodell
+
+Globale und bibliotheksspezifische Operatorzustände werden in PostgreSQL
+gespeichert und gelten damit pro Deployment, nicht nur für einen Browser.
+`GET /api/workflow/control` liest den Gesamtzustand; die globalen POST-Aktionen
+unter `/api/workflow/control/{action}` haben folgende Semantik:
+
+| Aktion / resultierender Status | Wirkung |
+| --- | --- |
+| `start` / `running` | Aktiviert Automatik, gibt die Queue frei und plant sofort Discovery ein. |
+| `deactivate` / `deactivated` | Deaktiviert nur neue automatische Planung; manuelle, erlaubte Läufe und bereits eingeplante Arbeit bleiben möglich. |
+| `pause` / `paused` | Verhindert neue Claims. Ein laufender Job beendet die aktuelle sichere Einheit und kehrt danach wartend in die Queue zurück. |
+| `resume` / `running` oder `deactivated` | Gibt die Queue frei; die vorherige Automatikentscheidung bleibt erhalten. |
+| `stop` / `stopped` | Deaktiviert Automatik, pausiert die Queue und fordert kooperativen Abbruch aller aktiven Jobs an. Der Controller-Container bleibt aktiv. |
+
+Pro Bibliothek verwenden
+`/api/workflow/libraries/{repo_id}/{enable|disable|pause|resume}` die
+persistenten Statuswerte `active`, `disabled` und `paused`. `disabled` und
+`paused` filtern automatische Connector-/OpenWebUI-Arbeit und weisen manuelle
+Läufe für diese Bibliothek ab. Die Zustände sind ausdrücklich kein Seafile-
+Löschsignal: Die Bibliothek zählt weiter als vorhanden und löst keine RAGFlow-
+oder OpenWebUI-Bereinigung aus.
+
+Konkrete Läufe unterstützen unter `/api/workflow/runs/{run_id}` die Aktionen
+`pause`, `resume`, `stop`, das kompatible `cancel` und `retry`. Für Pause wird
+ein persistenter Hold gesetzt: Jobs in `queued` oder `retrying` sind nicht
+claimbar, laufende Jobs kehren am nächsten vorhandenen Checkpoint nach `queued`
+zurück. Resume löscht den Hold; Stop oder Cancel gewinnt gegenüber einer
+gleichzeitigen Pause. Bereits bestätigte Teilresultate und Cursor werden nicht
+zurückgesetzt.
+
+`stop` und das kompatible `cancel` sind terminale Eingriffe und verlangen beide
+im JSON-Body die ausdrückliche Bestätigung `{"confirm":"STOP"}`.
+
+Ein Lauf speichert seinen Status und Fortschritt unabhängig vom Browser. Die
+UI zeigt `phase`, phasenbezogene Zähler und Fortschritt pro Bibliothek. Parsing
+wird als `tracked`, `done`, `pending`, `failed` und `percent` ausgegeben. Der
+Lauf ergänzt `completed`, `total`, `percent`, `phases` und `libraries`; Jobs
+zeigen außerdem `pause_requested_at` und `cancel_requested_at`. Eine
+Prozentangabe wird nur aus bekannten Zählern abgeleitet; fehlende oder
+ungültige RAGFlow-Fortschrittswerte werden nicht geschätzt.
+
+Theme, Auto-Refresh und Sprachwahl bleiben reine Browser-Einstellungen. Der
+Theme-Wechsel zwischen Dark und Light und die Auto-Refresh-Auswahl zwischen
+aus, 5 Sekunden, 10 Sekunden und 1 Minute werden lokal gespeichert. Deutsch
+ist der Sprach-Fallback; `English` ist direkt in der Oberfläche auswählbar.
 
 ```env
 CONNECTOR_DASHBOARD_ENABLED=false
+CONNECTOR_DASHBOARD_CONTROL_ENABLED=false
+CONNECTOR_AUTOMATION_INITIAL_STATE=running
 CONNECTOR_DASHBOARD_HOST=0.0.0.0
 CONNECTOR_DASHBOARD_PORT=8080
 CONNECTOR_DASHBOARD_MAX_LOG_ENTRIES=5000
@@ -175,6 +318,17 @@ CONNECTOR_DASHBOARD_AUTH_PASSWORD=change-me-dashboard-password
 
 - `CONNECTOR_DASHBOARD_ENABLED`: aktiviert den HTTP-Server im Controller oder
   im expliziten `connector dashboard` Prozess.
+- `CONNECTOR_DASHBOARD_CONTROL_ENABLED`: aktiviert ausschließlich die
+  schreibende Adminsteuerung im Controller. Default ist `false`. `true` ist nur
+  gültig, wenn das Dashboard aktiviert und Basic-Auth-Benutzername sowie
+  -Passwort nicht leer sind. In `production` werden bekannte Beispielpasswörter
+  zusätzlich abgewiesen; vor dem Aktivieren ein zufällig erzeugtes Secret
+  setzen.
+- `CONNECTOR_AUTOMATION_INITIAL_STATE`: bestimmt ausschließlich beim ersten
+  Erzeugen des globalen Steuerzustands `running` oder `stopped`. Default
+  `running` bleibt rückwärtskompatibel. Für einen isolierten Erststart vor dem
+  ersten Stack-Start `stopped` setzen; persistierte Operatorentscheidungen
+  werden bei späteren Starts nicht überschrieben.
 - `CONNECTOR_DASHBOARD_HOST` und `CONNECTOR_DASHBOARD_PORT`: Bind-Adresse im
   Container oder lokalen Prozess.
 - `CONNECTOR_DASHBOARD_MAX_LOG_ENTRIES`: harte Obergrenze persistierter
@@ -190,9 +344,40 @@ CONNECTOR_DASHBOARD_AUTH_PASSWORD=change-me-dashboard-password
   Meldungen, Pfade und Debug-Felder.
 - `CONNECTOR_DASHBOARD_AUTH_USERNAME` und
   `CONNECTOR_DASHBOARD_AUTH_PASSWORD`: aktivieren HTTP Basic Auth für
-  Dashboard-Oberfläche, Status-API und Workflow-Steuerung. Beide Werte müssen
-  zusammen gesetzt werden. Die OpenWebUI-Proxy-POST-Endpunkte nutzen weiterhin
-  das separate `OPENWEBUI_PROXY_SHARED_SECRET`.
+  Dashboard-Oberfläche und Status-API. Beide Werte müssen zusammen gesetzt
+  werden. Schreibende Adminaktionen sind zusätzlich durch den separaten
+  Dashboard-Control-Schalter und Request-Schutz begrenzt. Die OpenWebUI-Proxy-
+  POST-Endpunkte nutzen weiterhin das separate
+  `OPENWEBUI_PROXY_SHARED_SECRET`.
+
+### Sicherheitsgrenze der Steuer-API
+
+Die lesende Oberfläche und die schreibende Steuer-API sind getrennte
+Fähigkeiten. Adminaktionen arbeiten fail closed, wenn der Control-Schalter aus
+ist oder die Basic-Auth-Anmeldung fehlschlägt. Jede Mutation benötigt
+`Content-Type: application/json` mit optionalem Charset und den Header
+`X-Connector-Admin-Action: 1`. Globaler Stop sowie Stop/Cancel eines Laufs
+benötigen im JSON zusätzlich `{"confirm":"STOP"}`. Basic Auth ersetzt keine
+Transportverschlüsselung: Bei LAN-
+oder Reverse-Proxy-Zugriff muss die Browserstrecke per HTTPS geschützt und auf
+Administratoren begrenzt werden. Eine öffentliche unverschlüsselte Freigabe ist
+kein unterstützter Betriebsweg.
+
+Der feste Admin-Action-Header bildet zusammen mit dem nicht einfachen JSON-
+Content-Type die CSRF-/Browser-Schreibgrenze; er ist weder Secret noch
+Authentifizierung und darf nicht als Ersatz für Basic Auth oder HTTPS behandelt
+werden. Reverse Proxies sollen ihn unverändert nur an die Controller-Route
+weitergeben und keine permissive CORS-Regel für die Admin-API ergänzen.
+
+`/livez`, `/readyz` und `/metrics` sind Orchestrator-/Monitoring-Proben und
+gehören nicht zur Adminsteuerung. Interne Authz- und OpenWebUI-Proxy-Endpunkte
+behalten ihre eigenen Secrets; Dashboard-Basic-Auth oder der UI-Schutzheader
+dürfen dafür nicht wiederverwendet werden.
+
+Jede angenommene Adminaktion wird mit Basic-Auth-Benutzer, Aktion, Ziel,
+Vorher-/Nachher-Zustand und Ergebnis in der persistenten Änderungs-/Audit-
+Historie (`/api/changes`) auditiert. Passwort, Headerwert und andere Secrets
+werden dabei nicht gespeichert.
 
 Sensible Felder wie Tokens, API-Keys, Passwörter und Secrets werden maskiert.
 Das Dashboard bietet keine Downloads von synchronisierten Dateien. Workflow-
@@ -208,9 +393,8 @@ enthält keine Seafile-/RAGFlow-Dateiinhalte.
 Der Health-Endpunkt `/api/health` liefert begrenzte Statusdaten für Dashboard,
 Datenbank, Redis, Seafile-Admin-API, RAGFlow-API und Sync-Job-Zustand. Externe
 Checks nutzen kurze Timeouts, damit ein nicht erreichbarer Dienst die
-Weboberfläche nicht blockiert. Für lokal gebundene Testumgebungen können die
-Auth-Werte leer bleiben; bei LAN- oder Reverse-Proxy-Zugriff sollten
-Benutzername und Passwort gesetzt sein.
+Weboberfläche nicht blockiert. Ohne Auth-Werte darf nur ein lokal gebundener,
+lesender Diagnosebetrieb verwendet werden; schreibende Steuerung bleibt aus.
 
 ## OpenWebUI
 

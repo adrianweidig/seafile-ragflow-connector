@@ -1,0 +1,42 @@
+# State-Profil: vorhandene PostgreSQL- und Redis-Dienste verwenden.
+#
+# DATABASE_URL und REDIS_URL müssen aus allen Connector-Containern erreichbar
+# sein. Die gebündelten State-Dienste bleiben in der zusammengeführten
+# Compose-Datei nur hinter einem nicht aktivierten Profil definiert und werden
+# daher nicht gestartet.
+
+services:
+  connector-postgres:
+    profiles: [bundled-state]
+
+  connector-redis:
+    profiles: [bundled-state]
+
+  connector-controller:
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL for external state}
+      REDIS_URL: ${REDIS_URL:?set REDIS_URL for external state}
+    depends_on:
+      connector-postgres:
+        condition: service_healthy
+        required: false
+      connector-redis:
+        condition: service_healthy
+        required: false
+  connector-worker:
+    depends_on:
+      connector-postgres:
+        condition: service_healthy
+        required: false
+      connector-redis:
+        condition: service_healthy
+        required: false
+
+  connector-reconciler:
+    depends_on:
+      connector-postgres:
+        condition: service_healthy
+        required: false
+      connector-redis:
+        condition: service_healthy
+        required: false
