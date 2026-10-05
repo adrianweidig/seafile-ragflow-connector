@@ -40,7 +40,7 @@ dependencies = [
   "pypdfium2>=4.30",
   "python-multipart>=0.0.32",
   "redis>=5.0",
-  "sqlalchemy>=2.0.50",
+  "sqlalchemy>=2.0.51",
   "structlog>=26.1.0",
   "typer>=0.26.7",
 ]
