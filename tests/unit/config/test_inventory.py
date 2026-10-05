@@ -38,12 +38,18 @@ def test_inventory_redacts_secrets_and_exposes_canonical_env_names() -> None:
 
 
 def test_inventory_marks_configured_compatibility_options_honestly() -> None:
-    settings = _settings(upload_workers=4, max_file_size_mb=32)
+    settings = _settings(
+        upload_workers=4,
+        max_file_size_mb=32,
+        seafile_sync_user_email="sync@auth.local",
+        seafile_sync_user_auto_share_enabled=True,
+    )
 
     limited = configured_limited_settings(settings)
     by_field = {entry["field"]: entry for entry in limited}
 
     assert by_field["upload_workers"]["status"] == "reserved"
+    assert "seafile_sync_user_email" not in by_field
     assert "max_file_size_mb" not in by_field
     summary = settings_inventory_summary(settings_inventory(settings))
     assert summary["active"] > summary["reserved"]

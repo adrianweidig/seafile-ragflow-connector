@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from seafile_ragflow_connector.clients import OpenWebUIClient, RAGFlowClient
-from seafile_ragflow_connector.domain.naming import build_dataset_name
+from seafile_ragflow_connector.domain.naming import build_dataset_name, slugify
 from seafile_ragflow_connector.openwebui.artifacts import (
     DatasetArtifactInputs,
     build_pipe_id,
@@ -16,6 +16,7 @@ from seafile_ragflow_connector.openwebui.artifacts import (
 )
 from seafile_ragflow_connector.openwebui.sync import _chat_name, _is_connector_owned
 from seafile_ragflow_connector.persistence.models.library import Library
+from seafile_ragflow_connector.utils.hashing import sha256_text
 
 CONNECTOR_DATASET_PREFIXES = ("RAG_", "seafile__")
 
@@ -24,6 +25,8 @@ CONNECTOR_DATASET_PREFIXES = ("RAG_", "seafile__")
 class CleanupPlan:
     ragflow_dataset_ids: list[str] = field(default_factory=list)
     ragflow_chat_ids: list[str] = field(default_factory=list)
+    ragflow_primary_chat_ids: list[str] = field(default_factory=list, repr=False)
+    ragflow_interactive_chat_ids: list[str] = field(default_factory=list, repr=False)
     openwebui_tool_ids: list[str] = field(default_factory=list)
     openwebui_function_ids: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -52,11 +55,13 @@ class TargetCleanupService:
         *,
         session_factory: sessionmaker[Session],
         ragflow_client: RAGFlowClient,
+        ragflow_chat_client: RAGFlowClient | None = None,
         openwebui_client: OpenWebUIClient | None = None,
         openwebui_namespace: str = "ragflow",
     ) -> None:
         self.session_factory = session_factory
         self.ragflow_client = ragflow_client
+        self.ragflow_chat_client = ragflow_chat_client or ragflow_client
         self.openwebui_client = openwebui_client
         self.openwebui_namespace = openwebui_namespace
 
@@ -79,12 +84,52 @@ class TargetCleanupService:
             expected_dataset_names,
             expected_dataset_ids_by_name,
         )
-        connector_dataset_ids = _connector_dataset_ids(ragflow_datasets)
-        ragflow_chat_ids = self._orphan_ragflow_chat_ids(
-            expected_dataset_ids,
-            expected_chat_names,
-            connector_dataset_ids,
+        current_chat_names, legacy_chat_names = _connector_chat_names_by_dataset_id(
+            ragflow_datasets,
+            namespace=self.openwebui_namespace,
         )
+        primary_chats = self.ragflow_client.list_chats()
+        if self.ragflow_chat_client is self.ragflow_client:
+            ragflow_primary_chat_ids = _deduplicate(
+                [
+                    *self._orphan_ragflow_chat_ids(
+                        primary_chats,
+                        expected_dataset_ids,
+                        expected_chat_names,
+                        current_chat_names,
+                    ),
+                    *self._orphan_ragflow_chat_ids(
+                        primary_chats,
+                        expected_dataset_ids,
+                        expected_chat_names,
+                        legacy_chat_names,
+                    ),
+                ]
+            )
+            ragflow_interactive_chat_ids: list[str] = []
+        else:
+            ragflow_primary_chat_ids = self._orphan_ragflow_chat_ids(
+                primary_chats,
+                expected_dataset_ids,
+                expected_chat_names,
+                legacy_chat_names,
+            )
+            ragflow_interactive_chat_ids = self._orphan_ragflow_chat_ids(
+                self.ragflow_chat_client.list_chats(),
+                expected_dataset_ids,
+                expected_chat_names,
+                current_chat_names,
+            )
+            interactive_chat_ids = set(ragflow_interactive_chat_ids)
+            ragflow_primary_chat_ids = [
+                chat_id
+                for chat_id in ragflow_primary_chat_ids
+                if chat_id not in interactive_chat_ids
+            ]
+        ragflow_chat_ids = [
+            *ragflow_primary_chat_ids,
+            *ragflow_interactive_chat_ids,
+        ]
         openwebui_tool_ids: list[str] = []
         openwebui_function_ids: list[str] = []
         warnings: list[str] = []
@@ -98,6 +143,8 @@ class TargetCleanupService:
         return CleanupPlan(
             ragflow_dataset_ids=ragflow_dataset_ids,
             ragflow_chat_ids=ragflow_chat_ids,
+            ragflow_primary_chat_ids=ragflow_primary_chat_ids,
+            ragflow_interactive_chat_ids=ragflow_interactive_chat_ids,
             openwebui_tool_ids=openwebui_tool_ids,
             openwebui_function_ids=openwebui_function_ids,
             warnings=warnings,
@@ -133,9 +180,12 @@ class TargetCleanupService:
             ragflow_datasets_deleted = len(plan.ragflow_dataset_ids)
 
         ragflow_chats_deleted = 0
-        if plan.ragflow_chat_ids:
-            self.ragflow_client.delete_chats(plan.ragflow_chat_ids)
-            ragflow_chats_deleted = len(plan.ragflow_chat_ids)
+        if plan.ragflow_primary_chat_ids:
+            self.ragflow_client.delete_chats(plan.ragflow_primary_chat_ids)
+            ragflow_chats_deleted += len(plan.ragflow_primary_chat_ids)
+        if plan.ragflow_interactive_chat_ids:
+            self.ragflow_chat_client.delete_chats(plan.ragflow_interactive_chat_ids)
+            ragflow_chats_deleted += len(plan.ragflow_interactive_chat_ids)
 
         openwebui_tools_deleted = 0
         openwebui_functions_deleted = 0
@@ -237,29 +287,30 @@ class TargetCleanupService:
 
     def _orphan_ragflow_chat_ids(
         self,
+        ragflow_chats: list[dict[str, Any]],
         expected_dataset_ids: set[str],
         expected_chat_names: set[str],
-        connector_dataset_ids: set[str],
+        connector_chat_names_by_dataset_id: dict[str, str],
     ) -> list[str]:
         orphan_ids: list[str] = []
-        legacy_chat_prefix = f"owui__{self.openwebui_namespace}__"
-        for chat in self.ragflow_client.list_chats():
+        for chat in ragflow_chats:
             chat_id = _string_or_none(chat.get("id"))
             chat_name = _string_or_none(chat.get("name"))
             if not chat_id or not chat_name:
                 continue
             chat_dataset_ids = _chat_dataset_ids(chat)
-            is_legacy_connector_chat = chat_name.startswith(legacy_chat_prefix)
-            is_rag_connector_chat = chat_name.startswith("RAG_") and bool(
-                chat_dataset_ids.intersection(connector_dataset_ids)
-            )
-            if not (is_legacy_connector_chat or is_rag_connector_chat):
+            proven_dataset_ids = {
+                dataset_id
+                for dataset_id in chat_dataset_ids
+                if connector_chat_names_by_dataset_id.get(dataset_id) == chat_name
+            }
+            if not proven_dataset_ids:
                 continue
-            if chat_name not in expected_chat_names or not chat_dataset_ids.intersection(
+            if chat_name not in expected_chat_names or not proven_dataset_ids.intersection(
                 expected_dataset_ids
             ):
                 orphan_ids.append(chat_id)
-        return orphan_ids
+        return _deduplicate(orphan_ids)
 
     def _orphan_openwebui_tool_ids(self, expected_tool_ids: set[str]) -> list[str]:
         if self.openwebui_client is None:
@@ -301,14 +352,43 @@ def _is_connector_dataset_name(name: str) -> bool:
     return any(name.startswith(prefix) for prefix in CONNECTOR_DATASET_PREFIXES)
 
 
-def _connector_dataset_ids(ragflow_datasets: list[dict[str, Any]]) -> set[str]:
-    result: set[str] = set()
+def _connector_chat_names_by_dataset_id(
+    ragflow_datasets: list[dict[str, Any]],
+    *,
+    namespace: str,
+) -> tuple[dict[str, str], dict[str, str]]:
+    current_names: dict[str, str] = {}
+    legacy_names: dict[str, str] = {}
+    ambiguous_ids: set[str] = set()
     for dataset in ragflow_datasets:
         dataset_id = _string_or_none(dataset.get("id"))
         dataset_name = _string_or_none(dataset.get("name"))
-        if dataset_id and dataset_name and _is_connector_dataset_name(dataset_name):
-            result.add(dataset_id)
-    return result
+        if not dataset_id or not dataset_name or not _is_connector_dataset_name(dataset_name):
+            continue
+        current_name = _chat_name(namespace, dataset_name, dataset_id)
+        legacy_name = _legacy_chat_name(namespace, dataset_name, dataset_id)
+        if dataset_id in ambiguous_ids:
+            continue
+        if dataset_id in current_names and (
+            current_names[dataset_id] != current_name
+            or legacy_names[dataset_id] != legacy_name
+        ):
+            current_names.pop(dataset_id)
+            legacy_names.pop(dataset_id)
+            ambiguous_ids.add(dataset_id)
+            continue
+        current_names[dataset_id] = current_name
+        legacy_names[dataset_id] = legacy_name
+    return current_names, legacy_names
+
+
+def _legacy_chat_name(namespace: str, dataset_name: str, dataset_id: str) -> str:
+    slug = slugify(dataset_name, fallback="dataset").replace("-", "_")
+    return f"owui__{namespace}__{slug}__{sha256_text(dataset_id)[:8]}"
+
+
+def _deduplicate(values: Sequence[str]) -> list[str]:
+    return list(dict.fromkeys(values))
 
 
 def _chat_dataset_ids(chat: dict[str, Any]) -> set[str]:

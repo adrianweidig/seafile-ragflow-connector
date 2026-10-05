@@ -49,7 +49,6 @@
       "notes": {
         "acl_subfolders": "Unterordnerberechtigungen werden derzeit nicht separat ausgewertet.",
         "acl_share_links": "Freigabelinks werden derzeit nicht in den ACL-Snapshot aufgenommen.",
-        "sync_user_email": "Dokumentativer Hinweis; für den Zugriff ist das Sync-Token maßgeblich.",
         "validate_dataset": "Erstellte und gebundene Datasets werden im aktuellen Pfad immer gelesen.",
         "preserve_filename": "Quellpfad und Originalname werden derzeit immer als Metadaten erhalten.",
         "reparse": "Geänderte Dataset-Einstellungen lösen noch kein automatisches Reparse aus.",

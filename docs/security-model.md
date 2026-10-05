@@ -91,6 +91,29 @@ personenbezogene Berechtigung. Beide Entscheidungen sind absichtlich
 fail-closed: Ohne eindeutige personenbezogene Bibliotheksberechtigung gibt es
 keine RAGFlow-Abfrage.
 
+### Optionale technische Nur-Lese-Freigabe
+
+`SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED` ist standardmäßig `false`. Im Opt-in-
+Betrieb muss `SEAFILE_SYNC_USER_EMAIL` gesetzt sein und exakt zur kanonischen
+Identität des `SEAFILE_SYNC_USER_TOKEN` passen. Der Connector verifiziert dies
+über `GET /api2/account/info/`, bevor er eine Freigabe erwägt.
+
+Der Schalter wirkt retroaktiv auf den sichtbaren ausführbaren Bestand: Der
+erste automatische Discovery-Zyklus prüft alle bereits vorhandenen geeigneten
+und ausführbaren Bibliotheken, nicht nur künftig neu angelegte. Somit können
+bei der ersten Aktivierung mehrere technische Freigaben entstehen.
+Deaktivierte oder pausierte Bibliotheken werden dabei nicht automatisch
+freigegeben und erst nach erneuter Aktivierung geprüft.
+
+Nur ein HTTP 403 beim Root-Probe der konkreten Bibliothek darf einen
+`POST /api/v2.1/admin/shares/` mit `share_type=user`, `path=/` und
+`permission=r` auslösen. Erfolg wird weder aus HTTP 200 noch aus dem
+POST-Payload abgeleitet: Ein erneutes GET der direkten User-Shares und ein
+zweiter Root-Probe sind Pflicht. Bestehende `r`- oder `rw`-Freigaben bleiben
+unverändert. Verschlüsselte und virtuelle Bibliotheken werden niemals durch
+diesen Pfad freigegeben; automatische Rücknahme oder Berechtigungs-Downgrade
+gibt es nicht.
+
 ## Zentrale Authz-API
 
 Die interne Authz-API wird vom Connector-Core bereitgestellt:

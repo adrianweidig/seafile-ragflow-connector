@@ -49,7 +49,6 @@
       "notes": {
         "acl_subfolders": "Subfolder permissions are not evaluated separately yet.",
         "acl_share_links": "Share links are not included in the ACL snapshot yet.",
-        "sync_user_email": "Informational only; the sync token controls access.",
         "validate_dataset": "Created and bound datasets are always read in the current path.",
         "preserve_filename": "Source path and original name are currently always retained as metadata.",
         "reparse": "Changed dataset settings do not trigger an automatic reparse yet.",

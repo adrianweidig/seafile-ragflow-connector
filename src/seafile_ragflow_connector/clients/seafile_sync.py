@@ -38,6 +38,7 @@ class SeafileSyncClient:
         if max_download_bytes is not None and max_download_bytes <= 0:
             raise ValueError("max_download_bytes must be positive")
         self.max_download_bytes = max_download_bytes
+        self._verified_account_email: str | None = None
         trusted_origins = {_http_origin(self.base_url)}
         trusted_origins.update(_http_origin(value) for value in allowed_download_origins)
         if self.rewrite_download_urls and self.rewrite_to:
@@ -56,6 +57,31 @@ class SeafileSyncClient:
     def list_dir(self, repo_id: str, path: str = "/") -> list[dict[str, Any]]:
         data = unwrap_response(self._client.get(f"/api2/repos/{repo_id}/dir/", params={"p": path}))
         return list(data or [])
+
+    def require_account_identity(self, expected_email: str) -> str:
+        expected = expected_email.strip()
+        if not expected:
+            raise ValueError("expected Seafile sync-user email must not be empty")
+        if self._verified_account_email is None:
+            data = unwrap_response(self._client.get("/api2/account/info/"))
+            if not isinstance(data, dict):
+                raise TypeError("unexpected Seafile account-info response")
+            raw_email = data.get("email")
+            if not isinstance(raw_email, str) or not raw_email.strip():
+                raise RuntimeError("Seafile sync token account has no canonical email")
+            actual = raw_email.strip()
+            if actual.casefold() != expected.casefold():
+                raise RuntimeError(
+                    "Seafile sync token identity does not match "
+                    "SEAFILE_SYNC_USER_EMAIL"
+                )
+            self._verified_account_email = actual
+        elif self._verified_account_email.casefold() != expected.casefold():
+            raise RuntimeError(
+                "cached Seafile sync token identity does not match "
+                "SEAFILE_SYNC_USER_EMAIL"
+            )
+        return self._verified_account_email
 
     def list_dir_at_commit(
         self,

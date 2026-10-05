@@ -446,6 +446,7 @@ def annotate_answer_citations(
 
     by_provider_id: dict[int, dict[str, Any]] = {}
     by_current_id: dict[int, dict[str, Any]] = {}
+    linked_sources: set[str] = set()
     for index, source in enumerate(sources):
         metadata = _source_metadata(source)
         provider_id = _int_or_none(metadata.get("provider_citation_id"))
@@ -469,6 +470,10 @@ def annotate_answer_citations(
         )
         url = source.get("url") or source.get("preview_url")
         if url:
+            source_key = label
+            if source_key in linked_sources:
+                return f"[{label}]"
+            linked_sources.add(source_key)
             return f"[{label}]({url})"
         return f"[{label}]"
 
