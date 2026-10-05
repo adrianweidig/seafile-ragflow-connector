@@ -16,15 +16,33 @@ class PeriodicTask:
 
 
 class SimpleScheduler:
-    def __init__(self, tasks: list[PeriodicTask], *, sleep_seconds: int = 5) -> None:
+    def __init__(
+        self,
+        tasks: list[PeriodicTask],
+        *,
+        sleep_seconds: int = 5,
+        enabled: Callable[[], bool] | None = None,
+    ) -> None:
         self.tasks = tasks
         self.sleep_seconds = sleep_seconds
+        self.enabled = enabled
         self.log = structlog.get_logger(__name__)
 
     def run_forever(self) -> None:
         last_runs = {task.name: task.last_run_monotonic for task in self.tasks}
         while True:
             now = time.monotonic()
+            try:
+                enabled = self.enabled is None or self.enabled()
+            except Exception as exc:
+                self.log.warning(
+                    "scheduler.enabled_check_failed",
+                    error_class=type(exc).__name__,
+                )
+                enabled = False
+            if not enabled:
+                time.sleep(self.sleep_seconds)
+                continue
             for task in self.tasks:
                 if now - last_runs[task.name] >= task.interval_seconds:
                     try:

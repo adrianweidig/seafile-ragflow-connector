@@ -34,7 +34,7 @@ def upgrade() -> None:
         sa.Column("objects_skipped", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("errors_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("warnings_count", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("details", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
+        sa.Column("details", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -70,7 +70,7 @@ def upgrade() -> None:
         sa.Column("error_message", sa.Text(), nullable=True),
         sa.Column("source_system", sa.Text(), nullable=False, server_default="seafile"),
         sa.Column("target_system", sa.Text(), nullable=False, server_default="ragflow"),
-        sa.Column("details", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
+        sa.Column("details", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -97,7 +97,7 @@ def upgrade() -> None:
         sa.Column("component", sa.Text(), nullable=True),
         sa.Column("message", sa.Text(), nullable=False),
         sa.Column("sync_id", sa.Text(), nullable=True),
-        sa.Column("details", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
+        sa.Column("details", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

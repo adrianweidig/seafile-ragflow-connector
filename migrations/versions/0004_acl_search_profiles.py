@@ -19,7 +19,12 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "library_acl_subjects",
-        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            primary_key=True,
+            autoincrement=True,
+        ),
         sa.Column(
             "repo_id",
             sa.Text(),
@@ -61,7 +66,12 @@ def upgrade() -> None:
 
     op.create_table(
         "library_acl_effective_users",
-        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            primary_key=True,
+            autoincrement=True,
+        ),
         sa.Column(
             "repo_id",
             sa.Text(),
@@ -70,7 +80,7 @@ def upgrade() -> None:
         ),
         sa.Column("user_email", sa.Text(), nullable=False),
         sa.Column("permission", sa.Text(), nullable=False),
-        sa.Column("sources", sa.JSON(), nullable=False, server_default=sa.text("'[]'::json")),
+        sa.Column("sources", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column(
             "created_at",
@@ -99,7 +109,12 @@ def upgrade() -> None:
 
     op.create_table(
         "search_profiles",
-        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            primary_key=True,
+            autoincrement=True,
+        ),
         sa.Column(
             "repo_id",
             sa.Text(),

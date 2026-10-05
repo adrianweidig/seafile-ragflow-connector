@@ -1,0 +1,27 @@
+# Swarm-State-Profil: vorhandene PostgreSQL- und Redis-Dienste verwenden.
+# Die Basisdefinitionen bleiben für gemeinsame Deployments erhalten, werden in
+# diesem Profil aber auf null Replikate skaliert.
+
+services:
+  connector-postgres:
+    deploy:
+      replicas: 0
+
+  connector-redis:
+    deploy:
+      replicas: 0
+
+  connector-controller:
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL for external state}
+      REDIS_URL: ${REDIS_URL:?set REDIS_URL for external state}
+
+  connector-worker:
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL for external state}
+      REDIS_URL: ${REDIS_URL:?set REDIS_URL for external state}
+
+  connector-reconciler:
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL for external state}
+      REDIS_URL: ${REDIS_URL:?set REDIS_URL for external state}

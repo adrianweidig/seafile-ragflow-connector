@@ -1,0 +1,6 @@
+# Swarm-State-Profil: PostgreSQL und Redis im Connector-Stack.
+
+services:
+  connector-postgres:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD for bundled state}

@@ -4,6 +4,7 @@ import base64
 import hmac
 import json
 import re
+import time
 import zlib
 from dataclasses import dataclass, field, replace
 from hashlib import sha256
@@ -15,7 +16,9 @@ from urllib.parse import quote
 
 from seafile_ragflow_connector.i18n import Localizer, localizer_for
 from seafile_ragflow_connector.sources.evidence import (
+    SOURCE_DTO_VERSION,
     build_text_fragment_url,
+    user_facing_document_name,
 )
 from seafile_ragflow_connector.sources.evidence import (
     locator_quality as shared_locator_quality,
@@ -41,6 +44,12 @@ _EXACT_QUERY_TOKEN_RE = re.compile(
 )
 _PREVIEW_SNIPPET_MAX_CHARS = 120
 _SOURCE_SNIPPET_MAX_CHARS = 420
+PREVIEW_TOKEN_TTL_SECONDS = 15 * 60
+PREVIEW_TOKEN_VERSION = 1
+SOURCE_PREVIEW_PURPOSE = "source_preview"
+DOCUMENT_VIEWER_PURPOSE = "document_viewer"
+OPENWEBUI_PREVIEW_AUDIENCE = "openwebui_proxy"
+SEARCH_PREVIEW_AUDIENCE = "search_service"
 _TEXT_PROJECTION_WRAPPER_RE = re.compile(
     r"(?is)^\s*Source path:.*?----- BEGIN SOURCE CONTENT -----\s*(?P<content>.*?)"
     r"\s*----- END SOURCE CONTENT -----\s*$"
@@ -87,6 +96,8 @@ class SourceHit:
     claim_ids: tuple[str, ...] = ()
     support_status: str = "not_evaluated"
     language: str = "de"
+    source_dto_version: str = SOURCE_DTO_VERSION
+    status: str = "available"
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -118,6 +129,8 @@ class SourceHit:
 
     def metadata(self) -> dict[str, Any]:
         values = {
+            "source_dto_version": self.source_dto_version,
+            "status": self.status,
             "rank": self.rank,
             "source_id": self.source_id or f"S{self.rank}",
             "dataset_id": self.dataset_id,
@@ -178,6 +191,8 @@ class SourceHit:
         if location and location != self.l10n.text("sources.missing_location"):
             citation_title = f"{title} · {location}"
         return {
+            "source_dto_version": self.source_dto_version,
+            "status": self.status,
             "name": title,
             "source_id": self.source_id or f"S{self.rank}",
             "document": [self.snippet or title],
@@ -431,6 +446,7 @@ def annotate_answer_citations(
 
     by_provider_id: dict[int, dict[str, Any]] = {}
     by_current_id: dict[int, dict[str, Any]] = {}
+    linked_sources: set[str] = set()
     for index, source in enumerate(sources):
         metadata = _source_metadata(source)
         provider_id = _int_or_none(metadata.get("provider_citation_id"))
@@ -454,6 +470,10 @@ def annotate_answer_citations(
         )
         url = source.get("url") or source.get("preview_url")
         if url:
+            source_key = label
+            if source_key in linked_sources:
+                return f"[{label}]"
+            linked_sources.add(source_key)
             return f"[{label}]({url})"
         return f"[{label}]"
 
@@ -964,6 +984,12 @@ def _source_hit_from_event(source: dict[str, Any], *, index: int) -> SourceHit:
             or "not_evaluated"
         ),
         language="de",
+        source_dto_version=str(
+            source.get("source_dto_version")
+            or metadata.get("source_dto_version")
+            or SOURCE_DTO_VERSION
+        ),
+        status=str(source.get("status") or metadata.get("status") or "available"),
         raw=dict(source),
     )
 
@@ -1171,15 +1197,44 @@ def _locator_quality_score(value: str) -> float:
     }.get(str(value or "unknown"), 0.2)
 
 
-def sign_preview_payload(payload: dict[str, Any], secret: str, *, now: int | None = None) -> str:
+def sign_preview_payload(
+    payload: dict[str, Any],
+    secret: str,
+    *,
+    now: int | None = None,
+    ttl_seconds: int = PREVIEW_TOKEN_TTL_SECONDS,
+    purpose: str = SOURCE_PREVIEW_PURPOSE,
+    audience: str = OPENWEBUI_PREVIEW_AUDIENCE,
+) -> str:
+    if ttl_seconds <= 0:
+        raise ValueError("preview token ttl must be positive")
+    if not purpose or not audience:
+        raise ValueError("preview token purpose and audience are required")
+    issued_at = int(time.time()) if now is None else int(now)
     body = dict(payload)
+    body.update(
+        {
+            "v": PREVIEW_TOKEN_VERSION,
+            "iat": issued_at,
+            "exp": issued_at + ttl_seconds,
+            "purpose": purpose,
+            "aud": audience,
+        }
+    )
     raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     encoded = "z" + _b64encode(zlib.compress(raw, level=9))
     signature = hmac.new(secret.encode("utf-8"), encoded.encode("ascii"), sha256).digest()
     return f"{encoded}.{_b64encode(signature)}"
 
 
-def verify_preview_token(token: str, secret: str, *, now: int | None = None) -> dict[str, Any]:
+def verify_preview_token(
+    token: str,
+    secret: str,
+    *,
+    now: int | None = None,
+    expected_purpose: str = SOURCE_PREVIEW_PURPOSE,
+    expected_audience: str = OPENWEBUI_PREVIEW_AUDIENCE,
+) -> dict[str, Any]:
     try:
         encoded, signature = token.split(".", 1)
     except ValueError as exc:
@@ -1199,7 +1254,28 @@ def verify_preview_token(token: str, secret: str, *, now: int | None = None) -> 
     payload = json.loads(raw_payload)
     if not isinstance(payload, dict):
         raise ValueError("invalid preview token payload")
+    version = _preview_token_int_claim(payload, "v")
+    issued_at = _preview_token_int_claim(payload, "iat")
+    expires_at = _preview_token_int_claim(payload, "exp")
+    current_time = int(time.time()) if now is None else int(now)
+    if version != PREVIEW_TOKEN_VERSION:
+        raise ValueError("unsupported preview token version")
+    if issued_at > current_time:
+        raise ValueError("preview token issued in the future")
+    if expires_at <= issued_at or current_time >= expires_at:
+        raise ValueError("preview token expired")
+    if payload.get("purpose") != expected_purpose:
+        raise ValueError("invalid preview token purpose")
+    if payload.get("aud") != expected_audience:
+        raise ValueError("invalid preview token audience")
     return payload
+
+
+def _preview_token_int_claim(payload: dict[str, Any], name: str) -> int:
+    value = payload.get(name)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"invalid preview token {name}")
+    return value
 
 
 def _normalize_reference(
@@ -1244,6 +1320,8 @@ def _normalize_reference(
     if file_row:
         document_name = _safe_document_name_from_file_row(file_row) or document_name
     source_path = _source_path(raw, file_row)
+    if document_name or source_path:
+        document_name = user_facing_document_name(document_name, source_path)
     repo_id = _repo_id(raw, file_row)
     file_id = _first_text(raw, "file_id", "seafile_file_id", "seafile_obj_id", "obj_id")
     seafile_library_name = _first_text(raw, "seafile_library_name", "library_name")
@@ -1344,6 +1422,8 @@ def _normalize_reference(
         citation_label=citation_label,
         provider_citation_id=provider_citation_id,
         language=l10n.language,
+        source_dto_version=str(raw.get("source_dto_version") or SOURCE_DTO_VERSION),
+        status=str(raw.get("status") or "available"),
         raw=raw,
     )
 
@@ -1416,7 +1496,12 @@ def _preview_url(
             "file_type": file_type,
             "mime_type": mime_type,
         }
-        token = sign_preview_payload(payload, settings.openwebui_proxy_shared_secret)
+        token = sign_preview_payload(
+            payload,
+            settings.openwebui_proxy_shared_secret,
+            purpose=SOURCE_PREVIEW_PURPOSE,
+            audience=OPENWEBUI_PREVIEW_AUDIENCE,
+        )
         base_url = settings.openwebui_proxy_public_base_url
         return f"{base_url}/api/openwebui/sources/preview?token={quote(token)}"
     return None

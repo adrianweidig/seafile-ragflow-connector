@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ipaddress
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -47,6 +49,8 @@ class Settings(BaseSettings):
     connector_ca_bundle: str | None = None
 
     connector_dashboard_enabled: bool = False
+    connector_dashboard_control_enabled: bool = False
+    connector_automation_initial_state: Literal["running", "stopped"] = "running"
     connector_dashboard_host: str = "0.0.0.0"  # nosec B104
     connector_dashboard_port: int = 8080
     connector_dashboard_max_log_entries: int = 5000
@@ -77,6 +81,7 @@ class Settings(BaseSettings):
     seafile_admin_token: str
     seafile_sync_user_token: str
     seafile_sync_user_email: str | None = None
+    seafile_sync_user_auto_share_enabled: bool = False
     seafile_skip_encrypted_libraries: bool = True
     seafile_skip_virtual_repos: bool = True
     seafile_verify_ssl: bool = True
@@ -84,6 +89,10 @@ class Settings(BaseSettings):
     seafile_rewrite_download_urls: bool = False
     seafile_download_rewrite_from: str | None = None
     seafile_download_rewrite_to: str | None = None
+    seafile_download_allowed_origins_csv: str = Field(
+        default="",
+        validation_alias="SEAFILE_DOWNLOAD_ALLOWED_ORIGINS",
+    )
     seafile_public_base_url: str | None = Field(
         default=None,
         validation_alias="SEAFILE_PUBLIC_BASE_URL",
@@ -96,9 +105,13 @@ class Settings(BaseSettings):
     ragflow_base_url: str
     ragflow_internal_url: str | None = None
     ragflow_api_key: str
+    ragflow_interactive_api_key: str | None = None
+    ragflow_interactive_owner_id: str | None = None
+    ragflow_interactive_chat_model_id: str | None = None
     ragflow_template_dataset_name: str = "connector_template"
     ragflow_template_auto_create: bool = True
     ragflow_template_required: bool = True
+    ragflow_generated_dataset_permission: Literal["me", "team"] = "me"
     ragflow_template_chat_name: str = "connector_template_chat"
     ragflow_search_template_enabled: bool = True
     ragflow_search_template_name: str = "search_template"
@@ -118,6 +131,10 @@ class Settings(BaseSettings):
     search_answer_llm_temperature: float = 0.2
     search_document_viewer_enabled: bool = True
     search_document_viewer_max_mb: int = 100
+    search_document_viewer_timeout_seconds: int = 30
+    search_document_viewer_max_concurrency: int = 4
+    search_pdf_render_max_concurrency: int = 2
+    search_pdf_render_max_mb: int = 25
     search_ragflow_template_source_order_csv: str = Field(
         default="search_app,chat,builtin",
         validation_alias="SEARCH_RAGFLOW_TEMPLATE_SOURCE_ORDER",
@@ -247,6 +264,9 @@ class Settings(BaseSettings):
     job_max_attempts: int = 5
     job_retry_base_seconds: int = 30
     job_retry_max_seconds: int = 3600
+    job_lease_seconds: int = 900
+    job_heartbeat_seconds: int = 60
+    job_history_retention_days: int = 30
 
     cache_dir: Path = Path("/cache")
     temp_dir: Path = Path("/cache/tmp")
@@ -255,8 +275,10 @@ class Settings(BaseSettings):
 
     @field_validator(
         "seafile_base_url",
+        "seafile_internal_url",
         "seafile_public_base_url",
         "ragflow_base_url",
+        "ragflow_internal_url",
         "ragflow_public_base_url",
         "search_answer_llm_base_url",
         "openwebui_base_url",
@@ -267,7 +289,14 @@ class Settings(BaseSettings):
     )
     @classmethod
     def strip_url(cls, value: str | None) -> str | None:
-        return value.rstrip("/") if value else value
+        return value.strip().rstrip("/") if value else value
+
+    @field_validator("seafile_internal_url", "ragflow_internal_url", mode="before")
+    @classmethod
+    def blank_internal_url_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @field_validator("ragflow_search_template_name")
     @classmethod
@@ -288,6 +317,14 @@ class Settings(BaseSettings):
             return None
         stripped = value.strip()
         return stripped or None
+
+    @field_validator("seafile_sync_user_email", mode="before")
+    @classmethod
+    def strip_seafile_sync_user_email(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
 
     @field_validator(
         "connector_ca_bundle",
@@ -314,6 +351,7 @@ class Settings(BaseSettings):
         return value
 
     @field_validator(
+        "ragflow_interactive_api_key",
         "search_ragflow_candidate_top_k",
         "search_ragflow_top_n",
         "search_ragflow_similarity_threshold",
@@ -334,6 +372,18 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator(
+        "ragflow_interactive_owner_id",
+        "ragflow_interactive_chat_model_id",
+        mode="before",
+    )
+    @classmethod
+    def strip_interactive_ragflow_identifiers(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
     @field_validator("connector_language")
     @classmethod
     def validate_connector_language(cls, value: str | None) -> str | None:
@@ -348,8 +398,44 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return value
 
+    @field_validator("job_history_retention_days")
+    @classmethod
+    def validate_job_history_retention_days(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("JOB_HISTORY_RETENTION_DAYS must be positive")
+        return value
+
+    @field_validator(
+        "job_max_attempts",
+        "job_retry_base_seconds",
+        "job_retry_max_seconds",
+        "job_lease_seconds",
+        "job_heartbeat_seconds",
+    )
+    @classmethod
+    def validate_job_positive_int(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("job attempts and retry delays must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def validate_job_retry_bounds(self) -> Settings:
+        if self.job_retry_base_seconds > self.job_retry_max_seconds:
+            raise ValueError(
+                "JOB_RETRY_BASE_SECONDS must not exceed JOB_RETRY_MAX_SECONDS"
+            )
+        if self.job_heartbeat_seconds * 3 > self.job_lease_seconds:
+            raise ValueError(
+                "JOB_HEARTBEAT_SECONDS must not exceed one third of JOB_LEASE_SECONDS"
+            )
+        return self
+
     @field_validator(
         "search_document_viewer_max_mb",
+        "search_document_viewer_timeout_seconds",
+        "search_document_viewer_max_concurrency",
+        "search_pdf_render_max_concurrency",
+        "search_pdf_render_max_mb",
         "search_answer_llm_timeout_seconds",
         "search_answer_llm_max_tokens",
     )
@@ -463,6 +549,30 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def build_service_urls(self) -> Settings:
+        if self.seafile_sync_user_auto_share_enabled and not self.seafile_sync_user_email:
+            raise ValueError(
+                "SEAFILE_SYNC_USER_EMAIL must be set when "
+                "SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED is true"
+            )
+        interactive_values = (
+            self.ragflow_interactive_api_key,
+            self.ragflow_interactive_owner_id,
+            self.ragflow_interactive_chat_model_id,
+        )
+        if any(interactive_values) and not all(interactive_values):
+            msg = (
+                "RAGFLOW_INTERACTIVE_API_KEY, RAGFLOW_INTERACTIVE_OWNER_ID and "
+                "RAGFLOW_INTERACTIVE_CHAT_MODEL_ID must be set together"
+            )
+            raise ValueError(msg)
+        if (
+            self.ragflow_interactive_api_key
+            and self.ragflow_generated_dataset_permission != "team"
+        ):
+            raise ValueError(
+                "RAGFLOW_GENERATED_DATASET_PERMISSION must be team when "
+                "RAGFLOW_INTERACTIVE_API_KEY is configured"
+            )
         if bool(self.connector_dashboard_auth_username) != bool(
             self.connector_dashboard_auth_password
         ):
@@ -471,6 +581,35 @@ class Settings(BaseSettings):
                 "CONNECTOR_DASHBOARD_AUTH_PASSWORD must be set together"
             )
             raise ValueError(msg)
+        if self.connector_dashboard_control_enabled:
+            if not self.connector_dashboard_enabled:
+                raise ValueError(
+                    "CONNECTOR_DASHBOARD_ENABLED must be true when "
+                    "CONNECTOR_DASHBOARD_CONTROL_ENABLED is true"
+                )
+            if not (
+                self.connector_dashboard_auth_username
+                and self.connector_dashboard_auth_password
+            ):
+                raise ValueError(
+                    "CONNECTOR_DASHBOARD_AUTH_USERNAME and "
+                    "CONNECTOR_DASHBOARD_AUTH_PASSWORD are required when "
+                    "CONNECTOR_DASHBOARD_CONTROL_ENABLED is true"
+                )
+            if self.app_env.strip().lower() in {"prod", "production"} and (
+                self.connector_dashboard_auth_password.strip().lower()
+                in {
+                    "change-me",
+                    "change-me-dashboard-password",
+                    "changeme",
+                    "your-password",
+                    "your_password",
+                }
+            ):
+                raise ValueError(
+                    "CONNECTOR_DASHBOARD_AUTH_PASSWORD must not use a known "
+                    "placeholder when dashboard control is enabled in production"
+                )
         if not self.database_url:
             if not self.postgres_password:
                 msg = "DATABASE_URL or POSTGRES_PASSWORD must be set"
@@ -491,7 +630,11 @@ class Settings(BaseSettings):
         if self.openwebui_authz_shared_secret is None:
             self.openwebui_authz_shared_secret = self.authz_api_shared_secret
         for name in (
+            "seafile_base_url",
+            "seafile_internal_url",
             "seafile_public_base_url",
+            "ragflow_base_url",
+            "ragflow_internal_url",
             "ragflow_public_base_url",
             "search_answer_llm_base_url",
             "openwebui_proxy_public_base_url",
@@ -591,6 +734,10 @@ class Settings(BaseSettings):
         return _split_csv(self.authz_api_allow_networks_csv)
 
     @property
+    def seafile_download_allowed_origins(self) -> tuple[str, ...]:
+        return _split_csv(self.seafile_download_allowed_origins_csv)
+
+    @property
     def openwebui_effective_sync_mode(self) -> Literal["disabled", "dry-run", "sync", "repair"]:
         if not self.openwebui_integration_enabled or self.openwebui_sync_mode == "disabled":
             return "disabled"
@@ -670,10 +817,22 @@ class SearchServiceSettings(BaseSettings):
     search_service_host: str = "0.0.0.0"  # nosec B104
     search_service_port: int = 8090
 
-    search_auth_mode: Literal["trusted_header"] = "trusted_header"
+    search_auth_mode: Literal["trusted_header", "openwebui_ldap"] = "trusted_header"
     search_trusted_username_header: str = "X-Forwarded-User"
     search_trusted_email_header: str = "X-Forwarded-Email"
     search_trusted_display_name_header: str = "X-Forwarded-Name"
+    search_trusted_proxy_cidrs_csv: str = Field(
+        default="",
+        validation_alias="SEARCH_TRUSTED_PROXY_CIDRS",
+    )
+    search_openwebui_ldap_base_url: str = "http://openwebui:8080"
+    search_openwebui_ldap_verify_ssl: bool = True
+    search_openwebui_ldap_ca_bundle: str | None = None
+    search_openwebui_ldap_timeout_seconds: int = 20
+    search_session_secret: str = "change-me"
+    search_session_ttl_seconds: int = 28_800
+    search_session_cookie_name: str = "connector_search_session"
+    search_session_cookie_secure: bool = True
 
     search_authz_base_url: str = "http://connector-controller:8080"
     search_authz_shared_secret: str = "change-me"
@@ -738,6 +897,10 @@ class SearchServiceSettings(BaseSettings):
     search_source_preview_secret: str | None = None
     search_document_viewer_enabled: bool = True
     search_document_viewer_max_mb: int = 100
+    search_document_viewer_timeout_seconds: int = 30
+    search_document_viewer_max_concurrency: int = 4
+    search_pdf_render_max_concurrency: int = 2
+    search_pdf_render_max_mb: int = 25
 
     @field_validator("connector_language")
     @classmethod
@@ -759,6 +922,7 @@ class SearchServiceSettings(BaseSettings):
     @field_validator(
         "search_authz_base_url",
         "search_ragflow_base_url",
+        "search_openwebui_ldap_base_url",
         "search_answer_llm_base_url",
         "search_seafile_public_base_url",
     )
@@ -775,7 +939,12 @@ class SearchServiceSettings(BaseSettings):
             return None
         return f"{base_url}/lib/{{repo_id}}/file{{path_quoted}}{{page_fragment}}"
 
-    @field_validator("connector_ca_bundle", "search_ragflow_ca_bundle", mode="before")
+    @field_validator(
+        "connector_ca_bundle",
+        "search_ragflow_ca_bundle",
+        "search_openwebui_ldap_ca_bundle",
+        mode="before",
+    )
     @classmethod
     def strip_optional_path(cls, value: object) -> object:
         if isinstance(value, str):
@@ -819,8 +988,14 @@ class SearchServiceSettings(BaseSettings):
         "search_result_snippet_context_chars",
         "search_answer_max_sources",
         "search_document_viewer_max_mb",
+        "search_document_viewer_timeout_seconds",
+        "search_document_viewer_max_concurrency",
+        "search_pdf_render_max_concurrency",
+        "search_pdf_render_max_mb",
         "search_answer_llm_timeout_seconds",
         "search_answer_llm_max_tokens",
+        "search_openwebui_ldap_timeout_seconds",
+        "search_session_ttl_seconds",
     )
     @classmethod
     def validate_search_positive_int(cls, value: int) -> int:
@@ -856,6 +1031,17 @@ class SearchServiceSettings(BaseSettings):
             raise ValueError(msg)
         return value
 
+    @field_validator("search_trusted_proxy_cidrs_csv")
+    @classmethod
+    def validate_search_trusted_proxy_cidrs(cls, value: str) -> str:
+        for raw_network in _split_csv(value):
+            try:
+                ipaddress.ip_network(raw_network, strict=False)
+            except ValueError as exc:
+                msg = "SEARCH_TRUSTED_PROXY_CIDRS contains an invalid network"
+                raise ValueError(msg) from exc
+        return value
+
     @model_validator(mode="after")
     def validate_search_urls_and_limits(self) -> SearchServiceSettings:
         if not self.database_url and self.postgres_password:
@@ -866,7 +1052,11 @@ class SearchServiceSettings(BaseSettings):
                 f"postgresql+psycopg://{user}:{password}@"
                 f"{self.postgres_host}:{self.postgres_port}/{database}"
             )
-        for name in ("search_authz_base_url", "search_ragflow_base_url"):
+        for name in (
+            "search_authz_base_url",
+            "search_ragflow_base_url",
+            "search_openwebui_ldap_base_url",
+        ):
             value = getattr(self, name)
             if not _is_http_url(value):
                 msg = f"{name.upper()} must be an http or https URL"
@@ -880,7 +1070,19 @@ class SearchServiceSettings(BaseSettings):
         if not self.search_enable_chat_mode and not self.search_enable_retrieval_mode:
             msg = "at least one search mode must be enabled"
             raise ValueError(msg)
-        for name in ("connector_ca_bundle", "search_ragflow_ca_bundle"):
+        production = self.app_env.strip().lower() in {"prod", "production"}
+        if self.search_auth_mode == "openwebui_ldap":
+            if production and self.search_session_secret.strip() in {"", "change-me"}:
+                msg = "SEARCH_SESSION_SECRET must be set for openwebui_ldap in production"
+                raise ValueError(msg)
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", self.search_session_cookie_name):
+                msg = "SEARCH_SESSION_COOKIE_NAME contains invalid characters"
+                raise ValueError(msg)
+        for name in (
+            "connector_ca_bundle",
+            "search_ragflow_ca_bundle",
+            "search_openwebui_ldap_ca_bundle",
+        ):
             value = getattr(self, name)
             if value:
                 validate_tls_file(str(value), label=name.upper())
@@ -903,8 +1105,20 @@ class SearchServiceSettings(BaseSettings):
         )
 
     @property
+    def search_openwebui_ldap_httpx_verify(self) -> VerifyConfig:
+        return build_service_httpx_verify(
+            self.search_openwebui_ldap_verify_ssl,
+            self.search_openwebui_ldap_ca_bundle,
+            fallback_ca_bundle=self.connector_ca_bundle,
+        )
+
+    @property
     def effective_search_source_preview_secret(self) -> str:
         return self.search_source_preview_secret or self.search_authz_shared_secret
+
+    @property
+    def search_trusted_proxy_cidrs(self) -> tuple[str, ...]:
+        return _split_csv(self.search_trusted_proxy_cidrs_csv)
 
 
 def _is_http_url(value: str) -> bool:

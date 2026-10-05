@@ -9,6 +9,12 @@ _EXACT_QUERY_TOKEN_RE = re.compile(
     r"|[A-Z]{2,}-\d{2,}"
     r")\b"
 )
+_MANAGED_UPLOAD_DOCUMENT_RE = re.compile(
+    r"^(?P<stem>.+)\.__connector_"
+    r"(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})"
+    r"(?P<suffix>(?:\.[^/\\]+)?)$",
+    re.IGNORECASE,
+)
 
 
 # Event-Emission ist optional und fehlertolerant. Falls ein Frontend ein Event
@@ -48,14 +54,16 @@ async def _emit_status(
     )
 
 
-async def _emit_event(emitter, event: dict[str, Any]) -> None:
+async def _emit_event(emitter, event: dict[str, Any]) -> bool:
     if not emitter:
-        return
+        return False
 
     try:
         await emitter(event)
+        return True
     except Exception:
         LOGGER.warning("OpenWebUI event emission failed", exc_info=True)
+        return False
 
 
 def _completion_status(
@@ -894,6 +902,15 @@ def _source_mapping(source: Any) -> dict[str, Any]:
     return {}
 
 
+def _user_facing_document_name(value: Any, path: Any = None) -> str:
+    clean_path = str(path or "").replace("\\", "/").rstrip("/")
+    clean = clean_path.rsplit("/", 1)[-1].strip() if clean_path else _clean(value)
+    match = _MANAGED_UPLOAD_DOCUMENT_RE.fullmatch(clean)
+    if match:
+        clean = f"{match.group('stem')}{match.group('suffix')}"
+    return clean or "Quelle"
+
+
 def _normalize_source(
     source: Mapping[str, Any],
     rank: int,
@@ -1039,6 +1056,8 @@ def _normalize_source(
         )
     )
     path = _string_or_none(_first_nonempty(source.get("path"), metadata.get("path"), None))
+    document_name = _user_facing_document_name(document_name, path)
+    title = _user_facing_document_name(title, path)
     locator_quality = _locator_quality(
         page=page,
         section=section,
@@ -1108,6 +1127,12 @@ def _normalize_source(
         used_in_answer=bool(source.get("used_in_answer") or metadata.get("used_in_answer")),
         claim_ids=tuple(source.get("claim_ids") or metadata.get("claim_ids") or ()),
         support_status=str(source.get("support_status") or metadata.get("support_status") or "not_evaluated"),
+        source_dto_version=str(
+            source.get("source_dto_version")
+            or metadata.get("source_dto_version")
+            or "v1"
+        ),
+        status=str(source.get("status") or metadata.get("status") or "available"),
         source_metadata=source_metadata,
     )
 
@@ -1119,10 +1144,14 @@ def _source_event_data(
     show_debug: bool = False,
 ) -> dict[str, Any]:
     metadata = _public_metadata(hit, show_scores=show_scores, show_debug=show_debug)
+    metadata["source_dto_version"] = hit.source_dto_version
+    metadata["status"] = hit.status
     source_url = hit.preview_url or hit.original_url
     source_name = _source_name_with_location(hit.title, metadata)
 
     event = {
+        "source_dto_version": hit.source_dto_version,
+        "status": hit.status,
         "name": hit.title,
         "source_id": hit.source_id,
         "url": source_url,

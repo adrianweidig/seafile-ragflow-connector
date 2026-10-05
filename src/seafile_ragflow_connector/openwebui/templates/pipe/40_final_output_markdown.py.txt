@@ -10,9 +10,15 @@ def _compose_final_answer(
     *,
     answer_origin: str = "canonical_answer",
     diagnostics: Any = None,
+    force_markdown_fallback: bool = False,
 ) -> str:
     """Compose the final visible assistant message for OpenWebUI."""
-    markdown_mode = _effective_source_markdown_mode(valves)
+    append_source_markdown = _append_source_markdown(valves) or force_markdown_fallback
+    markdown_mode = (
+        _source_markdown_mode(getattr(valves, "SOURCE_MARKDOWN_MODE", "compact"))
+        if force_markdown_fallback
+        else _effective_source_markdown_mode(valves)
+    )
     if _looks_like_source_markdown_only(answer):
         answer = ""
     else:
@@ -21,14 +27,14 @@ def _compose_final_answer(
     if not answer:
         answer = _retrieval_only_fallback_message(sources, valves)
         answer_origin = "retrieval_only" if sources else "none"
-    elif sources and _append_source_markdown(valves) and not re.search(r"\[S\d+\]", answer):
+    elif sources and append_source_markdown and not re.search(r"\[S\d+\]", answer):
         answer = (
             f"{answer.rstrip()}\n\n"
             "> Hinweis: Die Antwort enthält keine expliziten Quellenmarken."
         )
 
     source_block = ""
-    if _append_source_markdown(valves) and not _contains_source_markdown(answer):
+    if append_source_markdown and not _contains_source_markdown(answer):
         source_block = _source_markdown(
             sources,
             show_scores=valves.SHOW_SOURCE_SCORES,

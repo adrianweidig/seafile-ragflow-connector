@@ -1,3 +1,7 @@
+from seafile_ragflow_connector.persistence.models.admin_control import (
+    LibraryControlState,
+    WorkflowControlState,
+)
 from seafile_ragflow_connector.persistence.models.dashboard import (
     DashboardChangeEvent,
     DashboardLogEntry,
@@ -15,6 +19,17 @@ from seafile_ragflow_connector.persistence.models.search import (
     LibraryACLSubject,
     SearchProfile,
 )
+from seafile_ragflow_connector.persistence.models.sync_state import (
+    CleanupOutbox,
+    FileDocumentVersion,
+    RepoMutationLease,
+    SourceSnapshot,
+    SourceSnapshotEntry,
+    SyncCursor,
+    SyncRun,
+    WorkflowCleanupSubscription,
+    WorkflowJobSubscription,
+)
 from seafile_ragflow_connector.persistence.models.template import (
     DatasetSettingsSnapshot,
     TemplateState,
@@ -28,10 +43,21 @@ __all__ = [
     "File",
     "LibraryACLEffectiveUser",
     "LibraryACLSubject",
+    "LibraryControlState",
     "Library",
     "OpenWebUIDatasetMapping",
     "OpenWebUISyncState",
     "SearchProfile",
     "SyncJob",
     "TemplateState",
+    "CleanupOutbox",
+    "FileDocumentVersion",
+    "RepoMutationLease",
+    "SourceSnapshot",
+    "SourceSnapshotEntry",
+    "SyncCursor",
+    "SyncRun",
+    "WorkflowCleanupSubscription",
+    "WorkflowControlState",
+    "WorkflowJobSubscription",
 ]

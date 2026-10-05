@@ -39,29 +39,53 @@ class OpenWebUISourceTests(unittest.TestCase):
             openwebui_source_preview_mode="connector_viewer",
         )
 
-    def test_signed_preview_tokens_roundtrip_and_keep_chat_links_durable(self) -> None:
+    def test_signed_preview_tokens_include_required_claims_and_expire(self) -> None:
         token = sign_preview_payload({"document_id": "doc-1"}, "proxy-secret", now=100)
 
-        self.assertEqual(
-            verify_preview_token(token, "proxy-secret", now=101)["document_id"],
-            "doc-1",
-        )
-        self.assertEqual(
-            verify_preview_token(token, "proxy-secret", now=2000)["document_id"],
-            "doc-1",
-        )
+        payload = verify_preview_token(token, "proxy-secret", now=101)
 
-    def test_legacy_expired_preview_tokens_still_open_saved_chat_sources(self) -> None:
+        self.assertEqual(payload["document_id"], "doc-1")
+        self.assertEqual(payload["iat"], 100)
+        self.assertEqual(payload["exp"], 1000)
+        self.assertEqual(payload["purpose"], "source_preview")
+        self.assertEqual(payload["aud"], "openwebui_proxy")
+        with self.assertRaisesRegex(ValueError, "expired"):
+            verify_preview_token(token, "proxy-secret", now=1000)
+
+    def test_payload_cannot_override_security_claims(self) -> None:
         token = sign_preview_payload(
-            {"document_id": "doc-1", "exp": 101},
+            {
+                "document_id": "doc-1",
+                "iat": 0,
+                "exp": 999999,
+                "purpose": "other",
+                "aud": "other",
+            },
             "proxy-secret",
             now=100,
+            ttl_seconds=10,
         )
 
-        self.assertEqual(
-            verify_preview_token(token, "proxy-secret", now=2000)["document_id"],
-            "doc-1",
-        )
+        with self.assertRaisesRegex(ValueError, "expired"):
+            verify_preview_token(token, "proxy-secret", now=110)
+
+    def test_preview_tokens_are_bound_to_purpose_and_audience(self) -> None:
+        token = sign_preview_payload({"document_id": "doc-1"}, "proxy-secret", now=100)
+
+        with self.assertRaisesRegex(ValueError, "purpose"):
+            verify_preview_token(
+                token,
+                "proxy-secret",
+                now=101,
+                expected_purpose="document_viewer",
+            )
+        with self.assertRaisesRegex(ValueError, "audience"):
+            verify_preview_token(
+                token,
+                "proxy-secret",
+                now=101,
+                expected_audience="search_service",
+            )
 
     def test_normalize_sources_builds_safe_preview_url(self) -> None:
         sources = normalize_sources(
@@ -97,10 +121,10 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual(sources[0]["source_metadata"]["relevance_label"], "hoch")
 
         token = sources[0]["preview_url"].rsplit("token=", 1)[1]
-        preview = verify_preview_token(token, "proxy-secret", now=100)
+        preview = verify_preview_token(token, "proxy-secret")
         self.assertEqual(preview["page"], 3)
         self.assertEqual(preview["position"], [[3, 10, 20, 30, 40]])
-        self.assertLess(len(token), 420)
+        self.assertLess(len(token), 500)
 
     def test_normalize_sources_adds_original_file_url_without_path_leak(self) -> None:
         settings = self._settings()
@@ -139,7 +163,7 @@ class OpenWebUISourceTests(unittest.TestCase):
         self.assertEqual(sources[0]["source_metadata"]["repo_id"], "repo-1")
 
         token = sources[0]["preview_url"].rsplit("token=", 1)[1]
-        preview = verify_preview_token(token, "proxy-secret", now=100)
+        preview = verify_preview_token(token, "proxy-secret")
         self.assertEqual(preview["source_path"], "/folder/report final.pdf")
         self.assertEqual(preview["original_url"], sources[0]["original_url"])
 
@@ -204,7 +228,7 @@ class OpenWebUISourceTests(unittest.TestCase):
         )
 
         token = sources[0]["preview_url"].rsplit("token=", 1)[1]
-        preview = verify_preview_token(token, "proxy-secret", now=100)
+        preview = verify_preview_token(token, "proxy-secret")
 
         self.assertEqual(sources[0]["snippet"], long_text.strip())
         self.assertLessEqual(len(preview["snippet"]), 123)
@@ -256,10 +280,57 @@ class OpenWebUISourceTests(unittest.TestCase):
             sources,
         )
 
-        self.assertEqual(answer.count("[S1](https://connector.example/preview)"), 3)
+        self.assertEqual(answer.count("[S1](https://connector.example/preview)"), 1)
+        self.assertEqual(answer.count("[S1]"), 3)
         self.assertNotIn("[ID:0]", answer)
         self.assertNotIn("{{source:0}}", answer)
         self.assertNotIn("##0$$", answer)
+
+    def test_annotate_answer_citations_links_each_long_preview_url_only_once(self) -> None:
+        long_preview_url = "https://connector.example/preview?token=" + ("x" * 600)
+        sources = [
+            {
+                "source_id": "S1",
+                "preview_url": long_preview_url,
+                "source_metadata": {
+                    "provider_citation_id": 0,
+                    "citation_id": 0,
+                },
+            }
+        ]
+
+        answer = annotate_answer_citations(
+            " ".join(["Aussage [ID:0]."] * 20),
+            sources,
+        )
+
+        self.assertEqual(answer.count(long_preview_url), 1)
+        self.assertEqual(answer.count("[S1]"), 20)
+        self.assertLess(len(answer), len(long_preview_url) + 500)
+
+    def test_annotate_answer_citations_links_each_source_once(self) -> None:
+        sources = [
+            {
+                "source_id": "S1",
+                "preview_url": "https://connector.example/preview/one",
+                "source_metadata": {"provider_citation_id": 0, "citation_id": 0},
+            },
+            {
+                "source_id": "S2",
+                "preview_url": "https://connector.example/preview/two",
+                "source_metadata": {"provider_citation_id": 1, "citation_id": 1},
+            },
+        ]
+
+        answer = annotate_answer_citations(
+            "Erste Aussage [ID:0], zweite [ID:1], erneut [ID:0] und [ID:1].",
+            sources,
+        )
+
+        self.assertEqual(answer.count("[S1](https://connector.example/preview/one)"), 1)
+        self.assertEqual(answer.count("[S2](https://connector.example/preview/two)"), 1)
+        self.assertEqual(answer.count("[S1]"), 2)
+        self.assertEqual(answer.count("[S2]"), 2)
 
     def test_audit_rank_sources_preserves_existing_source_labels(self) -> None:
         ranked = audit_rank_sources(
@@ -692,6 +763,32 @@ class OpenWebUISourceTests(unittest.TestCase):
         )
 
         self.assertEqual(sources[0]["name"], "html_fragmente.md")
+
+    def test_normalize_sources_hides_recovery_upload_names_without_metadata(self) -> None:
+        operation_id = "0123456789abcdef0123456789abcdef"
+        sources = normalize_sources(
+            {
+                "chunks": [
+                    {
+                        "id": "chunk-pdf",
+                        "document_name": f"report.__connector_{operation_id}.pdf",
+                        "content": "PDF-Treffer",
+                        "score": 0.9,
+                    },
+                    {
+                        "id": "chunk-text",
+                        "document_name": f"notes.__connector_{operation_id}.txt",
+                        "content": "Text-Treffer",
+                        "score": 0.8,
+                    },
+                ]
+            },
+            settings=self._settings(),
+            dataset_id="dataset-1",
+            dataset_name="Demo",
+        )
+
+        self.assertEqual([source["name"] for source in sources], ["report.pdf", "notes.txt"])
 
     def test_extract_answer_unwraps_native_ragflow_data_payload(self) -> None:
         answer = extract_answer(

@@ -16,30 +16,81 @@ auf. Nur erlaubte SearchProfiles werden an RAGFlow weitergegeben.
 
 | Route | Zweck |
 | --- | --- |
-| `GET /health` | Healthcheck für Portainer/Reverse Proxy |
+| `GET /livez` | billige Prozess-/Eventloop-Liveness ohne Upstream-Zugriff |
+| `GET /readyz` | kurz gecachte Readiness für Datenbank, Core-Authz, RAGFlow und den konfigurierten Identitätsdienst |
+| `GET /metrics` | Prometheus-Textformat ohne Nutzer-, Repository- oder Pfadlabels |
+| `GET /health` | rückwärtskompatibler Alias für `/livez` |
 | `GET /search` | Weboberfläche "Wissenssuche" |
+| `GET /auth/login` | Anmeldeseite im Modus `openwebui_ldap` |
+| `POST /auth/login` | serverseitige LDAP-Anmeldung über OpenWebUI |
+| `POST /auth/logout` | beendet die lokale Search-Sitzung |
 | `GET /api/search/profiles` | erlaubte Bibliotheken/Datasets für den Nutzer |
-| `POST /api/search/query` | Retrieval-Suche über erlaubte Datasets |
-| `POST /api/search/chat` | Antwortmodus mit Quellen aus erlaubten Datasets |
+| `POST /api/search/query` | paginierte Retrieval-Suche über erlaubte Datasets |
+| `POST /api/search/chat` | paginierter Antwortmodus mit Quellen aus erlaubten Datasets |
 | `GET /api/search/source/preview?token=...` | signierter Evidence-Viewer für eine Trefferpassage |
 | `GET /api/search/source/document?token=...` | authz-geprüfter same-origin Dokumentproxy für den nativen Browserviewer |
 
 ## Authentifizierung
 
-Der erste Auth-Modus ist `trusted_header`. Der Search-Service erwartet, dass
-ein vorgeschalteter Reverse Proxy oder Identity-Aware Proxy die Nutzeridentität
-setzt:
+Im Modus `trusted_header` erwartet der Search-Service, dass ein vorgeschalteter
+Reverse Proxy oder Identity-Aware Proxy die Nutzeridentität setzt:
 
 ```env
 SEARCH_AUTH_MODE=trusted_header
 SEARCH_TRUSTED_USERNAME_HEADER=X-Forwarded-User
 SEARCH_TRUSTED_EMAIL_HEADER=X-Forwarded-Email
 SEARCH_TRUSTED_DISPLAY_NAME_HEADER=X-Forwarded-Name
+SEARCH_TRUSTED_PROXY_CIDRS=10.20.30.0/28
 ```
 
 Die E-Mail ist der primäre ACL-Match-Key. Header dürfen nur aus einer
-vertrauenswürdigen Komponente kommen; öffentliche direkte Erreichbarkeit ohne
-Proxy ist für produktive Nutzung nicht geeignet.
+vertrauenswürdigen Komponente kommen. Der Search-Service wertet sie nur aus,
+wenn die unmittelbare Peer-IP in `SEARCH_TRUSTED_PROXY_CIDRS` liegt; ein
+`X-Forwarded-For`-Wert begründet kein Vertrauen. Bei öffentlicher Bindung und
+fehlender Proxy-Allowlist verweigert der Service im Produktionsmodus den Start.
+
+Der Reverse Proxy muss vom Client gelieferte Identitätsheader verwerfen und die
+Header ausschließlich aus seiner authentifizierten Session neu setzen. Eine
+Nginx-Konfiguration darf deshalb beispielsweise nur verifizierte Variablen
+weiterreichen, niemals `$http_x_forwarded_user` oder `$http_x_forwarded_email`:
+
+```nginx
+proxy_set_header X-Forwarded-User  $authenticated_user;
+proxy_set_header X-Forwarded-Email $authenticated_email;
+proxy_set_header X-Forwarded-Name  $authenticated_display_name;
+```
+
+Wenn OpenWebUI bereits erfolgreich an LDAP/AD angebunden ist, kann Search
+dieselbe Pipeline nutzen:
+
+```env
+SEARCH_AUTH_MODE=openwebui_ldap
+SEARCH_OPENWEBUI_LDAP_BASE_URL=http://openwebui:8080
+SEARCH_OPENWEBUI_LDAP_VERIFY_SSL=true
+SEARCH_OPENWEBUI_LDAP_CA_BUNDLE=
+SEARCH_OPENWEBUI_LDAP_TIMEOUT_SECONDS=20
+SEARCH_SESSION_SECRET=change-me-search-session-secret
+SEARCH_SESSION_TTL_SECONDS=28800
+SEARCH_SESSION_COOKIE_NAME=connector_search_session
+SEARCH_SESSION_COOKIE_SECURE=true
+```
+
+Search sendet Benutzername und Passwort nur serverseitig an
+`POST /api/v1/auths/ldap`. OpenWebUI führt den LDAP-Service-Bind, die
+Nutzersuche, den Nutzer-Bind und seine konfigurierte Gruppensynchronisierung
+aus. Das von OpenWebUI zurückgegebene Token wird weder gespeichert noch an den
+Browser weitergereicht. Search erstellt stattdessen eine eigene HMAC-signierte,
+zeitlich begrenzte Sitzung mit `HttpOnly`, `SameSite=Lax` und standardmäßig
+`Secure`. Das Session-Secret muss im Produktionsmodus explizit gesetzt werden.
+Die Abmeldung löscht nur die Search-Sitzung; LDAP- oder OpenWebUI-Sitzungen
+bleiben unverändert.
+
+Im Swarm-Standardprofil wird Search über
+`SEARCH_SERVICE_PUBLISHED_PORT` im Routing-Mesh veröffentlicht. Produktiv
+sollte im Modus `trusted_header` davor ein authentifizierender Proxy stehen;
+nur dessen konkretes Netz gehört in die CIDR-Allowlist. Im Modus
+`openwebui_ldap` reicht ein normaler TLS-Reverse-Proxy ohne eigene
+Nutzeranmeldung. Core-only lässt das Search-Modul vollständig weg.
 
 ## Autorisierung
 
@@ -76,6 +127,15 @@ SEARCH_ANSWER_LLM_MAX_TOKENS=900
 SEARCH_ANSWER_LLM_TEMPERATURE=0.2
 ```
 
+Ohne getrennte interaktive RAGFlow-Identität verwendet
+`SEARCH_RAGFLOW_API_KEY` denselben Key wie `RAGFLOW_API_KEY`. Wenn die
+automatisch verwalteten Chats und Search-App-Spiegel einem kontrollierten
+Admin-Zieluser über `RAGFLOW_INTERACTIVE_API_KEY` gehören, muss der
+Search-Service für native beziehungsweise Connector-Chat-Antworten denselben
+interaktiven Key verwenden. Das ändert nicht die Berechtigungsgrenze: Die
+Dataset-Auswahl wird weiterhin vor jedem RAGFlow-Aufruf über die Seafile-ACL
+gefiltert.
+
 RAGFlow wird pro erlaubtem Dataset abgefragt. Ergebnisse werden
 zusammengeführt, dedupliziert und nutzerfreundlich ausgegeben. RAGFlow bekommt
 keine Information über verbotene Datasets, weil diese vor dem Aufruf entfernt
@@ -91,10 +151,36 @@ Aus dem Template werden nur Suchparameter übernommen. Datasets, `kb_ids` oder
 Dokumentlisten aus RAGFlow werden ignoriert, damit die Seafile-ACL-Auswahl
 immer die einzige Berechtigungsgrenze bleibt.
 
-Die UI-Einstellung "Treffer" steuert die sichtbare Ergebnisanzahl. RAGFlows
-`top_k` ist dagegen der interne Kandidatenpool und bleibt standardmäßig `1024`.
-Dadurch kann RAGFlow sauber hybrid suchen, während die Oberfläche trotzdem nur
-eine kompakte Ergebnisliste zeigt.
+Die UI-Einstellung **Treffer pro Seite** steuert die Seitengröße (Standard 20,
+Maximum 100). Weitere Ergebnisse werden über einen opaken Cursor nachgeladen,
+der an Nutzer, Frage, Profilauswahl, die aktuelle Dataset-/ACL-Auflösung und den
+Service-Scope gebunden ist. Die erste Seite legt dafür einen kurzlebigen
+Result-Snapshot an; Folgeseiten lesen ausschließlich diesen Snapshot und bleiben
+daher auch bei veränderter Upstream-Rangfolge lücken- und duplikatfrei. Der
+ältere Request-Parameter `top_k` bleibt kompatibel. RAGFlows internes `top_k`
+ist dagegen der Kandidatenpool und bleibt standardmäßig `1024`. Dadurch kann
+RAGFlow sauber hybrid suchen, während die Oberfläche kompakte Seiten zeigt.
+
+Pro Request sind höchstens 25 Profile zulässig. Bis zu vier erlaubte Datasets
+werden parallel abgefragt; wenn RAGFlow für ein Dataset mehrere Seiten liefert,
+holt der Service sie bis zur benötigten Kandidatenmenge nach. Die Antwort
+enthält `request_id`, `timing_ms` und:
+
+```json
+{
+  "pagination": {"next_cursor": "…", "has_more": true},
+  "partial_failures": [
+    {"profile_id": "…", "reason": "dataset_not_ready"}
+  ]
+}
+```
+
+Ein einzelnes nicht bereites oder fehlerhaftes Dataset verwirft damit nicht die
+erfolgreichen Treffer anderer erlaubter Datasets. Der Cursor ist nicht als
+dauerhafte ID zu speichern oder manuell zu verändern. Result-Snapshots laufen
+nach 180 Sekunden ab und sind sowohl nach Anzahl als auch Speichergröße
+begrenzt. Bei `cursor_expired` startet die UI die Suche bewusst neu; ein
+ungültiger oder fremder Cursor wird nicht übernommen.
 
 Optionale Overrides:
 
@@ -156,6 +242,12 @@ Snippet, Score und den bestmöglichen Originallink. Dafür werden nur die bereit
 autorisierten RAGFlow-Treffer- und Metadaten in einem signierten Token genutzt;
 der Search-Service wird dadurch nicht zu einem generischen Seafile-Daten-Tunnel.
 
+Search und OpenWebUI verwenden dafür den versionierten `SourceDTO v1` mit
+stabilem Quellenmarker, Status, Locator, `viewer_url` und `original_url`.
+Bestehende `EvidenceHit`-Aufrufer bleiben kompatibel. OpenWebUI erhält native
+Citation-Events; kompaktes Quellen-Markdown wird nur genutzt, wenn die native
+Ausgabe nicht verfügbar oder unvollständig ist.
+
 Der zusätzliche Dokumentviewer verwendet `viewer_url` und ruft das Original über
 den Connector-Core ab. Der Search-Service speichert keinen Seafile-Admin- oder
 Sync-Token; er prüft Preview-Token und Nutzerheader, fragt die Authz-API und
@@ -207,6 +299,12 @@ Die GUI unter `/search` ist als Arbeitsoberfläche für Endnutzer gebaut:
 - Filterfeld für Bibliotheken
 - Umschaltung zwischen "Dokumente finden" und "Antwort mit Quellen"
 - dreispaltiges Desktop-Layout mit Quellenpanel
+- mobile Bereichsnavigation zwischen Antwort, Dokument und Quellen
+- serverseitig request-spezifisch abbrechen, exakt denselben fehlgeschlagenen
+  Request wiederholen und weitere Treffer per stabilem Snapshot-Cursor nachladen
+- letztes erfolgreiches Ergebnis bleibt während Loading, Abbruch und Fehler
+  sichtbar; nach Cursor-Ablauf startet ein Retry mit einer frischen Rangfolge
+- persistierte Bibliotheksauswahl und maximal 25 ausgewählte Profile
 - Kartenlayout für Ergebnisse mit `S1`-/`S2`-Quellenlabels
 - Quellenchips wählen dieselbe Quelle im Viewer aus
 - Dokumentname, Bibliothek, Pfad, Snippet, Score und Locator-Chip
@@ -227,6 +325,7 @@ kann das Overlay ergänzt werden:
 ```bash
 docker compose --env-file connector.env \
   -f deploy/compose/shared-network.compose.yml \
+  -f deploy/compose/bundled-state.compose.yml \
   -f deploy/compose/search.compose.yml up -d
 ```
 

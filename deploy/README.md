@@ -17,6 +17,8 @@ Inhalt in Portainer.
 Für die erste Abnahme nach einem neuen Deploy steht die
 [Admin-Erststart-Checkliste](../docs/admin-first-start-checklist.md) bereit.
 
-Der Stack bringt PostgreSQL und Redis für den Connector-State mit. Seafile,
-RAGFlow und optional OpenWebUI bleiben externe Systeme und werden nie durch
-dieses Repository bereitgestellt.
+Das Standardprofil bringt PostgreSQL, Redis und den nutzernahen Search-Service
+mit. Alternativ nutzt `external-state` vorhandene PostgreSQL-/Redis-Dienste;
+`core-only` lässt den Search-Service vollständig aus dem Deployment-Modell weg.
+Seafile, RAGFlow und optional OpenWebUI bleiben externe Systeme und werden nie
+durch dieses Repository bereitgestellt.

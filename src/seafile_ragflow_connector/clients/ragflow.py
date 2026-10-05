@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Any
 
+from seafile_ragflow_connector.app.metrics import (
+    datasets_created_total,
+    files_deleted_total,
+    files_uploaded_total,
+    parse_started_total,
+)
 from seafile_ragflow_connector.clients.http import (
     ApiError,
     VerifyConfig,
@@ -10,6 +17,8 @@ from seafile_ragflow_connector.clients.http import (
     unwrap_response,
 )
 from seafile_ragflow_connector.domain.ragflow_defaults import RAGFLOW_REFERENCE_METADATA_FIELDS
+
+RAGFLOW_MAX_DOCUMENT_PAGE_SIZE = 100
 
 
 class RAGFlowClient:
@@ -20,7 +29,10 @@ class RAGFlowClient:
         *,
         timeout: float = 60.0,
         verify: VerifyConfig = True,
+        artifact_owner_id: str | None = None,
     ) -> None:
+        self._artifact_owner_id = str(artifact_owner_id or "").strip() or None
+        self._artifact_owner_verified = False
         self._client = make_client(
             base_url,
             headers={"Authorization": f"Bearer {api_key}"},
@@ -30,6 +42,49 @@ class RAGFlowClient:
 
     def close(self) -> None:
         self._client.close()
+
+    @property
+    def artifact_owner_id(self) -> str | None:
+        return self._artifact_owner_id
+
+    def verify_artifact_owner(self) -> None:
+        if self._artifact_owner_id is None or self._artifact_owner_verified:
+            return
+        data = unwrap_response(self._client.get("/api/v1/users/me"))
+        if not isinstance(data, dict):
+            raise ApiError(
+                "RAGFlow API-key identity response is not verifiable",
+                status_code=200,
+                payload={"identity_response_valid": False},
+            )
+        authenticated_owner_id = str(data.get("id") or "").strip()
+        if authenticated_owner_id != self._artifact_owner_id:
+            raise ApiError(
+                "RAGFlow API-key identity does not match configured interactive owner",
+                status_code=200,
+                payload={
+                    "identity_id_present": bool(authenticated_owner_id),
+                    "identity_matches": False,
+                },
+            )
+        self._artifact_owner_verified = True
+
+    def _require_owned_artifact(
+        self,
+        artifact: dict[str, Any],
+        *,
+        artifact_type: str,
+    ) -> None:
+        if self._artifact_owner_id is None or _artifact_is_owned_by(
+            artifact,
+            self._artifact_owner_id,
+        ):
+            return
+        raise ApiError(
+            f"RAGFlow {artifact_type} owner does not match configured interactive owner",
+            status_code=200,
+            payload={"artifact_id": str(artifact.get("id") or "")},
+        )
 
     def list_datasets(
         self,
@@ -48,9 +103,7 @@ class RAGFlowClient:
             if name and _is_missing_dataset_name_response(exc.payload, name):
                 return []
             raise
-        if isinstance(data, dict) and "datasets" in data:
-            return list(data["datasets"])
-        return list(data or [])
+        return _mapping_list(data, endpoint="datasets", container_keys=("datasets",))
 
     def get_dataset(self, dataset_id: str) -> dict[str, Any]:
         data = unwrap_response(self._client.get(f"/api/v1/datasets/{dataset_id}"))
@@ -60,13 +113,16 @@ class RAGFlowClient:
         raise TypeError(msg)
 
     def create_dataset(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.verify_artifact_owner()
         data = unwrap_response(self._client.post("/api/v1/datasets", json=payload))
         if isinstance(data, dict):
+            datasets_created_total.inc()
             return data
         msg = "unexpected dataset create response"
         raise TypeError(msg)
 
     def update_dataset(self, dataset_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self.verify_artifact_owner()
         data = unwrap_response(self._client.put(f"/api/v1/datasets/{dataset_id}", json=payload))
         if isinstance(data, dict):
             return data
@@ -81,16 +137,25 @@ class RAGFlowClient:
         content: bytes,
         mime_type: str,
     ) -> dict[str, Any]:
+        self.verify_artifact_owner()
         files = {"file": (document_name, content, mime_type)}
         data = unwrap_response(
             self._client.post(f"/api/v1/datasets/{dataset_id}/documents", files=files)
         )
+        document: dict[str, Any] | None = None
         if isinstance(data, dict):
-            return data
-        if isinstance(data, list) and data and isinstance(data[0], dict):
-            return data[0]
-        msg = "unexpected document upload response"
-        raise TypeError(msg)
+            document = dict(data)
+        elif isinstance(data, list) and data and isinstance(data[0], dict):
+            document = dict(data[0])
+        document_id = (document or {}).get("id") or (document or {}).get("document_id")
+        if document is None or not str(document_id or "").strip():
+            raise ApiError(
+                "RAGFlow document upload response did not contain a document id",
+                status_code=200,
+                payload=data,
+            )
+        files_uploaded_total.inc()
+        return document
 
     def update_document_metadata(
         self,
@@ -98,6 +163,7 @@ class RAGFlowClient:
         document_id: str,
         metadata: dict[str, Any],
     ) -> dict[str, Any]:
+        self.verify_artifact_owner()
         data = unwrap_response(
             self._client.put(
                 f"/api/v1/datasets/{dataset_id}/documents/{document_id}/metadata/config",
@@ -108,11 +174,28 @@ class RAGFlowClient:
             return data
         return {"data": data}
 
+    def rename_document(
+        self,
+        dataset_id: str,
+        document_id: str,
+        document_name: str,
+    ) -> dict[str, Any]:
+        self.verify_artifact_owner()
+        data = unwrap_response(
+            self._client.put(
+                f"/api/v1/datasets/{dataset_id}/documents/{document_id}",
+                json={"name": document_name},
+            )
+        )
+        if isinstance(data, dict):
+            return data
+        return {"data": data}
+
     def delete_documents(self, dataset_id: str, document_ids: list[str]) -> Any:
         try:
             return self._delete_documents_once(dataset_id, document_ids)
         except ApiError as exc:
-            if not _is_missing_document_delete_response(exc.payload):
+            if exc.status_code != 200 or not _is_missing_document_delete_response(exc.payload):
                 raise
             if len(document_ids) <= 1:
                 return exc.payload
@@ -121,47 +204,57 @@ class RAGFlowClient:
                 try:
                     results.append(self._delete_documents_once(dataset_id, [document_id]))
                 except ApiError as single_exc:
-                    if _is_missing_document_delete_response(single_exc.payload):
+                    if single_exc.status_code == 200 and _is_missing_document_delete_response(
+                        single_exc.payload
+                    ):
                         continue
                     raise
             return results
 
     def delete_datasets(self, dataset_ids: list[str]) -> Any:
+        self.verify_artifact_owner()
         try:
             return unwrap_response(
                 self._client.request("DELETE", "/api/v1/datasets", json={"ids": dataset_ids})
             )
         except ApiError as exc:
-            if _is_missing_dataset_delete_response(exc.payload):
+            if exc.status_code == 200 and _is_missing_dataset_delete_response(exc.payload):
                 return exc.payload
             raise
 
     def delete_chats(self, chat_ids: list[str]) -> Any:
+        self.verify_artifact_owner()
         try:
             return unwrap_response(
                 self._client.request("DELETE", "/api/v1/chats", json={"ids": chat_ids})
             )
         except ApiError as exc:
-            if _is_missing_chat_response(exc.payload):
+            if exc.status_code == 200 and _is_missing_chat_response(exc.payload):
                 return exc.payload
             raise
 
     def _delete_documents_once(self, dataset_id: str, document_ids: list[str]) -> Any:
-        return unwrap_response(
+        self.verify_artifact_owner()
+        result = unwrap_response(
             self._client.request(
                 "DELETE",
                 f"/api/v1/datasets/{dataset_id}/documents",
                 json={"ids": document_ids},
             )
         )
+        files_deleted_total.inc(len(document_ids))
+        return result
 
     def parse_documents(self, dataset_id: str, document_ids: list[str]) -> Any:
-        return unwrap_response(
+        self.verify_artifact_owner()
+        result = unwrap_response(
             self._client.post(
                 f"/api/v1/datasets/{dataset_id}/chunks",
                 json={"document_ids": document_ids},
             )
         )
+        parse_started_total.inc(len(document_ids))
+        return result
 
     def list_documents(
         self,
@@ -169,6 +262,7 @@ class RAGFlowClient:
         *,
         run: str | None = None,
         keywords: str | None = None,
+        page: int | None = None,
         page_size: int | None = None,
     ) -> list[dict[str, Any]]:
         params: dict[str, str] = {}
@@ -176,16 +270,61 @@ class RAGFlowClient:
             params["run"] = run
         if keywords:
             params["keywords"] = keywords
-        if page_size:
-            params["page_size"] = str(page_size)
+        if page is not None:
+            if page < 1:
+                raise ValueError("page must be greater than zero")
+            params["page"] = str(page)
+        if page_size is not None:
+            if page_size < 1:
+                raise ValueError("page_size must be greater than zero")
+            params["page_size"] = str(min(page_size, RAGFLOW_MAX_DOCUMENT_PAGE_SIZE))
         data = unwrap_response(
             self._client.get(f"/api/v1/datasets/{dataset_id}/documents", params=params)
         )
-        if isinstance(data, dict) and "docs" in data:
-            return list(data["docs"])
-        if isinstance(data, dict) and "documents" in data:
-            return list(data["documents"])
-        return list(data or [])
+        return _mapping_list(
+            data,
+            endpoint="documents",
+            container_keys=("docs", "documents"),
+        )
+
+    def iter_documents(
+        self,
+        dataset_id: str,
+        *,
+        run: str | None = None,
+        keywords: str | None = None,
+        page_size: int = RAGFLOW_MAX_DOCUMENT_PAGE_SIZE,
+    ) -> Iterator[dict[str, Any]]:
+        if page_size < 1:
+            raise ValueError("page_size must be greater than zero")
+        effective_page_size = min(page_size, RAGFLOW_MAX_DOCUMENT_PAGE_SIZE)
+        seen_pages: set[tuple[str, ...]] = set()
+        page = 1
+        while True:
+            documents = self.list_documents(
+                dataset_id,
+                run=run,
+                keywords=keywords,
+                page=page,
+                page_size=effective_page_size,
+            )
+            if not documents:
+                return
+            page_marker = tuple(
+                json.dumps(document, ensure_ascii=False, sort_keys=True, default=str)
+                for document in documents
+            )
+            if page_marker in seen_pages:
+                raise ApiError(
+                    "RAGFlow document pagination did not advance",
+                    status_code=200,
+                    payload={"dataset_id": dataset_id, "page": page},
+                )
+            yield from documents
+            if len(documents) < effective_page_size:
+                return
+            seen_pages.add(page_marker)
+            page += 1
 
     def list_chats(
         self,
@@ -198,33 +337,43 @@ class RAGFlowClient:
             params["name"] = name
         if chat_id:
             params["id"] = chat_id
+        if self._artifact_owner_id:
+            params["owner_ids"] = self._artifact_owner_id
         data = unwrap_response(self._client.get("/api/v1/chats", params=params))
-        if isinstance(data, dict) and "chats" in data:
-            return list(data["chats"])
-        return list(data or [])
+        chats = _mapping_list(data, endpoint="chats", container_keys=("chats",))
+        return _owned_artifacts(chats, self._artifact_owner_id)
 
     def get_chat(self, chat_id: str) -> dict[str, Any] | None:
         try:
             data = unwrap_response(self._client.get(f"/api/v1/chats/{chat_id}"))
         except ApiError as exc:
-            if _is_missing_chat_response(exc.payload):
+            if _is_missing_chat_response(exc.payload) or (
+                self._artifact_owner_id
+                and _is_artifact_access_denied_response(exc.payload)
+            ):
                 return None
             raise
-        if isinstance(data, dict):
+        if isinstance(data, dict) and _artifact_is_owned_by(data, self._artifact_owner_id):
             return data
+        if isinstance(data, dict):
+            return None
         msg = f"unexpected chat response for {chat_id}"
         raise TypeError(msg)
 
     def create_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.verify_artifact_owner()
         data = unwrap_response(self._client.post("/api/v1/chats", json=payload))
         if isinstance(data, dict):
+            self._require_owned_artifact(data, artifact_type="chat")
             return data
         msg = "unexpected chat create response"
         raise TypeError(msg)
 
     def update_chat(self, chat_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self.verify_artifact_owner()
         data = unwrap_response(self._client.patch(f"/api/v1/chats/{chat_id}", json=payload))
         if isinstance(data, dict):
+            self._require_owned_artifact(data, artifact_type="chat")
             return data
         msg = f"unexpected chat update response for {chat_id}"
         raise TypeError(msg)
@@ -243,24 +392,35 @@ class RAGFlowClient:
             params["page"] = str(page)
         if page_size is not None:
             params["page_size"] = str(page_size)
+        if self._artifact_owner_id:
+            params["owner_ids"] = self._artifact_owner_id
         data = unwrap_response(self._client.get("/api/v1/searches", params=params))
-        if isinstance(data, dict) and "search_apps" in data:
-            return list(data["search_apps"])
-        return list(data or [])
+        searches = _mapping_list(
+            data,
+            endpoint="searches",
+            container_keys=("search_apps", "searches"),
+        )
+        return _owned_artifacts(searches, self._artifact_owner_id)
 
     def get_search(self, search_id: str) -> dict[str, Any] | None:
         try:
             data = unwrap_response(self._client.get(f"/api/v1/searches/{search_id}"))
         except ApiError as exc:
-            if _is_missing_search_response(exc.payload):
+            if _is_missing_search_response(exc.payload) or (
+                self._artifact_owner_id
+                and _is_artifact_access_denied_response(exc.payload)
+            ):
                 return None
             raise
-        if isinstance(data, dict):
+        if isinstance(data, dict) and _artifact_is_owned_by(data, self._artifact_owner_id):
             return data
+        if isinstance(data, dict):
+            return None
         msg = f"unexpected search app response for {search_id}"
         raise TypeError(msg)
 
     def create_search(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.verify_artifact_owner()
         data = unwrap_response(self._client.post("/api/v1/searches", json=payload))
         if isinstance(data, dict):
             return data
@@ -268,11 +428,21 @@ class RAGFlowClient:
         raise TypeError(msg)
 
     def update_search(self, search_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self.verify_artifact_owner()
         data = unwrap_response(self._client.put(f"/api/v1/searches/{search_id}", json=payload))
         if isinstance(data, dict):
             return data
         msg = f"unexpected search app update response for {search_id}"
         raise TypeError(msg)
+
+    def delete_search(self, search_id: str) -> Any:
+        self.verify_artifact_owner()
+        try:
+            return unwrap_response(self._client.delete(f"/api/v1/searches/{search_id}"))
+        except ApiError as exc:
+            if exc.status_code == 200 and _is_missing_search_response(exc.payload):
+                return exc.payload
+            raise
 
     def retrieve_chunks(
         self,
@@ -470,6 +640,54 @@ def _merge_streamed_answer(answer_parts: list[str], answer: str) -> None:
     answer_parts.append(answer)
 
 
+def _mapping_list(
+    data: Any,
+    *,
+    endpoint: str,
+    container_keys: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    value = data
+    if isinstance(data, dict):
+        matching_key = next((key for key in container_keys if key in data), None)
+        if matching_key is None:
+            raise ApiError(
+                f"unexpected list response from RAGFlow {endpoint} endpoint",
+                payload=data,
+            )
+        value = data[matching_key]
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise ApiError(
+            f"unexpected list response from RAGFlow {endpoint} endpoint",
+            payload=data,
+        )
+    return [dict(item) for item in value]
+
+
+def _owned_artifacts(
+    artifacts: list[dict[str, Any]],
+    owner_id: str | None,
+) -> list[dict[str, Any]]:
+    if owner_id is None:
+        return artifacts
+    return [artifact for artifact in artifacts if _artifact_is_owned_by(artifact, owner_id)]
+
+
+def _artifact_is_owned_by(artifact: dict[str, Any], owner_id: str | None) -> bool:
+    if owner_id is None:
+        return True
+    owner_values: list[str] = []
+    for field_name in ("tenant_id", "created_by"):
+        value = artifact.get(field_name)
+        if isinstance(value, dict):
+            value = value.get("id")
+        normalized = str(value or "").strip()
+        if normalized:
+            owner_values.append(normalized)
+    return bool(owner_values) and all(value == owner_id for value in owner_values)
+
+
 def _streaming_answer_fragment(data: dict[str, Any]) -> str:
     if data.get("answer"):
         return str(data["answer"])
@@ -563,6 +781,13 @@ def _is_missing_search_response(payload: Any) -> bool:
         return False
     message = str(payload.get("message", "")).lower()
     return "search" in message and ("not found" in message or "can't find" in message)
+
+
+def _is_artifact_access_denied_response(payload: Any) -> bool:
+    if not isinstance(payload, dict) or payload.get("code") not in (103, "103", 109, "109"):
+        return False
+    message = str(payload.get("message", "")).lower()
+    return "authorization" in message or "permission" in message
 
 
 def _with_retrieval_diagnostics(

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 from redis import Redis
+from sqlalchemy import select
 
 from seafile_ragflow_connector.clients.tls import (
     VerifyConfig,
@@ -21,9 +22,42 @@ from seafile_ragflow_connector.dashboard.store import (
     safe_text,
     utcnow,
 )
+from seafile_ragflow_connector.persistence.db import database_revisions
+from seafile_ragflow_connector.persistence.models.search import SearchProfile
 
 HEALTH_TIMEOUT_SECONDS = 0.5
 RAGFLOW_HEALTH_TIMEOUT_SECONDS = 3.0
+
+
+def collect_dashboard_readiness(
+    *,
+    store: DashboardEventStore,
+    settings: Settings,
+) -> dict[str, Any]:
+    checks = [
+        _timed_check("database", "Datenbank", _check_database(store)),
+        _timed_check(
+            "database_revision",
+            "Datenbankrevision",
+            _check_database_revision(settings.database_url),
+        ),
+        _timed_check("redis", "Redis", _check_redis(settings.redis_url)),
+        _timed_check("seafile", "Seafile Admin API", _check_seafile(settings)),
+        _timed_check("ragflow", "RAGFlow API", _check_ragflow(settings)),
+        _timed_check("authz_snapshot", "Authz-Snapshot", _check_authz_snapshot(store, settings)),
+    ]
+    ready = all(check["status"] == "ok" for check in checks)
+    return {
+        "status": "ready" if ready else "not_ready",
+        "checks": [
+            {
+                "name": check["name"],
+                "status": check["status"],
+                "latency_ms": check["latency_ms"],
+            }
+            for check in checks
+        ],
+    }
 
 
 def collect_dashboard_health(
@@ -120,6 +154,16 @@ def _check_database(store: DashboardEventStore) -> Callable[[], dict[str, Any]]:
     def run() -> dict[str, Any]:
         store.ping_database()
         return {"status": "ok", "message": "SQL-Ping erfolgreich."}
+
+    return run
+
+
+def _check_database_revision(database_url: str) -> Callable[[], dict[str, Any]]:
+    def run() -> dict[str, Any]:
+        current, expected = database_revisions(database_url)
+        if current != expected:
+            return {"status": "error", "message": "Datenbankrevision ist nicht aktuell."}
+        return {"status": "ok", "message": f"Alembic-Revision {expected} ist aktuell."}
 
     return run
 
@@ -279,6 +323,35 @@ def _check_sync_jobs(status: dict[str, Any]) -> dict[str, Any]:
         "failed_jobs": failed,
         "maintenance_action": "cleanup_dead_jobs" if failed else None,
     }
+
+
+def _check_authz_snapshot(
+    store: DashboardEventStore,
+    settings: Settings,
+) -> Callable[[], dict[str, Any]]:
+    def run() -> dict[str, Any]:
+        with store.session_factory() as session:
+            profiles = session.scalars(
+                select(SearchProfile).where(SearchProfile.enabled.is_(True))
+            ).all()
+        if not profiles:
+            return {"status": "ok", "message": "Keine aktiven Search-Profile vorhanden."}
+        timestamps = [profile.last_acl_sync_at for profile in profiles]
+        if any(timestamp is None for timestamp in timestamps):
+            return {"status": "error", "message": "ACL-Snapshot fehlt."}
+        normalized = [
+            timestamp.replace(tzinfo=UTC) if timestamp.tzinfo is None else timestamp
+            for timestamp in timestamps
+            if timestamp is not None
+        ]
+        oldest_age = max(
+            (datetime.now(UTC) - timestamp).total_seconds() for timestamp in normalized
+        )
+        if oldest_age > settings.authz_api_max_acl_age_seconds:
+            return {"status": "error", "message": "ACL-Snapshot ist veraltet."}
+        return {"status": "ok", "message": "ACL-Snapshot ist aktuell."}
+
+    return run
 
 
 def _tls_probe(

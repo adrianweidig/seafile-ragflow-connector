@@ -91,3 +91,22 @@ X-Authz-Email: olaf@example.local
 
 Alle drei Routen verlangen das Authz-Bearer-Secret. Ohne korrektes Secret
 antwortet der Core mit `401` beziehungsweise `403`.
+
+## Abgrenzung zur nativen RAGFlow-Sichtbarkeit
+
+`RAGFLOW_GENERATED_DATASET_PERMISSION=team` macht neu erzeugte
+Bibliotheks-Datasets für alle Mitglieder des RAGFlow-Tenants des Connectors
+sichtbar. Das ist eine tenantweite RAGFlow-Berechtigung und keine Seafile-ACL.
+Nutzer benötigen weiterhin eine Mitgliedschaft in diesem RAGFlow-Tenant; für
+Connector-Suche und OpenWebUI entscheidet zusätzlich unverändert der oben
+beschriebene Seafile-ACL-Snapshot. Das interne Template-Dataset (standardmäßig
+`connector_template`) bleibt immer privat (`me`).
+
+`team` allein überträgt keine Eigentümerschaft an vorhandenen Chats oder Search
+Apps und macht fremd besessene Artefakte nicht automatisch ausführbar. Für
+einen kontrollierten Admin-Zieluser kann der Connector deshalb eine separate
+interaktive Identität konfigurieren. Diese besitzt ihre automatisch
+verwalteten Chat- und Search-App-Spiegel und referenziert die kanonischen
+Team-Datasets. Normale Nutzer erhalten dadurch keine native RAGFlow-Freigabe;
+sie arbeiten weiterhin über Connector Search oder OpenWebUI mit Seafile-ACL-
+Prüfung.
