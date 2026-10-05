@@ -41,8 +41,64 @@ def test_unversioned_create_all_era_database_is_stamped_then_upgraded(tmp_path: 
         columns = {column["name"] for column in inspect(engine).get_columns("sync_jobs")}
     finally:
         engine.dispose()
-    assert current == expected == "0006_sync_consistency_state"
+    assert current == expected == "0007_dashboard_admin_control"
     assert "dedup_key" in columns
+
+
+def test_0007_adds_persistent_admin_control_and_job_pause(tmp_path: Path) -> None:
+    database_path = tmp_path / "admin-control-upgrade.db"
+    database_url = f"sqlite:///{database_path.as_posix()}"
+    config = db._alembic_config(database_url)
+    command.upgrade(config, "0006_sync_consistency_state")
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO libraries (repo_id, name, name_slug) "
+                    "VALUES ('repo', 'Demo', 'demo')"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO sync_jobs "
+                    "(job_type, dedup_key, status, priority, attempts, max_attempts) "
+                    "VALUES ('SYNC_LIBRARY_FULL', 'existing', 'queued', 100, 0, 5)"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        job_columns = {
+            column["name"] for column in inspector.get_columns("sync_jobs")
+        }
+        with engine.connect() as connection:
+            workflow_count = connection.scalar(
+                text("SELECT count(*) FROM workflow_control_state")
+            )
+            library = connection.execute(
+                text(
+                    "SELECT repo_id, enabled, paused, updated_by "
+                    "FROM library_control_states"
+                )
+            ).one()
+            pause_requested_at = connection.scalar(
+                text("SELECT pause_requested_at FROM sync_jobs")
+            )
+    finally:
+        engine.dispose()
+
+    assert {"workflow_control_state", "library_control_states"} <= tables
+    assert "pause_requested_at" in job_columns
+    assert workflow_count == 0
+    assert tuple(library) == ("repo", 1, 0, "migration")
+    assert pause_requested_at is None
 
 
 def test_0006_adds_recovery_tables_and_backfills_current_document(tmp_path: Path) -> None:

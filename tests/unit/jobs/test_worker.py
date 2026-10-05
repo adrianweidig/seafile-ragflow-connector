@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from seafile_ragflow_connector.clients.http import ApiError
+from seafile_ragflow_connector.jobs.context import JobDeferredError
 from seafile_ragflow_connector.jobs.job_store import JobStore
 from seafile_ragflow_connector.jobs.types import JobSpec, JobStatus, JobType
 from seafile_ragflow_connector.jobs.worker import WorkerRunner, is_retryable_job_error
@@ -184,6 +185,84 @@ def test_running_job_cancel_request_wins_over_late_handler_failure() -> None:
         job = session.get(SyncJob, job_id)
         assert job is not None
         assert job.status == JobStatus.CANCELLED.value
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("late failure"), JobDeferredError("late defer", delay_seconds=1)],
+)
+def test_cancel_wins_when_requested_after_worker_precheck(
+    failure: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store()
+    job_id = store.enqueue(JobSpec(JobType.SYNC_LIBRARY_FULL, repo_id="race-repo"))
+    original_cancel_requested = store.cancel_requested
+    checks = 0
+
+    def stale_cancel_check(
+        checked_job_id: int,
+        *,
+        worker_id: str | None = None,
+    ) -> bool:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            assert store.request_cancel(job_id)
+            return False
+        return original_cancel_requested(checked_job_id, worker_id=worker_id)
+
+    monkeypatch.setattr(store, "cancel_requested", stale_cancel_check)
+
+    def fail(_spec: JobSpec) -> None:
+        raise failure
+
+    runner = WorkerRunner(
+        store,
+        handlers={JobType.SYNC_LIBRARY_FULL: fail},
+        worker_id="worker-a",
+    )
+
+    assert runner.run_once()
+    job = store.get(job_id)
+    assert job is not None
+    assert job.status == JobStatus.CANCELLED.value
+    assert job.cancel_requested_at is not None
+
+
+def test_running_job_pause_returns_to_held_queue_without_consuming_attempt() -> None:
+    store = _store()
+    job_id = store.enqueue(JobSpec(JobType.SYNC_LIBRARY_FULL, repo_id="repo"))
+
+    def pause(_spec: JobSpec) -> None:
+        assert store.request_pause(job_id)
+        raise RuntimeError("cooperative pause checkpoint")
+
+    runner = WorkerRunner(
+        store,
+        handlers={JobType.SYNC_LIBRARY_FULL: pause},
+        worker_id="worker-a",
+    )
+
+    assert runner.run_once()
+    paused = store.get(job_id)
+    assert paused is not None
+    assert paused.status == JobStatus.QUEUED.value
+    assert paused.pause_requested_at is not None
+    assert paused.attempts == 0
+    assert paused.locked_by is None
+
+    assert store.resume(job_id)
+    resumed = WorkerRunner(
+        store,
+        handlers={JobType.SYNC_LIBRARY_FULL: lambda _spec: None},
+        worker_id="worker-b",
+    )
+    assert resumed.run_once()
+    completed = store.get(job_id)
+    assert completed is not None
+    assert completed.status == JobStatus.SUCCEEDED.value
+    assert completed.attempts == 1
 
 
 def test_busy_repository_lease_defers_job_without_consuming_attempt() -> None:

@@ -18,6 +18,64 @@ def _clean_answer(answer: str, *, clean_ragflow_markers: bool) -> str:
     return text.strip()
 
 
+def _strip_urls_for_synthesis(value: Any, *, preview_only: bool) -> str:
+    """Remove stale source URLs without regex over unbounded Markdown."""
+    text = str(value or "")
+    output: list[str] = []
+    index = 0
+    terminators = set(" \t\r\n<>\"'`)]}")
+
+    while index < len(text):
+        if not (text.startswith("https://", index) or text.startswith("http://", index)):
+            output.append(text[index])
+            index += 1
+            continue
+
+        end = index
+        while end < len(text) and text[end] not in terminators:
+            end += 1
+
+        raw_url = text[index:end]
+        trailing = ""
+        while raw_url.endswith((".", ",", ";", "!", "?")):
+            trailing = raw_url[-1] + trailing
+            raw_url = raw_url[:-1]
+
+        should_remove = not preview_only or _is_openwebui_source_preview_url(raw_url)
+        if not should_remove:
+            output.extend(text[index:end])
+            index = end
+            continue
+
+        wrapper_end = end
+        if len(output) >= 2 and output[-2:] == ["(", "<"] and text.startswith(">)", end):
+            del output[-2:]
+            wrapper_end += 2
+        elif output[-1:] == ["("] and text.startswith(")", end):
+            output.pop()
+            wrapper_end += 1
+        elif output[-1:] == ["<"] and text.startswith(">", end):
+            output.pop()
+            wrapper_end += 1
+
+        output.extend(trailing)
+        index = wrapper_end
+
+    return "".join(output)
+
+
+def _is_openwebui_source_preview_url(value: Any) -> bool:
+    try:
+        parsed = urlsplit(str(value or ""))
+    except ValueError:
+        return False
+    return (
+        parsed.scheme in {"http", "https"}
+        and bool(parsed.netloc)
+        and "/api/openwebui/sources/preview" in parsed.path.lower()
+    )
+
+
 class _SnippetHTMLTextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)

@@ -182,7 +182,10 @@ def _recent_messages_for_synthesis(messages: Any, *, max_messages: int = 6) -> l
             continue
         content = message.get("content")
         text = content if isinstance(content, str) else _content_parts_to_text(content)
-        text = _compact(_clean_answer(text, clean_ragflow_markers=True), 1800)
+        text = _clean_answer(text, clean_ragflow_markers=True)
+        if role == "assistant":
+            text = _strip_urls_for_synthesis(text, preview_only=False)
+        text = _compact(text, 1800)
         if text:
             normalized.append({"role": role, "content": text})
 
@@ -258,6 +261,7 @@ def _postprocess_synthesized_answer(answer: str, sources: list[dict[str, Any]], 
     if not text:
         return ""
 
+    text = _strip_urls_for_synthesis(text, preview_only=True)
     text = re.sub(r"\bDie\s+Verfügbaren\s+Quellen\b", "Die verfügbaren Quellen", text)
     text = re.sub(r"\s*\[(?:Quelle|Source)\s*\d+\]", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*\[\d+\]", "", text)

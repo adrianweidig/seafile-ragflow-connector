@@ -139,6 +139,17 @@ SEARCH_HTML = r"""<!doctype html>
       font-weight: 780;
     }
     .theme-option[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); }
+    .logout-form { margin: 0; }
+    .logout-button {
+      min-height: 40px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0 14px;
+      background: var(--surface);
+      color: var(--text);
+      font-weight: 760;
+    }
+    .logout-button:hover { border-color: var(--border-strong); background: var(--surface-2); }
     main {
       width: min(1680px, 100%);
       margin: 0 auto;
@@ -613,7 +624,8 @@ SEARCH_HTML = r"""<!doctype html>
     }
     @media (max-width: 600px) {
       header { display: grid; position: static; }
-      .header-actions, .theme-toggle { width: 100%; }
+      .header-actions { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+      .theme-toggle { width: 100%; }
       .toolbar { display: grid; }
       .segments { width: 100%; }
       .viewer-head { display: grid; }
@@ -687,6 +699,9 @@ SEARCH_HTML = r"""<!doctype html>
           <button class="theme-option" type="button" data-theme-choice="light" aria-pressed="true">Hell</button>
           <button class="theme-option" type="button" data-theme-choice="dark" aria-pressed="false">Dunkel</button>
         </div>
+        <form class="logout-form" method="post" action="/auth/logout">
+          <button class="logout-button" type="submit">Abmelden</button>
+        </form>
       </div>
     </header>
     <main>
@@ -1062,10 +1077,20 @@ SEARCH_HTML = r"""<!doctype html>
       });
     }
 
+    function requireActiveSession(response) {
+      if (response.status === 401) {
+        window.location.assign('/auth/login');
+        throw new Error('Die Sitzung ist abgelaufen. Anmeldung wird geöffnet.');
+      }
+      return response;
+    }
+
     async function loadProfiles() {
       setState(t('profilesLoading'), 'loading');
       try {
-        const response = await fetch('/api/search/profiles', {headers: {'Accept': 'application/json'}});
+        const response = requireActiveSession(
+          await fetch('/api/search/profiles', {headers: {'Accept': 'application/json'}})
+        );
         const data = await response.json();
         if (!response.ok) throw new Error(data.message || data.error || t('profileLoadFailed'));
         const capabilities = data.capabilities || {};
@@ -1121,18 +1146,20 @@ SEARCH_HTML = r"""<!doctype html>
         'loading'
       );
       try {
-        const response = await fetch(append ? '/api/search/query' : request.endpoint, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-          signal: activeRequestController.signal,
-          body: JSON.stringify({
-            profile_ids: request.profile_ids,
-            question: request.question,
-            page_size: request.page_size,
-            cursor,
-            request_id: requestId,
+        const response = requireActiveSession(
+          await fetch(append ? '/api/search/query' : request.endpoint, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+            signal: activeRequestController.signal,
+            body: JSON.stringify({
+              profile_ids: request.profile_ids,
+              question: request.question,
+              page_size: request.page_size,
+              cursor,
+              request_id: requestId,
+            })
           })
-        });
+        );
         const data = await response.json();
         if (!response.ok) {
           const requestError = new Error(data.message || data.error || t('searchFailed'));
@@ -1605,7 +1632,9 @@ SEARCH_HTML = r"""<!doctype html>
     async function loadBinaryPreview(url, requestId, source) {
       try {
         const target = splitUrlFragment(url);
-        const response = await fetch(target.url, {headers: {'Accept': 'image/*, */*'}});
+        const response = requireActiveSession(
+          await fetch(target.url, {headers: {'Accept': 'image/*, */*'}})
+        );
         if (!response.ok) throw new Error('Dokument konnte nicht im Viewer geladen werden.');
         const blob = await response.blob();
         if (requestId !== viewerRequestId) return;
@@ -1627,7 +1656,9 @@ SEARCH_HTML = r"""<!doctype html>
     async function loadTextPreview(url, requestId, source) {
       try {
         const target = splitUrlFragment(url);
-        const response = await fetch(target.url, {headers: {'Accept': 'text/plain, */*'}});
+        const response = requireActiveSession(
+          await fetch(target.url, {headers: {'Accept': 'text/plain, */*'}})
+        );
         if (!response.ok) throw new Error('Text konnte nicht geladen werden.');
         const text = await response.text();
         if (requestId !== viewerRequestId) return;

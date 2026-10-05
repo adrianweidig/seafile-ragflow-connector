@@ -17,9 +17,10 @@ from seafile_ragflow_connector.jobs.context import (
     JobDeferredError,
     activate_job_cancellation,
     activate_job_execution,
+    activate_job_pause,
 )
 from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
-from seafile_ragflow_connector.jobs.types import JobSpec, JobType
+from seafile_ragflow_connector.jobs.types import JobSpec, JobStatus, JobType
 from seafile_ragflow_connector.persistence.models.job import SyncJob
 from seafile_ragflow_connector.persistence.sync_state import (
     RepoLeaseBusyError,
@@ -85,6 +86,23 @@ class WorkerRunner:
         started = time.perf_counter()
         spec = self.job_store.to_spec(job)
         self._refresh_workflow_parents(job)
+        if self.job_store.cancel_requested(job.id, worker_id=self.worker_id):
+            if not self.job_store.mark_cancelled(job.id, worker_id=self.worker_id):
+                self._log_lease_lost(job)
+                return
+            self.log.info("job.cancelled", job_id=job.id, job_type=spec.job_type)
+            self._refresh_workflow_parents(job)
+            return
+        if self.job_store.pause_requested(job.id, worker_id=self.worker_id):
+            if not self.job_store.hold_running_for_pause(
+                job.id,
+                worker_id=self.worker_id,
+            ):
+                self._log_lease_lost(job)
+                return
+            self.log.info("job.paused", job_id=job.id, job_type=spec.job_type)
+            self._refresh_workflow_parents(job)
+            return
         handler = self.handlers.get(spec.job_type)
         if handler is None:
             error = f"no handler registered for {spec.job_type}"
@@ -98,13 +116,14 @@ class WorkerRunner:
             if status is None:
                 self._log_lease_lost(job)
                 return
-            jobs_failed.inc()
-            self.log.warning(
-                "job.no_handler",
-                job_id=job.id,
-                job_type=spec.job_type,
-                status=status.value,
-            )
+            if not self._log_controlled_transition(job, spec, status):
+                jobs_failed.inc()
+                self.log.warning(
+                    "job.no_handler",
+                    job_id=job.id,
+                    job_type=spec.job_type,
+                    status=status.value,
+                )
             self._refresh_workflow_parents(job)
             return
 
@@ -124,15 +143,13 @@ class WorkerRunner:
                     raise RuntimeError("job lease was lost before repository lease binding")
             except Exception as exc:
                 if isinstance(exc, RepoLeaseBusyError):
-                    deferred = self.job_store.defer_without_attempt(
+                    status = self.job_store.defer_without_attempt(
                         job.id,
                         str(exc),
                         worker_id=self.worker_id,
                         delay_seconds=min(30, self.heartbeat_seconds),
                     )
-                    status = None
                 else:
-                    deferred = False
                     status = self.job_store.mark_failed(
                         job.id,
                         str(exc),
@@ -141,14 +158,16 @@ class WorkerRunner:
                     )
                 if repo_lease is not None:
                     self.repo_lease_store.release(repo_lease)
-                if deferred:
+                if status is None:
+                    self._log_lease_lost(job)
+                elif self._log_controlled_transition(job, spec, status):
+                    pass
+                elif isinstance(exc, RepoLeaseBusyError):
                     self.log.info(
                         "job.repo_lease_deferred",
                         job_id=job.id,
                         repo_id=spec.repo_id,
                     )
-                elif status is None:
-                    self._log_lease_lost(job)
                 else:
                     jobs_failed.inc()
                     self.log.warning(
@@ -172,11 +191,21 @@ class WorkerRunner:
         failure: Exception | None = None
         try:
             context = activate_repo_lease(repo_lease) if repo_lease else nullcontext()
-            with context, activate_job_execution(job.id, job.run_id), activate_job_cancellation(
-                lambda: self.job_store.cancel_requested(
-                    job.id,
-                    worker_id=self.worker_id,
-                )
+            with (
+                context,
+                activate_job_execution(job.id, job.run_id),
+                activate_job_cancellation(
+                    lambda: self.job_store.cancel_requested(
+                        job.id,
+                        worker_id=self.worker_id,
+                    )
+                ),
+                activate_job_pause(
+                    lambda: self.job_store.pause_requested(
+                        job.id,
+                        worker_id=self.worker_id,
+                    )
+                ),
             ):
                 handler(spec)
         except Exception as exc:
@@ -202,23 +231,37 @@ class WorkerRunner:
                 self.log.info("job.cancelled", job_id=job.id, job_type=spec.job_type)
                 self._refresh_workflow_parents(job)
                 return
+            if failure is not None and self.job_store.pause_requested(
+                job.id,
+                worker_id=self.worker_id,
+            ):
+                if not self.job_store.hold_running_for_pause(
+                    job.id,
+                    worker_id=self.worker_id,
+                ):
+                    self._log_lease_lost(job)
+                    return
+                self.log.info("job.paused", job_id=job.id, job_type=spec.job_type)
+                self._refresh_workflow_parents(job)
+                return
             if failure is not None:
                 if isinstance(failure, JobDeferredError):
-                    deferred = self.job_store.defer_without_attempt(
+                    status = self.job_store.defer_without_attempt(
                         job.id,
                         str(failure),
                         worker_id=self.worker_id,
                         delay_seconds=failure.delay_seconds,
                     )
-                    if not deferred:
+                    if status is None:
                         self._log_lease_lost(job)
                         return
-                    self.log.info(
-                        "job.deferred",
-                        job_id=job.id,
-                        job_type=spec.job_type,
-                        delay_seconds=failure.delay_seconds,
-                    )
+                    if not self._log_controlled_transition(job, spec, status):
+                        self.log.info(
+                            "job.deferred",
+                            job_id=job.id,
+                            job_type=spec.job_type,
+                            delay_seconds=failure.delay_seconds,
+                        )
                     self._refresh_workflow_parents(job)
                     return
                 retryable = is_retryable_job_error(failure)
@@ -231,17 +274,43 @@ class WorkerRunner:
                 if status is None:
                     self._log_lease_lost(job)
                     return
-                jobs_failed.inc()
-                self.log.warning(
-                    "job.failed",
-                    job_id=job.id,
-                    job_type=spec.job_type,
-                    status=status.value,
-                    retryable=retryable,
-                )
+                if not self._log_controlled_transition(job, spec, status):
+                    jobs_failed.inc()
+                    self.log.warning(
+                        "job.failed",
+                        job_id=job.id,
+                        job_type=spec.job_type,
+                        status=status.value,
+                        retryable=retryable,
+                    )
                 self._refresh_workflow_parents(job)
                 return
             if not self.job_store.mark_succeeded(job.id, worker_id=self.worker_id):
+                if self.job_store.cancel_requested(
+                    job.id,
+                    worker_id=self.worker_id,
+                ) and self.job_store.mark_cancelled(job.id, worker_id=self.worker_id):
+                    self.log.info(
+                        "job.cancelled",
+                        job_id=job.id,
+                        job_type=spec.job_type,
+                    )
+                    self._refresh_workflow_parents(job)
+                    return
+                if self.job_store.pause_requested(
+                    job.id,
+                    worker_id=self.worker_id,
+                ) and self.job_store.hold_running_for_pause(
+                        job.id,
+                        worker_id=self.worker_id,
+                ):
+                    self.log.info(
+                        "job.paused",
+                        job_id=job.id,
+                        job_type=spec.job_type,
+                    )
+                    self._refresh_workflow_parents(job)
+                    return
                 self._log_lease_lost(job)
                 return
             self.log.info("job.succeeded", job_id=job.id, job_type=spec.job_type)
@@ -293,6 +362,28 @@ class WorkerRunner:
             job_id=job.id,
             job_type=job.job_type,
         )
+
+    def _log_controlled_transition(
+        self,
+        job: SyncJob,
+        spec: JobSpec,
+        status: JobStatus,
+    ) -> bool:
+        if status == JobStatus.CANCELLED:
+            self.log.info(
+                "job.cancelled",
+                job_id=job.id,
+                job_type=spec.job_type,
+            )
+            return True
+        if status == JobStatus.QUEUED:
+            self.log.info(
+                "job.paused",
+                job_id=job.id,
+                job_type=spec.job_type,
+            )
+            return True
+        return False
 
     def _refresh_workflow_parents(self, job: SyncJob) -> None:
         try:

@@ -131,27 +131,40 @@ the template should be visible.
 ## Dashboard Path
 
 When the stack runs through `connector-controller` with
-`CONNECTOR_DASHBOARD_ENABLED=true`, the workflow can be started completely from
-the dashboard:
+`CONNECTOR_DASHBOARD_ENABLED=true`,
+`CONNECTOR_DASHBOARD_CONTROL_ENABLED=true`, and complete Basic Auth, the
+workflow can be started completely from the dashboard:
 
-1. Open the dashboard, switch to the **Workflow** tab, and run
-   **Check libraries**.
+1. Open the dashboard and switch to **Administration**. The backward-compatible
+   initial state is global `running`, and unknown libraries are considered
+   active. For an isolated test, first choose **Disable**, let existing work
+   finish or pause/stop it in a controlled way, and then run **Check libraries**.
 2. The table lists only libraries visible to the current Seafile admin API key.
    Encrypted or virtual libraries remain visible depending on skip rules, but
    are not selectable.
-3. Select the test library.
+3. Disable or pause every non-test library, set the test library to `active`,
+   and select it.
 4. Keep **Synchronize RAGFlow dataset and documents** enabled when datasets and
    documents should be created or updated.
 5. Keep **Create RAGFlow chat and OpenWebUI tool/pipe** enabled when the
    OpenWebUI path should be created for the selected libraries.
 6. Optionally limit the Seafile path to `/manual-workflow-check`.
-7. Run **Start selection**, then verify the **Sync runs**, **Systems**, and
-   **OpenWebUI** tabs.
+7. Choose delta, full, or reconcile, run **Start selection**, and observe the
+   phase plus file and parsing counters. Then verify the **Sync runs**,
+   **Systems**, and **OpenWebUI** tabs.
+8. Exercise pause/resume and stop/retry only on this disposable test library.
+   Stop is cooperative and never stops a container. Choose global **Start**
+   only when automatic scheduling is intended for every remaining runnable
+   library.
 
 The standalone `connector dashboard` command still starts a status dashboard
-without the runtime controller. Control is shown there as unavailable.
+without the runtime controller. Control is intentionally unavailable there.
 
-## Step 3: Trigger Sync to RAGFlow
+## CLI Alternative to Step 3: Trigger Sync to RAGFlow
+
+For the same test, use either the dashboard path above or this CLI alternative,
+never both. Without a matching scope or control selection, `connector
+sync-once` may include more libraries than the dashboard selection.
 
 In the Compose stack:
 

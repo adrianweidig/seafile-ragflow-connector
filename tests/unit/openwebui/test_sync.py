@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import unittest
+from collections.abc import Callable
+from hashlib import sha256
 
 try:
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool
 
+    from seafile_ragflow_connector.clients.http import ApiError
     from seafile_ragflow_connector.clients.openwebui import OpenWebUICapabilities
     from seafile_ragflow_connector.config.settings import Settings
+    from seafile_ragflow_connector.domain.ragflow_defaults import (
+        build_chat_payload,
+        build_search_answer_chat_payload,
+    )
+    from seafile_ragflow_connector.jobs.context import activate_job_pause
     from seafile_ragflow_connector.openwebui.sync import OpenWebUISyncService
     from seafile_ragflow_connector.persistence.db import Base
     from seafile_ragflow_connector.persistence.models.library import Library
@@ -23,12 +31,20 @@ except ModuleNotFoundError as exc:
 
 
 class _FakeRAGFlowClient:
-    def __init__(self) -> None:
+    def __init__(self, *, artifact_owner_id: str | None = None) -> None:
+        self.artifact_owner_id = artifact_owner_id
         self.created_chats: list[dict[str, object]] = []
         self.updated_chats: list[tuple[str, dict[str, object]]] = []
         self.chats: dict[str, dict[str, object]] = {}
         self.deleted_chats: list[list[str]] = []
         self.next_chat_id = 1
+        self.searches: dict[str, dict[str, object]] = {}
+        self.created_searches: list[dict[str, object]] = []
+        self.updated_searches: list[tuple[str, dict[str, object]]] = []
+        self.owner_verifications = 0
+
+    def verify_artifact_owner(self):
+        self.owner_verifications += 1
 
     def get_chat(self, chat_id: str):
         return self.chats.get(chat_id)
@@ -57,7 +73,58 @@ class _FakeRAGFlowClient:
 
     def delete_chats(self, chat_ids: list[str]):
         self.deleted_chats.append(chat_ids)
+        for chat_id in chat_ids:
+            self.chats.pop(chat_id, None)
         return True
+
+    def list_searches(self, *, keywords: str | None = None, page_size: int | None = None):
+        _ = page_size
+        searches = list(self.searches.values())
+        if keywords:
+            searches = [search for search in searches if search.get("name") == keywords]
+        return searches
+
+    def get_search(self, search_id: str):
+        return self.searches.get(search_id)
+
+    def create_search(self, payload: dict[str, object]):
+        self.created_searches.append(payload)
+        search = {"id": "search-1", **payload}
+        self.searches["search-1"] = search
+        return search
+
+    def update_search(self, search_id: str, payload: dict[str, object]):
+        self.updated_searches.append((search_id, payload))
+        search = {"id": search_id, **payload}
+        self.searches[search_id] = search
+        return search
+
+
+def _connector_chat(chat_id: str, dataset_id: str) -> dict[str, object]:
+    short_id = sha256(dataset_id.encode("utf-8")).hexdigest()[:8]
+    return {
+        "id": chat_id,
+        "name": f"RAG_demo_{short_id}",
+        "dataset_ids": [dataset_id],
+    }
+
+
+class _InitiallyEmptyDatasetRAGFlowClient(_FakeRAGFlowClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.dataset_ready = False
+
+    def create_chat(self, payload: dict[str, object]):
+        if payload.get("dataset_ids") and not self.dataset_ready:
+            raise ApiError(
+                "API returned an error code",
+                status_code=200,
+                payload={
+                    "code": 102,
+                    "message": "The dataset dataset-1 doesn't own parsed file",
+                },
+            )
+        return super().create_chat(payload)
 
 
 class _FakeOpenWebUIClient:
@@ -167,12 +234,38 @@ class _FailingDeleteOnceOpenWebUIClient(_FakeOpenWebUIClient):
         return super().delete_tool(tool_id)
 
 
+class _FailingChatDeleteOnceRAGFlowClient(_FakeRAGFlowClient):
+    def __init__(self, failing_chat_id: str) -> None:
+        super().__init__()
+        self.failing_chat_id = failing_chat_id
+        self.delete_failures = 0
+
+    def delete_chats(self, chat_ids: list[str]):
+        if self.failing_chat_id in chat_ids and self.delete_failures == 0:
+            self.delete_failures += 1
+            raise RuntimeError("simulated transient chat delete failure")
+        return super().delete_chats(chat_ids)
+
+
+class _ControlSwitchingOpenWebUIClient(_FakeOpenWebUIClient):
+    def __init__(self, on_first_delete: Callable[[], None]) -> None:
+        super().__init__()
+        self.on_first_delete = on_first_delete
+
+    def delete_tool(self, tool_id: str):
+        result = super().delete_tool(tool_id)
+        if len(self.deleted_tools) == 1:
+            self.on_first_delete()
+        return result
+
+
 def _settings(
     *,
     mode: str = "sync",
     answer_synthesis: bool = False,
     proxy_base_url: str = "http://connector:8080",
     proxy_secret: str = "proxy-secret",
+    interactive: bool = False,
 ) -> Settings:
     return Settings(
         seafile_base_url="http://seafile.local",
@@ -180,6 +273,10 @@ def _settings(
         seafile_sync_user_token="sync-token",
         ragflow_base_url="http://ragflow.local",
         ragflow_api_key="ragflow-token",
+        ragflow_generated_dataset_permission="team" if interactive else "me",
+        ragflow_interactive_api_key="interactive-token" if interactive else None,
+        ragflow_interactive_owner_id="owner-1" if interactive else None,
+        ragflow_interactive_chat_model_id="model@provider" if interactive else None,
         database_url="sqlite://",
         redis_url="redis://127.0.0.1:1/0",
         openwebui_integration_enabled=True,
@@ -212,6 +309,221 @@ def _session_factory(test_case: unittest.TestCase):
     "pydantic or sqlalchemy is not installed in this environment",
 )
 class OpenWebUISyncServiceTests(unittest.TestCase):
+    def test_interactive_client_owns_chats_and_native_search_app(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Demo Dataset",
+                    status="active",
+                )
+            )
+            session.commit()
+        primary = _FakeRAGFlowClient()
+        interactive = _FakeRAGFlowClient(artifact_owner_id="owner-1")
+        service = OpenWebUISyncService(
+            settings=_settings(interactive=True),
+            session_factory=session_factory,
+            ragflow_client=primary,  # type: ignore[arg-type]
+            interactive_ragflow_client=interactive,  # type: ignore[arg-type]
+            openwebui_client=_FakeOpenWebUIClient(),  # type: ignore[arg-type]
+        )
+
+        first = service.sync_once()
+        second = service.sync_once()
+
+        self.assertEqual(first.chats_created, 1)
+        self.assertEqual(second.chats_reused, 1)
+        self.assertEqual(primary.created_chats, [])
+        self.assertTrue(interactive.created_chats)
+        self.assertTrue(
+            all(chat["llm_id"] == "model@provider" for chat in interactive.created_chats)
+        )
+        self.assertEqual(len(interactive.created_searches), 1)
+        search_config = interactive.created_searches[0]["search_config"]
+        self.assertEqual(search_config["kb_ids"], ["dataset-1"])
+        self.assertEqual(search_config["chat_id"], "model@provider")
+        self.assertEqual(interactive.updated_searches, [])
+
+    def test_primary_owner_chat_stays_pending_until_completion_is_verified(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Demo Dataset",
+                    status="active",
+                )
+            )
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Demo Dataset",
+                    ragflow_chat_id="service-owned-chat",
+                    sync_status="synced",
+                )
+            )
+            session.commit()
+        interactive = _FakeRAGFlowClient(artifact_owner_id="owner-1")
+        primary = _FakeRAGFlowClient()
+        primary.chats["service-owned-chat"] = _connector_chat(
+            "service-owned-chat",
+            "dataset-1",
+        )
+        service = OpenWebUISyncService(
+            settings=_settings(interactive=True),
+            session_factory=session_factory,
+            ragflow_client=primary,  # type: ignore[arg-type]
+            interactive_ragflow_client=interactive,  # type: ignore[arg-type]
+            openwebui_client=_FakeOpenWebUIClient(),  # type: ignore[arg-type]
+        )
+
+        summary = service.sync_once()
+
+        self.assertEqual(summary.chats_created, 1)
+        self.assertEqual(summary.manual_required, 1)
+        self.assertEqual(interactive.deleted_chats, [])
+        self.assertEqual(primary.deleted_chats, [])
+        with session_factory() as session:
+            mapping = session.query(OpenWebUIDatasetMapping).one()
+            self.assertNotEqual(mapping.ragflow_chat_id, "service-owned-chat")
+            self.assertEqual(mapping.sync_status, "manual_required")
+            pending = mapping.capabilities_snapshot["pending_replacement_cleanup"]
+            self.assertEqual(
+                pending["chats"],
+                [
+                    {
+                        "id": "service-owned-chat",
+                        "expected_dataset_id": "dataset-1",
+                        "provenance": "owner_migration_completion_unverified",
+                    }
+                ],
+            )
+
+    def test_scoped_sync_keeps_all_active_datasets_in_native_search_app(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    Library(
+                        repo_id="repo-1",
+                        name="Alpha",
+                        name_slug="alpha",
+                        ragflow_dataset_id="dataset-1",
+                        status="active",
+                    ),
+                    Library(
+                        repo_id="repo-2",
+                        name="Beta",
+                        name_slug="beta",
+                        ragflow_dataset_id="dataset-2",
+                        status="active",
+                    ),
+                ]
+            )
+            session.commit()
+        interactive = _FakeRAGFlowClient(artifact_owner_id="owner-1")
+        service = OpenWebUISyncService(
+            settings=_settings(interactive=True),
+            session_factory=session_factory,
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            interactive_ragflow_client=interactive,  # type: ignore[arg-type]
+            openwebui_client=_FakeOpenWebUIClient(),  # type: ignore[arg-type]
+        )
+
+        summary = service.sync_once(repo_ids={"repo-1"})
+
+        self.assertEqual(summary.datasets_seen, 1)
+        search_config = interactive.created_searches[0]["search_config"]
+        self.assertEqual(search_config["kb_ids"], ["dataset-1", "dataset-2"])
+
+    def test_global_primary_owner_artifacts_are_reported_without_name_only_delete(
+        self,
+    ) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Demo Dataset",
+                    status="active",
+                )
+            )
+            session.commit()
+        settings = _settings(interactive=True)
+        primary = _FakeRAGFlowClient()
+        primary.chats["primary-template"] = {
+            "id": "primary-template",
+            **build_chat_payload(settings.ragflow_template_chat_name),
+        }
+        primary.chats["foreign-template"] = {
+            "id": "foreign-template",
+            "name": settings.ragflow_template_chat_name,
+            "description": "foreign artifact with a matching name",
+        }
+        primary.chats["primary-answer"] = {
+            "id": "primary-answer",
+            **build_search_answer_chat_payload(settings.ragflow_search_answer_chat_name),
+        }
+        primary.searches["primary-search"] = {
+            "id": "primary-search",
+            "name": settings.ragflow_search_template_name,
+            "description": (
+                "Connector-verwaltetes Search-Template für nutzernahe "
+                "RAGFlow-Suchen."
+            ),
+            "search_config": {},
+        }
+        primary.searches["foreign-search"] = {
+            "id": "foreign-search",
+            "name": settings.ragflow_search_template_name,
+            "description": "foreign artifact with a matching name",
+            "search_config": {},
+        }
+        interactive = _FakeRAGFlowClient(artifact_owner_id="owner-1")
+        interactive.chats["interactive-answer"] = {
+            "id": "interactive-answer",
+            **build_search_answer_chat_payload(settings.ragflow_search_answer_chat_name),
+            "llm_id": settings.ragflow_interactive_chat_model_id,
+        }
+        service = OpenWebUISyncService(
+            settings=settings,
+            session_factory=session_factory,
+            ragflow_client=primary,  # type: ignore[arg-type]
+            interactive_ragflow_client=interactive,  # type: ignore[arg-type]
+            openwebui_client=_FakeOpenWebUIClient(),  # type: ignore[arg-type]
+        )
+
+        summary = service.sync_once()
+
+        self.assertEqual(summary.manual_required, 3)
+        self.assertEqual(primary.deleted_chats, [])
+        with session_factory() as session:
+            state = session.get(OpenWebUISyncState, "default")
+            assert state is not None
+            self.assertEqual(state.status, "manual_required")
+            pending = state.capabilities_snapshot["pending_owner_migration"]
+        self.assertEqual(
+            [entry["artifact_id"] for entry in pending],
+            ["primary-template", "primary-answer", "primary-search"],
+        )
+        self.assertTrue(
+            all(entry["status"] == "operator_cleanup_required" for entry in pending)
+        )
+        self.assertNotIn("foreign-template", {entry["artifact_id"] for entry in pending})
+        self.assertNotIn("foreign-search", {entry["artifact_id"] for entry in pending})
+
     def test_dry_run_creates_planned_mapping_without_writes(self) -> None:
         session_factory = _session_factory(self)
         with session_factory() as session:
@@ -302,7 +614,52 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         self.assertEqual(ragflow.updated_chats, [])
         with session_factory() as session:
             mapping = session.query(OpenWebUIDatasetMapping).one()
-            self.assertEqual(mapping.artifact_version, "28")
+            self.assertEqual(mapping.artifact_version, "29")
+
+    def test_sync_defers_chat_for_empty_dataset_and_retries_after_parsing(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Empty",
+                    name_slug="empty",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Empty Dataset",
+                    status="active",
+                )
+            )
+            session.commit()
+        ragflow = _InitiallyEmptyDatasetRAGFlowClient()
+        openwebui = _FakeOpenWebUIClient()
+        service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=ragflow,  # type: ignore[arg-type]
+            openwebui_client=openwebui,  # type: ignore[arg-type]
+        )
+
+        empty = service.sync_once()
+
+        self.assertEqual(empty.failed, 0)
+        self.assertEqual(empty.chats_created, 0)
+        self.assertEqual(empty.tools_created, 1)
+        self.assertEqual(empty.pipes_created, 1)
+        with session_factory() as session:
+            mapping = session.query(OpenWebUIDatasetMapping).one()
+            self.assertEqual(mapping.sync_status, "synced")
+            self.assertIsNone(mapping.ragflow_chat_id)
+
+        ragflow.dataset_ready = True
+        parsed = service.sync_once()
+
+        self.assertEqual(parsed.failed, 0)
+        self.assertEqual(parsed.chats_created, 1)
+        self.assertEqual(parsed.tools_updated, 1)
+        self.assertEqual(parsed.pipes_updated, 1)
+        with session_factory() as session:
+            mapping = session.query(OpenWebUIDatasetMapping).one()
+            self.assertEqual(mapping.ragflow_chat_id, "chat-2")
 
     def test_sync_merges_search_template_chat_settings_into_dataset_chat(self) -> None:
         session_factory = _session_factory(self)
@@ -380,10 +737,11 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
                 ]
             )
             session.commit()
+        ragflow = _FakeRAGFlowClient()
         service = OpenWebUISyncService(
             settings=_settings(),
             session_factory=session_factory,
-            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            ragflow_client=ragflow,  # type: ignore[arg-type]
             openwebui_client=_FakeOpenWebUIClient(),  # type: ignore[arg-type]
         )
 
@@ -394,6 +752,176 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
             mapping = session.query(OpenWebUIDatasetMapping).one()
             self.assertEqual(mapping.repo_id, "repo-2")
             self.assertEqual(mapping.ragflow_dataset_id, "dataset-2")
+
+    def test_sync_filters_paused_and_disabled_libraries(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    Library(
+                        repo_id="active",
+                        name="Active",
+                        name_slug="active",
+                        ragflow_dataset_id="dataset-active",
+                        status="active",
+                    ),
+                    Library(
+                        repo_id="paused",
+                        name="Paused",
+                        name_slug="paused",
+                        ragflow_dataset_id="dataset-paused",
+                        status="active",
+                    ),
+                    Library(
+                        repo_id="disabled",
+                        name="Disabled",
+                        name_slug="disabled",
+                        ragflow_dataset_id="dataset-disabled",
+                        status="active",
+                    ),
+                ]
+            )
+            session.commit()
+        service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            openwebui_client=_FakeOpenWebUIClient(),  # type: ignore[arg-type]
+        )
+        service.admin_control_store.update_library(
+            "paused",
+            updated_by="test",
+            paused=True,
+        )
+        service.admin_control_store.update_library(
+            "disabled",
+            updated_by="test",
+            enabled=False,
+        )
+
+        summary = service.sync_once()
+
+        self.assertEqual(summary.datasets_seen, 1)
+        with session_factory() as session:
+            mappings = session.query(OpenWebUIDatasetMapping).all()
+            self.assertEqual([mapping.repo_id for mapping in mappings], ["active"])
+
+    def test_scoped_sync_rejects_controlled_repo_and_dataset_ids(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset-1",
+                    status="active",
+                )
+            )
+            session.commit()
+        ragflow = _FakeRAGFlowClient()
+        openwebui = _FakeOpenWebUIClient()
+        service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=ragflow,  # type: ignore[arg-type]
+            openwebui_client=openwebui,  # type: ignore[arg-type]
+        )
+        service.admin_control_store.update_library(
+            "repo-1",
+            updated_by="test",
+            paused=True,
+        )
+
+        for requested in ({"repo-1"}, {"dataset-1"}):
+            with self.assertRaisesRegex(ValueError, "repo-1 \\(paused\\)"):
+                service.sync_once(repo_ids=requested)
+
+        self.assertEqual(ragflow.created_chats, [])
+        self.assertEqual(openwebui.operations, [])
+
+    def test_controlled_active_mapping_is_not_deleted(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset-1",
+                    status="active",
+                )
+            )
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Demo",
+                    ragflow_chat_id="chat-1",
+                    openwebui_tool_id="tool-1",
+                    openwebui_pipe_id="pipe-1",
+                    sync_status="synced",
+                )
+            )
+            session.commit()
+        ragflow = _FakeRAGFlowClient()
+        openwebui = _FakeOpenWebUIClient()
+        owned = {
+            "content": "owner: seafile-ragflow-connector",
+            "meta": {"manifest": {"owner": "seafile-ragflow-connector"}},
+        }
+        openwebui.tools["tool-1"] = dict(owned)
+        openwebui.functions["pipe-1"] = dict(owned)
+        service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=ragflow,  # type: ignore[arg-type]
+            openwebui_client=openwebui,  # type: ignore[arg-type]
+        )
+        service.admin_control_store.update_library(
+            "repo-1",
+            updated_by="test",
+            enabled=False,
+        )
+
+        summary = service.sync_once()
+
+        self.assertEqual(summary.datasets_seen, 0)
+        self.assertEqual(openwebui.deleted_tools, [])
+        self.assertEqual(openwebui.deleted_functions, [])
+        self.assertEqual(ragflow.deleted_chats, [])
+        with session_factory() as session:
+            mapping = session.query(OpenWebUIDatasetMapping).one()
+            self.assertEqual(mapping.sync_status, "synced")
+
+    def test_empty_repo_scope_does_not_expand_to_all_libraries(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset-1",
+                    status="active",
+                )
+            )
+            session.commit()
+        ragflow = _FakeRAGFlowClient()
+        service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=ragflow,  # type: ignore[arg-type]
+            openwebui_client=_FakeOpenWebUIClient(),  # type: ignore[arg-type]
+        )
+
+        summary = service.sync_once(repo_ids=set())
+
+        self.assertEqual(summary.datasets_seen, 0)
+        self.assertEqual(ragflow.created_chats, [])
+        self.assertEqual(ragflow.updated_chats, [])
+        with session_factory() as session:
+            self.assertEqual(session.query(OpenWebUIDatasetMapping).count(), 0)
 
     def test_pipe_sync_can_inject_answer_synthesis_valves(self) -> None:
         session_factory = _session_factory(self)
@@ -576,6 +1104,8 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
             )
             session.commit()
         ragflow = _FakeRAGFlowClient()
+        ragflow.chats["chat-1"] = _connector_chat("chat-1", "dataset-1")
+        ragflow.next_chat_id = 2
         openwebui = _FakeOpenWebUIClient()
         owned_payload = {
             "content": "owner: seafile-ragflow-connector",
@@ -591,6 +1121,7 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         )
 
         summary = service.sync_once()
+        second_summary = service.sync_once()
 
         self.assertEqual(summary.tools_deleted, 1)
         self.assertEqual(summary.pipes_deleted, 1)
@@ -598,9 +1129,210 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
         self.assertEqual(openwebui.deleted_tools, ["tool-1"])
         self.assertEqual(openwebui.deleted_functions, ["pipe-1"])
         self.assertEqual(ragflow.deleted_chats, [["chat-1"]])
+        self.assertEqual(second_summary.tools_deleted, 0)
+        self.assertEqual(second_summary.pipes_deleted, 0)
+        self.assertEqual(second_summary.chats_deleted, 0)
         with session_factory() as session:
             mapping = session.query(OpenWebUIDatasetMapping).one()
             self.assertEqual(mapping.sync_status, "deleted")
+            self.assertIsNone(mapping.openwebui_tool_id)
+            self.assertIsNone(mapping.openwebui_pipe_id)
+            self.assertIsNone(mapping.ragflow_chat_id)
+
+    def test_controlled_deleted_mapping_is_preserved_until_library_is_reenabled(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset-1",
+                    status="deleted",
+                )
+            )
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Demo",
+                    ragflow_chat_id="chat-1",
+                    openwebui_tool_id="tool-1",
+                    openwebui_pipe_id="pipe-1",
+                    sync_status="synced",
+                )
+            )
+            session.commit()
+        ragflow = _FakeRAGFlowClient()
+        ragflow.chats["chat-1"] = _connector_chat("chat-1", "dataset-1")
+        ragflow.next_chat_id = 2
+        openwebui = _FakeOpenWebUIClient()
+        owned = {
+            "content": "owner: seafile-ragflow-connector",
+            "meta": {"manifest": {"owner": "seafile-ragflow-connector"}},
+        }
+        openwebui.tools["tool-1"] = dict(owned)
+        openwebui.functions["pipe-1"] = dict(owned)
+        service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=ragflow,  # type: ignore[arg-type]
+            openwebui_client=openwebui,  # type: ignore[arg-type]
+        )
+        service.admin_control_store.update_library(
+            "repo-1",
+            updated_by="test",
+            enabled=False,
+        )
+
+        protected_summary = service.sync_once()
+
+        self.assertEqual(protected_summary.datasets_seen, 0)
+        self.assertEqual(openwebui.deleted_tools, [])
+        self.assertEqual(openwebui.deleted_functions, [])
+        self.assertEqual(ragflow.deleted_chats, [])
+        service.admin_control_store.update_library(
+            "repo-1",
+            updated_by="test",
+            enabled=True,
+        )
+
+        cleanup_summary = service.sync_once()
+
+        self.assertEqual(cleanup_summary.tools_deleted, 1)
+        self.assertEqual(cleanup_summary.pipes_deleted, 1)
+        self.assertEqual(cleanup_summary.chats_deleted, 1)
+
+    def test_deleted_cleanup_rechecks_control_before_each_library(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    Library(
+                        repo_id="repo-1",
+                        name="Alpha",
+                        name_slug="alpha",
+                        ragflow_dataset_id="dataset-1",
+                        status="deleted",
+                    ),
+                    Library(
+                        repo_id="repo-2",
+                        name="Beta",
+                        name_slug="beta",
+                        ragflow_dataset_id="dataset-2",
+                        status="deleted",
+                    ),
+                    OpenWebUIDatasetMapping(
+                        repo_id="repo-1",
+                        ragflow_dataset_id="dataset-1",
+                        ragflow_dataset_name="Alpha",
+                        openwebui_tool_id="tool-1",
+                        sync_status="synced",
+                    ),
+                    OpenWebUIDatasetMapping(
+                        repo_id="repo-2",
+                        ragflow_dataset_id="dataset-2",
+                        ragflow_dataset_name="Beta",
+                        openwebui_tool_id="tool-2",
+                        sync_status="synced",
+                    ),
+                ]
+            )
+            session.commit()
+        service: OpenWebUISyncService
+
+        def pause_second_library() -> None:
+            service.admin_control_store.update_library(
+                "repo-2",
+                updated_by="test",
+                paused=True,
+            )
+
+        openwebui = _ControlSwitchingOpenWebUIClient(pause_second_library)
+        owned = {
+            "content": "owner: seafile-ragflow-connector",
+            "meta": {"manifest": {"owner": "seafile-ragflow-connector"}},
+        }
+        openwebui.tools["tool-1"] = dict(owned)
+        openwebui.tools["tool-2"] = dict(owned)
+        service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=_FakeRAGFlowClient(),  # type: ignore[arg-type]
+            openwebui_client=openwebui,  # type: ignore[arg-type]
+        )
+
+        summary = service.sync_once()
+
+        self.assertEqual(summary.datasets_seen, 1)
+        self.assertEqual(summary.tools_deleted, 1)
+        self.assertEqual(openwebui.deleted_tools, ["tool-1"])
+        with session_factory() as session:
+            mappings = {
+                mapping.repo_id: mapping
+                for mapping in session.query(OpenWebUIDatasetMapping).all()
+            }
+            self.assertEqual(mappings["repo-1"].sync_status, "deleted")
+            self.assertIsNone(mappings["repo-1"].openwebui_tool_id)
+            self.assertEqual(mappings["repo-2"].sync_status, "synced")
+            self.assertEqual(mappings["repo-2"].openwebui_tool_id, "tool-2")
+
+    def test_deleted_cleanup_stops_before_next_mutation_when_job_is_paused(self) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset-1",
+                    status="deleted",
+                )
+            )
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-1",
+                    ragflow_dataset_name="Demo",
+                    ragflow_chat_id="chat-1",
+                    openwebui_tool_id="tool-1",
+                    openwebui_pipe_id="pipe-1",
+                    sync_status="synced",
+                )
+            )
+            session.commit()
+        ragflow = _FakeRAGFlowClient()
+        openwebui = _FakeOpenWebUIClient()
+        owned = {
+            "content": "owner: seafile-ragflow-connector",
+            "meta": {"manifest": {"owner": "seafile-ragflow-connector"}},
+        }
+        openwebui.tools["tool-1"] = dict(owned)
+        openwebui.functions["pipe-1"] = dict(owned)
+        service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=ragflow,  # type: ignore[arg-type]
+            openwebui_client=openwebui,  # type: ignore[arg-type]
+        )
+
+        with (
+            activate_job_pause(lambda: bool(openwebui.deleted_tools)),
+            self.assertRaisesRegex(RuntimeError, "OpenWebUI sync interrupted"),
+        ):
+            service.sync_once()
+
+        self.assertEqual(openwebui.deleted_tools, ["tool-1"])
+        self.assertEqual(openwebui.deleted_functions, [])
+        self.assertEqual(ragflow.deleted_chats, [])
+        with session_factory() as session:
+            mapping = session.query(OpenWebUIDatasetMapping).one()
+            state = session.get(OpenWebUISyncState, "default")
+            self.assertIsNone(mapping.openwebui_tool_id)
+            self.assertEqual(mapping.openwebui_pipe_id, "pipe-1")
+            self.assertEqual(mapping.ragflow_chat_id, "chat-1")
+            assert state is not None
+            self.assertEqual(state.status, "paused")
 
     def test_active_dataset_id_change_removes_replaced_openwebui_artifacts(self) -> None:
         session_factory = _session_factory(self)
@@ -629,6 +1361,7 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
             )
             session.commit()
         ragflow = _FakeRAGFlowClient()
+        ragflow.chats["chat-old"] = _connector_chat("chat-old", "dataset-old")
         openwebui = _FakeOpenWebUIClient()
         owned_payload = {
             "content": "owner: seafile-ragflow-connector",
@@ -665,6 +1398,100 @@ class OpenWebUISyncServiceTests(unittest.TestCase):
             openwebui.operations.index(("activate_function", new_pipe_id)),
             openwebui.operations.index(("delete_function", "pipe-old")),
         )
+
+    def test_chat_cleanup_keeps_provenance_across_multiple_dataset_transitions(
+        self,
+    ) -> None:
+        session_factory = _session_factory(self)
+        with session_factory() as session:
+            session.add(
+                Library(
+                    repo_id="repo-1",
+                    name="Demo",
+                    name_slug="demo",
+                    ragflow_dataset_id="dataset-b",
+                    ragflow_dataset_name="Demo Dataset",
+                    status="active",
+                )
+            )
+            session.add(
+                OpenWebUIDatasetMapping(
+                    repo_id="repo-1",
+                    ragflow_dataset_id="dataset-a",
+                    ragflow_dataset_name="Demo Dataset",
+                    ragflow_chat_id="chat-a",
+                    sync_status="synced",
+                )
+            )
+            session.commit()
+        ragflow = _FailingChatDeleteOnceRAGFlowClient("chat-a")
+        ragflow.chats["chat-a"] = _connector_chat("chat-a", "dataset-a")
+        ragflow.chats["foreign-chat"] = {
+            "id": "foreign-chat",
+            "name": "foreign",
+            "dataset_ids": ["dataset-a"],
+        }
+        service = OpenWebUISyncService(
+            settings=_settings(),
+            session_factory=session_factory,
+            ragflow_client=ragflow,  # type: ignore[arg-type]
+            openwebui_client=_FakeOpenWebUIClient(),  # type: ignore[arg-type]
+        )
+
+        first_summary = service.sync_once()
+
+        self.assertEqual(first_summary.failed, 0)
+        with session_factory() as session:
+            mapping = session.query(OpenWebUIDatasetMapping).one()
+            chat_b = str(mapping.ragflow_chat_id)
+            pending = mapping.capabilities_snapshot["pending_replacement_cleanup"]
+            self.assertEqual(
+                pending["chats"],
+                [
+                    {
+                        "id": "chat-a",
+                        "expected_dataset_id": "dataset-a",
+                        "provenance": "dataset_id_replacement",
+                    }
+                ],
+            )
+            pending = {
+                **pending,
+                "chats": [*pending["chats"], "foreign-chat"],
+            }
+            mapping.capabilities_snapshot = {
+                **mapping.capabilities_snapshot,
+                "pending_replacement_cleanup": pending,
+            }
+            library = session.get(Library, "repo-1")
+            assert library is not None
+            library.ragflow_dataset_id = "dataset-c"
+            session.commit()
+
+        second_summary = service.sync_once()
+
+        self.assertEqual(second_summary.failed, 0)
+        self.assertEqual(ragflow.deleted_chats, [["chat-a"], [chat_b]])
+        deleted_chat_ids = {
+            chat_id for ids in ragflow.deleted_chats for chat_id in ids
+        }
+        self.assertNotIn("foreign-chat", deleted_chat_ids)
+        self.assertIn("foreign-chat", ragflow.chats)
+        with session_factory() as session:
+            mapping = session.query(OpenWebUIDatasetMapping).one()
+            self.assertEqual(mapping.ragflow_dataset_id, "dataset-c")
+            self.assertEqual(mapping.sync_status, "manual_required")
+            pending = mapping.capabilities_snapshot["pending_replacement_cleanup"]
+            self.assertEqual(
+                pending["chats"],
+                [
+                    {
+                        "id": "foreign-chat",
+                        "expected_dataset_id": None,
+                        "provenance": "legacy_id_only_unverified",
+                    }
+                ],
+            )
 
     def test_artifact_id_change_keeps_previous_binding_when_create_fails(self) -> None:
         session_factory = _session_factory(self)

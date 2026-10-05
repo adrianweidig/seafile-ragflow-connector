@@ -8,8 +8,86 @@ retroactively.
 
 ## Unreleased
 
+## 2.6.3 - 2026-07-20
+
+### Fixed
+
+- Repeated RAGFlow source markers no longer duplicate signed preview URLs.
+  Only one marker per source remains linked while the other markers stay
+  short, preventing OpenWebUI responses from being truncated by repeated long
+  URLs.
+
+## 2.6.2 - 2026-07-20
+
 ### Added
 
+- Automatically generated library datasets can be provisioned as RAGFlow team
+  datasets while the internal template remains private.
+- An optional interactive RAGFlow identity owns the managed chats and native
+  Search app. Its dataset bindings are refreshed from all active connector
+  libraries and the same identity is used by Connector Search and OpenWebUI.
+- The administration dashboard exposes the effective dataset permission mode,
+  interactive owner, and chat model without disclosing the associated API key.
+- An optional auto-share mode, disabled by default, grants only direct read
+  access to the verified technical sync user for existing and future eligible
+  private Seafile libraries. The first automatic cycle checks the existing
+  inventory retroactively; existing permissions are neither changed nor
+  automatically removed.
+
+### Fixed
+
+- From the moment a library deletion is confirmed, its Search profile remains
+  disabled even if RAGFlow cleanup temporarily fails. Once deletion succeeds,
+  only that library's ACL snapshot is removed; other profiles and permissions
+  remain unchanged.
+- The enterprise Compose wizard now preserves and validates the dataset
+  permission and every interactive RAGFlow identity setting, and writes secret
+  environment files with owner-only permissions.
+- Existing exactly matched connector datasets are idempotently migrated to the
+  configured team permission when switching the target identity, without
+  overwriting parser or template settings.
+- The interactive RAGFlow identity is verified against the current API-key
+  owner before every mutation. Unverifiable Search creations are rolled back
+  by their exact ID instead of creating more Search apps on later cycles.
+- Legacy-chat and orphan cleanup now requires deterministic connector
+  provenance. Owner migrations that have not passed a completion smoke test
+  and multi-step dataset replacements remain visibly pending without deleting
+  manually created administrator chats.
+- The expected RAGFlow duplicate-name collision during the preparatory
+  blue/green document rename is accepted only for the exact known response and
+  only before parsing; generic final-rename failures enter a controlled retry.
+
+## 2.6.1 - 2026-07-19
+
+### Fixed
+
+- Updated Seafile files continue parsing in RAGFlow under a unique transitional
+  name while the active previous version still occupies the final document
+  name. Once parsing succeeds, the previous version is removed through the
+  persistent cleanup outbox and the readable name is restored.
+- During several rapid changes to the same file, only the newest document
+  version can become active; even a version that has not been uploaded yet
+  prevents an outdated promotion.
+- Document promotion and the cleanup request for the previous version are
+  stored atomically so a pause, cancellation, or process failure cannot leave
+  an orphaned RAGFlow document without a cleanup request.
+
+## 2.6.0 - 2026-07-19
+
+### Added
+
+- The dashboard embedded in `connector-controller` now also serves as an
+  interactive administration surface: connector work and individual Seafile
+  libraries can be persistently enabled, disabled, paused, and resumed, while
+  delta, full, and reconciliation runs can be started, paused, resumed,
+  stopped, and retried selectively.
+- Library and run views expose the current processing phase plus file and
+  parsing progress, including pending, successful, and failed documents.
+- Administration actions are persistently audited with actor, target,
+  before/after state, and result without storing passwords or other secrets.
+- Knowledge search can use the existing OpenWebUI LDAP/AD pipeline for login
+  and group synchronization, then manages its own short-lived signed browser
+  session with explicit logout.
 - Commit-pinned delta sync with confirmed snapshots/cursors, repository
   leases/fencing tokens, document versions, cleanup outbox, and a dedicated
   reconciliation plan.
@@ -22,6 +100,16 @@ retroactively.
 
 ### Changed
 
+- Mutating dashboard actions are separated from read-only status access and
+  are accepted only when control is enabled, dashboard authentication is
+  configured, and JSON carries `X-Connector-Admin-Action: 1`; global stop and
+  run stop/cancel also require `{"confirm":"STOP"}`. The standalone
+  `connector dashboard` command remains an intentionally read-only status
+  view; administration is available only in the running controller and never
+  controls containers or Portainer services.
+- `CONNECTOR_AUTOMATION_INITIAL_STATE=stopped` provides a scheduler-free first
+  start. The backward-compatible default remains `running`, and an existing
+  persisted operator state is never overwritten.
 - Dashboard and knowledge search now use responsive, state-preserving
   navigation, denser default views, and collapsed technical details.
 - Search and OpenWebUI sources expose consistent evidence, coverage, and

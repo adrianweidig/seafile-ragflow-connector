@@ -18,7 +18,7 @@
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml"><img alt="Docker image" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/docker.yml/badge.svg?branch=master"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/adrianweidig/seafile-ragflow-connector/actions/workflows/codeql.yml/badge.svg?branch=master"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="pyproject.toml"><img alt="Version 2.5.6" src="https://img.shields.io/badge/version-2.5.6-informational.svg"></a>
+  <a href="pyproject.toml"><img alt="Version 2.6.3" src="https://img.shields.io/badge/version-2.6.3-informational.svg"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/issues"><img alt="GitHub issues" src="https://img.shields.io/github/issues/adrianweidig/seafile-ragflow-connector"></a>
   <a href="https://github.com/adrianweidig/seafile-ragflow-connector/pulls"><img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/adrianweidig/seafile-ragflow-connector"></a>
 </p>
@@ -47,6 +47,7 @@ Autorisierungs-API des Connector-Cores.
 | Demo | [Demoaufnahme](#demo) |
 | Schnellstart | [Docker Compose](#schnellstart-mit-docker-compose) oder [Portainer](#portainer-start) |
 | Admin-Erststart | [Checkliste für den ersten produktionsnahen Start](docs/admin-first-start-checklist.md) |
+| Dashboard-Administration | [interaktive Oberfläche](#dashboard-und-administration), [sicherer Betrieb](docs/operations.md#dashboard-im-betrieb) |
 | Konfiguration | [`connector.env.example`](connector.env.example), [Environment-Referenz](docs/environment.md) |
 | Security und ACL | [Sicherheitsmodell](docs/security-model.md), [Access-Control](docs/access-control.md), [OpenWebUI-ACL](docs/openwebui-acl.md) |
 | Wissenssuche | [Search-Service](docs/search-service.md) |
@@ -125,7 +126,7 @@ Mehr Details stehen in [docs/architecture.md](docs/architecture.md).
 | Sync und Cleanup | Commit-gepinnter Delta-Sync, Vollsync-Fallback, Delete-Propagation, versionierte Dokument-Promotion und eine gefencte Cleanup-Outbox. |
 | Drift Repair | Reconcile-Plan zwischen Seafile-Snapshot, Connector-State und RAGFlow; Reparaturen laufen als persistente, deduplizierte Jobs. |
 | OpenWebUI Integration | deterministische Chats, Tools, Pipes, Custom-Model-Namen, Quellen/Citations und optionaler Preview-Viewer. |
-| Dashboard und Audit | Health, Sync-Historie, Änderungen, Logs, Diagnose, TLS-Status, kontrollierte Bibliotheksauswahl und Excel-Audit-Export ohne Dateiinhaltsexfiltration. |
+| Dashboard und Administration | Health, Sync-Historie, Änderungen, Logs, Diagnose, TLS-Status, persistente globale und bibliotheksspezifische Steuerung, Parsing-Fortschritt und Excel-Audit-Export ohne Dateiinhaltsexfiltration. |
 | Deployment | GHCR-Image, Portainer-Stack, direkte Compose-Varianten, Shared-Network-Modus, Swarm-Stack und Offline-Image-Workflow. |
 | TLS und Betrieb | interne CAs, mTLS-Dateien, `.top.secret`-Lab, lokale HTTPS-Mocks und Troubleshooting für Zertifikatsketten. |
 | Qualität | Ruff, mypy strict, pytest, unittest, CodeQL, Docker-Build-Workflow und Dependabot. |
@@ -138,9 +139,12 @@ Mehr Details stehen in [docs/architecture.md](docs/architecture.md).
 - OpenWebUI-Funktionen bekommen keine RAGFlow-Admin-Secrets, sondern sprechen mit dem Connector-Proxy.
 - Search-Service und OpenWebUI-Pipe bekommen keine Seafile-Admin-Tokens; RAGFlow wird nur nach zentralem `allow` abgefragt.
 - Der Runtime-Betrieb ist offline-fähig: keine Telemetrie und keine externen Service-Abhängigkeiten außerhalb der konfigurierten Zielsysteme.
-- Das Dashboard startet nur explizit ausgewählte Prüfläufe und kann
-  connector-eigene Pipe-, Chat- oder Dataset-Artefakte löschen; Seafile-
-  Bibliotheken bleiben dabei unangetastet.
+- Dashboard-Aktionen steuern ausschließlich Connector-Arbeit. Sie starten oder
+  stoppen weder Container noch Portainer-Dienste und verändern keine
+  Seafile-Bibliotheken.
+- Stop und Pause greifen kooperativ an sicheren Arbeitsgrenzen. Bereits an
+  RAGFlow oder OpenWebUI gesendete Operationen werden nicht zurückgerollt;
+  Reconcile und Retry stellen den konsistenten Zustand wieder her.
 
 ## Internationalisierung
 
@@ -167,6 +171,18 @@ ergänzt. Details stehen im [Sprach- und Unicode-Modell](docs/i18n.md).
 - Ein erreichbarer RAGFlow-Server mit API-Key.
 - Ein RAGFlow-Template-Dataset wird bei Bedarf automatisch angelegt,
   standardmäßig `connector_template`.
+- Erzeugte Bibliotheks-Datasets bleiben mit
+  `RAGFLOW_GENERATED_DATASET_PERMISSION=me` standardmäßig privat. `team` erlaubt
+  allen Mitgliedern des RAGFlow-Tenants des Connectors die Sichtbarkeit in
+  RAGFlow, ersetzt aber keine Seafile-ACL; das interne Template-Dataset
+  (standardmäßig `connector_template`) bleibt immer privat.
+- Optional kann ein einzelner kontrollierter RAGFlow-Admin-Zieluser über
+  `RAGFLOW_INTERACTIVE_API_KEY`, `RAGFLOW_INTERACTIVE_OWNER_ID` und
+  `RAGFLOW_INTERACTIVE_CHAT_MODEL_ID` die automatisch verwalteten Chats und
+  Search-App-Spiegel besitzen. Der reguläre `RAGFLOW_API_KEY` bleibt Eigentümer
+  und Sync-Identität der kanonischen Datasets. Dieser Modus erfordert
+  `RAGFLOW_GENERATED_DATASET_PERMISSION=team`; Details und Migrationsgrenzen
+  stehen unter [RAGFlow-Template](docs/ragflow-template.md).
 - Optional: eine erreichbare OpenWebUI-Instanz mit Admin-API-Key.
 - Für lokale Entwicklung: Python `>=3.12` und `uv`.
 
@@ -230,6 +246,23 @@ gebündeltem State:
 | `SEARCH_RAGFLOW_BASE_URL`, `SEARCH_RAGFLOW_API_KEY` | RAGFlow-Ziel aus Sicht des Search-Containers |
 | `POSTGRES_PASSWORD` | Passwort für die gebündelte Stack-Datenbank |
 
+Die drei `RAGFLOW_INTERACTIVE_*`-Werte sind optional und gehören deshalb nicht
+zur Minimalpflicht. Sobald `RAGFLOW_INTERACTIVE_API_KEY` gesetzt ist, müssen
+auch Owner-ID und Chat-Modell-ID gesetzt sein; zusätzlich muss die Berechtigung
+neuer Bibliotheks-Datasets `team` sein. Ohne interaktiven Key bleibt das
+bisherige Ein-Identitäts-Verhalten erhalten.
+
+Private Seafile-Bibliotheken müssen für den technischen Sync-Benutzer lesbar
+sein. Optional kann der Connector diese direkte Nur-Lese-Freigabe selbst
+ergänzen: `SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED=true` verlangt
+`SEAFILE_SYNC_USER_EMAIL`. Nach der Aktivierung prüft bereits der erste
+automatische Zyklus alle bestehenden geeigneten und ausführbaren Bibliotheken;
+spätere Zyklen erfassen zusätzlich neu hinzugekommene Bibliotheken. Dies kann
+beim ersten Lauf mehrere Freigaben erzeugen. Vor jeder Freigabe wird die Token-
+Identität über Seafile verifiziert; nur ein Root-Zugriffsfehler mit HTTP 403
+löst die Freigabe aus. Deaktivierte, pausierte, verschlüsselte und virtuelle
+Bibliotheken werden dabei nicht automatisch freigegeben.
+
 Start:
 
 ```bash
@@ -251,7 +284,15 @@ curl http://127.0.0.1:18080/api/health
 ```
 
 Das Dashboard ist bei Default-Portbindung lokal unter `http://127.0.0.1:18080`
-erreichbar, wenn `CONNECTOR_DASHBOARD_ENABLED=true` gesetzt ist.
+erreichbar, wenn `CONNECTOR_DASHBOARD_ENABLED=true` gesetzt ist. Interaktive
+Adminaktionen benötigen zusätzlich `CONNECTOR_DASHBOARD_CONTROL_ENABLED=true`
+und vollständige Dashboard-Basic-Auth-Werte.
+
+Für einen isolierten allerersten Start
+`CONNECTOR_AUTOMATION_INITIAL_STATE=stopped` bereits vor `up -d` setzen. Der
+Wert erzeugt den globalen Zustand einmalig vor dem ersten Scheduler-Zyklus;
+spätere Neustarts respektieren immer den persistenten Operatorzustand. Ohne die
+Variable bleibt der rückwärtskompatible Initialzustand `running`.
 
 ## Automatisierungen
 
@@ -330,11 +371,11 @@ der Name auf das bereits vorhandene gemeinsame Docker-Netz zeigen.
 
 Der Online-Start kann das veröffentlichte GHCR-Image nutzen. Für
 produktionsnahe Rollouts sollte nach Veröffentlichung ein fester Release-Tag
-wie `2.5.6` gepinnt werden; `latest` ist eine Komfortoption für Smoke-Tests und
+wie `2.6.3` gepinnt werden; `latest` ist eine Komfortoption für Smoke-Tests und
 frische Testumgebungen.
 
 ```bash
-docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:2.5.6
+docker pull ghcr.io/adrianweidig/seafile-ragflow-connector:2.6.3
 ```
 
 Für Offline-Umgebungen können die benötigten Images vorab exportiert und auf dem
@@ -342,7 +383,7 @@ Zielhost importiert werden:
 
 ```bash
 docker save \
-  ghcr.io/adrianweidig/seafile-ragflow-connector:2.5.6 \
+  ghcr.io/adrianweidig/seafile-ragflow-connector:2.6.3 \
   postgres:16 \
   redis:7 \
   -o images/seafile-ragflow-portainer-images.tar
@@ -354,7 +395,7 @@ Wenn interne Registry- oder lokale Image-Namen genutzt werden, trage sie in
 `connector.env` ein:
 
 ```env
-CONNECTOR_IMAGE=seafile-ragflow-connector:2.5.6
+CONNECTOR_IMAGE=seafile-ragflow-connector:2.6.3
 POSTGRES_IMAGE=postgres:16
 REDIS_IMAGE=redis:7
 ```
@@ -373,39 +414,80 @@ Die Compose-Datei referenziert keine lokale `env_file`. Docker Compose bekommt
 die Werte über `--env-file connector.env`; Portainer bekommt dieselben Werte
 über den Environment-Variablen-Import.
 
-## Dashboard
+## Dashboard und Administration
 
-Der Connector enthält ein HTTP-Dashboard für Administratoren, Auditoren und
-Entwickler. Es zeigt Connector-Zustand, Sync-Historie, Änderungen,
-Quellen/Ziele, gefilterte Logs und technische Diagnosewerte. Im laufenden
-`connector-controller` kann der Tab **Prüfablauf** die mit dem aktuellen
-Seafile-API-Key sichtbaren Bibliotheken anzeigen und ausgewählte Bibliotheken
-für RAGFlow-Dataset-/Dokument-Sync sowie OpenWebUI-Chat-/Tool-/Pipe-Sync
-starten. Es unterstützt einfache HTTP-Basic-Authentifizierung per Environment.
-Wer die Oberfläche nicht erreichbar machen will, aktiviert sie nicht oder
-veröffentlicht den Port nicht.
+Das im laufenden `connector-controller` eingebettete HTTP-Dashboard ist neben
+dem Log- und Statusbereich eine interaktive Administrationsoberfläche. Der
+Bereich **Administration** zeigt alle mit dem aktuellen Seafile-Admin-Token
+sichtbaren Bibliotheken und bietet drei getrennte Steuerungsebenen:
+
+- Global kann der Administrator Connector-Arbeit starten, deaktivieren,
+  pausieren, fortsetzen oder stoppen. Start aktiviert die Automatik, gibt die
+  Queue frei und stößt sofort Discovery an; Deaktivieren beendet nur neue
+  Automatik; Stop schaltet Automatik und Queue aus und fordert den kooperativen
+  Abbruch aktiver Jobs an.
+- Pro Seafile-Bibliothek kann er die persistente Richtlinie `active`, `paused`
+  oder `disabled` setzen und einen Delta-, Voll- oder
+  Reconcile-Lauf starten.
+- Konkrete Läufe lassen sich pausieren, fortsetzen, stoppen oder nach einem
+  terminalen Fehler beziehungsweise Stopp erneut einplanen.
+
+Diese Aktionen steuern Scheduler, Job-Queue, Worker und Reconciler des
+Connectors, niemals den Controller-Container oder andere Portainer-Dienste. Das
+Dashboard und seine Diagnose bleiben deshalb erreichbar, wenn Connector-Arbeit
+pausiert, gestoppt oder deaktiviert ist. Pause und Stop sind kooperativ: ein
+laufender Download, Upload oder RAGFlow-Aufruf wird nicht mitten in einer
+externen Operation abgebrochen. Ein pausierter Job wird am nächsten sicheren
+Checkpoint wieder wartend eingeordnet; Stop beziehungsweise Cancel gewinnt
+gegen Pause. Teilweise bereits ausgeführte Zieloperationen bleiben
+idempotent und können per Fortsetzen, Retry oder Reconcile vervollständigt
+werden.
+
+Die Bibliotheks- und Laufansichten zeigen die aktuelle Phase sowie Datei- und
+Parsing-Zähler. Der Parsing-Fortschritt liefert `tracked`, `done`, `pending`,
+`failed` und einen daraus berechneten Prozentwert. Fehlende RAGFlow-Werte
+werden nicht geschätzt. Steuerzustände und Läufe liegen in PostgreSQL und
+bleiben nach Browser- oder Controller-Neustarts erhalten.
+
+Der eigenständige Befehl `connector dashboard` ist bewusst eine lesende
+Statusansicht. Ohne Runtime-Controller, Job-Queue und Signalweg sind dort keine
+Adminaktionen verfügbar. Für die produktive Administrationsoberfläche muss
+immer die veröffentlichte Route des `connector-controller` verwendet werden.
+
+Schreibende Aktionen sind zusätzlich zum Dashboard-Schalter durch einen
+separaten Schalter `CONNECTOR_DASHBOARD_CONTROL_ENABLED=true` geschützt. Dieser
+ist nur mit aktiviertem Dashboard sowie vollständig gesetzter Dashboard-Basic-
+Authentifizierung gültig. Mutationen benötigen
+`Content-Type: application/json` und `X-Connector-Admin-Action: 1`; globaler
+Stop sowie Stop/Cancel eines Laufs zusätzlich die Bestätigung
+`{"confirm":"STOP"}`. Für LAN-Zugriff ist
+HTTPS über einen Reverse Proxy oder eine gleichwertig geschützte interne
+Strecke erforderlich. Ohne diese Bedingungen
+bleiben Status und Diagnose je nach Deployment lesbar, die Steuer-API arbeitet
+jedoch fail closed. Wer die Oberfläche nicht erreichbar machen will, aktiviert
+sie nicht oder veröffentlicht den Port nicht.
 
 Die Oberfläche nutzt keine CDN- oder Internet-Assets, bietet einen Dark-/Light-
-Modus und enthält Auto-Refresh für 5 Sekunden, 10 Sekunden oder 1 Minute. Der
-aktive Bereich und die Pagination bleiben in der URL erhalten. Auf schmalen
-Displays wechselt die Navigation in einen zugänglichen Drawer. Prüfläufe werden
-als persistente Jobs gestartet, zeigen Fortschritt und lassen sich abbrechen
-oder erneut einplanen; technische Rohdaten bleiben standardmäßig eingeklappt.
-Der
-Excel-Audit-Export enthält mehrere Tabellenblätter und exportiert nur Status-,
-Sync-, Änderungs-, Log- und Diagnosemetadaten. Datei-Inhalte aus Seafile oder
-RAGFlow werden nicht heruntergeladen. Im OpenWebUI-Tab können connector-eigene
-Pipes, RAGFlow-Chats und RAGFlow-Datasets gezielt gelöscht werden; Seafile-
-Bibliotheken und Dateien werden dabei nicht gelöscht.
+Modus und Auto-Refresh. Der Excel-Audit-Export enthält nur Status-, Sync-,
+Änderungs-, Log- und Diagnosemetadaten, keine Seafile- oder RAGFlow-
+Dateiinhalte. Im OpenWebUI-Tab können connector-eigene Pipes, RAGFlow-Chats und
+RAGFlow-Datasets gezielt gelöscht werden; Seafile-Bibliotheken und Dateien
+bleiben unangetastet.
 
 ```env
 CONNECTOR_DASHBOARD_ENABLED=true
+CONNECTOR_DASHBOARD_CONTROL_ENABLED=true
+CONNECTOR_AUTOMATION_INITIAL_STATE=stopped
 CONNECTOR_DASHBOARD_HOST=0.0.0.0
 CONNECTOR_DASHBOARD_PORT=8080
 CONNECTOR_DASHBOARD_PUBLISHED_PORT=127.0.0.1:18080
 CONNECTOR_DASHBOARD_AUTH_USERNAME=admin
-CONNECTOR_DASHBOARD_AUTH_PASSWORD=change-me-dashboard-password
+CONNECTOR_DASHBOARD_AUTH_PASSWORD=
 ```
+
+Das Passwort vor dem Start über den Secret-Store oder die geschützte Runtime-
+Umgebung zufällig erzeugt setzen. Bei aktivierter Adminsteuerung weist eine
+Produktionskonfiguration leere Werte und bekannte Beispielpasswörter ab.
 
 ## Optionale OpenWebUI-Anbindung
 
@@ -504,7 +586,7 @@ Das Paket stellt den Befehl `connector` bereit. Wichtige Kommandos:
 | `connector demo-fixtures` | lokale Demo-Dateien erzeugen |
 | `connector demo-bootstrap` | Demo-Libraries vorbereiten und optional synchronisieren |
 | `connector demo-cleanup` | klar benannte lokale Demo-Artefakte planen oder löschen |
-| `connector dashboard` | lesendes Dashboard starten |
+| `connector dashboard` | eigenständiges, lesendes Status-Dashboard ohne Adminsteuerung starten |
 | `connector controller`, `worker`, `reconciler` | Runtime-Prozesse starten |
 
 Die produktive Nutzung erfolgt normalerweise über die Compose-/Portainer-

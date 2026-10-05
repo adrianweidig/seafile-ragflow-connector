@@ -102,7 +102,9 @@ Das Dashboard-HTML liegt als paketierte Ressource unter
 `src/seafile_ragflow_connector/dashboard/assets/dashboard.html` und wird über
 `seafile_ragflow_connector.dashboard.ui.DASHBOARD_HTML` geladen. Unit-Tests
 prüfen die Ressource, Sprachwahl, Busy-/Empty-States, Workflow- und
-OpenWebUI-Tab sowie Touch-Zielgrößen.
+OpenWebUI-Tab sowie Touch-Zielgrößen. Für die Adminoberfläche prüfen sie
+zusätzlich globale, bibliotheksspezifische und laufbezogene Aktionen, den
+Schutzheader und die getrennte lesende Darstellung ohne Controller-Kontext.
 
 Bei sichtbaren Dashboard-Änderungen zusätzlich den opt-in Browser-Smoke mit
 Playwright ausführen:
@@ -128,7 +130,62 @@ uv run --extra dev python -m playwright install chromium
 
 Manuelle Visual-QA bleibt sinnvoll, wenn Layout, Farben oder Responsiveness
 geändert wurden. Dabei besonders Navigation, Sprachwahl, Tabellenbreiten,
-Auth-Fehlerzustand, Health/TLS-Karten und leere Ansichten kontrollieren.
+Auth-Fehlerzustand, Health/TLS-Karten, Adminzustände, Fortschrittsanzeigen und
+leere Ansichten kontrollieren.
+
+## Admin-Control-Regression
+
+Die Adminsteuerung betrifft Settings, Migrationen, Dashboard-Server, JobStore,
+Worker, Orchestrator und OpenWebUI-Scheduling. Der gezielte lokale Lauf ist:
+
+```bash
+uv run --offline --no-sync pytest \
+  tests/unit/dashboard \
+  tests/unit/jobs \
+  tests/unit/test_job_store.py \
+  tests/unit/persistence \
+  tests/unit/sync \
+  tests/unit/app/test_cli.py \
+  tests/unit/openwebui/test_sync.py \
+  tests/unit/config/test_settings.py
+```
+
+Die Regression muss mindestens diese Verträge abdecken:
+
+- `CONNECTOR_DASHBOARD_CONTROL_ENABLED=true` wird ohne aktiviertes Dashboard
+  und vollständige Basic-Auth-Werte bereits als ungültige Konfiguration
+  abgelehnt.
+- Mutationen lehnen fehlende Authentifizierung, anderen Content-Type und einen
+  fehlenden oder falschen Header `X-Connector-Admin-Action: 1` ab; Authz- und
+  OpenWebUI-Service-POSTs behalten ihren getrennten Vertrag.
+- Globaler Start, Deaktivieren, Pause, Fortsetzen und bestätigter Stop bilden
+  exakt Automatik- und Queue-Zustand ab. Stop ohne `{"confirm":"STOP"}` bleibt
+  wirkungslos.
+- Bibliothekszustände überleben einen neuen Store-/Prozesskontext. `disabled`
+  und `paused` blockieren manuelle und automatische Arbeit, markieren die
+  Bibliothek aber nicht als gelöscht und planen keine Zielbereinigung.
+- Wartende oder retryende pausierte Jobs werden nicht geclaimt. Ein laufender
+  Job kehrt kooperativ nach `queued` zurück; Resume löscht nur den Hold, und
+  Cancel gewinnt bei konkurrierenden Anforderungen.
+- Parsing-Fortschritt enthält konsistente `tracked`, `done`, `pending`,
+  `failed` und `percent`-Werte. Workflowfortschritt bleibt zwischen API-Abrufen
+  und Neustarts persistent und regressiert nicht durch fehlende Rohwerte.
+- Die persistente Änderungs-/Audit-Historie unter `/api/changes` erfasst
+  Akteur, Aktion, Ziel, Vorher-/Nachher-Zustand und Ergebnis, aber weder
+  Basic-Auth-Passwort noch Tokens oder andere Secrets.
+
+Für die gerenderte Abnahme muss das Browserziel die Controller-Variante mit
+Control-Store, Orchestrator, JobStore und SignalQueue verwenden. Die
+Standalone-Variante ist ein eigener negativer Test: Dort muss die Oberfläche
+lesend bleiben und Adminaktionen als nicht verfügbar zeigen. Der interaktive
+Browser-Smoke deckt Authentifizierung, globales Pause/Fortsetzen,
+bibliotheksspezifisches Pause/Fortsetzen, einen manuellen Delta-Lauf,
+Lauf- und Dateifortschritt, den Parsing-Bereich einschließlich Leerzustand,
+Historie und mobile Darstellung repräsentativ ab. Server- und Unit-Tests prüfen
+die globale Aktionsmatrix, Laufübergänge und Bestätigungen, persistente
+Bibliothekszustände sowie die Zuordnung von Delta-, Voll- und
+Reconcile-Spezifikationen; Stop/Cancel ohne `{"confirm":"STOP"}` bleibt
+wirkungslos.
 
 ## Externe Dienste und Secrets
 

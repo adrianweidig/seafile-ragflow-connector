@@ -21,10 +21,6 @@ _LIMITED_FIELDS: dict[str, tuple[str, str]] = {
         "reserved",
         "acl_share_links",
     ),
-    "seafile_sync_user_email": (
-        "informational",
-        "sync_user_email",
-    ),
     "ragflow_validate_created_dataset": (
         "compatibility",
         "validate_dataset",

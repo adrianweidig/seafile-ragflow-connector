@@ -70,7 +70,7 @@ jobs:
             echo
             echo "## Offline-Hinweis"
             echo
-            echo "Dieses Artefakt enthält den Repository-Stand als git-archive-ZIP sowie SHA256SUMS. Docker-Images und signierte Offline-Bundles bleiben separate Maintainer-Schritte."
+            echo "Dieses Artefakt enthält den Repository-Stand als git-archive-ZIP sowie SHA256SUMS. Docker-Images und geprüfte Offline-Bundles bleiben separate Maintainer-Schritte."
           } > "${artifact_dir}/release-notes.md"
 
           echo "artifact_name=release-artifact-${ref_slug}-${short_sha}" >> "$GITHUB_OUTPUT"

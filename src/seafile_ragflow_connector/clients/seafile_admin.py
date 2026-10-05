@@ -3,7 +3,12 @@ from __future__ import annotations
 from collections.abc import Generator
 from typing import Any
 
-from seafile_ragflow_connector.clients.http import VerifyConfig, make_client, unwrap_response
+from seafile_ragflow_connector.clients.http import (
+    ApiError,
+    VerifyConfig,
+    make_client,
+    unwrap_response,
+)
 
 
 class SeafileAdminClient:
@@ -70,6 +75,46 @@ class SeafileAdminClient:
             return [data]
         return list(data or [])
 
+    def ensure_read_only_user_share(self, repo_id: str, user_email: str) -> bool:
+        canonical_email = user_email.strip()
+        if not canonical_email:
+            raise ValueError("Seafile share target email must not be empty")
+
+        current = self.list_library_shares(repo_id, share_type="user")
+        if _has_root_user_share(current, canonical_email, permissions={"r", "rw"}):
+            return False
+        if _has_root_user_share(current, canonical_email):
+            raise RuntimeError(
+                "existing Seafile root user share has an unsupported permission"
+            )
+
+        post_error: ApiError | None = None
+        try:
+            unwrap_response(
+                self._client.post(
+                    "/api/v2.1/admin/shares/",
+                    data={
+                        "repo_id": repo_id,
+                        "share_type": "user",
+                        "path": "/",
+                        "share_to": canonical_email,
+                        "permission": "r",
+                    },
+                )
+            )
+        except ApiError as exc:
+            # A concurrent controller may have created the same share. The
+            # authoritative post-condition is the following GET, not the POST
+            # response shape or status alone.
+            post_error = exc
+
+        verified = self.list_library_shares(repo_id, share_type="user")
+        if _has_root_user_share(verified, canonical_email, permissions={"r", "rw"}):
+            return True
+        if post_error is not None:
+            raise post_error
+        raise RuntimeError("Seafile did not persist the requested read-only root share")
+
     def list_users(
         self,
         *,
@@ -108,3 +153,22 @@ class SeafileAdminClient:
                     return list(data[key])
             return [data]
         return list(data or [])
+
+
+def _has_root_user_share(
+    shares: list[dict[str, Any]],
+    user_email: str,
+    *,
+    permissions: set[str] | None = None,
+) -> bool:
+    expected_email = user_email.casefold()
+    for share in shares:
+        share_type = str(share.get("share_type") or "user").strip().lower()
+        email = str(share.get("user_email") or "").strip()
+        path = str(share.get("path") or "").strip()
+        permission = str(share.get("permission") or "").strip().lower()
+        if share_type != "user" or email.casefold() != expected_email or path != "/":
+            continue
+        if permissions is None or permission in permissions:
+            return True
+    return False

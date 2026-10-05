@@ -49,7 +49,6 @@
       "notes": {
         "acl_subfolders": "Subfolder permissions are not evaluated separately yet.",
         "acl_share_links": "Share links are not included in the ACL snapshot yet.",
-        "sync_user_email": "Informational only; the sync token controls access.",
         "validate_dataset": "Created and bound datasets are always read in the current path.",
         "preserve_filename": "Source path and original name are currently always retained as metadata.",
         "reparse": "Changed dataset settings do not trigger an automatic reparse yet.",
@@ -72,7 +71,8 @@
       "plan_help": "Build a reconciliation plan without remote mutations.",
       "sync_help": "Queue a persistent delta or full synchronization job.",
       "reconcile_help": "Plan reconciliation or run it as a fenced repair job.",
-      "missing": "Library {repo_id} is not present in connector state."
+      "missing": "Library {repo_id} is not present in connector state.",
+      "controlled": "Library {repo_id} is {state} and cannot be mutated."
     },
     "dashboard": {
       "help": "Run the read-only HTTP dashboard as a foreground process.",

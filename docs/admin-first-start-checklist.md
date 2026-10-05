@@ -86,11 +86,37 @@ docker compose \
   run --rm connector-controller connector check-live
 ```
 
-Wenn `CONNECTOR_DASHBOARD_ENABLED=true` gesetzt wird, sollte auch ein
-Dashboard-Passwort gesetzt sein. Für lokalen Zugriff ist
+Für die interaktive Administrationsoberfläche müssen
+`CONNECTOR_DASHBOARD_ENABLED=true` und
+`CONNECTOR_DASHBOARD_CONTROL_ENABLED=true` sowie nicht leere Werte für
+`CONNECTOR_DASHBOARD_AUTH_USERNAME` und
+`CONNECTOR_DASHBOARD_AUTH_PASSWORD` gesetzt sein. Soll das Dashboard nur lesen,
+bleibt der Control-Schalter `false`. Für lokalen Zugriff ist
 `CONNECTOR_DASHBOARD_PUBLISHED_PORT=127.0.0.1:18080` der sichere Default; für
 LAN-Zugriff muss der Port bewusst breiter veröffentlicht und durch Netzwerk-
-oder Reverse-Proxy-Regeln geschützt werden.
+oder Reverse-Proxy-Regeln sowie HTTPS geschützt werden. In Produktion muss das
+Passwort zufällig erzeugt sein; bekannte Beispielpasswörter werden abgewiesen.
+
+## Isolierten Erststart vorbereiten
+
+Vor dem allerersten Stack-Start in der Betreiber-Env setzen:
+
+```env
+CONNECTOR_DASHBOARD_ENABLED=true
+CONNECTOR_DASHBOARD_CONTROL_ENABLED=true
+CONNECTOR_AUTOMATION_INITIAL_STATE=stopped
+```
+
+Dieser Wert wird ausschließlich beim erstmaligen Erzeugen des globalen
+Steuerzustands angewendet. `stopped` legt ihn atomar als deaktiviert und
+queue-pausiert an, bevor Controller-Scheduler oder Worker Arbeit aufnehmen
+können. Ein bereits persistierter Operatorzustand wird niemals überschrieben.
+Der rückwärtskompatible Default `running` erlaubt dagegen sofortige automatische
+Zyklen und eignet sich nicht für einen garantiert isolierten Erststart. Bei
+Upgrades vorhandene Jobs deshalb vor dem Versionswechsel kontrolliert leeren;
+der Initialwert storniert keine Altjobs.
+Die oben beschriebenen echten, nicht leeren Basic-Auth-Werte müssen ebenfalls
+vor dem Start gesetzt sein; andernfalls fehlt der sichere UI-Aktivierungspfad.
 
 ## Starten
 
@@ -114,9 +140,22 @@ In Portainer wird `deploy/portainer/docker-compose.yml` oder die generierte
 `connector.env.example` beziehungsweise `portainer.env` kommen in den
 Environment-Bereich des Stacks.
 
+## Unmittelbar nach dem Start konfigurieren
+
+Im Controller-Dashboard muss der globale Zustand jetzt `stopped` sein. Dann
+**Bibliotheken prüfen** ausführen, alle Nicht-Testbibliotheken deaktivieren oder
+pausieren und genau eine kleine Testbibliothek aktiv lassen. Global
+**Fortsetzen** hebt ausschließlich die Queue-Pause auf; die Automatik bleibt
+`deactivated`, sodass der ausgewählte manuelle Lauf isoliert gestartet werden
+kann. Global **Start** erst wählen, wenn automatische Planung für alle
+verbleibenden ausführbaren Bibliotheken erwünscht ist. Ist der erste sichtbare
+Zustand nicht `stopped`, wurde der Initialwert zu spät gesetzt oder es existiert
+bereits ein persistierter Zustand; dann zuerst kontrolliert stoppen und
+vorhandene Jobs klären, bevor Isolation angenommen wird.
+
 ## Erfolgskriterien nach dem Start
 
-Nach einigen Minuten sollte der Stack diese Punkte erfüllen:
+Zuerst sollte die Infrastruktur diese Punkte erfüllen:
 
 - Beim Profil `bundled-state` laufen `connector-postgres` und
   `connector-redis`; bei `external-state` sind beide absichtlich nicht
@@ -129,12 +168,19 @@ Nach einigen Minuten sollte der Stack diese Punkte erfüllen:
   `docker compose run --rm connector-controller connector check-live` beendet
   sich erfolgreich.
 - Das Dashboard ist erreichbar, wenn es aktiviert wurde.
+- Die Browserroute endet am Dashboard des `connector-controller`, nicht an
+  einem separaten `connector dashboard` Prozess. Nur die Controller-Variante
+  zeigt den interaktiven Bereich **Administration**.
 - `/api/health` meldet Dashboard, Datenbank, Redis, Seafile und RAGFlow als
   `ok` oder zeigt einen konkreten, behebbaren externen Fehler.
-- In RAGFlow entsteht für jede relevante Seafile-Library ein Dataset aus dem
-  Template oder das Template wird bei aktivierter Auto-Create-Option erzeugt.
-- Erste Dateien werden hochgeladen und Parse-Statuswerte sind im Dashboard oder
-  in RAGFlow sichtbar.
+- Für jede danach bewusst freigegebene Seafile-Library entsteht in RAGFlow ein
+  Dataset aus dem Template oder das Template wird bei aktivierter
+  Auto-Create-Option erzeugt.
+- Nach dem explizit gestarteten Lauf der Testbibliothek werden erste Dateien
+  hochgeladen und Parse-Statuswerte sind im Dashboard oder in RAGFlow sichtbar.
+- Die Bibliothekstabelle zeigt Operatorstatus und Parsing-Zähler
+  `tracked`/`done`/`pending`/`failed`; ein gestarteter Lauf zeigt Phase und
+  Fortschritt dauerhaft über einen Browser-Refresh hinweg.
 - Bei aktivierter OpenWebUI-Anbindung erscheinen Chat, Tool, Pipe oder Custom
   Model erst nach einem echten Sync- oder Repair-Lauf.
 
@@ -144,6 +190,10 @@ Vor der Freigabe für Endnutzer sollten zusätzlich diese Punkte stimmen:
 
 - Das Dashboard ist nur für Administratoren erreichbar und per Basic Auth oder
   vorgelagertem Zugriffsschutz geschützt.
+- Schreibende Requests akzeptieren nur JSON mit
+  `X-Connector-Admin-Action: 1`; der Browser setzt den Header automatisch.
+  Globaler Stop sowie Stop/Cancel eines Laufs verlangen eine sichtbare
+  `STOP`-Bestätigung.
 - Die sichtbare Sprache passt zur Zielgruppe. Deutsch ist Default; Englisch und
   weitere Dashboard-Sprachen können über die UI oder `CONNECTOR_LANGUAGE`
   genutzt werden.
@@ -153,6 +203,8 @@ Vor der Freigabe für Endnutzer sollten zusätzlich diese Punkte stimmen:
   Dateiinhalte herunter.
 - Ein kleiner Testdatensatz wurde erfolgreich synchronisiert, bevor große
   Libraries freigegeben werden.
+- An einer kleinen Testbibliothek wurden Delta, Pause, Fortsetzen und Stop/Retry
+  geprüft. Stop/Pause betreffen Connector-Arbeit, niemals Portainer-Container.
 
 ## Wenn etwas nicht grün wird
 
@@ -163,6 +215,7 @@ Vor der Freigabe für Endnutzer sollten zusätzlich diese Punkte stimmen:
 | Seafile oder RAGFlow nicht erreichbar | Interne Container-URL gegen Host-/Browser-URL abgleichen |
 | Zertifikatsfehler | CA-Bundle per `CONNECTOR_CA_BUNDLE`, `SEAFILE_CA_BUNDLE`, `RAGFLOW_CA_BUNDLE` oder `OPENWEBUI_CA_BUNDLE` setzen |
 | Dashboard nicht erreichbar | `CONNECTOR_DASHBOARD_ENABLED`, Portmapping, Bind-Adresse und Portkonflikte prüfen |
+| Administration fehlt oder Mutation wird abgewiesen | Controller-Route, `CONNECTOR_DASHBOARD_CONTROL_ENABLED`, vollständige Basic Auth, HTTPS-Proxy sowie JSON-/Admin-Header prüfen |
 | Dashboard-Health ist `degraded` | Detailzeile im Health-Bereich öffnen und zuerst DB, Redis, Token und Ziel-URLs korrigieren |
 | Keine Datasets entstehen | Seafile-Admin-Rechte, RAGFlow-Template und `RAGFLOW_TEMPLATE_AUTO_CREATE` prüfen |
 | OpenWebUI-Artefakte fehlen | `OPENWEBUI_INTEGRATION_ENABLED`, `OPENWEBUI_SYNC_MODE` und Proxy-Erreichbarkeit aus dem OpenWebUI-Container prüfen |
@@ -171,9 +224,16 @@ Vor der Freigabe für Endnutzer sollten zusätzlich diese Punkte stimmen:
 Umgebungen sollte die Zertifikatskette stattdessen über CA-Bundles repariert
 werden.
 
-## Danach
+## CLI-Fallback
 
-Für den ersten produktionsnahen Lauf zuerst klein beginnen:
+Den Delta-Lauf der isolierten Testbibliothek über **Auswahl starten** auslösen
+und Phase, Datei- und Parsing-Zähler bis zum terminalen Zustand verfolgen.
+Pause/Fortsetzen und Stop/Retry nur an diesem entbehrlichen Testlauf prüfen.
+Globaler Stop lässt Controller und Dashboard laufen; Containersteuerung bleibt
+in Portainer beziehungsweise Docker Compose.
+
+Falls die Adminsteuerung bewusst deaktiviert bleibt, steht als CLI-Fallback zur
+Verfügung:
 
 ```bash
 docker compose \
@@ -187,9 +247,10 @@ Bei einem generierten Enterprise-Compose-Setup dieselben Compose-Dateien wie in
 als einmaliger Controller-Task oder über eine Shell im Controller-Container
 ausgeführt.
 
-Danach Dashboard, RAGFlow-Datasets, OpenWebUI-Artefakte und Audit-Export
-prüfen. Erst wenn dieser Lauf stabil ist, größere Libraries oder automatische
-Zeitpläne freigeben.
+Danach die persistente Änderungs-/Audit-Historie des Dashboards,
+RAGFlow-Datasets, OpenWebUI-Artefakte und Audit-Export prüfen. Erst wenn dieser
+Lauf stabil ist, größere Bibliotheken und automatische Zeitpläne über die
+Administrationsoberfläche freigeben.
 
 Der Standard für periodische Controller-, Reconciler-, Template-Refresh- und
 OpenWebUI-Sync-Läufe beträgt 30 Minuten (`1800` Sekunden). Die Intervalle sind

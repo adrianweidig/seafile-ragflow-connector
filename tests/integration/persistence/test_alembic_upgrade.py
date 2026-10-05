@@ -46,7 +46,7 @@ def test_previous_release_revision_upgrades_to_head_on_postgresql() -> None:
         assert "dedup_key" in columns
         assert "uq_sync_jobs_active_dedup" in indexes
         assert str(dedup_key).startswith("legacy:")
-        assert current == expected == "0006_sync_consistency_state"
+        assert current == expected == "0007_dashboard_admin_control"
     finally:
         engine.dispose()
 
@@ -69,7 +69,7 @@ def test_empty_postgresql_database_initializes_to_head() -> None:
         indexes = {index["name"] for index in inspector.get_indexes("sync_jobs")}
     finally:
         engine.dispose()
-    assert current == expected == "0006_sync_consistency_state"
+    assert current == expected == "0007_dashboard_admin_control"
     assert "dedup_key" in columns
     assert "uq_sync_jobs_active_dedup" in indexes
 

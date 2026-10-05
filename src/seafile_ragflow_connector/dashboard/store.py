@@ -246,23 +246,21 @@ class DashboardEventStore:
         details: Mapping[str, Any] | None = None,
     ) -> None:
         with self._session() as session:
-            session.add(
-                DashboardChangeEvent(
-                    sync_id=sync_id,
-                    occurred_at=utcnow(),
-                    action=safe_text(action, max_length=128) or "",
-                    object_name=safe_text(object_name, max_length=self.limits.max_field_length),
-                    source_path=safe_text(source_path, max_length=self.limits.max_field_length),
-                    target_path=safe_text(target_path, max_length=self.limits.max_field_length),
-                    previous_name=safe_text(previous_name, max_length=self.limits.max_field_length),
-                    new_name=safe_text(new_name, max_length=self.limits.max_field_length),
-                    change_type=safe_text(change_type, max_length=128) or "unknown",
-                    status=safe_text(status, max_length=128) or "unknown",
-                    error_message=safe_text(error_message, max_length=self.limits.max_field_length),
-                    source_system=source_system,
-                    target_system=target_system,
-                    details=safe_json(details or {}, max_length=self.limits.max_field_length),
-                )
+            self.stage_change(
+                session,
+                sync_id=sync_id,
+                action=action,
+                change_type=change_type,
+                status=status,
+                object_name=object_name,
+                source_path=source_path,
+                target_path=target_path,
+                previous_name=previous_name,
+                new_name=new_name,
+                error_message=error_message,
+                source_system=source_system,
+                target_system=target_system,
+                details=details,
             )
             session.commit()
             self._prune_table(
@@ -272,6 +270,44 @@ class DashboardEventStore:
                 DashboardChangeEvent.occurred_at,
                 self.limits.max_event_entries,
             )
+
+    def stage_change(
+        self,
+        session: Session,
+        *,
+        sync_id: str | None,
+        action: str,
+        change_type: str,
+        status: str,
+        object_name: str | None = None,
+        source_path: str | None = None,
+        target_path: str | None = None,
+        previous_name: str | None = None,
+        new_name: str | None = None,
+        error_message: str | None = None,
+        source_system: str = "seafile",
+        target_system: str = "ragflow",
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Stage one change event in the caller's transaction without committing."""
+        session.add(
+            DashboardChangeEvent(
+                sync_id=sync_id,
+                occurred_at=utcnow(),
+                action=safe_text(action, max_length=128) or "",
+                object_name=safe_text(object_name, max_length=self.limits.max_field_length),
+                source_path=safe_text(source_path, max_length=self.limits.max_field_length),
+                target_path=safe_text(target_path, max_length=self.limits.max_field_length),
+                previous_name=safe_text(previous_name, max_length=self.limits.max_field_length),
+                new_name=safe_text(new_name, max_length=self.limits.max_field_length),
+                change_type=safe_text(change_type, max_length=128) or "unknown",
+                status=safe_text(status, max_length=128) or "unknown",
+                error_message=safe_text(error_message, max_length=self.limits.max_field_length),
+                source_system=source_system,
+                target_system=target_system,
+                details=safe_json(details or {}, max_length=self.limits.max_field_length),
+            )
+        )
 
     def record_log(
         self,

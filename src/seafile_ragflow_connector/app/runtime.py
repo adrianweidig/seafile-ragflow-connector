@@ -23,6 +23,7 @@ from seafile_ragflow_connector.dashboard.store import DashboardEventStore, Dashb
 from seafile_ragflow_connector.domain.file_classification import FilePolicy
 from seafile_ragflow_connector.jobs.job_store import JobSignalQueue, JobStore
 from seafile_ragflow_connector.openwebui.sync import OpenWebUISyncService
+from seafile_ragflow_connector.persistence.admin_control import AdminControlStore
 from seafile_ragflow_connector.persistence.db import get_engine, get_session_factory, init_database
 from seafile_ragflow_connector.sync.orchestrator import SyncOrchestrator
 
@@ -39,10 +40,16 @@ class Runtime:
     openwebui_client: OpenWebUIClient | None = None
     openwebui_sync_service: OpenWebUISyncService | None = None
     dashboard_store: DashboardEventStore | None = None
+    interactive_ragflow_client: RAGFlowClient | None = None
 
     def close(self) -> None:
         self.admin_client.close()
         self.sync_client.close()
+        if (
+            self.interactive_ragflow_client is not None
+            and self.interactive_ragflow_client is not self.ragflow_client
+        ):
+            self.interactive_ragflow_client.close()
         self.ragflow_client.close()
         if self.openwebui_client is not None:
             self.openwebui_client.close()
@@ -69,6 +76,9 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
         _retry(lambda: init_database(settings.database_url), "database")
     _retry(lambda: check_redis(settings.redis_url), "redis")
     session_factory = get_session_factory(settings.database_url)
+    admin_control_store = AdminControlStore(session_factory)
+    if initialize_database:
+        admin_control_store.initialize_workflow(settings.connector_automation_initial_state)
     dashboard_store = build_dashboard_store(settings, session_factory)
     seafile_url = settings.seafile_internal_url or settings.seafile_base_url
     admin_client = SeafileAdminClient(
@@ -95,6 +105,14 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
         settings.ragflow_api_key,
         verify=settings.ragflow_httpx_verify,
     )
+    interactive_ragflow_client = ragflow_client
+    if settings.ragflow_interactive_api_key:
+        interactive_ragflow_client = RAGFlowClient(
+            ragflow_url,
+            settings.ragflow_interactive_api_key,
+            verify=settings.ragflow_httpx_verify,
+            artifact_owner_id=settings.ragflow_interactive_owner_id,
+        )
     openwebui_client = _build_openwebui_client(settings)
     orchestrator = SyncOrchestrator(
         session_factory,
@@ -105,12 +123,16 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
         template_dataset_name=settings.ragflow_template_dataset_name,
         template_auto_create=settings.ragflow_template_auto_create,
         template_required=settings.ragflow_template_required,
+        generated_dataset_permission=settings.ragflow_generated_dataset_permission,
         skip_encrypted_libraries=settings.seafile_skip_encrypted_libraries,
         skip_virtual_repos=settings.seafile_skip_virtual_repos,
+        sync_user_auto_share_enabled=settings.seafile_sync_user_auto_share_enabled,
+        sync_user_email=settings.seafile_sync_user_email,
         delete_ragflow_docs_on_seafile_delete=settings.delete_ragflow_docs_on_seafile_delete,
         delete_dataset_when_library_deleted=settings.delete_dataset_when_library_deleted,
         refresh_dataset_settings=settings.ragflow_refresh_dataset_settings,
         dashboard_store=dashboard_store,
+        admin_control_store=admin_control_store,
     )
     return Runtime(
         settings=settings,
@@ -130,10 +152,13 @@ def build_runtime(settings: Settings, *, initialize_database: bool = True) -> Ru
             settings=settings,
             session_factory=session_factory,
             ragflow_client=ragflow_client,
+            interactive_ragflow_client=interactive_ragflow_client,
             openwebui_client=openwebui_client,
             dashboard_store=dashboard_store,
+            admin_control_store=admin_control_store,
         ),
         dashboard_store=dashboard_store,
+        interactive_ragflow_client=interactive_ragflow_client,
     )
 
 
