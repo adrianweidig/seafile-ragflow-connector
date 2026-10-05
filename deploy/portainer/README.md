@@ -69,6 +69,12 @@ Portainer-Start:
    `SEARCH_OPENWEBUI_LDAP_BASE_URL` und ein eigenes starkes
    `SEARCH_SESSION_SECRET` setzen. OpenWebUI-Werte nur setzen, wenn
    `OPENWEBUI_INTEGRATION_ENABLED=true` genutzt wird.
+   Für einen einzelnen kontrollierten RAGFlow-Admin-Zieluser optional
+   `RAGFLOW_INTERACTIVE_API_KEY`, `RAGFLOW_INTERACTIVE_OWNER_ID` und
+   `RAGFLOW_INTERACTIVE_CHAT_MODEL_ID` setzen. Dann ist zusätzlich
+   `RAGFLOW_GENERATED_DATASET_PERMISSION=team` erforderlich, und
+   `SEARCH_RAGFLOW_API_KEY` muss für Antworten unter diesem User denselben
+   interaktiven Key enthalten. Team-Sichtbarkeit ersetzt keine Seafile-ACL.
    Wenn interne Zertifikate genutzt werden, die CA-PEM-Datei in ein
    Host-Verzeichnis legen, `CONNECTOR_CERTS_HOST_DIR` auf dieses Verzeichnis
    und `CONNECTOR_CA_BUNDLE=/certs/<datei>.pem` setzen. Fehlt die CA beim

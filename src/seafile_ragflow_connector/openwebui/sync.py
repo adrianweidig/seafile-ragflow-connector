@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 import httpx
 import structlog
@@ -22,11 +22,15 @@ from seafile_ragflow_connector.clients.ragflow import RAGFlowClient
 from seafile_ragflow_connector.config.settings import Settings
 from seafile_ragflow_connector.dashboard.store import DashboardEventStore, new_sync_id, safe_text
 from seafile_ragflow_connector.domain.naming import slugify
-from seafile_ragflow_connector.domain.ragflow_defaults import build_chat_payload
+from seafile_ragflow_connector.domain.ragflow_defaults import (
+    build_chat_payload,
+    build_search_answer_chat_payload,
+)
 from seafile_ragflow_connector.domain.ragflow_search_settings import (
     ResolvedSearchTemplate,
     apply_retrieval_settings_to_chat_payload,
     config_from_settings,
+    ensure_search_template,
     resolve_search_template,
 )
 from seafile_ragflow_connector.jobs.context import (
@@ -51,6 +55,23 @@ from seafile_ragflow_connector.utils.hashing import sha256_text
 from seafile_ragflow_connector.utils.redaction import redact_mapping
 
 _PENDING_REPLACEMENT_CLEANUP_KEY = "pending_replacement_cleanup"
+_PENDING_OWNER_MIGRATION_KEY = "pending_owner_migration"
+_CHAT_CLEANUP_DATASET_REPLACEMENT = "dataset_id_replacement"
+_CHAT_CLEANUP_OWNER_MIGRATION = "owner_migration_completion_unverified"
+_CHAT_CLEANUP_LEGACY_UNVERIFIED = "legacy_id_only_unverified"
+_CHAT_CLEANUP_OWNERSHIP_UNVERIFIED = "connector_ownership_unverified"
+
+
+class _PendingChatCleanup(TypedDict):
+    id: str
+    expected_dataset_id: str | None
+    provenance: str
+
+
+class _PendingReplacementCleanup(TypedDict):
+    tools: list[str]
+    pipes: list[str]
+    chats: list[_PendingChatCleanup]
 
 
 class OpenWebUISyncInterruptedError(RuntimeError):
@@ -88,18 +109,21 @@ class OpenWebUISyncService:
         settings: Settings,
         session_factory: sessionmaker[Session],
         ragflow_client: RAGFlowClient,
+        interactive_ragflow_client: RAGFlowClient | None = None,
         openwebui_client: OpenWebUIClient | None = None,
         dashboard_store: DashboardEventStore | None = None,
         admin_control_store: AdminControlStore | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
-        self.ragflow_client = ragflow_client
+        self.dataset_ragflow_client = ragflow_client
+        self.ragflow_client = interactive_ragflow_client or ragflow_client
         self.openwebui_client = openwebui_client
         self.dashboard_store = dashboard_store
         self.admin_control_store = admin_control_store or AdminControlStore(session_factory)
         self.log = structlog.get_logger(__name__)
         self._search_template_cache: ResolvedSearchTemplate | None = None
+        self._pending_owner_migration: list[dict[str, Any]] = []
 
     def sync_once(
         self,
@@ -108,6 +132,7 @@ class OpenWebUISyncService:
         repo_ids: set[str] | None = None,
     ) -> OpenWebUISyncSummary:
         self._search_template_cache = None
+        self._pending_owner_migration = []
         mode = mode_override or self.settings.openwebui_effective_sync_mode
         summary = OpenWebUISyncSummary(dry_run=mode == "dry-run")
         if mode == "disabled":
@@ -158,7 +183,13 @@ class OpenWebUISyncService:
         interrupted_status: str | None = None
         try:
             self._raise_if_job_interrupted()
+            self._ensure_native_search_template(mode=mode)
             self._ensure_template_chat(mode=mode, sync_id=sync_id)
+            self._reconcile_primary_owner_global_artifacts(
+                mode=mode,
+                summary=summary,
+                sync_id=sync_id,
+            )
             if repo_ids is None:
                 self._sync_deleted_library_mappings(
                     mode=mode,
@@ -265,12 +296,14 @@ class OpenWebUISyncService:
         self._raise_if_library_controlled(library.repo_id)
         dataset_id = str(library.ragflow_dataset_id)
         dataset_name = str(library.ragflow_dataset_name or library.name)
+        previous_dataset_id = self._mapped_dataset_id(library.repo_id)
         mapping = self._ensure_mapping(library, capabilities)
         previous_tool_hash = mapping.tool_definition_hash
         previous_pipe_hash = mapping.pipe_definition_hash
         previous_tool_id = mapping.openwebui_tool_id
         previous_pipe_id = mapping.openwebui_pipe_id
         previous_chat_id = mapping.ragflow_chat_id
+        chat_cleanup_provenance = self._chat_replacement_provenance(previous_chat_id)
         chat_name = _chat_name(self.settings.openwebui_function_namespace, dataset_name, dataset_id)
         self._raise_if_library_controlled(library.repo_id)
         chat_id, chat_action = self._ensure_chat(
@@ -392,6 +425,8 @@ class OpenWebUISyncService:
                 next_pipe_id=next_pipe_id,
                 previous_chat_id=previous_chat_id,
                 next_chat_id=chat_id,
+                previous_dataset_id=previous_dataset_id or dataset_id,
+                chat_provenance=chat_cleanup_provenance,
             )
         with self.session_factory() as session:
             stored_mapping = session.get(OpenWebUIDatasetMapping, mapping_id)
@@ -433,6 +468,8 @@ class OpenWebUISyncService:
             next_pipe_id=next_pipe_id,
             previous_chat_id=previous_chat_id,
             next_chat_id=chat_id,
+            previous_dataset_id=previous_dataset_id or dataset_id,
+            chat_provenance=chat_cleanup_provenance,
             pending_cleanup=pending_cleanup,
             repo_id=library.repo_id,
         )
@@ -443,6 +480,15 @@ class OpenWebUISyncService:
                     capabilities.as_dict(),
                     remaining_cleanup,
                 )
+                manual_chats = _manual_chat_cleanup_entries(remaining_cleanup)
+                if manual_chats:
+                    stored_mapping.sync_status = "manual_required"
+                    stored_mapping.last_error = safe_text(
+                        "RAGFlow-Chat-Cleanup benötigt einen operatorgesteuerten "
+                        "Funktionsnachweis und eine explizite Bereinigung: "
+                        + ", ".join(entry["id"] for entry in manual_chats),
+                        max_length=4000,
+                    )
                 session.commit()
 
     def _discover_libraries(self, *, repo_ids: set[str] | None = None) -> list[Library]:
@@ -492,6 +538,208 @@ class OpenWebUISyncService:
                 or library.ragflow_dataset_id in allowlist
             )
         ]
+
+    def _active_dataset_ids(self) -> list[str]:
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(Library.ragflow_dataset_id)
+                .where(Library.status == "active")
+                .where(Library.ragflow_dataset_id.is_not(None))
+                .order_by(Library.ragflow_dataset_id.asc())
+            ).all()
+        return list(dict.fromkeys(str(dataset_id) for dataset_id in rows if dataset_id))
+
+    def _mapped_dataset_id(self, repo_id: str) -> str | None:
+        with self.session_factory() as session:
+            value = session.scalar(
+                select(OpenWebUIDatasetMapping.ragflow_dataset_id).where(
+                    OpenWebUIDatasetMapping.repo_id == repo_id
+                )
+            )
+        normalized = str(value or "").strip()
+        return normalized or None
+
+    def _chat_replacement_provenance(self, previous_chat_id: str | None) -> str:
+        if not previous_chat_id or self.dataset_ragflow_client is self.ragflow_client:
+            return _CHAT_CLEANUP_DATASET_REPLACEMENT
+        try:
+            if self.ragflow_client.get_chat(previous_chat_id) is not None:
+                return _CHAT_CLEANUP_DATASET_REPLACEMENT
+        except (ApiError, httpx.RequestError, RuntimeError, TypeError, ValueError):
+            return _CHAT_CLEANUP_OWNERSHIP_UNVERIFIED
+        try:
+            if self.dataset_ragflow_client.get_chat(previous_chat_id) is not None:
+                return _CHAT_CLEANUP_OWNER_MIGRATION
+        except (ApiError, httpx.RequestError, RuntimeError, TypeError, ValueError):
+            return _CHAT_CLEANUP_OWNERSHIP_UNVERIFIED
+        return _CHAT_CLEANUP_DATASET_REPLACEMENT
+
+    def _ensure_native_search_template(self, *, mode: str) -> None:
+        if mode == "dry-run":
+            return
+        self._search_template_cache = ensure_search_template(
+            self.ragflow_client,
+            config_from_settings(self.settings),
+            native_dataset_ids=(
+                self._active_dataset_ids()
+                if self.settings.ragflow_interactive_api_key
+                else None
+            ),
+            chat_model_id=self.settings.ragflow_interactive_chat_model_id,
+        )
+
+    def _reconcile_primary_owner_global_artifacts(
+        self,
+        *,
+        mode: str,
+        summary: OpenWebUISyncSummary,
+        sync_id: str,
+    ) -> None:
+        if mode == "dry-run" or self.dataset_ragflow_client is self.ragflow_client:
+            return
+
+        legacy_template_payload = build_chat_payload(
+            self.settings.ragflow_template_chat_name
+        )
+        interactive_template_payload = self._chat_payload_with_search_template(
+            legacy_template_payload
+        )
+        legacy_search_answer_payload = build_search_answer_chat_payload(
+            self.settings.ragflow_search_answer_chat_name
+        )
+        interactive_search_answer_payload = self._chat_payload_with_interactive_model(
+            legacy_search_answer_payload
+        )
+        replacements = {
+            "template_chat": self._verified_interactive_chat_id(
+                self.settings.ragflow_template_chat_name,
+                interactive_template_payload,
+            ),
+            "search_answer_chat": self._verified_interactive_chat_id(
+                self.settings.ragflow_search_answer_chat_name,
+                interactive_search_answer_payload,
+            ),
+            "search_template": self._verified_interactive_search_id(),
+        }
+
+        pending: list[dict[str, Any]] = []
+        chat_specs = (
+            (
+                "template_chat",
+                self.settings.ragflow_template_chat_name,
+                legacy_template_payload,
+            ),
+            (
+                "search_answer_chat",
+                self.settings.ragflow_search_answer_chat_name,
+                legacy_search_answer_payload,
+            ),
+        )
+        for role, name, payload in chat_specs:
+            replacement_id = replacements[role]
+            for item in self.dataset_ragflow_client.list_chats(name=name):
+                artifact_id = str(item.get("id") or "").strip()
+                if not artifact_id or artifact_id == replacement_id:
+                    continue
+                detail = self.dataset_ragflow_client.get_chat(artifact_id)
+                if not _matches_connector_global_chat(detail, payload):
+                    self.log.info(
+                        "openwebui.sync.owner_migration.foreign_chat_skipped",
+                        sync_id=sync_id,
+                        ragflow_chat_id=artifact_id,
+                        ragflow_chat_name=name,
+                    )
+                    continue
+                pending.append(
+                    _owner_migration_entry(
+                        artifact_type="chat",
+                        role=role,
+                        artifact_id=artifact_id,
+                        artifact_name=name,
+                        replacement_id=replacement_id,
+                    )
+                )
+
+        search_name = self.settings.ragflow_search_template_name
+        replacement_search_id = replacements["search_template"]
+        for item in self.dataset_ragflow_client.list_searches(
+            keywords=search_name,
+            page_size=100,
+        ):
+            artifact_id = str(item.get("id") or "").strip()
+            if not artifact_id or artifact_id == replacement_search_id:
+                continue
+            detail = self.dataset_ragflow_client.get_search(artifact_id)
+            if not _matches_connector_search_template(detail, search_name):
+                self.log.info(
+                    "openwebui.sync.owner_migration.foreign_search_skipped",
+                    sync_id=sync_id,
+                    ragflow_search_id=artifact_id,
+                    ragflow_search_name=search_name,
+                )
+                continue
+            pending.append(
+                _owner_migration_entry(
+                    artifact_type="search",
+                    role="search_template",
+                    artifact_id=artifact_id,
+                    artifact_name=search_name,
+                    replacement_id=replacement_search_id,
+                )
+            )
+
+        self._pending_owner_migration = pending
+        if not pending:
+            return
+        summary.manual_required += len(pending)
+        for entry in pending:
+            self.log.warning(
+                "openwebui.sync.owner_migration.manual_cleanup_required",
+                sync_id=sync_id,
+                **entry,
+            )
+
+    def _verified_interactive_chat_id(
+        self,
+        name: str,
+        payload: dict[str, Any],
+    ) -> str | None:
+        matches = [
+            item
+            for item in self.ragflow_client.list_chats(name=name)
+            if str(item.get("name") or "") == name
+        ]
+        if len(matches) != 1:
+            return None
+        chat_id = str(matches[0].get("id") or "").strip()
+        if not chat_id:
+            return None
+        detail = self.ragflow_client.get_chat(chat_id)
+        if not _matches_connector_global_chat(detail, payload):
+            return None
+        return chat_id
+
+    def _verified_interactive_search_id(self) -> str | None:
+        resolved = self._search_template_cache
+        if resolved is None or resolved.source != "search_app" or not resolved.template_id:
+            return None
+        detail = self.ragflow_client.get_search(resolved.template_id)
+        if not _matches_connector_search_template(
+            detail,
+            self.settings.ragflow_search_template_name,
+        ):
+            return None
+        search_config = detail.get("search_config") if isinstance(detail, dict) else None
+        if not isinstance(search_config, dict):
+            return None
+        if sorted(str(value) for value in search_config.get("kb_ids", [])) != sorted(
+            self._active_dataset_ids()
+        ):
+            return None
+        model_id = self.settings.ragflow_interactive_chat_model_id
+        if model_id and str(search_config.get("chat_id") or "") != model_id:
+            return None
+        return resolved.template_id
 
     def _ensure_mapping(
         self,
@@ -629,8 +877,16 @@ class OpenWebUISyncService:
                 "openwebui.sync.search_template_unavailable",
                 ragflow_search_template_name=config.name,
             )
+            return self._chat_payload_with_interactive_model(payload)
+        return self._chat_payload_with_interactive_model(
+            apply_retrieval_settings_to_chat_payload(payload, resolved)
+        )
+
+    def _chat_payload_with_interactive_model(self, payload: dict[str, Any]) -> dict[str, Any]:
+        model_id = self.settings.ragflow_interactive_chat_model_id
+        if not model_id:
             return payload
-        return apply_retrieval_settings_to_chat_payload(payload, resolved)
+        return {**payload, "llm_id": model_id}
 
     def _resolved_search_template(self) -> ResolvedSearchTemplate:
         if self._search_template_cache is None:
@@ -874,7 +1130,12 @@ class OpenWebUISyncService:
                 if summary.dry_run:
                     state.dry_run_plan = summary.__dict__
             if capabilities is not None:
-                state.capabilities_snapshot = capabilities.as_dict()
+                capabilities_snapshot = capabilities.as_dict()
+                if self._pending_owner_migration:
+                    capabilities_snapshot[_PENDING_OWNER_MIGRATION_KEY] = list(
+                        self._pending_owner_migration
+                    )
+                state.capabilities_snapshot = capabilities_snapshot
                 if capabilities.error:
                     state.last_error = safe_text(capabilities.error, max_length=4000)
             if error:
@@ -1008,24 +1269,28 @@ class OpenWebUISyncService:
         if mapping.ragflow_chat_id:
             chat_id = mapping.ragflow_chat_id
             self._raise_if_library_controlled(mapping.repo_id)
-            self.ragflow_client.delete_chats([chat_id])
+            deleted = self._delete_ragflow_chat(
+                chat_id,
+                expected_dataset_id=mapping.ragflow_dataset_id,
+            )
             self._clear_deleted_mapping_artifact(mapping.id, "ragflow_chat_id")
             mapping.ragflow_chat_id = None
-            summary.chats_deleted += 1
-            self.log.info(
-                "openwebui.sync.ragflow_chat.deleted",
-                sync_id=sync_id,
-                repo_id=mapping.repo_id,
-                dataset_id=mapping.ragflow_dataset_id,
-                ragflow_chat_id=chat_id,
-            )
-            self._record_change(
-                sync_id,
-                "ragflow_chat",
-                "deleted",
-                chat_id,
-                mapping.ragflow_dataset_id,
-            )
+            if deleted:
+                summary.chats_deleted += 1
+                self.log.info(
+                    "openwebui.sync.ragflow_chat.deleted",
+                    sync_id=sync_id,
+                    repo_id=mapping.repo_id,
+                    dataset_id=mapping.ragflow_dataset_id,
+                    ragflow_chat_id=chat_id,
+                )
+                self._record_change(
+                    sync_id,
+                    "ragflow_chat",
+                    "deleted",
+                    chat_id,
+                    mapping.ragflow_dataset_id,
+                )
 
         if manual_errors:
             summary.manual_required += 1
@@ -1070,21 +1335,25 @@ class OpenWebUISyncService:
         next_pipe_id: str | None,
         previous_chat_id: str | None,
         next_chat_id: str | None,
-        pending_cleanup: dict[str, list[str]] | None = None,
+        previous_dataset_id: str,
+        chat_provenance: str,
+        pending_cleanup: _PendingReplacementCleanup | None = None,
         repo_id: str,
-    ) -> dict[str, list[str]]:
+    ) -> _PendingReplacementCleanup:
         candidates = _replacement_cleanup_candidates(
-            pending_cleanup or {},
+            pending_cleanup or _empty_pending_replacement_cleanup(),
             previous_tool_id=previous_tool_id,
             next_tool_id=next_tool_id,
             previous_pipe_id=previous_pipe_id,
             next_pipe_id=next_pipe_id,
             previous_chat_id=previous_chat_id,
             next_chat_id=next_chat_id,
+            previous_dataset_id=previous_dataset_id,
+            chat_provenance=chat_provenance,
         )
         if mode == "dry-run":
             return candidates
-        remaining: dict[str, list[str]] = {"tools": [], "pipes": [], "chats": []}
+        remaining = _empty_pending_replacement_cleanup()
         for tool_id in candidates["tools"]:
             self._raise_if_library_controlled(repo_id)
             if not capabilities.tools_write or self.openwebui_client is None:
@@ -1100,7 +1369,7 @@ class OpenWebUISyncService:
                 raise
             except OpenWebUISyncInterruptedError:
                 raise
-            except (ApiError, httpx.RequestError, RuntimeError, TypeError, ValueError) as exc:
+            except (ApiError, httpx.RequestError, RuntimeError, TypeError) as exc:
                 deleted = False
                 remaining["tools"].append(tool_id)
                 self.log.warning(
@@ -1149,21 +1418,69 @@ class OpenWebUISyncService:
                     pipe_id,
                     dataset_id,
                 )
-        for chat_id in candidates["chats"]:
+        for chat_cleanup in candidates["chats"]:
+            chat_id = chat_cleanup["id"]
             self._raise_if_library_controlled(repo_id)
+            if _chat_cleanup_requires_operator(chat_cleanup):
+                try:
+                    chat_exists = self._ragflow_chat_exists(chat_id)
+                except (ApiError, httpx.RequestError, RuntimeError, TypeError, ValueError):
+                    chat_exists = True
+                if chat_exists:
+                    remaining["chats"].append(chat_cleanup)
+                    summary.manual_required += 1
+                    self.log.warning(
+                        "openwebui.sync.replaced_chat_cleanup_manual_required",
+                        ragflow_chat_id=chat_id,
+                        expected_dataset_id=chat_cleanup["expected_dataset_id"],
+                        provenance=chat_cleanup["provenance"],
+                    )
+                continue
+            expected_dataset_id = chat_cleanup["expected_dataset_id"]
+            if not expected_dataset_id:
+                manual_entry: _PendingChatCleanup = {
+                    "id": chat_id,
+                    "expected_dataset_id": None,
+                    "provenance": _CHAT_CLEANUP_LEGACY_UNVERIFIED,
+                }
+                remaining["chats"].append(manual_entry)
+                summary.manual_required += 1
+                continue
             try:
                 self._raise_if_library_controlled(repo_id)
-                self.ragflow_client.delete_chats([chat_id])
+                deleted = self._delete_ragflow_chat(
+                    chat_id,
+                    expected_dataset_id=expected_dataset_id,
+                )
             except OpenWebUISyncInterruptedError:
                 raise
-            except (ApiError, httpx.RequestError, RuntimeError, TypeError, ValueError) as exc:
-                remaining["chats"].append(chat_id)
+            except ValueError as exc:
+                manual_entry = {
+                    "id": chat_id,
+                    "expected_dataset_id": expected_dataset_id,
+                    "provenance": _CHAT_CLEANUP_OWNERSHIP_UNVERIFIED,
+                }
+                remaining["chats"].append(manual_entry)
+                summary.manual_required += 1
+                self.log.warning(
+                    "openwebui.sync.replaced_chat_cleanup_manual_required",
+                    ragflow_chat_id=chat_id,
+                    expected_dataset_id=expected_dataset_id,
+                    provenance=manual_entry["provenance"],
+                    error_class=exc.__class__.__name__,
+                )
+            except (ApiError, httpx.RequestError, RuntimeError, TypeError) as exc:
+                remaining["chats"].append(chat_cleanup)
                 self.log.warning(
                     "openwebui.sync.replaced_chat_cleanup_deferred",
                     ragflow_chat_id=chat_id,
+                    expected_dataset_id=expected_dataset_id,
+                    provenance=chat_cleanup["provenance"],
                     error_class=exc.__class__.__name__,
                 )
             else:
+                if not deleted:
+                    continue
                 summary.chats_deleted += 1
                 self.log.info(
                     "openwebui.sync.ragflow_chat.deleted",
@@ -1179,6 +1496,31 @@ class OpenWebUISyncService:
                     dataset_id,
                 )
         return remaining
+
+    def _delete_ragflow_chat(
+        self,
+        chat_id: str,
+        *,
+        expected_dataset_id: str,
+    ) -> bool:
+        client = self.ragflow_client
+        chat = client.get_chat(chat_id)
+        if chat is None and self.dataset_ragflow_client is not client:
+            client = self.dataset_ragflow_client
+            chat = client.get_chat(chat_id)
+        if chat is None:
+            return False
+        if not _is_connector_chat_for_dataset(chat, expected_dataset_id):
+            raise ValueError("RAGFlow chat is not a connector-owned dataset chat")
+        client.delete_chats([chat_id])
+        return True
+
+    def _ragflow_chat_exists(self, chat_id: str) -> bool:
+        if self.ragflow_client.get_chat(chat_id) is not None:
+            return True
+        if self.dataset_ragflow_client is self.ragflow_client:
+            return False
+        return self.dataset_ragflow_client.get_chat(chat_id) is not None
 
     def _delete_openwebui_tool(
         self,
@@ -1293,6 +1635,16 @@ def _chat_name(_namespace: str, dataset_name: str, dataset_id: str) -> str:
     return f"RAG_{slug}_{sha256_text(dataset_id)[:8]}"
 
 
+def _is_connector_chat_for_dataset(chat: dict[str, Any], dataset_id: str) -> bool:
+    normalized_dataset_id = str(dataset_id).strip()
+    if not normalized_dataset_id or not _chat_has_dataset(chat, normalized_dataset_id):
+        return False
+    name = str(chat.get("name") or "")
+    return name.startswith("RAG_") and name.endswith(
+        f"_{sha256_text(normalized_dataset_id)[:8]}"
+    )
+
+
 def _is_dataset_without_parsed_files(exc: ApiError) -> bool:
     payload = exc.payload
     if not isinstance(payload, dict) or payload.get("code") not in (102, "102"):
@@ -1301,25 +1653,105 @@ def _is_dataset_without_parsed_files(exc: ApiError) -> bool:
     return "dataset" in message and "parsed file" in message
 
 
-def _pending_replacement_cleanup(snapshot: Any) -> dict[str, list[str]]:
-    pending: dict[str, list[str]] = {"tools": [], "pipes": [], "chats": []}
+def _empty_pending_replacement_cleanup() -> _PendingReplacementCleanup:
+    return {"tools": [], "pipes": [], "chats": []}
+
+
+def _pending_replacement_cleanup(snapshot: Any) -> _PendingReplacementCleanup:
+    pending = _empty_pending_replacement_cleanup()
     if not isinstance(snapshot, dict):
         return pending
     raw = snapshot.get(_PENDING_REPLACEMENT_CLEANUP_KEY)
     if not isinstance(raw, dict):
         return pending
-    for kind in pending:
+    for kind in ("tools", "pipes"):
         values = raw.get(kind)
         if not isinstance(values, list):
             continue
         pending[kind] = list(
             dict.fromkeys(value for value in values if isinstance(value, str) and value)
         )
+    raw_chats = raw.get("chats")
+    if isinstance(raw_chats, list):
+        for value in raw_chats:
+            entry = _normalize_pending_chat_cleanup(value)
+            if entry is not None:
+                _merge_pending_chat_cleanup(pending["chats"], entry)
     return pending
 
 
+def _normalize_pending_chat_cleanup(value: Any) -> _PendingChatCleanup | None:
+    if isinstance(value, str):
+        chat_id = value.strip()
+        if not chat_id:
+            return None
+        return {
+            "id": chat_id,
+            "expected_dataset_id": None,
+            "provenance": _CHAT_CLEANUP_LEGACY_UNVERIFIED,
+        }
+    if not isinstance(value, dict):
+        return None
+    chat_id = str(value.get("id") or "").strip()
+    if not chat_id:
+        return None
+    expected_dataset_id = str(value.get("expected_dataset_id") or "").strip() or None
+    if expected_dataset_id is None:
+        legacy_expected_ids = value.get("expected_dataset_ids")
+        if isinstance(legacy_expected_ids, list):
+            normalized_ids = list(
+                dict.fromkeys(
+                    str(item).strip()
+                    for item in legacy_expected_ids
+                    if str(item).strip()
+                )
+            )
+            if len(normalized_ids) == 1:
+                expected_dataset_id = normalized_ids[0]
+    provenance = str(value.get("provenance") or "").strip()
+    known_provenance = {
+        _CHAT_CLEANUP_DATASET_REPLACEMENT,
+        _CHAT_CLEANUP_OWNER_MIGRATION,
+        _CHAT_CLEANUP_LEGACY_UNVERIFIED,
+        _CHAT_CLEANUP_OWNERSHIP_UNVERIFIED,
+    }
+    if provenance not in known_provenance:
+        provenance = _CHAT_CLEANUP_OWNERSHIP_UNVERIFIED
+    if provenance == _CHAT_CLEANUP_DATASET_REPLACEMENT and expected_dataset_id is None:
+        provenance = _CHAT_CLEANUP_LEGACY_UNVERIFIED
+    return {
+        "id": chat_id,
+        "expected_dataset_id": expected_dataset_id,
+        "provenance": provenance,
+    }
+
+
+def _merge_pending_chat_cleanup(
+    entries: list[_PendingChatCleanup],
+    candidate: _PendingChatCleanup,
+) -> None:
+    for index, existing in enumerate(entries):
+        if existing["id"] != candidate["id"]:
+            continue
+        if existing == candidate:
+            return
+        if _chat_cleanup_requires_operator(existing):
+            return
+        if _chat_cleanup_requires_operator(candidate):
+            entries[index] = candidate
+            return
+        if existing["expected_dataset_id"] != candidate["expected_dataset_id"]:
+            entries[index] = {
+                "id": candidate["id"],
+                "expected_dataset_id": None,
+                "provenance": _CHAT_CLEANUP_OWNERSHIP_UNVERIFIED,
+            }
+        return
+    entries.append(candidate)
+
+
 def _replacement_cleanup_candidates(
-    pending: dict[str, list[str]],
+    pending: _PendingReplacementCleanup,
     *,
     previous_tool_id: str | None,
     next_tool_id: str | None,
@@ -1327,24 +1759,35 @@ def _replacement_cleanup_candidates(
     next_pipe_id: str | None,
     previous_chat_id: str | None,
     next_chat_id: str | None,
-) -> dict[str, list[str]]:
+    previous_dataset_id: str,
+    chat_provenance: str,
+) -> _PendingReplacementCleanup:
     candidates = _pending_replacement_cleanup(
         {_PENDING_REPLACEMENT_CLEANUP_KEY: pending}
     )
-    replacements = (
-        ("tools", previous_tool_id, next_tool_id),
-        ("pipes", previous_pipe_id, next_pipe_id),
-        ("chats", previous_chat_id, next_chat_id),
-    )
-    for kind, previous_id, next_id in replacements:
-        if previous_id and next_id and previous_id != next_id:
-            candidates[kind] = list(dict.fromkeys([*candidates[kind], previous_id]))
+    if previous_tool_id and next_tool_id and previous_tool_id != next_tool_id:
+        candidates["tools"] = list(
+            dict.fromkeys([*candidates["tools"], previous_tool_id])
+        )
+    if previous_pipe_id and next_pipe_id and previous_pipe_id != next_pipe_id:
+        candidates["pipes"] = list(
+            dict.fromkeys([*candidates["pipes"], previous_pipe_id])
+        )
+    if previous_chat_id and next_chat_id and previous_chat_id != next_chat_id:
+        _merge_pending_chat_cleanup(
+            candidates["chats"],
+            {
+                "id": previous_chat_id,
+                "expected_dataset_id": previous_dataset_id,
+                "provenance": chat_provenance,
+            },
+        )
     return candidates
 
 
 def _capabilities_with_pending_cleanup(
     capabilities: dict[str, Any],
-    pending: dict[str, list[str]],
+    pending: _PendingReplacementCleanup,
 ) -> dict[str, Any]:
     snapshot = dict(capabilities)
     normalized = _pending_replacement_cleanup(
@@ -1355,6 +1798,68 @@ def _capabilities_with_pending_cleanup(
     else:
         snapshot.pop(_PENDING_REPLACEMENT_CLEANUP_KEY, None)
     return snapshot
+
+
+def _chat_cleanup_requires_operator(entry: _PendingChatCleanup) -> bool:
+    return entry["provenance"] != _CHAT_CLEANUP_DATASET_REPLACEMENT
+
+
+def _manual_chat_cleanup_entries(
+    pending: _PendingReplacementCleanup,
+) -> list[_PendingChatCleanup]:
+    return [entry for entry in pending["chats"] if _chat_cleanup_requires_operator(entry)]
+
+
+def _matches_connector_global_chat(
+    chat: dict[str, Any] | None,
+    expected_payload: dict[str, Any],
+) -> bool:
+    if not isinstance(chat, dict):
+        return False
+    if str(chat.get("name") or "") != str(expected_payload.get("name") or ""):
+        return False
+    if str(chat.get("description") or "") != str(
+        expected_payload.get("description") or ""
+    ):
+        return False
+    return not _chat_needs_update(chat, expected_payload)
+
+
+def _matches_connector_search_template(
+    search: dict[str, Any] | None,
+    expected_name: str,
+) -> bool:
+    if not isinstance(search, dict):
+        return False
+    if str(search.get("name") or "") != expected_name:
+        return False
+    description = str(search.get("description") or "")
+    if not description.startswith("Connector-verwaltetes Search-Template "):
+        return False
+    return isinstance(search.get("search_config"), dict)
+
+
+def _owner_migration_entry(
+    *,
+    artifact_type: str,
+    role: str,
+    artifact_id: str,
+    artifact_name: str,
+    replacement_id: str | None,
+) -> dict[str, Any]:
+    return {
+        "artifact_type": artifact_type,
+        "role": role,
+        "artifact_id": artifact_id,
+        "artifact_name": artifact_name,
+        "replacement_id": replacement_id,
+        "provenance": "connector_payload_verified",
+        "status": (
+            "operator_cleanup_required"
+            if replacement_id
+            else "interactive_replacement_unverified"
+        ),
+    }
 
 
 def _chat_has_dataset(chat: dict[str, Any], dataset_id: str) -> bool:

@@ -1412,7 +1412,13 @@ def _safe_config(settings: Settings) -> dict[str, Any]:
         "seafile_skip_virtual_repos": settings.seafile_skip_virtual_repos,
         "ragflow_base_url": settings.ragflow_base_url,
         "ragflow_template_dataset_name": settings.ragflow_template_dataset_name,
+        "ragflow_generated_dataset_permission": settings.ragflow_generated_dataset_permission,
         "ragflow_refresh_dataset_settings": settings.ragflow_refresh_dataset_settings,
+        "ragflow_interactive_api_key_configured": bool(
+            settings.ragflow_interactive_api_key
+        ),
+        "ragflow_interactive_owner_id": settings.ragflow_interactive_owner_id,
+        "ragflow_interactive_chat_model_id": settings.ragflow_interactive_chat_model_id,
         "postgres_host": settings.postgres_host,
         "postgres_port": settings.postgres_port,
         "postgres_db": settings.postgres_db,
@@ -1569,8 +1575,18 @@ def _delete_ragflow_chat_artifact(context: DashboardContext, mapping_id: int) ->
     if not chat_id:
         return _artifact_delete_response("chat", None, "missing", "Kein RAGFlow-Chat hinterlegt.")
 
-    ragflow = _ragflow_client(context.settings)
+    ragflow = _ragflow_client(context.settings, interactive=True)
     try:
+        existing = ragflow.get_chat(chat_id)
+        if existing is None:
+            raise ValueError(
+                "RAGFlow-Chat konnte nicht eindeutig dem interaktiven Besitzer zugeordnet werden."
+            )
+        if not _is_owned_ragflow_chat_artifact(
+            existing,
+            dataset_id=mapping.ragflow_dataset_id,
+        ):
+            raise ValueError("RAGFlow-Chat ist nicht vom Connector für dieses Dataset erzeugt.")
         ragflow.delete_chats([chat_id])
     finally:
         ragflow.close()
@@ -3286,12 +3302,7 @@ def _handle_openwebui_query(
     top_k = _bounded_top_k(payload.get("top_k"))
     mapping = _load_mapping(context.store, dataset_id=dataset_id, tool_id=artifact_id)
     _require_openwebui_dataset_access(context, payload, mapping, dataset_id)
-    ragflow = RAGFlowClient(
-        context.settings.ragflow_internal_url or context.settings.ragflow_base_url,
-        context.settings.ragflow_api_key,
-        timeout=context.settings.openwebui_request_timeout_seconds,
-        verify=context.settings.ragflow_httpx_verify,
-    )
+    ragflow = _ragflow_client(context.settings, interactive=True)
     try:
         search_template = resolve_search_template(ragflow, config_from_settings(context.settings))
         result = ragflow.retrieve_chunks(
@@ -3350,12 +3361,7 @@ def _handle_openwebui_chat(
         pipe_id=artifact_id,
     )
     _require_openwebui_dataset_access(context, payload, mapping, dataset_id)
-    ragflow = RAGFlowClient(
-        context.settings.ragflow_internal_url or context.settings.ragflow_base_url,
-        context.settings.ragflow_api_key,
-        timeout=context.settings.openwebui_request_timeout_seconds,
-        verify=context.settings.ragflow_httpx_verify,
-    )
+    ragflow = _ragflow_client(context.settings, interactive=True)
     try:
         files_by_document_id = _files_by_document_id(context.store, mapping.repo_id)
         question = _last_user_message(messages)
@@ -3793,13 +3799,40 @@ def _openwebui_admin_client(settings: Settings) -> OpenWebUIClient:
     )
 
 
-def _ragflow_client(settings: Settings) -> RAGFlowClient:
+def _ragflow_client(settings: Settings, *, interactive: bool = False) -> RAGFlowClient:
+    interactive_key = settings.ragflow_interactive_api_key if interactive else None
     return RAGFlowClient(
         settings.ragflow_internal_url or settings.ragflow_base_url,
-        settings.ragflow_api_key,
+        interactive_key or settings.ragflow_api_key,
         timeout=settings.openwebui_request_timeout_seconds,
         verify=settings.ragflow_httpx_verify,
+        artifact_owner_id=(
+            settings.ragflow_interactive_owner_id if interactive_key else None
+        ),
     )
+
+
+def _is_owned_ragflow_chat_artifact(
+    artifact: dict[str, Any],
+    *,
+    dataset_id: str,
+) -> bool:
+    normalized_dataset_id = str(dataset_id).strip()
+    if not normalized_dataset_id:
+        return False
+    raw_dataset_ids = artifact.get("dataset_ids") or artifact.get("datasets") or []
+    if not isinstance(raw_dataset_ids, list):
+        return False
+    dataset_ids = {
+        str(item.get("id")) if isinstance(item, dict) and item.get("id") else str(item)
+        for item in raw_dataset_ids
+        if item
+    }
+    if normalized_dataset_id not in dataset_ids:
+        return False
+    name = str(artifact.get("name") or "")
+    short_id = sha256(normalized_dataset_id.encode("utf-8")).hexdigest()[:8]
+    return name.startswith("RAG_") and name.endswith(f"_{short_id}")
 
 
 def _is_owned_openwebui_artifact(

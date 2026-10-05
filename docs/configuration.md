@@ -28,6 +28,73 @@ Tuning sind optionale Erweiterungen.
 Secrets müssen über Portainer-Environment-Management, Docker Secrets oder eine
 lokale nicht committete Env-Datei bereitgestellt werden.
 
+## Technischer Seafile-Zugriff auf Bibliotheken
+
+Standardmäßig verändert der Connector keine Seafile-Freigaben. Der technische
+Benutzer hinter `SEAFILE_SYNC_USER_TOKEN` muss private Bibliotheken daher
+bereits lesen dürfen. Für eine kontrollierte automatische Ergänzung kann der
+Betreiber explizit konfigurieren:
+
+```env
+SEAFILE_SYNC_USER_EMAIL=ragflow-sync@example.local
+SEAFILE_SYNC_USER_AUTO_SHARE_ENABLED=true
+```
+
+Bei aktiviertem Schalter prüft der Connector die kanonische Token-Identität
+über `/api2/account/info/`. Ein Share wird ausschließlich angelegt, wenn der
+Root-Probe der konkreten, unverschlüsselten und nicht virtuellen Bibliothek mit
+HTTP 403 antwortet. Der Admin-Client erstellt dann einen direkten User-Share
+für `/` mit `permission=r`, liest die Freigabe erneut und wiederholt den
+Root-Probe. Abweichende Identität, andere HTTP-Fehler oder eine fehlende
+Nachprüfung brechen fail-closed ab. Bestehende `r`- und `rw`-Freigaben bleiben
+unverändert; der Connector stuft keine Berechtigung herab und entfernt solche
+Freigaben nicht automatisch.
+
+Die Aktivierung gilt nicht nur für künftig neu entdeckte Bibliotheken. Bereits
+der erste automatische Discovery-Zyklus prüft alle bestehenden, geeigneten und
+ausführbaren Bibliotheken und kann für jede mit fehlendem Root-Zugriff eine
+Freigabe anlegen. Deaktivierte oder pausierte Bibliotheken werden erst nach
+ihrer erneuten Aktivierung geprüft. Vor dem Einschalten sollten Betreiber den
+Bibliotheksbestand im Dashboard kontrollieren und nicht gewünschte
+Bibliotheken deaktivieren oder pausieren.
+
+## RAGFlow-Identitäten und Eigentümerschaft
+
+Der verpflichtende `RAGFLOW_API_KEY` ist die technische Sync-Identität. Sie
+besitzt das interne Template und die kanonischen, aus Seafile erzeugten
+Datasets. Standardmäßig besitzt dieselbe Identität auch alle vom Connector
+erzeugten RAGFlow-Chats und die Search-App; das ist der rückwärtskompatible
+Ein-Identitäts-Betrieb.
+
+Für genau einen kontrollierten Admin-Zieluser kann die interaktive
+Eigentümerschaft getrennt werden:
+
+```env
+RAGFLOW_INTERACTIVE_API_KEY=
+RAGFLOW_INTERACTIVE_OWNER_ID=
+RAGFLOW_INTERACTIVE_CHAT_MODEL_ID=
+RAGFLOW_GENERATED_DATASET_PERMISSION=team
+```
+
+Wenn `RAGFLOW_INTERACTIVE_API_KEY` gesetzt ist, sind Owner-ID und eine für
+diesen User verfügbare Chat-Modell-ID Pflicht. Der User muss Mitglied desselben
+RAGFlow-Tenants wie die Sync-Identität sein. Der Connector erzeugt seine
+interaktiven Chats und ausführbaren Search-App-Spiegel unter diesem User,
+während `RAGFLOW_API_KEY` die Datasets weiterhin synchronisiert. `team` ist
+dabei zwingend, damit der interaktive Besitzer die kanonischen Datasets
+referenzieren kann. Der Connector gleicht `permission` für bereits vorhandene,
+exakt erwartete Bibliotheks-Datasets beim Provisioning idempotent auf diesen
+Wert ab, ohne Parser- oder sonstige Dataset-Einstellungen zu überschreiben.
+Das interne Template bleibt `me`. Diese tenantweite Freigabe ist keine
+Seafile-ACL.
+
+Dieser Modus ist keine allgemeine Freigabe nativer RAGFlow-Chats an alle
+Tenant-Mitglieder. Normale Nutzer verwenden die ACL-geprüfte Connector-Suche
+oder OpenWebUI. Wenn Search-Antworten unter der interaktiven Identität laufen,
+muss `SEARCH_RAGFLOW_API_KEY` denselben Wert wie
+`RAGFLOW_INTERACTIVE_API_KEY` erhalten. API-Keys bleiben ausschließlich in der
+Runtime-Umgebung; sie gehören weder in Git noch in generierte Artefakte.
+
 ## Sprache und Locale
 
 Deutsch ist die Standardsprache für menschenlesbare CLI-, Dashboard-,

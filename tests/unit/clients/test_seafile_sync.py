@@ -221,3 +221,62 @@ def test_commit_snapshot_rejects_mixed_entry_lists() -> None:
             client.list_dir_at_commit("repo", "commit-1", "/")
     finally:
         client.close()
+
+
+def test_sync_identity_is_verified_against_account_info_and_cached() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            request=request,
+            json={"email": "sync-user@auth.local"},
+        )
+
+    client = SeafileSyncClient("https://seafile.example", "sync-token")
+    client._client.close()
+    client._client = httpx.Client(  # type: ignore[assignment]
+        base_url="https://seafile.example",
+        headers={"Authorization": "Token sync-token"},
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        assert (
+            client.require_account_identity("SYNC-USER@auth.local")
+            == "sync-user@auth.local"
+        )
+        assert (
+            client.require_account_identity("sync-user@auth.local")
+            == "sync-user@auth.local"
+        )
+    finally:
+        client.close()
+
+    assert [request.url.path for request in requests] == ["/api2/account/info/"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"email": "different@auth.local"},
+        {"name": "Sync User"},
+        ["unexpected"],
+    ],
+)
+def test_sync_identity_verification_fails_closed(payload: object) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, json=payload)
+
+    client = SeafileSyncClient("https://seafile.example", "sync-token")
+    client._client.close()
+    client._client = httpx.Client(  # type: ignore[assignment]
+        base_url="https://seafile.example",
+        headers={"Authorization": "Token sync-token"},
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises((RuntimeError, TypeError)):
+            client.require_account_identity("sync-user@auth.local")
+    finally:
+        client.close()
